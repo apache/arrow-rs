@@ -1529,23 +1529,16 @@ impl<'a> Maker<'a> {
                 Ok(dt)
             }
             (writer_non_union, Schema::Union(reader_variants)) => {
-                let null_position = reader_variants
-                    .iter()
-                    .position(|x| x == &Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)));
-                if let (2, Some(null_idx)) = (reader_variants.len(), null_position) {
-                    let non_null_idx = 1 - null_idx;
-                    let non_null_branch = &reader_variants[non_null_idx];
-                    let mut dt =
-                        self.make_data_type(writer_non_union, Some(non_null_branch), namespace)?;
-                    let nullability = if null_idx == 0 {
-                        Nullability::NullFirst
-                    } else {
-                        Nullability::NullSecond
+                if let Some((nullability, non_null_branch)) =
+                    nullable_union_variants(reader_variants)
+                {
+                    let mut dt = self.resolve_type(writer_non_union, non_null_branch, namespace)?;
+                    let non_null_idx = match nullability {
+                        Nullability::NullFirst => 1,
+                        Nullability::NullSecond => 0,
                     };
-
                     #[cfg(feature = "avro_custom_types")]
                     Self::propagate_nullability_into_ree(&mut dt, nullability);
-
                     dt.nullability = Some(nullability);
                     let promotion = Self::coercion_from(&dt);
                     dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
