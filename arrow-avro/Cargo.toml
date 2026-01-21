@@ -44,6 +44,7 @@ md5 = ["dep:md5"]
 sha256 = ["dep:sha2"]
 small_decimals = []
 avro_custom_types = ["dep:arrow-select"]
+async = ["tokio", "futures", "bytes"]
 
 [dependencies]
 arrow-schema = { workspace = true }
@@ -66,6 +67,9 @@ indexmap = "2.10"
 rand = "0.9"
 md5 = { version = "0.8", optional = true }
 sha2 = { version = "0.10", optional = true }
+tokio = { version = "1", features = ["io-util"], optional = true }
+futures = { version = "0.3.31", optional = true }
+bytes = { version = "1.10.1", optional = true }
 
 [dev-dependencies]
 arrow-data = { workspace = true }
@@ -83,6 +87,7 @@ async-stream = "0.3.6"
 apache-avro = "0.21.0"
 num-bigint = "0.4"
 once_cell = "1.21.3"
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [[bench]]
 name = "avro_reader"

@@ -79,6 +79,13 @@ mod encoder;
 /// Logic for different Avro container file formats.
 pub mod format;
 
+/// Async Avro writer API
+#[cfg(feature = "async")]
+pub mod async_writer;
+
+#[cfg(feature = "async")]
+pub use async_writer::{AsyncAvroWriter, AsyncAvroStreamWriter, AsyncFileWriter, AsyncWriter, AsyncWriterBuilder};
+
 /// Builder to configure and create a `Writer`.
 #[derive(Debug, Clone)]
 pub struct WriterBuilder {
