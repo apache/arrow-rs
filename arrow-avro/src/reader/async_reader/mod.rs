@@ -472,6 +472,7 @@ mod tests {
     use super::*;
     use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
     use arrow_array::cast::AsArray;
+    use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::*;
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use futures::{StreamExt, TryStreamExt};
@@ -840,7 +841,8 @@ mod tests {
         path: &str,
         batch_size: usize,
         range: Option<Range<u64>>,
-        schema: SchemaRef,
+        schema: Option<SchemaRef>,
+        projection: Option<Vec<usize>>,
     ) -> Result<Vec<RecordBatch>, ArrowError> {
         let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
         let location = Path::from_filesystem_path(path).unwrap();
@@ -848,30 +850,32 @@ mod tests {
         let file_size = store.head(&location).await.unwrap().size;
 
         let file_reader = AvroObjectReader::new(store, location);
-        let reader_schema = AvroSchema::try_from(schema.as_ref())?;
-        let builder = AsyncAvroFileReader::builder(file_reader, file_size, batch_size)
-            .with_reader_schema(reader_schema);
-        let reader = if let Some(range) = range {
-            builder.with_range(range)
-        } else {
-            builder
+        let mut builder = AsyncAvroFileReader::builder(file_reader, file_size, batch_size);
+
+        if let Some(s) = schema {
+            let reader_schema = AvroSchema::try_from(s.as_ref())?;
+            builder = builder.with_reader_schema(reader_schema);
         }
-        .try_build()
-        .await?;
 
-        let batches: Vec<RecordBatch> = reader.try_collect().await?;
-        Ok(batches)
+        if let Some(proj) = projection {
+            builder = builder.with_projection(proj);
+        }
+
+        if let Some(range) = range {
+            builder = builder.with_range(range);
+        }
+
+        let reader = builder.try_build().await?;
+        reader.try_collect().await
     }
-
-    // ============================================================================
-    // CORE FUNCTIONALITY TESTS
-    // ============================================================================
 
     #[tokio::test]
     async fn test_full_file_read() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, None, schema).await.unwrap();
+        let batches = read_async_file(&file, 1024, None, Some(schema), None)
+            .await
+            .unwrap();
         let batch = &batches[0];
 
         assert_eq!(batch.num_rows(), 8);
@@ -890,7 +894,9 @@ mod tests {
     async fn test_small_batch_size() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 2, None, schema).await.unwrap();
+        let batches = read_async_file(&file, 2, None, Some(schema), None)
+            .await
+            .unwrap();
         assert_eq!(batches.len(), 4);
 
         let batch = &batches[0];
@@ -903,7 +909,9 @@ mod tests {
     async fn test_batch_size_one() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1, None, schema).await.unwrap();
+        let batches = read_async_file(&file, 1, None, Some(schema), None)
+            .await
+            .unwrap();
         let batch = &batches[0];
 
         assert_eq!(batches.len(), 8);
@@ -914,22 +922,20 @@ mod tests {
     async fn test_batch_size_larger_than_file() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 10000, None, schema).await.unwrap();
+        let batches = read_async_file(&file, 10000, None, Some(schema), None)
+            .await
+            .unwrap();
         let batch = &batches[0];
 
         assert_eq!(batch.num_rows(), 8);
     }
-
-    // ============================================================================
-    // RANGE HANDLING TESTS
-    // ============================================================================
 
     #[tokio::test]
     async fn test_empty_range() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let range = 100..100;
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, Some(range), schema)
+        let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
             .await
             .unwrap();
         assert_eq!(batches.len(), 0);
@@ -945,7 +951,7 @@ mod tests {
 
         let range = 0..meta.size;
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, Some(range), schema)
+        let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
             .await
             .unwrap();
         let batch = &batches[0];
@@ -962,7 +968,7 @@ mod tests {
 
         let range = 100..meta.size;
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, Some(range), schema)
+        let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
             .await
             .unwrap();
         let batch = &batches[0];
@@ -976,7 +982,7 @@ mod tests {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let range = 50..150;
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, Some(range), schema)
+        let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
             .await
             .unwrap();
         assert_eq!(batches.len(), 0);
@@ -988,7 +994,7 @@ mod tests {
 
         let range = 700..768; // Header ends at 675, so this should be mid-block
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, Some(range), schema)
+        let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
             .await
             .unwrap();
         assert_eq!(batches.len(), 0);
@@ -1003,7 +1009,7 @@ mod tests {
 
         let range = 200..meta.size;
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, Some(range), schema)
+        let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
             .await
             .unwrap();
         let batch = &batches[0];
@@ -1011,17 +1017,13 @@ mod tests {
         assert_eq!(batch.num_rows(), 8);
     }
 
-    // ============================================================================
-    // INCOMPLETE BLOCK HANDLING TESTS
-    // ============================================================================
-
     #[tokio::test]
     async fn test_incomplete_block_requires_fetch() {
         // Range ends mid-block, should trigger fetching_rem_block logic
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let range = 0..1200;
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, Some(range), schema)
+        let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
             .await
             .unwrap();
         let batch = &batches[0];
@@ -1035,7 +1037,7 @@ mod tests {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let range = 16..676; // Header should end at 675
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, Some(range), schema)
+        let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
             .await
             .unwrap();
         let batch = &batches[0];
@@ -1054,7 +1056,7 @@ mod tests {
 
             let range = 200..meta.size;
             let schema = get_alltypes_schema();
-            let batches = read_async_file(&file, 1024, Some(range), schema)
+            let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
                 .await
                 .unwrap();
             let batch = &batches[0];
@@ -1067,7 +1069,9 @@ mod tests {
     async fn test_nulls() {
         let file = arrow_test_data("avro/alltypes_nulls_plain.avro");
         let schema = get_alltypes_with_nulls_schema();
-        let batches = read_async_file(&file, 1024, None, schema).await.unwrap();
+        let batches = read_async_file(&file, 1024, None, Some(schema), None)
+            .await
+            .unwrap();
         let batch = &batches[0];
 
         assert_eq!(batch.num_rows(), 1);
@@ -1080,16 +1084,14 @@ mod tests {
     async fn test_nested_records() {
         let file = arrow_test_data("avro/nested_records.avro");
         let schema = get_nested_records_schema();
-        let batches = read_async_file(&file, 1024, None, schema).await.unwrap();
+        let batches = read_async_file(&file, 1024, None, Some(schema), None)
+            .await
+            .unwrap();
         let batch = &batches[0];
 
         assert_eq!(batch.num_rows(), 2);
         assert!(batch.num_columns() > 0);
     }
-
-    // ============================================================================
-    // STREAM BEHAVIOR TESTS
-    // ============================================================================
 
     #[tokio::test]
     async fn test_stream_produces_multiple_batches() {
@@ -1142,17 +1144,13 @@ mod tests {
         assert!(first_batch[0].num_rows() > 0);
     }
 
-    // ============================================================================
-    // EDGE CASE TESTS
-    // ============================================================================
-
     #[tokio::test]
     async fn test_various_batch_sizes() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
 
         for batch_size in [1, 2, 3, 5, 7, 11, 100] {
             let schema = get_alltypes_schema();
-            let batches = read_async_file(&file, batch_size, None, schema)
+            let batches = read_async_file(&file, batch_size, None, Some(schema), None)
                 .await
                 .unwrap();
             let batch = &batches[0];
@@ -1177,7 +1175,7 @@ mod tests {
         // Range extends beyond file size
         let range = 100..(meta.size + 1000);
         let schema = get_alltypes_schema();
-        let batches = read_async_file(&file, 1024, Some(range), schema)
+        let batches = read_async_file(&file, 1024, Some(range), Some(schema), None)
             .await
             .unwrap();
         let batch = &batches[0];
@@ -1308,5 +1306,395 @@ mod tests {
             .downcast_ref::<Int64Array>()
             .unwrap();
         assert_eq!(count_array.values(), &[10, 20, 30, 40, 50]);
+    }
+
+    #[tokio::test]
+    async fn test_alltypes_no_schema_no_projection() {
+        // No reader schema, no projection - uses writer schema from file
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let batches = read_async_file(&file, 1024, None, None, None)
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 11);
+        assert_eq!(batch.schema().field(0).name(), "id");
+    }
+
+    #[tokio::test]
+    async fn test_alltypes_no_schema_with_projection() {
+        // No reader schema, with projection - project writer schema
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        // Project [tinyint_col, id, bigint_col] = indices [2, 0, 5]
+        let batches = read_async_file(&file, 1024, None, None, Some(vec![2, 0, 5]))
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.schema().field(0).name(), "tinyint_col");
+        assert_eq!(batch.schema().field(1).name(), "id");
+        assert_eq!(batch.schema().field(2).name(), "bigint_col");
+
+        // Verify data values
+        let tinyint_col = batch.column(0).as_primitive::<Int32Type>();
+        assert_eq!(tinyint_col.values(), &[0, 1, 0, 1, 0, 1, 0, 1]);
+
+        let id = batch.column(1).as_primitive::<Int32Type>();
+        assert_eq!(id.values(), &[4, 5, 6, 7, 2, 3, 0, 1]);
+
+        let bigint_col = batch.column(2).as_primitive::<Int64Type>();
+        assert_eq!(bigint_col.values(), &[0, 10, 0, 10, 0, 10, 0, 10]);
+    }
+
+    #[tokio::test]
+    async fn test_alltypes_with_schema_no_projection() {
+        // With reader schema, no projection
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let schema = get_alltypes_schema();
+        let batches = read_async_file(&file, 1024, None, Some(schema), None)
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 11);
+    }
+
+    #[tokio::test]
+    async fn test_alltypes_with_schema_with_projection() {
+        // With reader schema, with projection
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let schema = get_alltypes_schema();
+        // Project [bool_col, id] = indices [1, 0]
+        let batches = read_async_file(&file, 1024, None, Some(schema), Some(vec![1, 0]))
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.schema().field(0).name(), "bool_col");
+        assert_eq!(batch.schema().field(1).name(), "id");
+
+        let bool_col = batch.column(0).as_boolean();
+        assert!(bool_col.value(0));
+        assert!(!bool_col.value(1));
+
+        let id = batch.column(1).as_primitive::<Int32Type>();
+        assert_eq!(id.values(), &[4, 5, 6, 7, 2, 3, 0, 1]);
+    }
+
+    #[tokio::test]
+    async fn test_nested_no_schema_no_projection() {
+        // No reader schema, no projection
+        let file = arrow_test_data("avro/nested_records.avro");
+        let batches = read_async_file(&file, 1024, None, None, None)
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 4);
+        assert_eq!(batch.schema().field(0).name(), "f1");
+        assert_eq!(batch.schema().field(1).name(), "f2");
+        assert_eq!(batch.schema().field(2).name(), "f3");
+        assert_eq!(batch.schema().field(3).name(), "f4");
+    }
+
+    #[tokio::test]
+    async fn test_nested_no_schema_with_projection() {
+        // No reader schema, with projection - reorder nested fields
+        let file = arrow_test_data("avro/nested_records.avro");
+        // Project [f3, f1] = indices [2, 0]
+        let batches = read_async_file(&file, 1024, None, None, Some(vec![2, 0]))
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.schema().field(0).name(), "f3");
+        assert_eq!(batch.schema().field(1).name(), "f1");
+    }
+
+    #[tokio::test]
+    async fn test_nested_with_schema_no_projection() {
+        // With reader schema, no projection
+        let file = arrow_test_data("avro/nested_records.avro");
+        let schema = get_nested_records_schema();
+        let batches = read_async_file(&file, 1024, None, Some(schema), None)
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_nested_with_schema_with_projection() {
+        // With reader schema, with projection
+        let file = arrow_test_data("avro/nested_records.avro");
+        let schema = get_nested_records_schema();
+        // Project [f4, f2, f1] = indices [3, 1, 0]
+        let batches = read_async_file(&file, 1024, None, Some(schema), Some(vec![3, 1, 0]))
+            .await
+            .unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.schema().field(0).name(), "f4");
+        assert_eq!(batch.schema().field(1).name(), "f2");
+        assert_eq!(batch.schema().field(2).name(), "f1");
+    }
+
+    #[tokio::test]
+    async fn test_projection_error_out_of_bounds() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        // Index 100 is out of bounds for the 11-field schema
+        let err = read_async_file(&file, 1024, None, None, Some(vec![100]))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("out of bounds"));
+    }
+
+    #[tokio::test]
+    async fn test_projection_error_duplicate_index() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        // Duplicate index 0
+        let err = read_async_file(&file, 1024, None, None, Some(vec![0, 0]))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("Duplicate projection index"));
+    }
+
+    #[tokio::test]
+    async fn test_with_header_size_hint_small() {
+        // Use a very small header size hint to force multiple fetches
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let schema = get_alltypes_schema();
+        let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
+
+        // Use a tiny header hint (64 bytes) - header is much larger
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_reader_schema(reader_schema)
+            .with_header_size_hint(64)
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 11);
+    }
+
+    #[tokio::test]
+    async fn test_with_header_size_hint_large() {
+        // Use a larger header size hint than needed
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let schema = get_alltypes_schema();
+        let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
+
+        // Use a large header hint (64KB)
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_reader_schema(reader_schema)
+            .with_header_size_hint(64 * 1024)
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 11);
+    }
+
+    #[tokio::test]
+    async fn test_with_utf8_view_enabled() {
+        // Test that utf8_view produces StringViewArray instead of StringArray
+        let file = arrow_test_data("avro/nested_records.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_utf8_view(true)
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 2);
+
+        // The f1 struct contains f1_1 which is a string field
+        // With utf8_view enabled, it should be Utf8View type
+        let f1_col = batch.column(0);
+        let f1_struct = f1_col.as_struct();
+        let f1_1_field = f1_struct.column_by_name("f1_1").unwrap();
+
+        // Check that the data type is Utf8View
+        assert_eq!(f1_1_field.data_type(), &DataType::Utf8View);
+    }
+
+    #[tokio::test]
+    async fn test_with_utf8_view_disabled() {
+        // Test that without utf8_view, we get regular Utf8
+        let file = arrow_test_data("avro/nested_records.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_utf8_view(false)
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_rows(), 2);
+
+        // The f1 struct contains f1_1 which is a string field
+        // Without utf8_view, it should be regular Utf8
+        let f1_col = batch.column(0);
+        let f1_struct = f1_col.as_struct();
+        let f1_1_field = f1_struct.column_by_name("f1_1").unwrap();
+
+        assert_eq!(f1_1_field.data_type(), &DataType::Utf8);
+    }
+
+    #[tokio::test]
+    async fn test_with_strict_mode_disabled_allows_null_second() {
+        // Test that with strict_mode disabled, unions of ['T', 'null'] are allowed
+        // The alltypes_nulls_plain.avro file has unions with null second
+        let file = arrow_test_data("avro/alltypes_nulls_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+
+        // Without strict mode, this should succeed
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_strict_mode(false)
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_with_strict_mode_enabled_rejects_null_second() {
+        // Test that with strict_mode enabled, unions of ['T', 'null'] are rejected
+        // The alltypes_plain.avro file has unions like ["int", "null"] (null second)
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+
+        // With strict mode, this should fail because of ['T', 'null'] unions
+        let result = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_strict_mode(true)
+            .try_build()
+            .await;
+
+        match result {
+            Ok(_) => panic!("Expected error for strict_mode with ['T', 'null'] union"),
+            Err(err) => {
+                assert!(
+                    err.to_string().contains("disallowed in strict_mode"),
+                    "Expected strict_mode error, got: {}",
+                    err
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_with_strict_mode_enabled_valid_schema() {
+        // Test that strict_mode works with schemas that have proper ['null', 'T'] unions
+        // The nested_records.avro file has properly ordered unions
+        let file = arrow_test_data("avro/nested_records.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+
+        // With strict mode, properly ordered unions should still work
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_strict_mode(true)
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_builder_options_combined() {
+        // Test combining multiple builder options
+        let file = arrow_test_data("avro/nested_records.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 2)
+            .with_header_size_hint(128)
+            .with_utf8_view(true)
+            .with_strict_mode(true)
+            .with_projection(vec![0, 2]) // f1 and f3
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        // Should have 2 columns (f1 and f3) due to projection
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.schema().field(0).name(), "f1");
+        assert_eq!(batch.schema().field(1).name(), "f3");
+
+        // Verify utf8_view is applied
+        let f1_col = batch.column(0);
+        let f1_struct = f1_col.as_struct();
+        let f1_1_field = f1_struct.column_by_name("f1_1").unwrap();
+        assert_eq!(f1_1_field.data_type(), &DataType::Utf8View);
     }
 }
