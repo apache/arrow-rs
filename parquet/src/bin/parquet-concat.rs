@@ -124,3 +124,40 @@ impl Args {
 fn main() -> Result<()> {
     Args::parse().run()
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    #[should_panic]
+    fn test_parse_args0() {
+        Args::try_parse_from(vec![""]).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_parse_args1() {
+        Args::try_parse_from(vec!["parquet-concat"]).unwrap();
+    }
+
+    #[test]
+    fn test_parse_args2() -> Result<()> {
+        let tmpf = TempDir::new().unwrap();
+        let msg = "Must provide at least one input file".to_string();
+        let out_name = tmpf
+            .path()
+            .join("out.parquet")
+            .into_os_string()
+            .into_string()
+            .unwrap();
+        let args = Args::try_parse_from(vec!["parquet-concat", &out_name]).unwrap();
+        match args.run() {
+            Err(ParquetError::General(msg)) => (),
+            _ => assert!(false, "expected General ParquetError"),
+        }
+        Ok(())
+    }
+}
