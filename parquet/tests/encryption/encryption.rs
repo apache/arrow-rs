@@ -919,7 +919,7 @@ fn write_and_read_stats(
     }
 
     // Verify the presence or not of statistics per-column when reading with the provided decryption properties
-    let mut options = ArrowReaderOptions::default();
+    let mut options = ArrowReaderOptions::default().with_encoding_stats_as_mask(false);
     if let Some(decryption_properties) = decryption_properties {
         options = options.with_file_decryption_properties(decryption_properties);
     }
