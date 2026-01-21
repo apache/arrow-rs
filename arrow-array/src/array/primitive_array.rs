@@ -1186,7 +1186,8 @@ impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
     }
 }
 
-impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -76,7 +76,8 @@ impl NullArray {
     }
 }
 
-impl Array for NullArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for NullArray {
     fn as_any(&self) -> &dyn Any {
         self
     }

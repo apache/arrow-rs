@@ -79,7 +79,16 @@ pub use list_view_array::*;
 use crate::iterator::ArrayIter;
 
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
-pub trait Array: std::fmt::Debug + Send + Sync {
+///
+/// # Safety
+///
+/// Implementations of this trait must ensure that all methods implementations comply with
+/// the Arrow specification. No safety guards are placed and failing to comply with it can
+/// translate into panics or undefined behavior. For example, a value computed based on `len`
+/// may be used as a direct index into memory regions without checks.
+///
+/// Use it at your own risk knowing that this trait might be sealed in the future.
+pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
@@ -342,7 +351,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 pub type ArrayRef = Arc<dyn Array>;
 
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
-impl Array for ArrayRef {
+unsafe impl Array for ArrayRef {
     fn as_any(&self) -> &dyn Any {
         self.as_ref().as_any()
     }
@@ -421,7 +430,7 @@ impl Array for ArrayRef {
     }
 }
 
-impl<T: Array> Array for &T {
+unsafe impl<T: Array> Array for &T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
     }

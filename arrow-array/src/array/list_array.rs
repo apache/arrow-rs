@@ -527,7 +527,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self
     }

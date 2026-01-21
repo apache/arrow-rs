@@ -742,7 +742,8 @@ impl From<UnionArray> for ArrayData {
     }
 }
 
-impl Array for UnionArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for UnionArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
