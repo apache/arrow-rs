@@ -17,18 +17,20 @@
 
 use crate::StructMode;
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{ArrayDecoder, make_decoder};
+use crate::reader::{ArrayDecoder, JSON_DECODER_CONFIG_KEY, make_decoder};
 use arrow_array::OffsetSizeTrait;
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::{ArrowError, DataType, Field};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use super::DecoderFactory;
 
 pub struct ListArrayDecoder<O> {
     data_type: DataType,
+    type_changed: bool,
     decoder: Box<dyn ArrayDecoder>,
     phantom: PhantomData<O>,
     is_nullable: bool,
@@ -36,14 +38,14 @@ pub struct ListArrayDecoder<O> {
 
 impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
     pub fn new(
-        data_type: DataType,
+        data_type: &DataType,
         coerce_primitive: bool,
         strict_mode: bool,
         is_nullable: bool,
         struct_mode: StructMode,
         decoder_factory: Option<&dyn DecoderFactory>,
     ) -> Result<Self, ArrowError> {
-        let field = match &data_type {
+        let field = match data_type {
             DataType::List(f) if !O::IS_LARGE => f,
             DataType::LargeList(f) if O::IS_LARGE => f,
             _ => unreachable!(),
@@ -58,8 +60,31 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
             decoder_factory,
         )?;
 
+        // Check if field needs modification
+        let type_changed = field.metadata().contains_key(JSON_DECODER_CONFIG_KEY)
+            || decoder.output_data_type().is_some();
+
+        let data_type = if type_changed {
+            // Strip decoder metadata and update data type if needed
+            let data_type = decoder.output_data_type().unwrap_or(field.data_type());
+            let mut metadata = field.metadata().clone();
+            metadata.remove(JSON_DECODER_CONFIG_KEY);
+
+            let field = Field::new(field.name(), data_type.clone(), field.is_nullable());
+            let field = Arc::new(field.with_metadata(metadata));
+
+            if O::IS_LARGE {
+                DataType::LargeList(field)
+            } else {
+                DataType::List(field)
+            }
+        } else {
+            data_type.clone()
+        };
+
         Ok(Self {
             data_type,
+            type_changed,
             decoder,
             phantom: Default::default(),
             is_nullable,
@@ -68,6 +93,10 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
 }
 
 impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
+    fn output_data_type(&self) -> Option<&DataType> {
+        self.type_changed.then_some(&self.data_type)
+    }
+
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut child_pos = Vec::with_capacity(pos.len());
         let mut offsets = BufferBuilder::<O>::new(pos.len() + 1);

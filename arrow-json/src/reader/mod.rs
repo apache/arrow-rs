@@ -794,6 +794,22 @@ impl Decoder {
 
 /// A trait to decode JSON values into arrow arrays
 pub trait ArrayDecoder: Send {
+    /// Returns the output data type if it differs from the input data type.
+    ///
+    /// Custom decoders may produce output with a different data type than was
+    /// specified in the input schema. For example, a custom decoder might strip
+    /// extension metadata or change the type entirely.
+    ///
+    /// Returns:
+    /// - `Some(&DataType)` if the decoder's output type differs from its input
+    /// - `None` if the decoder produces the same type as its input
+    ///
+    /// This is used by parent decoders (Struct, List, Map) to determine whether
+    /// they need to update their output type to reflect child type changes.
+    fn output_data_type(&self) -> Option<&DataType> {
+        None
+    }
+
     /// Decode elements from `tape` starting at the indexes contained in `pos`
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError>;
 }
@@ -845,10 +861,8 @@ pub fn make_decoder(
         }
     }
 
-    let data_type = data_type.clone();
-
     downcast_integer! {
-        data_type => (primitive_decoder, data_type),
+        *data_type => (primitive_decoder, data_type),
         DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
         DataType::Float16 => primitive_decoder!(Float16Type, data_type),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
@@ -907,7 +921,7 @@ pub fn make_decoder(
         DataType::FixedSizeBinary(len) => Ok(Box::new(FixedSizeBinaryArrayDecoder::new(len))),
         DataType::BinaryView => Ok(Box::new(BinaryViewDecoder::default())),
         DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode, decoder_factory)?)),
-        d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
+        _ => Err(ArrowError::NotYetImplemented(format!("Support for {data_type} in JSON reader")))
     }
 }
 

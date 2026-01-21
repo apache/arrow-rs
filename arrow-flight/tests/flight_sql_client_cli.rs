@@ -48,7 +48,7 @@ const QUERY: &str = "SELECT * FROM table;";
 
 /// Return a Command instance for running the `flight_sql_client` CLI
 fn flight_sql_client_cmd() -> Command {
-    Command::new(assert_cmd::cargo::cargo_bin!("flight_sql_client"))
+    Command::new(assert_cmd::cargo::cargo_bin("flight_sql_client"))
 }
 
 #[tokio::test]

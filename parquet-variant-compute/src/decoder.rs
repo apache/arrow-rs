@@ -21,8 +21,8 @@ use arrow_data::ArrayData;
 use arrow_json::{DecoderFactory, StructMode};
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType};
-use std::collections::HashMap;
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt};
+use std::collections::HashMap;
 
 use arrow_json::reader::ArrayDecoder;
 use arrow_json::reader::{Tape, TapeElement};

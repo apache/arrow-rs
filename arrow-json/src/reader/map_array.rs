@@ -17,17 +17,20 @@
 
 use crate::StructMode;
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{ArrayDecoder, make_decoder};
+use crate::reader::{ArrayDecoder, JSON_DECODER_CONFIG_KEY, make_decoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::{ArrowError, DataType, Field};
+use std::borrow::Cow;
+use std::sync::Arc;
 
 use super::DecoderFactory;
 
 pub struct MapArrayDecoder {
     data_type: DataType,
+    type_changed: bool,
     keys: Box<dyn ArrayDecoder>,
     values: Box<dyn ArrayDecoder>,
     is_nullable: bool,
@@ -35,21 +38,21 @@ pub struct MapArrayDecoder {
 
 impl MapArrayDecoder {
     pub fn new(
-        data_type: DataType,
+        data_type: &DataType,
         coerce_primitive: bool,
         strict_mode: bool,
         is_nullable: bool,
         struct_mode: StructMode,
         decoder_factory: Option<&dyn DecoderFactory>,
     ) -> Result<Self, ArrowError> {
-        let fields = match &data_type {
+        let (map_field, fields) = match data_type {
             DataType::Map(_, true) => {
                 return Err(ArrowError::NotYetImplemented(
                     "Decoding MapArray with sorted fields".to_string(),
                 ));
             }
             DataType::Map(f, _) => match f.data_type() {
-                DataType::Struct(fields) if fields.len() == 2 => fields,
+                DataType::Struct(fields) if fields.len() == 2 => (f, fields),
                 d => {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "MapArray must contain struct with two fields, got {d}"
@@ -59,27 +62,75 @@ impl MapArrayDecoder {
             _ => unreachable!(),
         };
 
+        let (key_field, value_field) = (&fields[0], &fields[1]);
+
         let keys = make_decoder(
-            fields[0].data_type(),
-            fields[0].is_nullable(),
-            fields[0].metadata(),
+            key_field.data_type(),
+            key_field.is_nullable(),
+            key_field.metadata(),
             coerce_primitive,
             strict_mode,
             struct_mode,
             decoder_factory,
         )?;
         let values = make_decoder(
-            fields[1].data_type(),
-            fields[1].is_nullable(),
-            fields[1].metadata(),
+            value_field.data_type(),
+            value_field.is_nullable(),
+            value_field.metadata(),
             coerce_primitive,
             strict_mode,
             struct_mode,
             decoder_factory,
         )?;
 
+        // Check if fields need modification
+        let key_has_metadata = key_field.metadata().contains_key(JSON_DECODER_CONFIG_KEY);
+        let value_has_metadata = value_field.metadata().contains_key(JSON_DECODER_CONFIG_KEY);
+
+        let key_field = if key_has_metadata || keys.output_data_type().is_some() {
+            let key_type = keys.output_data_type().unwrap_or(key_field.data_type());
+            let mut metadata = key_field.metadata().clone();
+            metadata.remove(JSON_DECODER_CONFIG_KEY);
+
+            let field = Field::new(key_field.name(), key_type.clone(), key_field.is_nullable());
+            Cow::Owned(Arc::new(field.with_metadata(metadata)))
+        } else {
+            Cow::Borrowed(key_field)
+        };
+
+        let value_field = if value_has_metadata || values.output_data_type().is_some() {
+            let value_type = values.output_data_type().unwrap_or(value_field.data_type());
+            let mut metadata = value_field.metadata().clone();
+            metadata.remove(JSON_DECODER_CONFIG_KEY);
+
+            let field = Field::new(
+                value_field.name(),
+                value_type.clone(),
+                value_field.is_nullable(),
+            );
+            Cow::Owned(Arc::new(field.with_metadata(metadata)))
+        } else {
+            Cow::Borrowed(value_field)
+        };
+
+        let type_changed =
+            matches!(key_field, Cow::Owned(_)) || matches!(value_field, Cow::Owned(_));
+
+        let data_type = if type_changed {
+            let struct_fields = vec![key_field.into_owned(), value_field.into_owned()];
+            let struct_field = Arc::new(Field::new(
+                map_field.name(),
+                DataType::Struct(struct_fields.into()),
+                map_field.is_nullable(),
+            ));
+            DataType::Map(struct_field, false)
+        } else {
+            data_type.clone()
+        };
+
         Ok(Self {
             data_type,
+            type_changed,
             keys,
             values,
             is_nullable,
@@ -88,13 +139,16 @@ impl MapArrayDecoder {
 }
 
 impl ArrayDecoder for MapArrayDecoder {
+    fn output_data_type(&self) -> Option<&DataType> {
+        self.type_changed.then_some(&self.data_type)
+    }
+
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        let s = match &self.data_type {
-            DataType::Map(f, _) => match f.data_type() {
-                s @ DataType::Struct(_) => s,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
+        let DataType::Map(f, _) = &self.data_type else {
+            unreachable!()
+        };
+        let s @ DataType::Struct(_) = f.data_type() else {
+            unreachable!()
         };
 
         let mut offsets = BufferBuilder::<i32>::new(pos.len() + 1);
