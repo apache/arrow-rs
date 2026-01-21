@@ -330,64 +330,63 @@ impl ByteViewArrayDecoderPlain {
         let to_read = len.min(self.max_remaining_values);
 
         let buf: &[u8] = self.buf.as_ref();
-        let mut eof = false;
-        let mut invalid_utf8 = false;
-
+        let buf_len = buf.len();
+        let mut error = None;
         let mut offset = self.offset;
 
         if self.validate_utf8 {
             let mut utf8_validation_begin = offset;
             output.views.extend((0..to_read).map(|_| {
-                if offset + 4 > buf.len() {
-                    eof = true;
+                if offset + 4 > buf_len {
+                    error = Some(ParquetError::EOF("eof decoding byte array".into()));
                     return 0;
                 }
-                let len_bytes: [u8; 4] = unsafe { buf.get_unchecked(offset..offset + 4).try_into().unwrap() };
-                let len = u32::from_le_bytes(len_bytes);
+                let len = u32::from_le_bytes(unsafe {
+                    *(buf.as_ptr().add(offset) as *const [u8; 4])
+                });
 
                 let start_offset = offset + 4;
-                let end_offset = start_offset + len as usize;
+                offset = start_offset + len as usize;
 
-                if end_offset > buf.len() {
-                    eof = true;
+                if offset > buf_len {
+                    error = Some(ParquetError::EOF("eof decoding byte array".into()));
                     return 0;
                 }
 
                 if len >= 128 {
-                    if let Err(_e) = check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) }) {
-                        invalid_utf8 = true;
+                    if let Err(e) = check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) }) {
+                        error = Some(e);
                         return 0;
                     }
-                    utf8_validation_begin = start_offset;
+                    utf8_validation_begin = offset;
                 }
 
-                let view = make_view(unsafe { buf.get_unchecked(start_offset..end_offset) }, block_id, start_offset as u32);
-                offset = end_offset;
+                let view = make_view(unsafe { buf.get_unchecked(start_offset..offset) }, block_id, start_offset as u32);
                 view
             }));
 
-            if !eof {
+            if error.is_none() {
                 check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) })?;
             }
         } else {
             output.views.extend((0..to_read).map(|_| {
-                if offset + 4 > buf.len() {
-                    eof = true;
+                if offset + 4 > buf_len {
+                    error = Some(ParquetError::EOF("eof decoding byte array".into()));
                     return 0;
                 }
-                let len_bytes: [u8; 4] = unsafe { buf.get_unchecked(offset..offset + 4).try_into().unwrap() };
-                let len = u32::from_le_bytes(len_bytes);
+                let len = u32::from_le_bytes(unsafe {
+                    *(buf.as_ptr().add(offset) as *const [u8; 4])
+                });
 
                 let start_offset = offset + 4;
-                let end_offset = start_offset + len as usize;
+                offset = start_offset + len as usize;
 
-                if end_offset > buf.len() {
-                    eof = true;
+                if offset > buf_len {
+                    error = Some(ParquetError::EOF("eof decoding byte array".into()));
                     return 0;
                 }
 
-                let view = make_view(unsafe { buf.get_unchecked(start_offset..end_offset) }, block_id, start_offset as u32);
-                offset = end_offset;
+                let view = make_view(unsafe { buf.get_unchecked(start_offset..offset) }, block_id, start_offset as u32);
                 view
             }));
         }
@@ -395,8 +394,8 @@ impl ByteViewArrayDecoderPlain {
         self.offset = offset;
         self.max_remaining_values -= to_read;
 
-        if eof {
-            return Err(ParquetError::EOF("eof decoding byte array".into()));
+        if let Some(e) = error {
+            return Err(e);
         }
 
         Ok(to_read)
