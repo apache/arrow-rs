@@ -469,32 +469,31 @@ impl ByteViewArrayDecoderDictionary {
         // then the base_buffer_idx is 5 - 2 = 3
         let base_buffer_idx = output.buffers.len() as u32 - dict.buffers.len() as u32;
 
-        self.decoder.read(len, |keys| {
-            for k in keys {
-                let view = dict
-                    .views
-                    .get(*k as usize)
-                    .ok_or_else(|| general_err!("invalid key={} for dictionary", *k))?;
-                let len = *view as u32;
-                if len <= 12 {
-                    // directly append the view if it is inlined
-                    // Safety: the view is from the dictionary, so it is valid
-                    unsafe {
-                        output.append_raw_view_unchecked(view);
+        let mut error = None;
+        let read = self.decoder.read(len, |keys| {
+            output.views.extend(keys.iter().map(|k| {
+                if error.is_some() { return 0; }
+                match dict.views.get(*k as usize) {
+                    Some(&view) => {
+                        let len = view as u32;
+                        if len <= 12 {
+                            view
+                        } else {
+                            let mut view = ByteView::from(view);
+                            view.buffer_index += base_buffer_idx;
+                            view.into()
+                        }
                     }
-                } else {
-                    // correct the buffer index and append the view
-                    let mut view = ByteView::from(*view);
-                    view.buffer_index += base_buffer_idx;
-                    // Safety: the view is from the dictionary,
-                    // we corrected the index value to point it to output buffer, so it is valid
-                    unsafe {
-                        output.append_raw_view_unchecked(&view.into());
+                    None => {
+                        error = Some(general_err!("invalid key={} for dictionary", *k));
+                        0
                     }
                 }
-            }
+            }));
             Ok(())
-        })
+        })?;
+        if let Some(e) = error { return Err(e); }
+        Ok(read)
     }
 
     fn skip(&mut self, dict: &ViewBuffer, to_skip: usize) -> Result<usize> {
@@ -561,15 +560,19 @@ impl ByteViewArrayDecoderDeltaLength {
 
         let mut current_offset = self.data_offset;
         let initial_offset = current_offset;
-        for length in src_lengths {
-            // # Safety
-            // The length is from the delta length decoder, so it is valid
-            // The start_offset is calculated from the lengths, so it is valid
-            // `start_offset + length` is guaranteed to be within the bounds of `data`, as checked in `new`
-            unsafe { output.append_view_unchecked(block_id, current_offset as u32, *length as u32) }
 
-            current_offset += *length as usize;
-        }
+        output.views.extend(src_lengths.iter().map(|length| {
+            let len = *length as u32;
+            let start_offset = current_offset;
+            current_offset += len as usize;
+            // # Safety
+            // The length and offset are guaranteed valid by the entry check in `new`
+            make_view(
+                &self.data[start_offset..start_offset + len as usize],
+                block_id,
+                start_offset as u32,
+            )
+        }));
 
         // Delta length encoding has continuous strings, we can validate utf8 in one go
         if self.validate_utf8 {
