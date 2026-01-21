@@ -332,13 +332,12 @@ impl ByteViewArrayDecoderPlain {
         let buf: &[u8] = self.buf.as_ref();
         let buf_len = buf.len();
         let mut offset = self.offset;
-        let mut read = 0;
 
         output.views.reserve(to_read);
 
         if self.validate_utf8 {
             let mut utf8_validation_begin = offset;
-            while read < to_read {
+            for _ in 0..to_read {
                 if offset + 4 > buf_len {
                     return Err(ParquetError::EOF("eof decoding byte array".into()));
                 }
@@ -363,11 +362,10 @@ impl ByteViewArrayDecoderPlain {
                     output.append_raw_view_unchecked(&view);
                 }
                 offset = end_offset;
-                read += 1;
             }
             check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) })?;
         } else {
-            while read < to_read {
+            for _ in 0..to_read {
                 if offset + 4 > buf_len {
                     return Err(ParquetError::EOF("eof decoding byte array".into()));
                 }
@@ -387,7 +385,6 @@ impl ByteViewArrayDecoderPlain {
                     output.append_raw_view_unchecked(&view);
                 }
                 offset = end_offset;
-                read += 1;
             }
         }
 
