@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
-use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray, builder::make_view};
+use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
 use std::sync::Arc;
@@ -89,6 +89,7 @@ impl ValuesBuffer for ViewBuffer {
 #[cfg(test)]
 mod tests {
 
+    use arrow::array::make_view;
     use arrow_array::Array;
 
     use super::*;

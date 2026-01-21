@@ -352,9 +352,7 @@ impl ByteViewArrayDecoderPlain {
             if offset + 4 > buf_len {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
-            let len = u32::from_le_bytes(unsafe {
-                *(buf.as_ptr().add(offset) as *const [u8; 4])
-            });
+            let len = u32::from_le_bytes(unsafe { *(buf.as_ptr().add(offset) as *const [u8; 4]) });
 
             let start_offset = offset + 4;
             let end_offset = start_offset + len as usize;
@@ -484,8 +482,9 @@ impl ByteViewArrayDecoderDictionary {
 
         let mut error = None;
         let read = self.decoder.read(len, |keys| {
-            output.views.extend(keys.iter().map(|k| {
-                match dict.views.get(*k as usize) {
+            output
+                .views
+                .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
                     Some(&view) => {
                         let len = view as u32;
                         if len <= 12 {
@@ -500,11 +499,12 @@ impl ByteViewArrayDecoderDictionary {
                         error = Some(general_err!("invalid key={} for dictionary", *k));
                         0
                     }
-                }
-            }));
+                }));
             Ok(())
         })?;
-        if let Some(e) = error { return Err(e); }
+        if let Some(e) = error {
+            return Err(e);
+        }
         Ok(read)
     }
 
