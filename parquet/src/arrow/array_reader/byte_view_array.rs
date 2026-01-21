@@ -399,7 +399,7 @@ impl ByteViewArrayDecoderPlain {
                 start_offset as u32,
             );
             unsafe {
-                output.append_raw_view_unchecked(&view);
+                output.append_raw_view_unchecked(view);
             }
             offset = end_offset;
         }
@@ -653,7 +653,7 @@ impl ByteViewArrayDecoderDelta {
                 // The buffer_id is the last buffer in the output buffers
                 // The offset is calculated from the buffer, so it is valid
                 unsafe {
-                    output.append_raw_view_unchecked(&view);
+                    output.append_raw_view_unchecked(view);
                 }
                 Ok(())
             })?
@@ -678,7 +678,7 @@ impl ByteViewArrayDecoderDelta {
                 // The offset is calculated from the buffer, so it is valid
                 // Utf-8 validation is done later
                 unsafe {
-                    output.append_raw_view_unchecked(&view);
+                    output.append_raw_view_unchecked(view);
                 }
                 Ok(())
             })?;
