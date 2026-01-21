@@ -1537,15 +1537,16 @@ impl<'a> Maker<'a> {
                     let non_null_branch = &reader_variants[non_null_idx];
                     let mut dt =
                         self.make_data_type(writer_non_union, Some(non_null_branch), namespace)?;
-                    dt.nullability = Some(if null_idx == 0 {
+                    let nullability = if null_idx == 0 {
                         Nullability::NullFirst
                     } else {
                         Nullability::NullSecond
-                    });
+                    };
+
                     #[cfg(feature = "avro_custom_types")]
-                    if let Some(nb) = dt.nullability {
-                        Self::propagate_nullability_into_ree(&mut dt, nb);
-                    }
+                    Self::propagate_nullability_into_ree(&mut dt, nullability);
+
+                    dt.nullability = Some(nullability);
                     let promotion = Self::coercion_from(&dt);
                     dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
                         writer_to_reader: Arc::from(vec![Some((non_null_idx, promotion))]),
