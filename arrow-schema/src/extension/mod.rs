@@ -277,7 +277,7 @@ pub trait ExtensionType: Sized {
         data_type: &DataType,
     ) -> Result<Self, ArrowError> {
         match metadata.get(EXTENSION_TYPE_NAME_KEY).map(|s| s.as_str()) {
-            Some(Self::NAME) => {
+            Some(name) if name == Self::NAME => {
                 let ext_metadata = metadata
                     .get(EXTENSION_TYPE_METADATA_KEY)
                     .map(|s| s.as_str());
@@ -289,7 +289,7 @@ pub trait ExtensionType: Sized {
                 Self::NAME
             ))),
             None => Err(ArrowError::InvalidArgumentError(
-                "Extension type name missing".to_string()
+                "Extension type name missing".to_string(),
             )),
         }
     }

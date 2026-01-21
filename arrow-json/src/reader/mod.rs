@@ -137,6 +137,8 @@ use crate::StructMode;
 use crate::reader::binary_array::{
     BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
 };
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -306,22 +308,24 @@ impl ReaderBuilder {
 
     /// Create a [`Decoder`]
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
-        let (data_type, nullable) = match self.is_field {
-            false => (DataType::Struct(self.schema.fields.clone()), false),
-            true => {
-                let field = &self.schema.fields[0];
-                (field.data_type().clone(), field.is_nullable())
-            }
+        let empty_metadata = HashMap::default();
+        let (data_type, nullable, metadata) = if self.is_field {
+            let field = &self.schema.fields[0];
+            let data_type = Cow::Borrowed(field.data_type());
+            (data_type, field.is_nullable(), field.metadata())
+        } else {
+            let data_type = Cow::Owned(DataType::Struct(self.schema.fields.clone()));
+            (data_type, false, &empty_metadata)
         };
 
         let decoder = make_decoder(
-            None,
-            data_type,
+            data_type.as_ref(),
+            nullable,
+            metadata,
             self.coerce_primitive,
             self.strict_mode,
-            nullable,
             self.struct_mode,
-            self.decoder_factory,
+            self.decoder_factory.as_deref(),
         )?;
 
         let num_fields = self.schema.flattened_fields().len();
@@ -424,14 +428,15 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 /// struct IncorrectStringAsNullDecoderFactory;
 ///
 /// impl DecoderFactory for IncorrectStringAsNullDecoderFactory {
-///     fn make_custom_decoder<'a>(
+///     fn make_custom_decoder(
 ///         &self,
-///         _field: Option<FieldRef>,
-///         data_type: DataType,
+///         data_type: &DataType,
+///         _is_nullable: bool,
+///         _field_metadata: &HashMap<String, String>,
 ///         _coerce_primitive: bool,
 ///         _strict_mode: bool,
-///         _is_nullable: bool,
 ///         _struct_mode: StructMode,
+///         _decoder_factory: Option<&dyn DecoderFactory>,
 ///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
 ///         match data_type {
 ///             DataType::Utf8 => Ok(Some(Box::new(IncorrectStringAsNullDecoder {}))),
@@ -466,14 +471,25 @@ pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
     /// This can be used to override how e.g. error in decoding are handled.
     fn make_custom_decoder(
         &self,
-        _field: Option<FieldRef>,
-        _data_type: DataType,
+        _data_type: &DataType,
+        _is_nullable: bool,
+        _field_metadata: &HashMap<String, String>,
         _coerce_primitive: bool,
         _strict_mode: bool,
-        _is_nullable: bool,
         _struct_mode: StructMode,
+        _decoder_factory: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError>;
 }
+
+///
+/// Metadata key for JSON decoder configuration.
+///
+/// This well-known metadata key can be used to annotate schema fields with
+/// custom decoding instructions. Custom [`DecoderFactory`] implementations
+/// can inspect this metadata to determine how to decode specific fields.
+///
+/// This metadata key is automatically stripped from the output array schema.
+pub const JSON_DECODER_CONFIG_KEY: &str = "arrow-rs:json:decoder";
 
 /// A low-level interface for reading JSON data from a byte stream
 ///
@@ -788,27 +804,48 @@ macro_rules! primitive_decoder {
     };
 }
 
-fn make_decoder(
-    field: Option<FieldRef>,
-    data_type: DataType,
+/// Creates an [`ArrayDecoder`] for decoding JSON values into Arrow arrays.
+///
+/// This function is the primary entry point for constructing decoders. It first
+/// attempts to use a custom [`DecoderFactory`] if provided, then falls back to
+/// default decoder implementations based on the data type.
+///
+/// Custom decoders can use this function to recursively create child decoders
+/// for complex types by passing along the `decoder_factory` parameter.
+///
+/// # Arguments
+///
+/// * `data_type` - The Arrow data type to decode into
+/// * `is_nullable` - Whether the field is nullable
+/// * `field_metadata` - Schema metadata for the field (can contain [`JSON_DECODER_CONFIG_KEY`])
+/// * `coerce_primitive` - Whether to coerce primitive types (e.g., string to number)
+/// * `strict_mode` - Whether to validate struct fields strictly
+/// * `struct_mode` - How to decode struct fields
+/// * `decoder_factory` - Optional custom decoder factory for recursion
+pub fn make_decoder(
+    data_type: &DataType,
+    is_nullable: bool,
+    field_metadata: &HashMap<String, String>,
     coerce_primitive: bool,
     strict_mode: bool,
-    is_nullable: bool,
     struct_mode: StructMode,
-    decoder_factory: Option<Arc<dyn DecoderFactory>>,
+    decoder_factory: Option<&dyn DecoderFactory>,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
-    if let Some(ref factory) = decoder_factory {
+    if let Some(factory) = decoder_factory {
         if let Some(decoder) = factory.make_custom_decoder(
-            field.clone(),
-            data_type.clone(),
+            data_type,
+            is_nullable,
+            field_metadata,
             coerce_primitive,
             strict_mode,
-            is_nullable,
             struct_mode,
+            decoder_factory,
         )? {
             return Ok(decoder);
         }
     }
+
+    let data_type = data_type.clone();
 
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
@@ -2954,17 +2991,18 @@ mod tests {
         struct AlwaysNullStringArrayDecoderFactory;
 
         impl DecoderFactory for AlwaysNullStringArrayDecoderFactory {
-            fn make_custom_decoder<'a>(
+            fn make_custom_decoder(
                 &self,
-                _field: Option<FieldRef>,
-                data_type: DataType,
+                data_type: &DataType,
+                _is_nullable: bool,
+                _field_metadata: &HashMap<String, String>,
                 _coerce_primitive: bool,
                 _strict_mode: bool,
-                _is_nullable: bool,
                 _struct_mode: StructMode,
+                _decoder_factory: Option<&dyn DecoderFactory>,
             ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
                 match data_type {
-                    DataType::Utf8 => Ok(Some(Box::new(AlwaysNullStringArrayDecoder {}))),
+                    DataType::Utf8 => Ok(Some(Box::new(AlwaysNullStringArrayDecoder))),
                     _ => Ok(None),
                 }
             }

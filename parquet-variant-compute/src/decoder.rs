@@ -20,7 +20,8 @@ use arrow_array::{Array, StructArray};
 use arrow_data::ArrayData;
 use arrow_json::{DecoderFactory, StructMode};
 use arrow_schema::extension::ExtensionType;
-use arrow_schema::{ArrowError, DataType, FieldRef};
+use arrow_schema::{ArrowError, DataType};
+use std::collections::HashMap;
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt};
 
 use arrow_json::reader::ArrayDecoder;
@@ -70,23 +71,19 @@ impl ArrayDecoder for VariantArrayDecoder {
 pub struct VariantArrayDecoderFactory;
 
 impl DecoderFactory for VariantArrayDecoderFactory {
-    fn make_custom_decoder<'a>(
+    fn make_custom_decoder(
         &self,
-        field: Option<FieldRef>,
-        _data_type: DataType,
+        data_type: &DataType,
+        _is_nullable: bool,
+        field_metadata: &HashMap<String, String>,
         _coerce_primitive: bool,
         _strict_mode: bool,
-        _is_nullable: bool,
         _struct_mode: StructMode,
+        _decoder_factory: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
-        let field = match field {
-            Some(inner_field) => inner_field,
-            None => return Ok(None),
-        };
-        if field.extension_type_name() == Some(VariantType::NAME)
-            && field.try_extension_type::<VariantType>().is_ok()
-        {
-            return Ok(Some(Box::new(VariantArrayDecoder)))
+        // Check if this is a Variant extension type using metadata
+        if VariantType::try_from_parts(field_metadata, data_type).is_ok() {
+            return Ok(Some(Box::new(VariantArrayDecoder)));
         }
         Ok(None)
     }
