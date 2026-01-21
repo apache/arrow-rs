@@ -485,7 +485,6 @@ impl ByteViewArrayDecoderDictionary {
         let mut error = None;
         let read = self.decoder.read(len, |keys| {
             output.views.extend(keys.iter().map(|k| {
-                if error.is_some() { return 0; }
                 match dict.views.get(*k as usize) {
                     Some(&view) => {
                         let len = view as u32;
