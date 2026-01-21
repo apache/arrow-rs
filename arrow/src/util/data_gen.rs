@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use half::f16;
 use rand::{
     Rng,
     distr::uniform::{SampleRange, SampleUniform},
@@ -116,7 +115,10 @@ pub fn create_random_array(
             size,
             primitive_null_density,
         )),
-        Float16 => Arc::new(create_random_float16_array(size, primitive_null_density)),
+        Float16 => Arc::new(create_primitive_array::<Float16Type>(
+            size,
+            primitive_null_density,
+        )),
         Float32 => Arc::new(create_primitive_array::<Float32Type>(
             size,
             primitive_null_density,
@@ -565,20 +567,6 @@ where
                 None
             } else {
                 Some(T::random(&mut rng))
-            }
-        })
-        .collect()
-}
-
-fn create_random_float16_array(size: usize, null_density: f32) -> PrimitiveArray<Float16Type> {
-    let mut rng = seedable_rng();
-
-    (0..size)
-        .map(|_| {
-            if rng.random::<f32>() < null_density {
-                None
-            } else {
-                Some(f16::from_f32(rng.random()))
             }
         })
         .collect()
