@@ -121,6 +121,15 @@ pub struct AsyncWriterBuilder {
 
 impl AsyncWriterBuilder {
     /// Create a new builder with default settings.
+    ///
+    /// The Avro schema used for writing is determined as follows:
+    /// 1) If the Arrow schema metadata contains `avro::schema` (see `SCHEMA_METADATA_KEY`),
+    ///    that JSON is used verbatim.
+    /// 2) Otherwise, the Arrow schema is converted to an Avro record schema.
+    ///
+    /// All other writer settings (compression codec, buffer capacity, fingerprint strategy)
+    /// are initialized to their defaults and can be customized using the corresponding
+    /// builder methods.
     pub fn new(schema: Schema) -> Self {
         Self {
             schema,
