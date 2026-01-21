@@ -449,7 +449,8 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "deflate")]
-    async fn test_async_writer_with_deflate_compression() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_async_writer_with_deflate_compression() -> Result<(), Box<dyn std::error::Error>>
+    {
         let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
