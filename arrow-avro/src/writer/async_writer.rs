@@ -38,7 +38,7 @@
 //! )?;
 //!
 //! let mut buffer = Vec::new();
-//! let mut writer = AsyncAvroWriter::new(&mut buffer, schema)?;
+//! let mut writer = AsyncAvroWriter::new(&mut buffer, schema).await?;
 //! writer.write(&batch).await?;
 //! writer.finish().await?;
 //!
