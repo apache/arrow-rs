@@ -269,8 +269,9 @@ pub(crate) fn parse_column_index(
                             rg_idx,
                             col_idx,
                         )
+                        .map(Some)
                     }
-                    None => Ok(ColumnIndexMetaData::NONE),
+                    None => Ok(None),
                 })
                 .collect::<crate::errors::Result<Vec<_>>>()
         })
@@ -289,42 +290,32 @@ pub(crate) fn parse_offset_index(
     if offset_index_policy == PageIndexPolicy::Skip {
         return Ok(());
     }
-    let row_groups = metadata.row_groups();
-    let mut all_indexes = Vec::with_capacity(row_groups.len());
-    for (rg_idx, x) in row_groups.iter().enumerate() {
-        let mut row_group_indexes = Vec::with_capacity(x.columns().len());
-        for (col_idx, c) in x.columns().iter().enumerate() {
-            let result = match c.offset_index_range() {
-                Some(r) => {
-                    let r_start = usize::try_from(r.start - start_offset)?;
-                    let r_end = usize::try_from(r.end - start_offset)?;
-                    inner::parse_single_offset_index(
-                        &bytes[r_start..r_end],
-                        metadata,
-                        c,
-                        rg_idx,
-                        col_idx,
-                    )
-                }
-                None => Err(general_err!("missing offset index")),
-            };
-
-            match result {
-                Ok(index) => row_group_indexes.push(index),
-                Err(e) => {
-                    if offset_index_policy == PageIndexPolicy::Required {
-                        return Err(e);
-                    } else {
-                        // Invalidate and return
-                        metadata.set_column_index(None);
-                        metadata.set_offset_index(None);
-                        return Ok(());
+    let index = metadata
+        .row_groups()
+        .iter()
+        .enumerate()
+        .map(|(rg_idx, x)| {
+            x.columns()
+                .iter()
+                .enumerate()
+                .map(|(col_idx, c)| match c.offset_index_range() {
+                    Some(r) => {
+                        let r_start = usize::try_from(r.start - start_offset)?;
+                        let r_end = usize::try_from(r.end - start_offset)?;
+                        inner::parse_single_offset_index(
+                            &bytes[r_start..r_end],
+                            metadata,
+                            c,
+                            rg_idx,
+                            col_idx,
+                        )
+                        .map(Some)
                     }
-                }
-            }
-        }
-        all_indexes.push(row_group_indexes);
-    }
-    metadata.set_offset_index(Some(all_indexes));
+                    None => Ok(None),
+                })
+                .collect::<crate::errors::Result<Vec<_>>>()
+        })
+        .collect::<crate::errors::Result<Vec<_>>>()?;
+    metadata.set_offset_index(Some(index));
     Ok(())
 }

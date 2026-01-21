@@ -970,8 +970,8 @@ mod tests {
         assert_eq!(metadata_with_index.num_row_groups(), 1);
 
         // Check offset indexes are present for all columns
-        let offset_index = metadata_with_index.offset_index().unwrap();
-        let column_index = metadata_with_index.column_index().unwrap();
+        let offset_index = metadata_with_index.offset_index().expect("offset index should be present when page index is enabled");
+        let column_index = metadata_with_index.column_index().expect("column index should be present when page index is enabled");
 
         assert_eq!(offset_index.len(), metadata_with_index.num_row_groups());
         assert_eq!(column_index.len(), metadata_with_index.num_row_groups());

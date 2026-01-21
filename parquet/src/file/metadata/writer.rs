@@ -149,19 +149,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .is_some_and(|ci| ci.iter().all(|cii| cii.iter().all(|idx| idx.is_none())));
 
         // transform from Option<Vec<Vec<Option<ColumnIndexMetaData>>>> to
-        // Option<Vec<Vec<ColumnIndexMetaData>>>
+        // Option<Vec<Vec<Option<ColumnIndexMetaData>>>>
         let column_indexes: Option<ParquetColumnIndex> = if all_none {
             None
         } else {
-            column_indexes.map(|ovvi| {
-                ovvi.into_iter()
-                    .map(|vi| {
-                        vi.into_iter()
-                            .map(|ci| ci.unwrap_or(ColumnIndexMetaData::NONE))
-                            .collect()
-                    })
-                    .collect()
-            })
+            column_indexes
         };
 
         Ok(column_indexes)
@@ -184,12 +176,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let offset_indexes: Option<ParquetOffsetIndex> = if all_none {
             None
         } else {
-            // FIXME(ets): this will panic if there's a missing index.
-            offset_indexes.map(|ovvi| {
-                ovvi.into_iter()
-                    .map(|vi| vi.into_iter().map(|oi| oi.unwrap()).collect())
-                    .collect()
-            })
+            offset_indexes
         };
 
         Ok(offset_indexes)
@@ -489,7 +476,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                         let column_indexes = &row_group_column_indexes[rg_idx];
                         column_indexes
                             .iter()
-                            .map(|column_index| Some(column_index.clone()))
+                            .map(|column_index| column_index.clone())
                             .collect()
                     })
                     .collect()
@@ -505,7 +492,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                         let offset_indexes = &row_group_offset_indexes[rg_idx];
                         offset_indexes
                             .iter()
-                            .map(|offset_index| Some(offset_index.clone()))
+                            .map(|offset_index| offset_index.clone())
                             .collect()
                     })
                     .collect()

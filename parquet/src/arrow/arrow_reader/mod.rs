@@ -1293,7 +1293,7 @@ impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
         // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
+            .map(|i| i[rg_idx][self.column_idx].as_ref().unwrap().page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
@@ -4847,7 +4847,7 @@ pub(crate) mod tests {
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
-            assert!(!builder.metadata().offset_index().unwrap()[0].is_empty());
+            assert!(!builder.metadata().offset_index().expect("offset index should be present when page index is enabled")[0].is_empty());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 8);
