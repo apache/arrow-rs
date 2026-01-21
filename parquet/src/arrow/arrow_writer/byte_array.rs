@@ -132,7 +132,7 @@ impl FallbackEncoder {
                 .encoding(descr.path())
                 .unwrap_or_else(|| match props.writer_version() {
                     WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
-                    WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
+                    WriterVersion::PARQUET_2_0 => Encoding::DELTA_LENGTH_BYTE_ARRAY,
                 });
 
         let encoder = match encoding {
