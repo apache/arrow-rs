@@ -575,25 +575,7 @@ impl Field {
     /// }
     /// ```
     pub fn try_extension_type<E: ExtensionType>(&self) -> Result<E, ArrowError> {
-        // Check the extension name in the metadata
-        match self.extension_type_name() {
-            // It should match the name of the given extension type
-            Some(name) if name == E::NAME => {
-                // Deserialize the metadata and try to construct the extension
-                // type
-                E::deserialize_metadata(self.extension_type_metadata())
-                    .and_then(|metadata| E::try_new(self.data_type(), metadata))
-            }
-            // Name mismatch
-            Some(name) => Err(ArrowError::InvalidArgumentError(format!(
-                "Field extension type name mismatch, expected {}, found {name}",
-                E::NAME
-            ))),
-            // Name missing
-            None => Err(ArrowError::InvalidArgumentError(
-                "Field extension type name missing".to_owned(),
-            )),
-        }
+        E::try_from_parts(self.metadata(), self.data_type())
     }
 
     /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
