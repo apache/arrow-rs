@@ -304,6 +304,7 @@ impl<W: AsyncFileWriter, F: AvroFormat> AsyncWriter<W, F> {
 mod tests {
     use super::*;
     use crate::reader::ReaderBuilder;
+    use crate::writer::format::AvroOcfFormat;
     use arrow_array::{ArrayRef, Int32Array, Int64Array, StringArray};
     use arrow_schema::{DataType, Field};
     use std::io::Cursor;
@@ -380,6 +381,93 @@ mod tests {
             total_rows += out.num_rows();
         }
         assert_eq!(total_rows, 4);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_async_writer_builder_configuration() -> Result<(), Box<dyn std::error::Error>> {
+        let schema = Schema::new(vec![Field::new("x", DataType::Int64, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int64Array::from(vec![42])) as ArrayRef],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut writer = AsyncWriterBuilder::new(schema.clone())
+            .with_capacity(2048)
+            .build::<_, AvroOcfFormat>(&mut buffer)
+            .await?;
+
+        writer.write(&batch).await?;
+        writer.finish().await?;
+
+        let mut reader = ReaderBuilder::new().build(Cursor::new(buffer))?;
+        let out = reader.next().unwrap()?;
+        assert_eq!(out.num_rows(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_async_writer_into_inner() -> Result<(), Box<dyn std::error::Error>> {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![99])) as ArrayRef],
+        )?;
+
+        let mut buffer = Vec::new();
+        {
+            let mut writer = AsyncAvroWriter::new(&mut buffer, schema).await?;
+            writer.write(&batch).await?;
+            writer.finish().await?;
+        }
+
+        assert!(!buffer.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_async_writer_schema_mismatch_error() -> Result<(), Box<dyn std::error::Error>> {
+        let schema1 = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+        let schema2 = Schema::new(vec![Field::new("name", DataType::Utf8, false)]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema2.clone()),
+            vec![Arc::new(StringArray::from(vec!["test"])) as ArrayRef],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut writer = AsyncAvroWriter::new(&mut buffer, schema1).await?;
+
+        let result = writer.write(&batch).await;
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "deflate")]
+    async fn test_async_writer_with_deflate_compression() -> Result<(), Box<dyn std::error::Error>> {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut writer = AsyncWriterBuilder::new(schema.clone())
+            .with_compression(Some(CompressionCodec::Deflate))
+            .build::<_, AvroOcfFormat>(&mut buffer)
+            .await?;
+
+        writer.write(&batch).await?;
+        writer.finish().await?;
+
+        let mut reader = ReaderBuilder::new().build(Cursor::new(buffer))?;
+        let out = reader.next().unwrap()?;
+        assert_eq!(out.num_rows(), 3);
 
         Ok(())
     }
