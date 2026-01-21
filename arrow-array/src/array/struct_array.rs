@@ -543,8 +543,8 @@ mod tests {
     use super::*;
 
     use crate::{
-        cast::AsArray, types::Int32Type, BooleanArray, Float32Array, Float64Array, Int32Array,
-        Int64Array, StringArray,
+        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+        cast::AsArray, types::Int32Type,
     };
     use arrow_buffer::ToByteSlice;
 
