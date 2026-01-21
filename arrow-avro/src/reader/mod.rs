@@ -9081,4 +9081,46 @@ mod test {
             "entire RecordBatch mismatch (schema, all columns, all rows)"
         );
     }
+
+    #[test]
+    fn test_bad_varint_bug_nullable_array_items() {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let gz_path = format!("{manifest_dir}/test/data/bad-varint-bug.avro.gz");
+        let gz_file = File::open(&gz_path).expect("test file should exist");
+        let mut decoder = GzDecoder::new(gz_file);
+        let mut avro_bytes = Vec::new();
+        decoder
+            .read_to_end(&mut avro_bytes)
+            .expect("should decompress");
+        let reader_arrow_schema = Schema::new(vec![Field::new(
+            "int_array",
+            DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+            true,
+        )])
+        .with_metadata(HashMap::from([("avro.name".into(), "table".into())]));
+        let reader_schema = AvroSchema::try_from(&reader_arrow_schema)
+            .expect("should convert Arrow schema to Avro");
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(avro_bytes))
+            .expect("should build reader");
+        let batch = reader
+            .next()
+            .expect("should have one batch")
+            .expect("reading should succeed without bad varint error");
+        assert_eq!(batch.num_rows(), 1);
+        let list_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("should be ListArray");
+        assert_eq!(list_col.len(), 1);
+        let values = list_col.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 2);
+        assert_eq!(int_values.value(0), 1);
+        assert_eq!(int_values.value(1), 2);
+    }
 }
