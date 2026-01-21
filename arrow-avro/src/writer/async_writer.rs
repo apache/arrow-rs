@@ -154,9 +154,7 @@ impl AsyncWriterBuilder {
         let maybe_fingerprint = if F::NEEDS_PREFIX {
             match self.fingerprint_strategy {
                 Some(FingerprintStrategy::Id(id)) => Some(crate::schema::Fingerprint::Id(id)),
-                Some(FingerprintStrategy::Id64(id)) => {
-                    Some(crate::schema::Fingerprint::Id64(id))
-                }
+                Some(FingerprintStrategy::Id64(id)) => Some(crate::schema::Fingerprint::Id64(id)),
                 Some(strategy) => {
                     Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?)
                 }
@@ -274,7 +272,11 @@ impl<W: AsyncFileWriter, F: AvroFormat> AsyncWriter<W, F> {
         self.writer
     }
 
-    async fn write_ocf_block(&mut self, batch: &RecordBatch, sync: &[u8; 16]) -> Result<(), ArrowError> {
+    async fn write_ocf_block(
+        &mut self,
+        batch: &RecordBatch,
+        sync: &[u8; 16],
+    ) -> Result<(), ArrowError> {
         let mut buf = Vec::<u8>::with_capacity(self.capacity);
         self.encoder.encode(&mut buf, batch)?;
         let encoded = match self.compression {
@@ -447,7 +449,8 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "deflate")]
-    async fn test_async_writer_with_deflate_compression() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_async_writer_with_deflate_compression() -> Result<(), Box<dyn std::error::Error>>
+    {
         let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),

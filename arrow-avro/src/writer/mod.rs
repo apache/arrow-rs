@@ -84,7 +84,9 @@ pub mod format;
 pub mod async_writer;
 
 #[cfg(feature = "async")]
-pub use async_writer::{AsyncAvroWriter, AsyncAvroStreamWriter, AsyncFileWriter, AsyncWriter, AsyncWriterBuilder};
+pub use async_writer::{
+    AsyncAvroStreamWriter, AsyncAvroWriter, AsyncFileWriter, AsyncWriter, AsyncWriterBuilder,
+};
 
 /// Builder to configure and create a `Writer`.
 #[derive(Debug, Clone)]
