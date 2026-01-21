@@ -692,8 +692,6 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<&'a str> for DictionaryArray<T>
     }
 }
 
-impl<T: ArrowDictionaryKeyType> super::private::Sealed for DictionaryArray<T> {}
-
 impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
@@ -852,8 +850,6 @@ impl<'a, K: ArrowDictionaryKeyType, V> TypedDictionaryArray<'a, K, V> {
         self.values
     }
 }
-
-impl<K: ArrowDictionaryKeyType, V: Sync> super::private::Sealed for TypedDictionaryArray<'_, K, V> {}
 
 impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V> {
     fn as_any(&self) -> &dyn Any {

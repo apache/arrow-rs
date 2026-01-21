@@ -402,8 +402,6 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
     }
 }
 
-impl super::private::Sealed for StructArray {}
-
 impl Array for StructArray {
     fn as_any(&self) -> &dyn Any {
         self

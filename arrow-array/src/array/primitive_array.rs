@@ -1186,8 +1186,6 @@ impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
     }
 }
 
-impl<T: ArrowPrimitiveType> super::private::Sealed for PrimitiveArray<T> {}
-
 impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     fn as_any(&self) -> &dyn Any {
         self

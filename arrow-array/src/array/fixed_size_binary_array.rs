@@ -602,8 +602,6 @@ impl std::fmt::Debug for FixedSizeBinaryArray {
     }
 }
 
-impl super::private::Sealed for FixedSizeBinaryArray {}
-
 impl Array for FixedSizeBinaryArray {
     fn as_any(&self) -> &dyn Any {
         self

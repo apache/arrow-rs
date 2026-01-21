@@ -527,8 +527,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> super::private::Sealed for GenericListArray<OffsetSize> {}
-
 impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self

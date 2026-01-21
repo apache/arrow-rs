@@ -270,8 +270,6 @@ impl<R: RunEndIndexType> From<RunArray<R>> for ArrayData {
     }
 }
 
-impl<T: RunEndIndexType> super::private::Sealed for RunArray<T> {}
-
 impl<T: RunEndIndexType> Array for RunArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
@@ -530,8 +528,6 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
         self.run_array
     }
 }
-
-impl<R: RunEndIndexType, V: Sync> super::private::Sealed for TypedRunArray<'_, R, V> {}
 
 impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn as_any(&self) -> &dyn Any {

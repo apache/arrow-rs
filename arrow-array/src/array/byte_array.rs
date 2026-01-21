@@ -462,8 +462,6 @@ impl<T: ByteArrayType> std::fmt::Debug for GenericByteArray<T> {
     }
 }
 
-impl<T: ByteArrayType> super::private::Sealed for GenericByteArray<T> {}
-
 impl<T: ByteArrayType> Array for GenericByteArray<T> {
     fn as_any(&self) -> &dyn Any {
         self

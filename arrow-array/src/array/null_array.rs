@@ -76,8 +76,6 @@ impl NullArray {
     }
 }
 
-impl super::private::Sealed for NullArray {}
-
 impl Array for NullArray {
     fn as_any(&self) -> &dyn Any {
         self

@@ -742,8 +742,6 @@ impl From<UnionArray> for ArrayData {
     }
 }
 
-impl super::private::Sealed for UnionArray {}
-
 impl Array for UnionArray {
     fn as_any(&self) -> &dyn Any {
         self

@@ -462,8 +462,6 @@ impl From<FixedSizeListArray> for ArrayData {
     }
 }
 
-impl super::private::Sealed for FixedSizeListArray {}
-
 impl Array for FixedSizeListArray {
     fn as_any(&self) -> &dyn Any {
         self

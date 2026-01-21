@@ -286,8 +286,6 @@ impl BooleanArray {
     }
 }
 
-impl super::private::Sealed for BooleanArray {}
-
 impl Array for BooleanArray {
     fn as_any(&self) -> &dyn Any {
         self
