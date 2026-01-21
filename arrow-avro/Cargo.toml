@@ -44,7 +44,7 @@ md5 = ["dep:md5"]
 sha256 = ["dep:sha2"]
 small_decimals = []
 avro_custom_types = ["dep:arrow-select"]
-async = ["tokio", "futures", "bytes"]
+async = ["dep:tokio", "dep:futures", "dep:bytes"]
 
 [dependencies]
 arrow-schema = { workspace = true }
