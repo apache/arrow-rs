@@ -162,6 +162,15 @@ mod encoder;
 /// Logic for different Avro container file formats.
 pub mod format;
 
+/// Async Avro writer API
+#[cfg(feature = "async")]
+pub mod async_writer;
+
+#[cfg(feature = "async")]
+pub use async_writer::{
+    AsyncAvroStreamWriter, AsyncAvroWriter, AsyncFileWriter, AsyncWriter, AsyncWriterBuilder,
+};
+
 /// A contiguous set of Avro encoded rows.
 ///
 /// `EncodedRows` stores:
