@@ -317,6 +317,18 @@ impl ByteViewArrayDecoderPlain {
     }
 
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
+        if self.validate_utf8 {
+            self.read_impl::<true>(output, len)
+        } else {
+            self.read_impl::<false>(output, len)
+        }
+    }
+
+    fn read_impl<const VALIDATE_UTF8: bool>(
+        &mut self,
+        output: &mut ViewBuffer,
+        len: usize,
+    ) -> Result<usize> {
         // avoid creating a new buffer if the last buffer is the same as the current buffer
         // This is especially useful when row-level filtering is applied, where we call lots of small `read` over the same buffer.
         let block_id = {
@@ -335,57 +347,42 @@ impl ByteViewArrayDecoderPlain {
 
         output.views.reserve(to_read);
 
-        if self.validate_utf8 {
-            let mut utf8_validation_begin = offset;
-            for _ in 0..to_read {
-                if offset + 4 > buf_len {
-                    return Err(ParquetError::EOF("eof decoding byte array".into()));
-                }
-                let len = u32::from_le_bytes(unsafe {
-                    *(buf.as_ptr().add(offset) as *const [u8; 4])
-                });
+        let mut utf8_validation_begin = offset;
+        for _ in 0..to_read {
+            if offset + 4 > buf_len {
+                return Err(ParquetError::EOF("eof decoding byte array".into()));
+            }
+            let len = u32::from_le_bytes(unsafe {
+                *(buf.as_ptr().add(offset) as *const [u8; 4])
+            });
 
-                let start_offset = offset + 4;
-                let end_offset = start_offset + len as usize;
+            let start_offset = offset + 4;
+            let end_offset = start_offset + len as usize;
 
-                if end_offset > buf_len {
-                    return Err(ParquetError::EOF("eof decoding byte array".into()));
-                }
+            if end_offset > buf_len {
+                return Err(ParquetError::EOF("eof decoding byte array".into()));
+            }
 
+            if VALIDATE_UTF8 {
                 if len >= 128 {
                     check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) })?;
                     utf8_validation_begin = start_offset;
                 }
-
-                let view = make_view(unsafe { buf.get_unchecked(start_offset..end_offset) }, block_id, start_offset as u32);
-                unsafe {
-                    output.append_raw_view_unchecked(&view);
-                }
-                offset = end_offset;
             }
+
+            let view = make_view(
+                unsafe { buf.get_unchecked(start_offset..end_offset) },
+                block_id,
+                start_offset as u32,
+            );
+            unsafe {
+                output.append_raw_view_unchecked(&view);
+            }
+            offset = end_offset;
+        }
+
+        if VALIDATE_UTF8 {
             check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) })?;
-        } else {
-            for _ in 0..to_read {
-                if offset + 4 > buf_len {
-                    return Err(ParquetError::EOF("eof decoding byte array".into()));
-                }
-                let len = u32::from_le_bytes(unsafe {
-                    *(buf.as_ptr().add(offset) as *const [u8; 4])
-                });
-
-                let start_offset = offset + 4;
-                let end_offset = start_offset + len as usize;
-
-                if end_offset > buf_len {
-                    return Err(ParquetError::EOF("eof decoding byte array".into()));
-                }
-
-                let view = make_view(unsafe { buf.get_unchecked(start_offset..end_offset) }, block_id, start_offset as u32);
-                unsafe {
-                    output.append_raw_view_unchecked(&view);
-                }
-                offset = end_offset;
-            }
         }
 
         self.offset = offset;
