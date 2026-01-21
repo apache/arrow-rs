@@ -65,3 +65,7 @@ rand = { version = "0.9", default-features = false, features = ["std", "std_rng"
 [[bench]]
 name = "serde"
 harness = false
+
+[[bench]]
+name = "json-reader"
+harness = false

@@ -718,6 +718,8 @@ impl Field {
             DataType::Union(fields, _) => fields.iter().flat_map(|(_, f)| f.fields()).collect(),
             DataType::List(field)
             | DataType::LargeList(field)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field)
             | DataType::FixedSizeList(field, _)
             | DataType::Map(field, _) => field.fields(),
             DataType::Dictionary(_, value_field) => Field::_fields(value_field.as_ref()),
@@ -1448,10 +1450,8 @@ mod test {
 
     #[cfg(feature = "serde")]
     fn assert_binary_serde_round_trip(field: Field) {
-        let config = bincode::config::legacy();
-        let serialized = bincode::serde::encode_to_vec(&field, config).unwrap();
-        let (deserialized, _): (Field, _) =
-            bincode::serde::decode_from_slice(&serialized, config).unwrap();
+        let serialized = postcard::to_stdvec(&field).unwrap();
+        let deserialized: Field = postcard::from_bytes(&serialized).unwrap();
         assert_eq!(field, deserialized)
     }
 

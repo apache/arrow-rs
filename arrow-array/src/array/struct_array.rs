@@ -347,25 +347,26 @@ impl StructArray {
 
 impl From<ArrayData> for StructArray {
     fn from(data: ArrayData) -> Self {
-        let parent_offset = data.offset();
-        let parent_len = data.len();
+        let (data_type, len, nulls, offset, _buffers, child_data) = data.into_parts();
 
-        let fields = data
-            .child_data()
-            .iter()
+        let parent_offset = offset;
+        let parent_len = len;
+
+        let fields = child_data
+            .into_iter()
             .map(|cd| {
                 if parent_offset != 0 || parent_len != cd.len() {
                     make_array(cd.slice(parent_offset, parent_len))
                 } else {
-                    make_array(cd.clone())
+                    make_array(cd)
                 }
             })
             .collect();
 
         Self {
-            len: data.len(),
-            data_type: data.data_type().clone(),
-            nulls: data.nulls().cloned(),
+            len,
+            data_type,
+            nulls,
             fields,
         }
     }
@@ -400,6 +401,8 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
         StructArray::try_new(fields.into(), arrays, None)
     }
 }
+
+impl super::private::Sealed for StructArray {}
 
 impl Array for StructArray {
     fn as_any(&self) -> &dyn Any {

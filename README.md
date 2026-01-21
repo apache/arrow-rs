@@ -19,7 +19,32 @@
 
 # Native Rust implementation of Apache Arrow and Apache Parquet
 
-Welcome to the [Rust][rust] implementation of [Apache Arrow], the popular in-memory columnar format.
+Welcome to the [Rust][rust] implementation of [Apache Arrow], a popular
+in-memory columnar format and [Apache Parquet], a popular columnar file
+format.
+
+## Community
+
+We welcome participation from everyone and encourage you to join us, ask
+questions, help others, and get involved. All participation in the Apache Arrow
+project is governed by the Apache Software Foundation's [code of
+conduct](https://www.apache.org/foundation/policies/conduct.html).
+
+We use GitHub [issues] and [pull requests] for all technical discussions, reviews,
+new features, bug fixes and release coordination. This ensures that all communication
+is public and archived for future reference.
+
+The `dev@arrow.apache.org` mailing list is the communication channel for the overall Apache Arrow community.
+Instructions for signing up and links to the archives can be found on the [Arrow Community](https://arrow.apache.org/community/) page.
+
+Some community members also use the [Arrow Rust Discord Server](https://discord.gg/YAb2TdazKQ) and the official [ASF Slack](https://s.apache.org/slack-invite) server for informal discussions and coordination.
+This is a great place to meet other contributors and get guidance on where to contribute.
+However, all technical designs should also be recorded and formalized in GitHub issues, so that they are accessible to everyone.
+In Slack, find us in the `#arrow-rust` channel and feel free to ask for an invite via Discord, GitHub issues, or other means.
+
+There is more information in the [contributing] guide.
+
+## Repository Structure
 
 This repository contains the following crates:
 
@@ -27,15 +52,16 @@ This repository contains the following crates:
 | ------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------ | --------------------------------- |
 | [`arrow`]          | Core functionality (memory layout, arrays, low level computations)           | [docs.rs](https://docs.rs/arrow/latest)          | [(README)][arrow-readme]          |
 | [`arrow-flight`]   | Support for Arrow-Flight IPC protocol                                        | [docs.rs](https://docs.rs/arrow-flight/latest)   | [(README)][flight-readme]         |
-| [`parquet`]        | Support for Parquet columnar file format                                     | [docs.rs](https://docs.rs/parquet/latest)        | [(README)][parquet-readme]        |
+| [`parquet`]        | Support for the [Apache Parquet] columnar file format                        | [docs.rs](https://docs.rs/parquet/latest)        | [(README)][parquet-readme]        |
 | [`parquet_derive`] | A crate for deriving RecordWriter/RecordReader for arbitrary, simple structs | [docs.rs](https://docs.rs/parquet-derive/latest) | [(README)][parquet-derive-readme] |
 
-The current development version the API documentation in this repo can be found [here](https://arrow.apache.org/rust).
+The current development version the API documentation can be found [here](https://arrow.apache.org/rust).
 
 Note: previously the [`object_store`] crate was also part of this repository,
 but it has been moved to the [arrow-rs-object-store repository]
 
 [apache arrow]: https://arrow.apache.org/
+[apache parquet]: https://parquet.apache.org/
 [`arrow`]: https://crates.io/crates/arrow
 [`parquet`]: https://crates.io/crates/parquet
 [`parquet_derive`]: https://crates.io/crates/parquet-derive
@@ -49,7 +75,7 @@ Versioning].
 
 Due to available maintainer and testing bandwidth, [`arrow`] crates ([`arrow`],
 [`arrow-flight`], etc.) are released on the same schedule with the same versions
-as the [`parquet`] and [`parquet-derive`] crates.
+as the [`parquet`] and [`parquet_derive`] crates.
 
 This crate releases every month. We release new major versions (with potentially
 breaking API changes) at most once a quarter, and release incremental minor
@@ -65,21 +91,23 @@ Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
 | ---------------- | ---------- | --------------------------------------- |
-| October 2025     | [`57.0.0`] | Major, potentially breaking API changes |
-| November 2025    | [`57.1.0`] | Minor, NO breaking API changes          |
 | December 2025    | [`57.2.0`] | Minor, NO breaking API changes          |
 | January 2026     | [`58.0.0`] | Major, potentially breaking API changes |
+| February 2026    | [`58.1.0`] | Minor, NO breaking API changes          |
+| March 2026       | [`58.2.0`] | Minor, NO breaking API changes          |
+| April 2026       | [`59.0.0`] | Major, potentially breaking API changes |
 
-[`57.0.0`]: https://github.com/apache/arrow-rs/issues/7835
-[`57.1.0`]: https://github.com/apache/arrow-rs/milestone/3
 [`57.2.0`]: https://github.com/apache/arrow-rs/milestone/5
 [`58.0.0`]: https://github.com/apache/arrow-rs/milestone/6
+[`58.1.0`]: https://github.com/apache/arrow-rs/issues/9108
+[`58.2.0`]: https://github.com/apache/arrow-rs/issues/9109
+[`59.0.0`]: https://github.com/apache/arrow-rs/issues/9110
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 
 ### Rust Version Compatibility Policy
 
-arrow-rs and parquet are built and tested with stable Rust, and will keep a rolling MSRV (minimum supported Rust version) that can only be updated in major releases on a need by basis (e.g. project dependencies bump their MSRV or a particular Rust feature is useful for us etc.). The new MSRV if selected will be at least 6 months old. The minor releases are guaranteed to have the same MSRV.
+arrow-rs and parquet are built and tested with stable Rust, and will keep a rolling MSRV (minimum supported Rust version) that can only be updated in major releases on an as needed basis (e.g. project dependencies bump their MSRV or a particular Rust feature is useful for us etc.). The new MSRV if selected will be at least 6 months old. The minor releases are guaranteed to have the same MSRV.
 
 Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
 
@@ -150,24 +178,6 @@ including `join`s and window functions.
 
 You can find more details about each crate in their respective READMEs.
 
-## Arrow Rust Community
-
-The `dev@arrow.apache.org` mailing list serves as the core communication channel for the Arrow community. Instructions for signing up and links to the archives can be found on the [Arrow Community](https://arrow.apache.org/community/) page. All major announcements and communications happen there.
-
-The Rust Arrow community also uses the official [ASF Slack](https://s.apache.org/slack-invite) for informal discussions and coordination. This is
-a great place to meet other contributors and get guidance on where to contribute. Join us in the `#arrow-rust` channel and feel free to ask for an invite via:
-
-1. the `dev@arrow.apache.org` mailing list
-2. the [GitHub Discussions][discussions]
-3. the [Discord channel](https://discord.gg/YAb2TdazKQ)
-
-The Rust implementation uses [GitHub issues][issues] as the system of record for new features and bug fixes and
-this plays a critical role in the release process.
-
-For design discussions we generally use GitHub issues.
-
-There is more information in the [contributing] guide.
-
 [rust]: https://www.rust-lang.org/
 [`object_store`]: https://crates.io/crates/object-store
 [arrow-readme]: arrow/README.md
@@ -178,4 +188,5 @@ There is more information in the [contributing] guide.
 [ballista-readme]: https://github.com/apache/datafusion-ballista/blob/main/README.md
 [parquet-derive-readme]: parquet_derive/README.md
 [issues]: https://github.com/apache/arrow-rs/issues
+[pull requests]: https://github.com/apache/arrow-rs/pulls
 [discussions]: https://github.com/apache/arrow-rs/discussions

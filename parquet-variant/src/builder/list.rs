@@ -174,7 +174,7 @@ impl<'a, S: BuilderSpecificState> ListBuilder<'a, S> {
         // Make sure to reserve enough capacity to handle the extra bytes we'll truncate.
         let mut bytes_to_splice = Vec::with_capacity(header_size + 3);
         // Write header
-        let header = array_header(is_large, offset_size);
+        let header = array_header(is_large, offset_size as _);
         bytes_to_splice.push(header);
 
         append_packed_u32(&mut bytes_to_splice, num_elements as u32, num_elements_size);

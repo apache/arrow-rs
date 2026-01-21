@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
-use arrow_array::{ArrayRef, builder::make_view, make_array};
-use arrow_buffer::Buffer;
-use arrow_data::ArrayDataBuilder;
+use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray, builder::make_view};
+use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
+use std::sync::Arc;
 
 /// A buffer of view type byte arrays that can be converted into
 /// `GenericByteViewArray`
@@ -70,26 +70,18 @@ impl ViewBuffer {
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: &ArrowType) -> ArrayRef {
         let len = self.views.len();
-        let views = Buffer::from_vec(self.views);
+        let views = ScalarBuffer::from(self.views);
+        let nulls = null_buffer
+            .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, len)))
+            .filter(|n| n.null_count() != 0);
         match data_type {
             ArrowType::Utf8View => {
-                let builder = ArrayDataBuilder::new(ArrowType::Utf8View)
-                    .len(len)
-                    .add_buffer(views)
-                    .add_buffers(self.buffers)
-                    .null_bit_buffer(null_buffer);
-                // We have checked that the data is utf8 when building the buffer, so it is safe
-                let array = unsafe { builder.build_unchecked() };
-                make_array(array)
+                // Safety: views were created correctly, and checked that the data is utf8 when building the buffer
+                unsafe { Arc::new(StringViewArray::new_unchecked(views, self.buffers, nulls)) }
             }
             ArrowType::BinaryView => {
-                let builder = ArrayDataBuilder::new(ArrowType::BinaryView)
-                    .len(len)
-                    .add_buffer(views)
-                    .add_buffers(self.buffers)
-                    .null_bit_buffer(null_buffer);
-                let array = unsafe { builder.build_unchecked() };
-                make_array(array)
+                // Safety: views were created correctly
+                unsafe { Arc::new(BinaryViewArray::new_unchecked(views, self.buffers, nulls)) }
             }
             _ => panic!("Unsupported data type: {data_type}"),
         }

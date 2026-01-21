@@ -494,7 +494,9 @@ pub fn parquet_column<'a>(
 #[cfg(test)]
 mod test {
     use crate::arrow::ArrowWriter;
-    use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader, ParquetMetaDataWriter};
+    use crate::file::metadata::{
+        ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader, ParquetMetaDataWriter,
+    };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
@@ -511,13 +513,17 @@ mod test {
         let parquet_bytes = create_parquet_file();
 
         // read the metadata from the file WITHOUT the page index structures
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let original_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
         // this should error because the page indexes are not present, but have offsets specified
         let metadata_bytes = metadata_to_bytes(&original_metadata);
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let err = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .with_page_indexes(true) // there are no page indexes in the metadata
             .parse_and_finish(&metadata_bytes)
             .err()
@@ -533,7 +539,9 @@ mod test {
         let parquet_bytes = create_parquet_file();
 
         // read the metadata from the file
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let original_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
@@ -545,7 +553,9 @@ mod test {
             "metadata is subset of parquet"
         );
 
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let roundtrip_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .parse_and_finish(&metadata_bytes)
             .unwrap();
 
@@ -559,14 +569,18 @@ mod test {
 
         // read the metadata from the file including the page index structures
         // (which are stored elsewhere in the footer)
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let original_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .with_page_indexes(true)
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
         // read metadata back from the serialized bytes and ensure it is the same
         let metadata_bytes = metadata_to_bytes(&original_metadata);
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let roundtrip_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .with_page_indexes(true)
             .parse_and_finish(&metadata_bytes)
             .unwrap();

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{get_offsets, make_array, print_long_array};
+use crate::array::{get_offsets_from_buffer, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
     Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray,
@@ -479,23 +479,26 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListArray<
 
 impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
-        if data.buffers().len() != 1 {
+        let (data_type, len, nulls, offset, mut buffers, mut child_data) = data.into_parts();
+
+        if buffers.len() != 1 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "ListArray data should contain a single buffer only (value offsets), had {}",
-                data.buffers().len()
+                buffers.len()
             )));
         }
+        let buffer = buffers.pop().expect("checked above");
 
-        if data.child_data().len() != 1 {
+        if child_data.len() != 1 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "ListArray should contain a single child array (values array), had {}",
-                data.child_data().len()
+                child_data.len()
             )));
         }
 
-        let values = data.child_data()[0].clone();
+        let values = child_data.pop().expect("checked above");
 
-        if let Some(child_data_type) = Self::get_type(data.data_type()) {
+        if let Some(child_data_type) = Self::get_type(&data_type) {
             if values.data_type() != child_data_type {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "[Large]ListArray's child datatype {:?} does not \
@@ -506,24 +509,25 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
             }
         } else {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "[Large]ListArray's datatype must be [Large]ListArray(). It is {:?}",
-                data.data_type()
+                "[Large]ListArray's datatype must be [Large]ListArray(). It is {data_type:?}",
             )));
         }
 
         let values = make_array(values);
         // SAFETY:
         // ArrayData is valid, and verified type above
-        let value_offsets = unsafe { get_offsets(&data) };
+        let value_offsets = unsafe { get_offsets_from_buffer(buffer, offset, len) };
 
         Ok(Self {
-            data_type: data.data_type().clone(),
-            nulls: data.nulls().cloned(),
+            data_type,
+            nulls,
             values,
             value_offsets,
         })
     }
 }
+
+impl<OffsetSize: OffsetSizeTrait> super::private::Sealed for GenericListArray<OffsetSize> {}
 
 impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {

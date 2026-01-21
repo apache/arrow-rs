@@ -430,6 +430,53 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         };
     }
 
+    /// Append the same value `n` times into the builder
+    ///
+    /// This is more efficient than calling [`Self::try_append_value`] `n` times,
+    /// especially when deduplication is enabled, as it only hashes the value once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if
+    /// - String buffer count exceeds `u32::MAX`
+    /// - String length exceeds `u32::MAX`
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::builder::StringViewBuilder;
+    /// # use arrow_array::Array;
+    /// let mut builder = StringViewBuilder::new().with_deduplicate_strings();
+    ///
+    /// // Append "hello" 1000 times efficiently
+    /// builder.try_append_value_n("hello", 1000)?;
+    ///
+    /// let array = builder.finish();
+    /// assert_eq!(array.len(), 1000);
+    ///
+    /// // All values are "hello"
+    /// for value in array.iter() {
+    ///     assert_eq!(value, Some("hello"));
+    /// }
+    /// # Ok::<(), arrow_schema::ArrowError>(())
+    /// ```
+    #[inline]
+    pub fn try_append_value_n(
+        &mut self,
+        value: impl AsRef<T::Native>,
+        n: usize,
+    ) -> Result<(), ArrowError> {
+        if n == 0 {
+            return Ok(());
+        }
+        // Process value once (handles deduplication, buffer management, view creation)
+        self.try_append_value(value)?;
+        // Reuse the view (n-1) times
+        let view = *self.views_buffer.last().unwrap();
+        self.views_buffer.extend(std::iter::repeat_n(view, n - 1));
+        self.null_buffer_builder.append_n_non_nulls(n - 1);
+        Ok(())
+    }
+
     /// Append a null value into the builder
     #[inline]
     pub fn append_null(&mut self) {
@@ -883,5 +930,77 @@ mod tests {
             exp_builder.completed.last().unwrap().capacity(),
             MAX_BLOCK_SIZE as usize
         );
+    }
+
+    #[test]
+    fn test_append_value_n() {
+        // Test with inline strings (<=12 bytes)
+        let mut builder = StringViewBuilder::new();
+
+        builder.try_append_value_n("hello", 100).unwrap();
+        builder.append_value("world");
+        builder.try_append_value_n("foo", 50).unwrap();
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 151);
+        assert_eq!(array.null_count(), 0);
+
+        // Verify the values
+        for i in 0..100 {
+            assert_eq!(array.value(i), "hello");
+        }
+        assert_eq!(array.value(100), "world");
+        for i in 101..151 {
+            assert_eq!(array.value(i), "foo");
+        }
+
+        // All inline strings should have no data buffers
+        assert_eq!(array.data_buffers().len(), 0);
+    }
+
+    #[test]
+    fn test_append_value_n_with_deduplication() {
+        let long_string = "This is a very long string that exceeds the inline length";
+
+        // Test with deduplication enabled
+        let mut builder = StringViewBuilder::new().with_deduplicate_strings();
+
+        // First append the string once to add it to the hash map
+        builder.append_value(long_string);
+
+        // Then append_n the same string - should deduplicate and reuse the existing value
+        builder.try_append_value_n(long_string, 999).unwrap();
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 1000);
+        assert_eq!(array.null_count(), 0);
+
+        // Verify all values are the same
+        for i in 0..1000 {
+            assert_eq!(array.value(i), long_string);
+        }
+
+        // With deduplication, should only have 1 data buffer containing the string once
+        assert_eq!(array.data_buffers().len(), 1);
+
+        // All views should be identical
+        let first_view = array.views()[0];
+        for view in array.views().iter() {
+            assert_eq!(*view, first_view);
+        }
+    }
+
+    #[test]
+    fn test_append_value_n_zero() {
+        let mut builder = StringViewBuilder::new();
+
+        builder.append_value("first");
+        builder.try_append_value_n("should not appear", 0).unwrap();
+        builder.append_value("second");
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.value(0), "first");
+        assert_eq!(array.value(1), "second");
     }
 }

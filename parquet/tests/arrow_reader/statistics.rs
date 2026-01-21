@@ -46,6 +46,7 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::file::statistics::{Statistics, ValueStatistics};
@@ -145,7 +146,7 @@ fn build_parquet_file(
     let _file_meta = writer.close().unwrap();
 
     let file = output_file.reopen().unwrap();
-    let options = ArrowReaderOptions::new().with_page_index(true);
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
     ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
 }
 
@@ -170,7 +171,7 @@ impl TestReader {
 
         // open the file & get the reader
         let file = file.reopen().unwrap();
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
         ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
     }
 }
