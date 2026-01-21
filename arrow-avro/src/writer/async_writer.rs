@@ -46,6 +46,14 @@
 //! assert!(!bytes.is_empty());
 //! # Ok(()) }
 //! ```
+//!
+//! # Features
+//!
+//! - **OCF format**: Write Avro Object Container Files with schema, sync markers, and optional compression
+//! - **SOE format**: Write Avro Single Object Encoding streams for registry-based workflows
+//! - **Flexible sinks**: Works with any `AsyncWrite + Send` type or custom `AsyncFileWriter` implementations
+//! - **Compression**: Supports all compression codecs (Deflate, Snappy, ZStandard, etc.)
+//! - **Feature-gated**: Requires `async` feature to use
 
 use crate::compression::CompressionCodec;
 use crate::schema::{AvroSchema, FingerprintAlgorithm, FingerprintStrategy, SCHEMA_METADATA_KEY};
@@ -473,3 +481,6 @@ mod tests {
         Ok(())
     }
 }
+
+// TODO: Future work - add `object_store` feature for cloud storage integration
+// Similar to `parquet::arrow::async_writer::ParquetObjectWriter` for S3, GCS, Azure support
