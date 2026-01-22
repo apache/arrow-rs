@@ -397,9 +397,7 @@ impl ByteViewArrayDecoderPlain {
                 // If the length is larger than 128, then we validate the buffer before the length bytes, and move the water mark to the beginning of next string.
                 if len >= 128 {
                     // unfortunately, the len bytes may not be valid utf8, we need to wrap up and validate everything before it.
-                    if let Err(e) = check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..end_offset) }) {
-                        return Err(e);
-                    }
+                    check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..end_offset) })?;
                     // move the cursor to skip the len bytes.
                     utf8_validation_begin = start_offset;
                 }
