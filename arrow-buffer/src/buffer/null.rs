@@ -222,6 +222,13 @@ impl NullBuffer {
     pub fn buffer(&self) -> &Buffer {
         self.buffer.inner()
     }
+
+    /// Claim memory used by this null buffer in the provided memory pool.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        // NullBuffer wraps a BooleanBuffer which wraps a Buffer
+        self.buffer.inner().claim(pool);
+    }
 }
 
 impl<'a> IntoIterator for &'a NullBuffer {
