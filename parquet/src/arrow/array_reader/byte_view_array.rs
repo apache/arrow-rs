@@ -350,17 +350,16 @@ impl ByteViewArrayDecoderPlain {
         
         // Safety: we reserved enough space in output.views
         // and we will only write up to to_read views / track how many views we wrote.
-        // Ideally, we would use `extend` here, but this generates sub-optimal code.
+        // Ideally, we would use `Vec::extend` here, but this generates sub-optimal code.
         let views_ptr = output.views.as_mut_ptr().wrapping_add(output.views.len());
-        let mut views_written = 0;
-        for _ in 0..to_read {
+        for i in 0..to_read {
             let start_offset = end_offset + 4;
 
             if start_offset > buf_len {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
 
-            // Safety: we have checked that start_offset + 4 <= buf_len
+            // Safety: we have checked that start_offset <= buf_len
             let len = u32::from_le_bytes(
                 unsafe { buf.get_unchecked(end_offset..start_offset) }
                     .try_into()
@@ -411,14 +410,13 @@ impl ByteViewArrayDecoderPlain {
             );
             // Safety: views_ptr is valid for writes, and we have reserved enough space.
             unsafe {
-                views_ptr.add(views_written).write(view);
+                views_ptr.add(i).write(view);
             }
-            views_written += 1;
         };
 
-        // Safety: we have written `views_written` views to `views_ptr`
+        // Safety: we have written `to_read` views to `views_ptr`
         unsafe {
-            output.views.set_len(output.views.len() + views_written);
+            output.views.set_len(output.views.len() + to_read);
         }
         if VALIDATE_UTF8 {
             // validate the last part of the buffer
