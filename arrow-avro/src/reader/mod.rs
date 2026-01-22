@@ -1039,13 +1039,13 @@ impl ReaderBuilder {
                         reader_schema.clone()
                     } else {
                         let raw = hdr.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
-                            ArrowError::ParseError(
+                            AvroError::ParseError(
                                 "No Avro schema present in file header".to_string(),
                             )
                         })?;
                         let json_string = std::str::from_utf8(raw)
                             .map_err(|e| {
-                                ArrowError::ParseError(format!(
+                                AvroError::ParseError(format!(
                                     "Invalid UTF-8 in Avro schema header: {e}"
                                 ))
                             })?

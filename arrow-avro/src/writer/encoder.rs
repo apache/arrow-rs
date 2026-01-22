@@ -42,7 +42,7 @@ use arrow_array::{
 use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_schema::{
-    ArrowError, DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit, UnionMode,
+    DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit, UnionMode,
 };
 use std::io::Write;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ use uuid::Uuid;
 ///
 /// Spec: <https://avro.apache.org/docs/1.11.1/specification/#binary-encoding>
 #[inline]
-pub(crate) fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<(), ArrowError> {
+pub(crate) fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<()> {
     let mut zz = ((value << 1) ^ (value >> 63)) as u64;
     // At most 10 bytes for 64-bit varint
     let mut buf = [0u8; 10];
@@ -65,25 +65,25 @@ pub(crate) fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<(
     buf[i] = (zz & 0x7F) as u8;
     i += 1;
     out.write_all(&buf[..i])
-        .map_err(|e| ArrowError::IoError(format!("write long: {e}"), e))
+        .map_err(|e| AvroError::IoError(format!("write long: {e}"), e))
 }
 
 #[inline]
-fn write_int<W: Write + ?Sized>(out: &mut W, value: i32) -> Result<(), ArrowError> {
+fn write_int<W: Write + ?Sized>(out: &mut W, value: i32) -> Result<()> {
     write_long(out, value as i64)
 }
 
 #[inline]
-fn write_len_prefixed<W: Write + ?Sized>(out: &mut W, bytes: &[u8]) -> Result<(), ArrowError> {
+fn write_len_prefixed<W: Write + ?Sized>(out: &mut W, bytes: &[u8]) -> Result<()> {
     write_long(out, bytes.len() as i64)?;
     out.write_all(bytes)
-        .map_err(|e| ArrowError::IoError(format!("write bytes: {e}"), e))
+        .map_err(|e| AvroError::IoError(format!("write bytes: {e}"), e))
 }
 
 #[inline]
-fn write_bool<W: Write + ?Sized>(out: &mut W, v: bool) -> Result<(), ArrowError> {
+fn write_bool<W: Write + ?Sized>(out: &mut W, v: bool) -> Result<()> {
     out.write_all(&[if v { 1 } else { 0 }])
-        .map_err(|e| ArrowError::IoError(format!("write bool: {e}"), e))
+        .map_err(|e| AvroError::IoError(format!("write bool: {e}"), e))
 }
 
 /// Minimal two's-complement big-endian representation helper for Avro decimal (bytes).
@@ -761,7 +761,7 @@ impl RecordEncoder {
     fn prepare_for_batch<'a>(
         &'a self,
         batch: &'a RecordBatch,
-    ) -> Result<Vec<FieldEncoder<'a>>, ArrowError> {
+    ) -> Result<Vec<FieldEncoder<'a>>> {
         let arrays = batch.columns();
         let mut out = Vec::with_capacity(self.columns.len());
         for col_plan in self.columns.iter() {
@@ -1428,7 +1428,7 @@ impl<'a> UnionEncoder<'a> {
             .type_id_to_encoder_index
             .get(type_id as usize)
             .and_then(|opt| *opt)
-            .ok_or_else(|| ArrowError::SchemaError(format!("Invalid type_id {type_id}")))?;
+            .ok_or_else(|| AvroError::SchemaError(format!("Invalid type_id {type_id}")))?;
         write_int(out, encoder_index as i32)?;
         let encoder = self.encoders.get_mut(encoder_index).ok_or_else(|| {
             AvroError::SchemaError(format!("Invalid encoder index {encoder_index}"))
