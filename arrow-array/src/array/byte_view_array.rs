@@ -988,14 +988,18 @@ impl<'a, T: ByteViewType + ?Sized> IntoIterator for &'a GenericByteViewArray<T> 
 
 impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
     fn from(data: ArrayData) -> Self {
-        let (_data_type, len, nulls, offset, buffers, _child_data) = data.into_parts();
-
+        let (data_type, len, nulls, offset, buffers, _child_data) = data.into_parts();
+        assert_eq!(
+            data_type,
+            T::DATA_TYPE,
+            "Mismatched data type, expected {}, got {data_type}",
+            T::DATA_TYPE
+        );
         let mut buffers = buffers.into_iter();
         // first buffer is views, remaining are data buffers
         let views = ScalarBuffer::new(buffers.next().unwrap(), offset, len);
-
         Self {
-            data_type: T::DATA_TYPE,
+            data_type,
             views,
             buffers: Arc::from_iter(buffers),
             nulls,
@@ -1207,9 +1211,11 @@ mod tests {
         Array, BinaryViewArray, GenericBinaryArray, GenericByteViewArray, StringViewArray,
     };
     use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
-    use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
+    use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
+    use arrow_schema::DataType;
     use rand::prelude::StdRng;
     use rand::{Rng, SeedableRng};
+    use std::str::from_utf8;
 
     const BLOCK_SIZE: u32 = 8;
 
@@ -1815,5 +1821,47 @@ mod tests {
         }
 
         assert_eq!(lengths_iter.next(), None, "Should not have more lengths");
+    }
+
+    #[should_panic(expected = "Mismatched data type, expected Utf8View, got BinaryView")]
+    #[test]
+    fn invalid_casting_from_array_data() {
+        // Should not be able to cast to StringViewArray due to invalid UTF-8
+        let array_data = binary_view_array_with_invalid_utf8_data().into_data();
+        let _ = StringViewArray::from(array_data);
+    }
+
+    #[should_panic(expected = "invalid utf-8 sequence")]
+    #[test]
+    fn invalid_array_data() {
+        let (views, buffers, nulls) = binary_view_array_with_invalid_utf8_data().into_parts();
+
+        // manually try and add invalid array data with Utf8View data type
+        let mut builder = ArrayDataBuilder::new(DataType::Utf8View)
+            .add_buffer(views.into_inner())
+            .len(3);
+        for buffer in buffers.iter() {
+            builder = builder.add_buffer(buffer.clone())
+        }
+        builder = builder.nulls(nulls);
+
+        let data = builder.build().unwrap(); // should fail validation
+        let _arr = StringViewArray::from(data);
+    }
+
+    /// Returns a BinaryViewArray with one invalid UTF-8 value
+    fn binary_view_array_with_invalid_utf8_data() -> BinaryViewArray {
+        let array = GenericByteViewArray::<BinaryViewType>::from(vec![
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaa" as &[u8],
+            &[
+                0xf0, 0x80, 0x80, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00,
+            ],
+            b"good",
+        ]);
+        assert!(from_utf8(array.value(0)).is_ok());
+        assert!(from_utf8(array.value(1)).is_err()); // value 1 is invalid utf8
+        assert!(from_utf8(array.value(2)).is_ok());
+        array
     }
 }

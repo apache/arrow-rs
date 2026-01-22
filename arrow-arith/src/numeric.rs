@@ -944,6 +944,23 @@ mod tests {
     use arrow_buffer::{ScalarBuffer, i256};
     use chrono::{DateTime, NaiveDate};
 
+    // The valid date range of NaiveDate is from January 1, -262143 to December 31, 262142 (Gregorian calendar).
+    const MAX_VALID_DATE: NaiveDate = NaiveDate::from_ymd_opt(262142, 12, 31).unwrap();
+    const MIN_VALID_DATE: NaiveDate = NaiveDate::from_ymd_opt(-262143, 1, 1).unwrap();
+    const MAX_VALID_MILLIS: i64 = MAX_VALID_DATE
+        .signed_duration_since(EPOCH)
+        .num_milliseconds();
+    const MIN_VALID_MILLIS: i64 = MIN_VALID_DATE
+        .signed_duration_since(EPOCH)
+        .num_milliseconds();
+    const EPOCH: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    const YEAR_2000_MILLIS: i64 = date_to_millis(2000, 1, 1);
+
+    const fn date_to_millis(year: i32, month: u32, day: u32) -> i64 {
+        let date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+        date.signed_duration_since(EPOCH).num_milliseconds()
+    }
+
     fn test_neg_primitive<T: ArrowPrimitiveType>(
         input: &[T::Native],
         out: Result<&[T::Native], &str>,
@@ -1645,534 +1662,203 @@ mod tests {
     }
 
     #[test]
-    fn test_date64_to_naive_date_opt_boundary_values() {
+    fn test_date64_to_naive_date_opt_boundaries() {
         use arrow_array::types::Date64Type;
 
-        // Date64Type::to_naive_date_opt has boundaries determined by NaiveDate's supported range.
-        // The valid date range is from January 1, -262143 to December 31, 262142 (Gregorian calendar).
+        const MS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        let ms_per_day = 24 * 60 * 60 * 1000i64;
+        // Verify boundary millisecond values
+        assert_eq!(MAX_VALID_MILLIS, 8210266790400000i64);
+        assert_eq!(MIN_VALID_MILLIS, -8334601228800000i64);
 
-        // Define the boundary dates using NaiveDate::from_ymd_opt
-        let max_valid_date = NaiveDate::from_ymd_opt(262142, 12, 31).unwrap();
-        let min_valid_date = NaiveDate::from_ymd_opt(-262143, 1, 1).unwrap();
+        // Valid boundary dates work
+        assert!(Date64Type::to_naive_date_opt(MAX_VALID_MILLIS).is_some());
+        assert!(Date64Type::to_naive_date_opt(MIN_VALID_MILLIS).is_some());
 
-        // Calculate their millisecond values from epoch
-        let max_valid_millis = (max_valid_date - epoch).num_milliseconds();
-        let min_valid_millis = (min_valid_date - epoch).num_milliseconds();
+        // Beyond boundaries fail
+        assert!(Date64Type::to_naive_date_opt(MAX_VALID_MILLIS + MS_PER_DAY).is_none());
+        assert!(Date64Type::to_naive_date_opt(MIN_VALID_MILLIS - MS_PER_DAY).is_none());
 
-        // Verify these match the expected boundaries in milliseconds
-        assert_eq!(
-            max_valid_millis, 8210266790400000i64,
-            "December 31, 262142 should be 8210266790400000 ms from epoch"
-        );
-        assert_eq!(
-            min_valid_millis, -8334601228800000i64,
-            "January 1, -262143 should be -8334601228800000 ms from epoch"
-        );
+        // Extreme values fail
+        assert!(Date64Type::to_naive_date_opt(i64::MAX).is_none());
+        assert!(Date64Type::to_naive_date_opt(i64::MIN).is_none());
 
-        // Test that the boundary dates work
+        // Common values work
+        assert!(Date64Type::to_naive_date_opt(0).is_some());
+        assert!(Date64Type::to_naive_date_opt(YEAR_2000_MILLIS).is_some());
+    }
+
+    fn test_year_month_op<F>(op: F, op_name: &str)
+    where
+        F: Fn(i64, i32) -> Option<i64>,
+    {
+        // Normal operations succeed
+        assert!(op(YEAR_2000_MILLIS, 120).is_some(), "{op_name}: normal add");
         assert!(
-            Date64Type::to_naive_date_opt(max_valid_millis).is_some(),
-            "December 31, 262142 should return Some"
-        );
-        assert!(
-            Date64Type::to_naive_date_opt(min_valid_millis).is_some(),
-            "January 1, -262143 should return Some"
-        );
-
-        // Test that one day beyond the boundaries fails
-        assert!(
-            Date64Type::to_naive_date_opt(max_valid_millis + ms_per_day).is_none(),
-            "January 1, 262143 should return None"
-        );
-        assert!(
-            Date64Type::to_naive_date_opt(min_valid_millis - ms_per_day).is_none(),
-            "December 31, -262144 should return None"
+            op(YEAR_2000_MILLIS, 0).is_some(),
+            "{op_name}: zero interval"
         );
 
-        // Test some values well within the valid range
+        // Large but valid years work
+        let large_year = date_to_millis(5000, 1, 1);
+        let neg_year = date_to_millis(-5000, 12, 31);
+        assert!(op(large_year, 12).is_some(), "{op_name}: large year");
+        assert!(op(neg_year, -12).is_some(), "{op_name}: negative year");
+    }
+
+    #[test]
+    fn test_date64_year_month_operations() {
+        use arrow_array::types::Date64Type;
+
+        test_year_month_op(Date64Type::add_year_months_opt, "add_year_months");
+        test_year_month_op(Date64Type::subtract_year_months_opt, "subtract_year_months");
+    }
+
+    fn test_day_time_op<F>(op: F, op_name: &str, is_subtract: bool)
+    where
+        F: Fn(i64, IntervalDayTime) -> Option<i64>,
+    {
+        // Moderate intervals succeed
         assert!(
-            Date64Type::to_naive_date_opt(0).is_some(),
-            "Epoch (1970-01-01) should return Some"
+            op(YEAR_2000_MILLIS, IntervalDayTime::new(30, 0)).is_some(),
+            "{op_name}: +30 days"
         );
-        let year_2000 = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let year_2000_millis = (year_2000 - epoch).num_milliseconds();
         assert!(
-            Date64Type::to_naive_date_opt(year_2000_millis).is_some(),
-            "Year 2000 should return Some"
+            op(YEAR_2000_MILLIS, IntervalDayTime::new(-30, 0)).is_some(),
+            "{op_name}: -30 days"
+        );
+        assert!(
+            op(YEAR_2000_MILLIS, IntervalDayTime::new(1000, 12345)).is_some(),
+            "{op_name}: normal"
         );
 
-        // Test extreme values that definitely fail due to Duration constraints
+        // Overflow handling
+        if is_subtract {
+            assert!(
+                op(MIN_VALID_MILLIS, IntervalDayTime::new(1, 0)).is_none(),
+                "{op_name}: overflow days from min"
+            );
+            assert!(
+                op(MAX_VALID_MILLIS, IntervalDayTime::new(-1, 0)).is_none(),
+                "{op_name}: overflow neg days from max"
+            );
+        } else {
+            assert!(
+                op(MAX_VALID_MILLIS, IntervalDayTime::new(1, 0)).is_none(),
+                "{op_name}: overflow days"
+            );
+            assert!(
+                op(MIN_VALID_MILLIS, IntervalDayTime::new(-1, 0)).is_none(),
+                "{op_name}: overflow neg days"
+            );
+        }
+
+        // Extreme intervals fail
         assert!(
-            Date64Type::to_naive_date_opt(i64::MAX).is_none(),
-            "i64::MAX should return None"
+            op(0, IntervalDayTime::new(i32::MAX, i32::MAX)).is_none(),
+            "{op_name}: max interval"
         );
         assert!(
-            Date64Type::to_naive_date_opt(i64::MIN).is_none(),
-            "i64::MIN should return None"
+            op(0, IntervalDayTime::new(i32::MIN, i32::MIN)).is_none(),
+            "{op_name}: min interval"
+        );
+
+        // Large ms within valid range succeed
+        assert!(
+            op(YEAR_2000_MILLIS, IntervalDayTime::new(0, i32::MAX)).is_some(),
+            "{op_name}: large ms"
         );
     }
 
     #[test]
-    fn test_date64_add_year_months_opt_boundary_values() {
+    fn test_date64_day_time_operations() {
         use arrow_array::types::Date64Type;
 
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        test_day_time_op(Date64Type::add_day_time_opt, "add_day_time", false);
+        test_day_time_op(Date64Type::subtract_day_time_opt, "subtract_day_time", true);
+    }
 
-        // Test normal case within valid range
-        let year_2000 = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let year_2000_millis = (year_2000 - epoch).num_milliseconds();
-        assert!(
-            Date64Type::add_year_months_opt(year_2000_millis, 120).is_some(),
-            "Adding 10 years to year 2000 should succeed"
-        );
+    fn test_month_day_nano_op<F>(op: F, op_name: &str, is_subtract: bool)
+    where
+        F: Fn(i64, IntervalMonthDayNano) -> Option<i64>,
+    {
+        let zero = IntervalMonthDayNano::new(0, 0, 0);
 
-        // Test with moderate years that are within chrono's safe range
-        let large_year = NaiveDate::from_ymd_opt(5000, 1, 1).unwrap();
-        let large_year_millis = (large_year - epoch).num_milliseconds();
         assert!(
-            Date64Type::add_year_months_opt(large_year_millis, 12).is_some(),
-            "Adding 12 months to year 5000 should succeed"
-        );
-
-        let neg_year = NaiveDate::from_ymd_opt(-5000, 12, 31).unwrap();
-        let neg_year_millis = (neg_year - epoch).num_milliseconds();
-        assert!(
-            Date64Type::add_year_months_opt(neg_year_millis, -12).is_some(),
-            "Subtracting 12 months from year -5000 should succeed"
-        );
-
-        // Test with extreme input values that would cause overflow
-        assert!(
-            Date64Type::add_year_months_opt(i64::MAX, 1).is_none(),
-            "Adding months to i64::MAX should fail"
+            op(YEAR_2000_MILLIS, IntervalMonthDayNano::new(1, 30, 0)).is_some(),
+            "{op_name}: +1mo +30d"
         );
         assert!(
-            Date64Type::add_year_months_opt(i64::MIN, -1).is_none(),
-            "Subtracting months from i64::MIN should fail"
+            op(YEAR_2000_MILLIS, IntervalMonthDayNano::new(-1, -30, 0)).is_some(),
+            "{op_name}: -1mo -30d"
+        );
+        assert!(
+            op(YEAR_2000_MILLIS, zero).is_some(),
+            "{op_name}: zero interval"
+        );
+        assert!(
+            op(
+                YEAR_2000_MILLIS,
+                IntervalMonthDayNano::new(2, 10, 123_456_789_000)
+            )
+            .is_some(),
+            "{op_name}: normal"
         );
 
-        // Test edge case: adding zero should always work for valid dates
+        // overflow handling
+        if is_subtract {
+            assert!(
+                op(MIN_VALID_MILLIS, IntervalMonthDayNano::new(0, 1, 0)).is_none(),
+                "{op_name}: overflow days from min"
+            );
+            assert!(
+                op(MAX_VALID_MILLIS, IntervalMonthDayNano::new(0, -1, 0)).is_none(),
+                "{op_name}: overflow neg days from max"
+            );
+        } else {
+            assert!(
+                op(MAX_VALID_MILLIS, IntervalMonthDayNano::new(0, 1, 0)).is_none(),
+                "{op_name}: overflow days"
+            );
+            assert!(
+                op(MIN_VALID_MILLIS, IntervalMonthDayNano::new(0, -1, 0)).is_none(),
+                "{op_name}: overflow neg days"
+            );
+        }
+
+        // Nanosecond precision works
         assert!(
-            Date64Type::add_year_months_opt(year_2000_millis, 0).is_some(),
-            "Adding zero months should always succeed for valid dates"
+            op(
+                YEAR_2000_MILLIS,
+                IntervalMonthDayNano::new(0, 0, 999_999_999)
+            )
+            .is_some(),
+            "{op_name}: nanos"
+        );
+        // 1 day in nanos
+        assert!(
+            op(
+                YEAR_2000_MILLIS,
+                IntervalMonthDayNano::new(0, 0, 86_400_000_000_000)
+            )
+            .is_some(),
+            "{op_name}: 1 day nanos"
         );
     }
 
     #[test]
-    fn test_date64_add_day_time_opt_boundary_values() {
-        use arrow_array::types::Date64Type;
-        use arrow_buffer::IntervalDayTime;
-
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-
-        // Test with a date far from the boundary but still testing the function
-        let near_max_date = NaiveDate::from_ymd_opt(200000, 12, 1).unwrap();
-        let near_max_millis = (near_max_date - epoch).num_milliseconds();
-
-        // Adding 30 days should succeed
-        let interval_30_days = IntervalDayTime::new(30, 0);
-        assert!(
-            Date64Type::add_day_time_opt(near_max_millis, interval_30_days).is_some(),
-            "Adding 30 days to large year should succeed"
-        );
-
-        // Adding a very large number of days should fail
-        let interval_large_days = IntervalDayTime::new(100000000, 0);
-        assert!(
-            Date64Type::add_day_time_opt(near_max_millis, interval_large_days).is_none(),
-            "Adding 100M days to large year should fail"
-        );
-
-        // Test with a date far from the boundary in the negative direction
-        let near_min_date = NaiveDate::from_ymd_opt(-200000, 2, 1).unwrap();
-        let near_min_millis = (near_min_date - epoch).num_milliseconds();
-
-        // Subtracting 30 days should succeed
-        let interval_minus_30_days = IntervalDayTime::new(-30, 0);
-        assert!(
-            Date64Type::add_day_time_opt(near_min_millis, interval_minus_30_days).is_some(),
-            "Subtracting 30 days from large negative year should succeed"
-        );
-
-        // Subtracting a very large number of days should fail
-        let interval_minus_large_days = IntervalDayTime::new(-100000000, 0);
-        assert!(
-            Date64Type::add_day_time_opt(near_min_millis, interval_minus_large_days).is_none(),
-            "Subtracting 100M days from large negative year should fail"
-        );
-
-        // Test normal case within valid range
-        let year_2000 = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let year_2000_millis = (year_2000 - epoch).num_milliseconds();
-        let interval_1000_days = IntervalDayTime::new(1000, 12345);
-        assert!(
-            Date64Type::add_day_time_opt(year_2000_millis, interval_1000_days).is_some(),
-            "Adding 1000 days and time to year 2000 should succeed"
-        );
-
-        // Test with extreme input values that would cause overflow
-        let interval_one_day = IntervalDayTime::new(1, 0);
-        assert!(
-            Date64Type::add_day_time_opt(i64::MAX, interval_one_day).is_none(),
-            "Adding interval to i64::MAX should fail"
-        );
-        assert!(
-            Date64Type::add_day_time_opt(i64::MIN, IntervalDayTime::new(-1, 0)).is_none(),
-            "Subtracting interval from i64::MIN should fail"
-        );
-
-        // Test with extreme interval values
-        let max_interval = IntervalDayTime::new(i32::MAX, i32::MAX);
-        assert!(
-            Date64Type::add_day_time_opt(0, max_interval).is_none(),
-            "Adding extreme interval should fail"
-        );
-
-        let min_interval = IntervalDayTime::new(i32::MIN, i32::MIN);
-        assert!(
-            Date64Type::add_day_time_opt(0, min_interval).is_none(),
-            "Adding extreme negative interval should fail"
-        );
-
-        // Test millisecond overflow within a day
-        let large_ms_interval = IntervalDayTime::new(0, i32::MAX);
-        assert!(
-            Date64Type::add_day_time_opt(year_2000_millis, large_ms_interval).is_some(),
-            "Adding large milliseconds within valid range should succeed"
-        );
-    }
-
-    #[test]
-    fn test_date64_add_month_day_nano_opt_boundary_values() {
-        use arrow_array::types::Date64Type;
-        use arrow_buffer::IntervalMonthDayNano;
-
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-
-        // Test with a large year that is still within chrono's safe range
-        let near_max_date = NaiveDate::from_ymd_opt(5000, 11, 1).unwrap();
-        let near_max_millis = (near_max_date - epoch).num_milliseconds();
-
-        // Adding 1 month and 30 days should succeed
-        let interval_safe = IntervalMonthDayNano::new(1, 30, 0);
-        assert!(
-            Date64Type::add_month_day_nano_opt(near_max_millis, interval_safe).is_some(),
-            "Adding 1 month 30 days to large year should succeed"
-        );
-
-        // Test normal case within valid range
-        let year_2000 = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let year_2000_millis = (year_2000 - epoch).num_milliseconds();
-
-        // Test edge case: adding zero should always work for valid dates
-        let zero_interval = IntervalMonthDayNano::new(0, 0, 0);
-        assert!(
-            Date64Type::add_month_day_nano_opt(year_2000_millis, zero_interval).is_some(),
-            "Adding zero interval should always succeed for valid dates"
-        );
-
-        // Test with a negative year that is still within chrono's safe range
-        let near_min_date = NaiveDate::from_ymd_opt(-5000, 2, 28).unwrap();
-        let near_min_millis = (near_min_date - epoch).num_milliseconds();
-
-        // Subtracting 1 month and 30 days should succeed
-        let interval_safe_neg = IntervalMonthDayNano::new(-1, -30, 0);
-        assert!(
-            Date64Type::add_month_day_nano_opt(near_min_millis, interval_safe_neg).is_some(),
-            "Subtracting 1 month 30 days from large negative year should succeed"
-        );
-
-        // Test with extreme input values that would cause overflow
-        assert!(
-            Date64Type::add_month_day_nano_opt(i64::MAX, IntervalMonthDayNano::new(1, 0, 0))
-                .is_none(),
-            "Adding interval to i64::MAX should fail"
-        );
-
-        let interval_normal = IntervalMonthDayNano::new(2, 10, 123_456_789_000);
-        assert!(
-            Date64Type::add_month_day_nano_opt(year_2000_millis, interval_normal).is_some(),
-            "Adding 2 months, 10 days, and nanos to year 2000 should succeed"
-        );
-
-        // Test with extreme input values that would cause overflow
-        assert!(
-            Date64Type::add_month_day_nano_opt(i64::MAX, IntervalMonthDayNano::new(1, 0, 0))
-                .is_none(),
-            "Adding interval to i64::MAX should fail"
-        );
-        assert!(
-            Date64Type::add_month_day_nano_opt(i64::MIN, IntervalMonthDayNano::new(-1, 0, 0))
-                .is_none(),
-            "Subtracting interval from i64::MIN should fail"
-        );
-
-        // Test with invalid timestamp input (the _opt function should handle these gracefully)
-
-        // Test nanosecond precision (should not affect boundary since it's < 1ms)
-        let nano_interval = IntervalMonthDayNano::new(0, 0, 999_999_999);
-        assert!(
-            Date64Type::add_month_day_nano_opt(year_2000_millis, nano_interval).is_some(),
-            "Adding nanoseconds within valid range should succeed"
-        );
-
-        // Test large nanosecond values that convert to milliseconds
-        let large_nano_interval = IntervalMonthDayNano::new(0, 0, 86_400_000_000_000); // 1 day in nanos
-        assert!(
-            Date64Type::add_month_day_nano_opt(year_2000_millis, large_nano_interval).is_some(),
-            "Adding 1 day worth of nanoseconds should succeed"
-        );
-    }
-
-    #[test]
-    fn test_date64_subtract_year_months_opt_boundary_values() {
+    fn test_date64_month_day_nano_operations() {
         use arrow_array::types::Date64Type;
 
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-
-        // Test with a negative year that is still within chrono's safe range
-        let near_min_date = NaiveDate::from_ymd_opt(-5000, 12, 31).unwrap();
-        let near_min_millis = (near_min_date - epoch).num_milliseconds();
-
-        // Subtracting 12 months should succeed
-        assert!(
-            Date64Type::subtract_year_months_opt(near_min_millis, 12).is_some(),
-            "Subtracting 12 months from year -5000 should succeed"
+        test_month_day_nano_op(
+            Date64Type::add_month_day_nano_opt,
+            "add_month_day_nano",
+            false,
         );
-
-        // Test normal case within valid range
-        let year_2000 = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let year_2000_millis = (year_2000 - epoch).num_milliseconds();
-
-        // Test edge case: subtracting zero should always work for valid dates
-        assert!(
-            Date64Type::subtract_year_months_opt(year_2000_millis, 0).is_some(),
-            "Subtracting zero months should always succeed for valid dates"
-        );
-
-        // Test with a large year that is still within chrono's safe range
-        let near_max_date = NaiveDate::from_ymd_opt(5000, 1, 1).unwrap();
-        let near_max_millis = (near_max_date - epoch).num_milliseconds();
-
-        // Adding 12 months (subtracting negative) should succeed
-        assert!(
-            Date64Type::subtract_year_months_opt(near_max_millis, -12).is_some(),
-            "Adding 12 months to year 5000 should succeed"
-        );
-
-        // Test with extreme input values that would cause overflow
-        assert!(
-            Date64Type::subtract_year_months_opt(i64::MAX, -1).is_none(),
-            "Adding months to i64::MAX should fail"
-        );
-
-        assert!(
-            Date64Type::subtract_year_months_opt(year_2000_millis, 12).is_some(),
-            "Subtracting 1 year from year 2000 should succeed"
-        );
-
-        // Test with extreme input values that would cause overflow
-        assert!(
-            Date64Type::subtract_year_months_opt(i64::MAX, -1).is_none(),
-            "Adding months to i64::MAX should fail"
-        );
-        assert!(
-            Date64Type::subtract_year_months_opt(i64::MIN, 1).is_none(),
-            "Subtracting months from i64::MIN should fail"
-        );
-
-        // Test edge case: subtracting zero should always work for valid dates
-        let valid_date = NaiveDate::from_ymd_opt(2020, 6, 15).unwrap();
-        let valid_millis = (valid_date - epoch).num_milliseconds();
-        assert!(
-            Date64Type::subtract_year_months_opt(valid_millis, 0).is_some(),
-            "Subtracting zero months should always succeed for valid dates"
-        );
-    }
-
-    #[test]
-    fn test_date64_subtract_day_time_opt_boundary_values() {
-        use arrow_array::types::Date64Type;
-        use arrow_buffer::IntervalDayTime;
-
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-
-        // Test with a date far from the boundary in the negative direction
-        let near_min_date = NaiveDate::from_ymd_opt(-200000, 2, 1).unwrap();
-        let near_min_millis = (near_min_date - epoch).num_milliseconds();
-
-        // Subtracting 30 days should succeed
-        let interval_30_days = IntervalDayTime::new(30, 0);
-        assert!(
-            Date64Type::subtract_day_time_opt(near_min_millis, interval_30_days).is_some(),
-            "Subtracting 30 days from large negative year should succeed"
-        );
-
-        // Subtracting a very large number of days should fail
-        let interval_large_days = IntervalDayTime::new(100000000, 0);
-        assert!(
-            Date64Type::subtract_day_time_opt(near_min_millis, interval_large_days).is_none(),
-            "Subtracting 100M days from large negative year should fail"
-        );
-
-        // Test with a date far from the boundary but still testing the function
-        let near_max_date = NaiveDate::from_ymd_opt(200000, 12, 1).unwrap();
-        let near_max_millis = (near_max_date - epoch).num_milliseconds();
-
-        // Adding 30 days (subtracting negative) should succeed
-        let interval_minus_30_days = IntervalDayTime::new(-30, 0);
-        assert!(
-            Date64Type::subtract_day_time_opt(near_max_millis, interval_minus_30_days).is_some(),
-            "Adding 30 days to large year should succeed"
-        );
-
-        // Adding a very large number of days should fail
-        let interval_minus_large_days = IntervalDayTime::new(-100000000, 0);
-        assert!(
-            Date64Type::subtract_day_time_opt(near_max_millis, interval_minus_large_days).is_none(),
-            "Adding 100M days to large year should fail"
-        );
-
-        // Test normal case within valid range
-        let year_2000 = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let year_2000_millis = (year_2000 - epoch).num_milliseconds();
-        let interval_1000_days = IntervalDayTime::new(1000, 12345);
-        assert!(
-            Date64Type::subtract_day_time_opt(year_2000_millis, interval_1000_days).is_some(),
-            "Subtracting 1000 days and time from year 2000 should succeed"
-        );
-
-        // Test with extreme input values that would cause overflow
-        let interval_one_day = IntervalDayTime::new(1, 0);
-        assert!(
-            Date64Type::subtract_day_time_opt(i64::MIN, interval_one_day).is_none(),
-            "Subtracting interval from i64::MIN should fail"
-        );
-        assert!(
-            Date64Type::subtract_day_time_opt(i64::MAX, IntervalDayTime::new(-1, 0)).is_none(),
-            "Adding interval to i64::MAX should fail"
-        );
-
-        // Test with extreme interval values
-        let max_interval = IntervalDayTime::new(i32::MAX, i32::MAX);
-        assert!(
-            Date64Type::subtract_day_time_opt(0, max_interval).is_none(),
-            "Subtracting extreme interval should fail"
-        );
-
-        let min_interval = IntervalDayTime::new(i32::MIN, i32::MIN);
-        assert!(
-            Date64Type::subtract_day_time_opt(0, min_interval).is_none(),
-            "Subtracting extreme negative interval should fail"
-        );
-
-        // Test millisecond precision
-        let large_ms_interval = IntervalDayTime::new(0, i32::MAX);
-        assert!(
-            Date64Type::subtract_day_time_opt(year_2000_millis, large_ms_interval).is_some(),
-            "Subtracting large milliseconds within valid range should succeed"
-        );
-
-        // Test edge case: subtracting zero should always work for valid dates
-        let zero_interval = IntervalDayTime::new(0, 0);
-        let valid_date = NaiveDate::from_ymd_opt(2020, 6, 15).unwrap();
-        let valid_millis = (valid_date - epoch).num_milliseconds();
-        assert!(
-            Date64Type::subtract_day_time_opt(valid_millis, zero_interval).is_some(),
-            "Subtracting zero interval should always succeed for valid dates"
-        );
-    }
-
-    #[test]
-    fn test_date64_subtract_month_day_nano_opt_boundary_values() {
-        use arrow_array::types::Date64Type;
-        use arrow_buffer::IntervalMonthDayNano;
-
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-
-        // Test with a negative year that is still within chrono's safe range
-        let near_min_date = NaiveDate::from_ymd_opt(-5000, 2, 28).unwrap();
-        let near_min_millis = (near_min_date - epoch).num_milliseconds();
-
-        // Subtracting 1 month and 30 days should succeed
-        let interval_safe = IntervalMonthDayNano::new(1, 30, 0);
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(near_min_millis, interval_safe).is_some(),
-            "Subtracting 1 month 30 days from large negative year should succeed"
-        );
-
-        // Test normal case within valid range
-        let year_2000 = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let year_2000_millis = (year_2000 - epoch).num_milliseconds();
-
-        // Test edge case: subtracting zero should always work for valid dates
-        let zero_interval = IntervalMonthDayNano::new(0, 0, 0);
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(year_2000_millis, zero_interval).is_some(),
-            "Subtracting zero interval should always succeed for valid dates"
-        );
-
-        // Test with a large year that is still within chrono's safe range
-        let near_max_date = NaiveDate::from_ymd_opt(5000, 11, 1).unwrap();
-        let near_max_millis = (near_max_date - epoch).num_milliseconds();
-
-        // Adding 1 month and 30 days (subtracting negative) should succeed
-        let interval_safe_neg = IntervalMonthDayNano::new(-1, -30, 0);
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(near_max_millis, interval_safe_neg).is_some(),
-            "Adding 1 month 30 days to large year should succeed"
-        );
-
-        // Test with extreme input values that would cause overflow
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(i64::MIN, IntervalMonthDayNano::new(1, 0, 0))
-                .is_none(),
-            "Subtracting interval from i64::MIN should fail"
-        );
-
-        let interval_normal = IntervalMonthDayNano::new(2, 10, 123_456_789_000);
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(year_2000_millis, interval_normal).is_some(),
-            "Subtracting 2 months, 10 days, and nanos from year 2000 should succeed"
-        );
-
-        // Test with extreme input values that would cause overflow
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(i64::MIN, IntervalMonthDayNano::new(1, 0, 0))
-                .is_none(),
-            "Subtracting interval from i64::MIN should fail"
-        );
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(i64::MAX, IntervalMonthDayNano::new(-1, 0, 0))
-                .is_none(),
-            "Adding interval to i64::MAX should fail"
-        );
-
-        // Test nanosecond precision (should not affect boundary since it's < 1ms)
-        let nano_interval = IntervalMonthDayNano::new(0, 0, 999_999_999);
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(year_2000_millis, nano_interval).is_some(),
-            "Subtracting nanoseconds within valid range should succeed"
-        );
-
-        // Test large nanosecond values that convert to milliseconds
-        let large_nano_interval = IntervalMonthDayNano::new(0, 0, 86_400_000_000_000); // 1 day in nanos
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(year_2000_millis, large_nano_interval)
-                .is_some(),
-            "Subtracting 1 day worth of nanoseconds should succeed"
-        );
-
-        // Test edge case: subtracting zero should always work for valid dates
-        let zero_interval = IntervalMonthDayNano::new(0, 0, 0);
-        let valid_date = NaiveDate::from_ymd_opt(2020, 6, 15).unwrap();
-        let valid_millis = (valid_date - epoch).num_milliseconds();
-        assert!(
-            Date64Type::subtract_month_day_nano_opt(valid_millis, zero_interval).is_some(),
-            "Subtracting zero interval should always succeed for valid dates"
+        test_month_day_nano_op(
+            Date64Type::subtract_month_day_nano_opt,
+            "subtract_month_day_nano",
+            true,
         );
     }
 }

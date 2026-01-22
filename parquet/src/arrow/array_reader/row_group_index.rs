@@ -1,0 +1,241 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::arrow::array_reader::ArrayReader;
+use crate::errors::{ParquetError, Result};
+use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use arrow_array::{ArrayRef, Int64Array};
+use arrow_schema::DataType;
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+pub(crate) struct RowGroupIndexReader {
+    buffered_indices: Vec<i64>,
+    remaining_indices: std::iter::Flatten<std::vec::IntoIter<std::iter::RepeatN<i64>>>,
+}
+
+impl RowGroupIndexReader {
+    pub(crate) fn try_new<'a>(
+        parquet_metadata: &'a ParquetMetaData,
+        row_groups: impl Iterator<Item = &'a RowGroupMetaData>,
+    ) -> Result<Self> {
+        // build mapping from ordinal to row group index
+        // this is O(n) where n is the total number of row groups in the file
+        let ordinal_to_index: HashMap<i16, i64> =
+            HashMap::from_iter(parquet_metadata.row_groups().iter().enumerate().filter_map(
+                |(row_group_index, rg)| {
+                    rg.ordinal()
+                        .map(|ordinal| (ordinal, row_group_index as i64))
+                },
+            ));
+
+        // build repeating iterators in the order specified by the row_groups iterator
+        // this is O(m) where m is the number of selected row groups
+        let repeated_indices: Vec<_> = row_groups
+            .map(|rg| {
+                let ordinal = rg.ordinal().ok_or_else(|| {
+                    ParquetError::General(
+                        "Row group missing ordinal field, required to compute row group indices"
+                            .to_string(),
+                    )
+                })?;
+
+                let row_group_index = ordinal_to_index.get(&ordinal).ok_or_else(|| {
+                    ParquetError::General(format!(
+                        "Row group with ordinal {} not found in metadata",
+                        ordinal
+                    ))
+                })?;
+
+                // repeat row group index for each row in this row group
+                Ok(std::iter::repeat_n(
+                    *row_group_index,
+                    rg.num_rows() as usize,
+                ))
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(Self {
+            buffered_indices: Vec::new(),
+            remaining_indices: repeated_indices.into_iter().flatten(),
+        })
+    }
+}
+
+impl ArrayReader for RowGroupIndexReader {
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        let starting_len = self.buffered_indices.len();
+        self.buffered_indices
+            .extend((self.remaining_indices.by_ref()).take(batch_size));
+        Ok(self.buffered_indices.len() - starting_len)
+    }
+
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        // TODO: Use advance_by when it stabilizes to improve performance
+        Ok((self.remaining_indices.by_ref()).take(num_records).count())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn get_data_type(&self) -> &DataType {
+        &DataType::Int64
+    }
+
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
+        Ok(Arc::new(Int64Array::from_iter(
+            self.buffered_indices.drain(..),
+        )))
+    }
+
+    fn get_def_levels(&self) -> Option<&[i16]> {
+        None
+    }
+
+    fn get_rep_levels(&self) -> Option<&[i16]> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::basic::Type as PhysicalType;
+    use crate::file::metadata::{
+        ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
+    };
+    use crate::schema::types::{SchemaDescriptor, Type as SchemaType};
+    use std::sync::Arc;
+
+    fn create_test_schema() -> Arc<SchemaDescriptor> {
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(
+                SchemaType::primitive_type_builder("test_col", PhysicalType::INT32)
+                    .build()
+                    .unwrap(),
+            )])
+            .build()
+            .unwrap();
+        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    fn create_test_parquet_metadata(row_groups: Vec<(i16, i64)>) -> ParquetMetaData {
+        let schema_descr = create_test_schema();
+
+        let mut row_group_metas = vec![];
+        for (ordinal, num_rows) in row_groups {
+            let columns: Vec<_> = schema_descr
+                .columns()
+                .iter()
+                .map(|col| ColumnChunkMetaData::builder(col.clone()).build().unwrap())
+                .collect();
+
+            let row_group = RowGroupMetaData::builder(schema_descr.clone())
+                .set_num_rows(num_rows)
+                .set_ordinal(ordinal)
+                .set_total_byte_size(100)
+                .set_column_metadata(columns)
+                .build()
+                .unwrap();
+            row_group_metas.push(row_group);
+        }
+
+        let total_rows: i64 = row_group_metas.iter().map(|rg| rg.num_rows()).sum();
+        let file_metadata = FileMetaData::new(1, total_rows, None, None, schema_descr, None);
+
+        ParquetMetaData::new(file_metadata, row_group_metas)
+    }
+
+    #[test]
+    fn test_row_group_index_reader_basic() {
+        // create metadata with 3 row groups, each with varying number of rows
+        let metadata = create_test_parquet_metadata(vec![
+            (0, 2), // rg: 0, ordinal: 0, 2 rows
+            (1, 3), // rg: 1, ordinal: 1, 3 rows
+            (2, 1), // rg: 2, ordinal: 2, 1 row
+        ]);
+
+        let selected_row_groups: Vec<_> = metadata.row_groups().iter().collect();
+
+        let mut reader =
+            RowGroupIndexReader::try_new(&metadata, selected_row_groups.into_iter()).unwrap();
+
+        // 2 rows + 3 rows + 1 row
+        let num_read = reader.read_records(6).unwrap();
+        assert_eq!(num_read, 6);
+
+        let array = reader.consume_batch().unwrap();
+        let indices = array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        let actual: Vec<i64> = indices.iter().map(|v| v.unwrap()).collect();
+        assert_eq!(actual, [0, 0, 1, 1, 1, 2],);
+    }
+
+    #[test]
+    fn test_row_group_index_reader_reverse_order() {
+        // create metadata with 3 row groups, each rg has 2 rows
+        let metadata = create_test_parquet_metadata(vec![(0, 2), (1, 2), (2, 2)]);
+
+        // select only rgs with ordinals 2 and 0 (in that order)
+        // means select row group 2 first, then row group 0, skipping row group 1
+        let selected_row_groups: Vec<_> =
+            vec![&metadata.row_groups()[2], &metadata.row_groups()[0]];
+
+        let mut reader =
+            RowGroupIndexReader::try_new(&metadata, selected_row_groups.into_iter()).unwrap();
+
+        let num_read = reader.read_records(6).unwrap();
+        // 2 rgs * 2 rows each
+        assert_eq!(num_read, 4);
+
+        let array = reader.consume_batch().unwrap();
+        let indices = array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        let actual: Vec<i64> = indices.iter().map(|v| v.unwrap()).collect();
+
+        assert_eq!(actual, [2, 2, 0, 0],);
+    }
+
+    #[test]
+    fn test_row_group_index_reader_skip_records() {
+        // rg 0: 3 rows, rg 1: 4 rows, rg 2: 2 rows
+        // [0, 0, 0, 1, 1, 1, 1, 2, 2]
+        let metadata = create_test_parquet_metadata(vec![(0, 3), (1, 4), (2, 2)]);
+
+        let selected_row_groups = metadata.row_groups().iter().collect::<Vec<_>>();
+
+        let mut reader =
+            RowGroupIndexReader::try_new(&metadata, selected_row_groups.into_iter()).unwrap();
+
+        // skip first 5 rows
+        // [0, 0, 0, 1, 1, 1, 1, 2, 2]
+        // |---- skip ---|
+        let num_skipped = reader.skip_records(5).unwrap();
+        assert_eq!(num_skipped, 5);
+
+        let num_read = reader.read_records(10).unwrap();
+        assert_eq!(num_read, 4);
+
+        let array = reader.consume_batch().unwrap();
+        let indices = array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        let actual = indices.iter().map(|v| v.unwrap()).collect::<Vec<i64>>();
+        assert_eq!(actual, [1, 1, 2, 2]);
+    }
+}
