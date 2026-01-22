@@ -20,9 +20,9 @@ use criterion::*;
 extern crate arrow;
 
 use arrow::compute::kernels::numeric::*;
-use arrow::datatypes::Float32Type;
+use arrow::datatypes::{Float32Type, Int64Type};
 use arrow::util::bench_util::*;
-use arrow_array::Scalar;
+use arrow_array::{PrimitiveArray, Scalar};
 use std::hint;
 
 fn add_benchmark(c: &mut Criterion) {
@@ -33,11 +33,15 @@ fn add_benchmark(c: &mut Criterion) {
         let scalar_a = create_primitive_array::<Float32Type>(1, 0.);
         let scalar = Scalar::new(&scalar_a);
 
+        let arr_a_int = create_primitive_array::<Int64Type>(BATCH_SIZE, null_density);
+        let arr_b_int: PrimitiveArray<Int64Type> =
+            create_primitive_array::<Int64Type>(BATCH_SIZE, null_density).unary(|_| 1);
+
         c.bench_function(&format!("add({null_density})"), |b| {
             b.iter(|| hint::black_box(add_wrapping(&arr_a, &arr_b).unwrap()))
         });
         c.bench_function(&format!("add_checked({null_density})"), |b| {
-            b.iter(|| hint::black_box(add(&arr_a, &arr_b).unwrap()))
+            b.iter(|| hint::black_box(add(&arr_a_int, &arr_b_int).unwrap()))
         });
         c.bench_function(&format!("add_scalar({null_density})"), |b| {
             b.iter(|| hint::black_box(add_wrapping(&arr_a, &scalar).unwrap()))
@@ -46,7 +50,7 @@ fn add_benchmark(c: &mut Criterion) {
             b.iter(|| hint::black_box(sub_wrapping(&arr_a, &arr_b).unwrap()))
         });
         c.bench_function(&format!("subtract_checked({null_density})"), |b| {
-            b.iter(|| hint::black_box(sub(&arr_a, &arr_b).unwrap()))
+            b.iter(|| hint::black_box(sub(&arr_a_int, &arr_b_int).unwrap()))
         });
         c.bench_function(&format!("subtract_scalar({null_density})"), |b| {
             b.iter(|| hint::black_box(sub_wrapping(&arr_a, &scalar).unwrap()))
@@ -55,7 +59,7 @@ fn add_benchmark(c: &mut Criterion) {
             b.iter(|| hint::black_box(mul_wrapping(&arr_a, &arr_b).unwrap()))
         });
         c.bench_function(&format!("multiply_checked({null_density})"), |b| {
-            b.iter(|| hint::black_box(mul(&arr_a, &arr_b).unwrap()))
+            b.iter(|| hint::black_box(mul(&arr_a_int, &arr_b_int).unwrap()))
         });
         c.bench_function(&format!("multiply_scalar({null_density})"), |b| {
             b.iter(|| hint::black_box(mul_wrapping(&arr_a, &scalar).unwrap()))
@@ -63,6 +67,10 @@ fn add_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("divide({null_density})"), |b| {
             b.iter(|| hint::black_box(div(&arr_a, &arr_b).unwrap()))
         });
+        c.bench_function(&format!("divide_int({null_density})"), |b| {
+            b.iter(|| hint::black_box(div(&arr_a_int, &arr_b_int).unwrap()))
+        });
+
         c.bench_function(&format!("divide_scalar({null_density})"), |b| {
             b.iter(|| hint::black_box(div(&arr_a, &scalar).unwrap()))
         });
