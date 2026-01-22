@@ -2517,7 +2517,7 @@ mod tests {
 
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(
             TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index(true),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
         )
         .await
         .unwrap();
@@ -2538,7 +2538,7 @@ mod tests {
         // Use Mask policy explicitly to test page-aware behavior
         let stream = ParquetRecordBatchStreamBuilder::new_with_options(
             TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index(true),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
         )
         .await
         .unwrap()
@@ -2597,7 +2597,7 @@ mod tests {
 
         let stream = ParquetRecordBatchStreamBuilder::new_with_options(
             TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index(true),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
         )
         .await
         .unwrap()
@@ -2668,7 +2668,7 @@ mod tests {
 
         let stream = ParquetRecordBatchStreamBuilder::new_with_options(
             TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index(true),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
         )
         .await
         .unwrap()

@@ -5730,7 +5730,7 @@ pub(crate) mod tests {
         writer.close().unwrap();
         let data = Bytes::from(buffer);
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
         let builder =
             ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options).unwrap();
         let schema = builder.parquet_schema().clone();
@@ -5745,7 +5745,7 @@ pub(crate) mod tests {
             })
         };
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
         let predicate = make_predicate(filter_mask.clone());
 
         // Use Mask policy explicitly to test page-aware behavior
@@ -5808,7 +5808,7 @@ pub(crate) mod tests {
             RowSelector::select(4), // Pages 3-4: rows 6-9
         ]);
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
         let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options)
             .unwrap()
             .with_row_selection(selection.clone())
@@ -5880,7 +5880,7 @@ pub(crate) mod tests {
             RowSelector::skip(1),   // Skip row 11
         ]);
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
         let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options)
             .unwrap()
             .with_row_selection(selection.clone())
