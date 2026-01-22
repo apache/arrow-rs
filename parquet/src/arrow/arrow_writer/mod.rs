@@ -1797,6 +1797,35 @@ mod tests {
         roundtrip(batch, None);
     }
 
+    #[test]
+    fn arrow_writer_binary_view_long_value() {
+        let string_field = Field::new("a", DataType::Utf8View, false);
+        let binary_field = Field::new("b", DataType::BinaryView, false);
+        let schema = Schema::new(vec![string_field, binary_field]);
+
+        // There is special case validation for long values (greater than 128)
+        let long = "a".repeat(256);
+        let raw_string_values = vec!["foo", long.as_str(), "bar"];
+        let raw_binary_values = vec![b"foo".to_vec(), long.as_bytes().to_vec(), b"bar".to_vec()];
+
+        let string_view_values = StringViewArray::from(raw_string_values);
+        let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(string_view_values), Arc::new(binary_view_values)],
+        )
+        .unwrap();
+
+        // Disable dictionary to exercise plain encoding paths in the reader.
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let props = WriterProperties::builder()
+                .set_writer_version(version)
+                .set_dictionary_enabled(false)
+                .build();
+            roundtrip_opts(&batch, props);
+        }
+    }
+
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
         let decimal_field = Field::new("a", DataType::Decimal128(precision, scale), false);
         let schema = Schema::new(vec![decimal_field]);
@@ -2310,6 +2339,8 @@ mod tests {
     const SMALL_SIZE: usize = 7;
     const MEDIUM_SIZE: usize = 63;
 
+    // Write the batch to parquet and read it back out, ensuring
+    // that what comes out is the same as what was written in
     fn roundtrip(expected_batch: RecordBatch, max_row_group_size: Option<usize>) -> Vec<Bytes> {
         let mut files = vec![];
         for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
