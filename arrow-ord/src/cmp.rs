@@ -625,10 +625,20 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
                 < GenericByteViewArray::<T>::inline_key_fast(*r_view);
         }
 
-        // Fallback to the generic, unchecked comparison for non-inline cases
+        let l_prefix = (*l_view >> 32) as u32;
+        let r_prefix = (*r_view >> 32) as u32;
+        if l_prefix != r_prefix {
+            return l_prefix.swap_bytes() < r_prefix.swap_bytes();
+        }
+
+        // Fallback to the generic, unchecked comparison for mixed cases
         // # Safety
         // The index is within bounds as it is checked in value()
-        unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
+        unsafe {
+            let l_data: &[u8] = l.0.value_unchecked(l.1).as_ref();
+            let r_data: &[u8] = r.0.value_unchecked(r.1).as_ref();
+            l_data[4..] < r_data[4..]
+        }
     }
 
     fn len(&self) -> usize {
@@ -882,5 +892,23 @@ mod tests {
             Some("very long apple exceeding 12 bytes"),
         ]);
         assert_eq!(lt(&a, &b).unwrap(), BooleanArray::from(vec![true, false, true, false]));
+    }
+
+    #[test]
+    fn test_string_view_mixed_lt() {
+        let a = arrow_array::StringViewArray::from(vec![
+            Some("apple"),
+            Some("apple"),
+            Some("apple_long_string"),
+        ]);
+        let b = arrow_array::StringViewArray::from(vec![
+            Some("apple_long_string"),
+            Some("appl"),
+            Some("apple"),
+        ]);
+        // "apple" < "apple_long_string" -> true
+        // "apple" < "appl" -> false
+        // "apple_long_string" < "apple" -> false
+        assert_eq!(lt(&a, &b).unwrap(), BooleanArray::from(vec![true, false, false]));
     }
 }
