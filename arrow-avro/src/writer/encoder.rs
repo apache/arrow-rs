@@ -41,9 +41,7 @@ use arrow_array::{
 #[cfg(feature = "small_decimals")]
 use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_buffer::{ArrowNativeType, NullBuffer};
-use arrow_schema::{
-    DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit, UnionMode,
-};
+use arrow_schema::{DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit, UnionMode};
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -758,10 +756,7 @@ pub(crate) struct RecordEncoder {
 }
 
 impl RecordEncoder {
-    fn prepare_for_batch<'a>(
-        &'a self,
-        batch: &'a RecordBatch,
-    ) -> Result<Vec<FieldEncoder<'a>>> {
+    fn prepare_for_batch<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<FieldEncoder<'a>>> {
         let arrays = batch.columns();
         let mut out = Vec::with_capacity(self.columns.len());
         for col_plan in self.columns.iter() {
@@ -1442,10 +1437,7 @@ struct StructEncoder<'a> {
 }
 
 impl<'a> StructEncoder<'a> {
-    fn try_new(
-        array: &'a StructArray,
-        field_bindings: &[FieldBinding],
-    ) -> Result<Self, AvroError> {
+    fn try_new(array: &'a StructArray, field_bindings: &[FieldBinding]) -> Result<Self, AvroError> {
         let mut encoders = Vec::with_capacity(field_bindings.len());
         for field_binding in field_bindings {
             let idx = field_binding.arrow_index;
