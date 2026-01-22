@@ -1039,17 +1039,19 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # writer.write(&batch).unwrap();
     /// # writer.close().unwrap();
     /// # let file = Bytes::from(file);
-    /// #
+    /// // Build the reader from anything that implements `ChunkReader`
+    /// // such as a `File`, or `Bytes`
     /// let mut builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-    ///
-    /// // Inspect metadata
+    /// // The builder has access to ParquetMetaData such
+    /// // as the number and layout of row groups
     /// assert_eq!(builder.metadata().num_row_groups(), 1);
-    ///
-    /// // Construct reader
-    /// let mut reader: ParquetRecordBatchReader = builder.with_row_groups(vec![0]).build().unwrap();
-    ///
+    /// // Call build to create the reader
+    /// let mut reader: ParquetRecordBatchReader = builder.build().unwrap();
     /// // Read data
-    /// let _batch = reader.next().unwrap().unwrap();
+    /// while let Some(batch) = reader.next().transpose()? {
+    ///     println!("Read {} rows", batch.num_rows());
+    /// }
+    /// # Ok::<(), parquet::errors::ParquetError>(())
     /// ```
     pub fn try_new(reader: T) -> Result<Self> {
         Self::try_new_with_options(reader, Default::default())
