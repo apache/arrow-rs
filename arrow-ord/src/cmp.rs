@@ -568,33 +568,59 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
         let l_view = unsafe { l.0.views().get_unchecked(l.1) };
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
-        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
-            // For eq case, we can directly compare the inlined bytes
-            return l_view == r_view;
+        if l_view == r_view {
+            if (*l_view as u32) <= 12 || std::ptr::eq(l.0, r.0) {
+                return true;
+            }
         }
 
         let l_len = *l_view as u32;
         let r_len = *r_view as u32;
-        // This is a fast path for equality check.
-        // We don't need to look at the actual bytes to determine if they are equal.
         if l_len != r_len {
             return false;
         }
-        if l_len == 0 && r_len == 0 {
+
+        if l_len == 0 {
             return true;
+        }
+
+        // Check prefix
+        if (*l_view >> 32) as u32 != (*r_view >> 32) as u32 {
+            return false;
+        }
+
+        if l_len <= 12 {
+            return false;
         }
 
         // # Safety
         // The index is within bounds as it is checked in value()
-        unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_eq() }
+        unsafe {
+            let l_buffer_idx = (*l_view >> 64) as u32;
+            let l_offset = (*l_view >> 96) as u32;
+            let r_buffer_idx = (*r_view >> 64) as u32;
+            let r_offset = (*r_view >> 96) as u32;
+
+            let l_data = l.0.data_buffers().get_unchecked(l_buffer_idx as usize);
+            let r_data = r.0.data_buffers().get_unchecked(r_buffer_idx as usize);
+
+            // We already compared the first 4 bytes in the prefix
+            let l_slice = l_data
+                .as_slice()
+                .get_unchecked((l_offset + 4) as usize..(l_offset + l_len) as usize);
+            let r_slice = r_data
+                .as_slice()
+                .get_unchecked((r_offset + 4) as usize..(r_offset + r_len) as usize);
+            l_slice == r_slice
+        }
     }
 
     #[inline(always)]
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
-        // If both arrays use only the inline buffer
-        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
-            let l_view = unsafe { l.0.views().get_unchecked(l.1) };
-            let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+        let l_view = unsafe { l.0.views().get_unchecked(l.1) };
+        let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+
+        if (*l_view as u32) <= 12 && (*r_view as u32) <= 12 {
             return GenericByteViewArray::<T>::inline_key_fast(*l_view)
                 < GenericByteViewArray::<T>::inline_key_fast(*r_view);
         }
@@ -814,5 +840,47 @@ mod tests {
         let col = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
 
         neq(&col.slice(0, col.len() - 1), &col.slice(1, col.len() - 1)).unwrap();
+    }
+
+    #[test]
+    fn test_string_view_eq() {
+        let a = arrow_array::StringViewArray::from(vec![
+            Some("hello"),
+            Some("world"),
+            None,
+            Some("very long string exceeding 12 bytes"),
+        ]);
+        let b = arrow_array::StringViewArray::from(vec![
+            Some("hello"),
+            Some("world"),
+            None,
+            Some("very long string exceeding 12 bytes"),
+        ]);
+        assert_eq!(eq(&a, &b).unwrap(), BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]));
+
+        let c = arrow_array::StringViewArray::from(vec![
+            Some("hello"),
+            Some("world!"),
+            None,
+            Some("very long string exceeding 12 bytes!"),
+        ]);
+        assert_eq!(eq(&a, &c).unwrap(), BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]));
+    }
+
+    #[test]
+    fn test_string_view_lt() {
+        let a = arrow_array::StringViewArray::from(vec![
+            Some("apple"),
+            Some("banana"),
+            Some("very long apple exceeding 12 bytes"),
+            Some("very long banana exceeding 12 bytes"),
+        ]);
+        let b = arrow_array::StringViewArray::from(vec![
+            Some("banana"),
+            Some("apple"),
+            Some("very long banana exceeding 12 bytes"),
+            Some("very long apple exceeding 12 bytes"),
+        ]);
+        assert_eq!(lt(&a, &b).unwrap(), BooleanArray::from(vec![true, false, true, false]));
     }
 }
