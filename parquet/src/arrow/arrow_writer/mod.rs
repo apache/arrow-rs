@@ -1810,11 +1810,16 @@ mod tests {
         let raw_string_values = vec!["foo", long.as_str(), "bar"];
         let raw_binary_values = vec![b"foo".to_vec(), long.as_bytes().to_vec(), b"bar".to_vec()];
 
-        let string_view_values = StringViewArray::from(raw_string_values);
-        let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
+        let string_view_values: ArrayRef = Arc::new(StringViewArray::from(raw_string_values));
+        let binary_view_values: ArrayRef =
+            Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
+
+        one_column_roundtrip(Arc::clone(&string_view_values), false);
+        one_column_roundtrip(Arc::clone(&binary_view_values), false);
+
         let batch = RecordBatch::try_new(
             Arc::new(schema),
-            vec![Arc::new(string_view_values), Arc::new(binary_view_values)],
+            vec![string_view_values, binary_view_values],
         )
         .unwrap();
 
