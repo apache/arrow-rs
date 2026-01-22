@@ -343,19 +343,31 @@ impl ByteViewArrayDecoderPlain {
 
         let buf: &[u8] = self.buf.as_ref();
         let buf_len = buf.len();
-        let mut offset = self.offset;
+        let mut end_offset = self.offset;
+        let mut utf8_validation_begin = end_offset;
 
         output.views.reserve(to_read);
-
-        let mut utf8_validation_begin = offset;
+        
+        // Safety: we reserved enough space in output.views
+        // and we will only write up to to_read views / track how many views we wrote.
+        // Ideally, we would use `extend` here, but this generates sub-optimal code.
+        let views_ptr = output.views.as_mut_ptr().wrapping_add(output.views.len());
+        let mut views_written = 0;
         for _ in 0..to_read {
-            if offset + 4 > buf_len {
+            let start_offset = end_offset + 4;
+
+            if start_offset > buf_len {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
-            let len = u32::from_le_bytes(unsafe { *(buf.as_ptr().add(offset) as *const [u8; 4]) });
 
-            let start_offset = offset + 4;
-            let end_offset = start_offset + len as usize;
+            // Safety: we have checked that start_offset + 4 <= buf_len
+            let len = u32::from_le_bytes(
+                unsafe { buf.get_unchecked(end_offset..start_offset) }
+                    .try_into()
+                    .unwrap(),
+            );
+
+            end_offset = start_offset + len as usize;
 
             if end_offset > buf_len {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
@@ -385,10 +397,13 @@ impl ByteViewArrayDecoderPlain {
                 // If the length is larger than 128, then we validate the buffer before the length bytes, and move the water mark to the beginning of next string.
                 if len >= 128 {
                     // unfortunately, the len bytes may not be valid utf8, we need to wrap up and validate everything before it.
-                    check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) })?;
+                    if let Err(e) = check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..end_offset) }) {
+                        return Err(e);
+                    }
                     // move the cursor to skip the len bytes.
                     utf8_validation_begin = start_offset;
                 }
+
             }
 
             let view = make_view(
@@ -396,18 +411,23 @@ impl ByteViewArrayDecoderPlain {
                 block_id,
                 start_offset as u32,
             );
+            // Safety: views_ptr is valid for writes, and we have reserved enough space.
             unsafe {
-                output.append_raw_view_unchecked(view);
+                views_ptr.add(views_written).write(view);
             }
-            offset = end_offset;
-        }
+            views_written += 1;
+        };
 
+        // Safety: we have written `views_written` views to `views_ptr`
+        unsafe {
+            output.views.set_len(output.views.len() + views_written);
+        }
         if VALIDATE_UTF8 {
             // validate the last part of the buffer
-            check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) })?;
+            check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..end_offset) })?;
         }
 
-        self.offset = offset;
+        self.offset = end_offset;
         self.max_remaining_values -= to_read;
 
         Ok(to_read)
@@ -450,6 +470,8 @@ impl ByteViewArrayDecoderDictionary {
     /// Assumptions / Optimization
     /// This function checks if dict.buffers() are the last buffers in `output`, and if so
     /// reuses the dictionary page buffers directly without copying data
+    /// 
+    /// If the dictionary is empty, the buffer contains empty view.
     fn read(&mut self, output: &mut ViewBuffer, dict: &ViewBuffer, len: usize) -> Result<usize> {
         if dict.is_empty() || len == 0 {
             return Ok(0);
@@ -482,25 +504,48 @@ impl ByteViewArrayDecoderDictionary {
 
         let mut error = None;
         let read = self.decoder.read(len, |keys| {
-            output
-                .views
-                .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
-                    Some(&view) => {
-                        let len = view as u32;
-                        if len <= 12 {
-                            view
-                        } else {
-                            let mut view = ByteView::from(view);
-                            view.buffer_index += base_buffer_idx;
-                            view.into()
+
+            if base_buffer_idx == 0 {
+                // the dictionary buffers are the last buffers in output, we can directly use the views
+                output
+                    .views
+                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
+                        Some(&view) => view,
+                        None => {
+                            if error.is_none() {
+                                error = Some(general_err!(
+                                    "invalid key={} for dictionary",
+                                    *k
+                                ));
+                            }
+                            0
                         }
-                    }
-                    None => {
-                        error = Some(general_err!("invalid key={} for dictionary", *k));
-                        0
-                    }
-                }));
-            Ok(())
+                    }));
+                Ok(())
+            }
+            else {
+                output
+                    .views
+                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
+                        Some(&view) => {
+                            let len = view as u32;
+                            if len <= 12 {
+                                view
+                            } else {
+                                let mut view = ByteView::from(view);
+                                view.buffer_index += base_buffer_idx;
+                                view.into()
+                            }
+                        }
+                        None => {
+                            if error.is_none() {
+                                error = Some(general_err!("invalid key={} for dictionary", *k));
+                            }
+                            0
+                        }
+                    }));
+                Ok(())
+            }
         })?;
         if let Some(e) = error {
             return Err(e);
