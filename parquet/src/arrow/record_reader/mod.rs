@@ -50,7 +50,9 @@ pub(crate) type ColumnReader<CV> =
 pub struct GenericRecordReader<V, CV> {
     column_desc: ColumnDescPtr,
 
-    values: V,
+    /// Values buffer, lazily initialized on first read to avoid
+    /// allocating a buffer that may never be used (e.g., after the last batch)
+    values: Option<V>,
     def_levels: Option<DefinitionLevelBuffer>,
     rep_levels: Option<Vec<i16>>,
     column_reader: Option<ColumnReader<CV>>,
@@ -79,7 +81,7 @@ where
         let rep_levels = (desc.max_rep_level() > 0).then(Vec::new);
 
         Self {
-            values: V::with_capacity(capacity),
+            values: None, // Lazily initialized on first read
             def_levels,
             rep_levels,
             column_reader: None,
@@ -176,9 +178,9 @@ where
     /// Returns currently stored buffer data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_record_data(&mut self) -> V {
-        // Replace the buffer with a new one that has the same capacity
-        // This avoids reallocations on subsequent batches
-        std::mem::replace(&mut self.values, V::with_capacity(self.capacity_hint))
+        // Take the buffer, leaving None. The next read will lazily allocate a new buffer.
+        // This avoids allocating a buffer that may never be used (e.g., after the last batch).
+        self.values.take().unwrap_or_else(|| V::with_capacity(0))
     }
 
     /// Returns currently stored null bitmap data for nullable columns.
@@ -222,12 +224,18 @@ where
             self.capacity_hint = batch_size;
         }
 
+        // Lazily initialize buffer on first read
+        let capacity_hint = self.capacity_hint;
+        let values = self
+            .values
+            .get_or_insert_with(|| V::with_capacity(capacity_hint));
+
         let (records_read, values_read, levels_read) =
             self.column_reader.as_mut().unwrap().read_records(
                 batch_size,
                 self.def_levels.as_mut(),
                 self.rep_levels.as_mut(),
-                &mut self.values,
+                values,
             )?;
 
         if values_read < levels_read {
@@ -235,7 +243,7 @@ where
                 general_err!("Definition levels should exist when data is less than levels!")
             })?;
 
-            self.values.pad_nulls(
+            values.pad_nulls(
                 self.num_values,
                 values_read,
                 levels_read,
