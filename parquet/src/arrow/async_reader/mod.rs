@@ -786,7 +786,7 @@ mod tests {
     use arrow::error::Result as ArrowResult;
     use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
     use arrow_array::cast::AsArray;
-    use arrow_array::types::Int32Type;
+    use arrow_array::types::{Int32Type, TimestampNanosecondType};
     use arrow_array::{
         Array, ArrayRef, BooleanArray, Int8Array, Int32Array, Int64Array, RecordBatchReader,
         Scalar, StringArray, StructArray, UInt64Array,
@@ -2379,84 +2379,87 @@ mod tests {
             writer.flush().unwrap();
         }
         writer.close().unwrap();
+        let buffer = Bytes::from(buffer);
+        // Read back with various page index policies, should get the same answer with all
+        for policy in [
+            PageIndexPolicy::Skip,
+            PageIndexPolicy::Optional,
+            PageIndexPolicy::Required,
+        ] {
+            println!("Testing with page index policy: {:?}", policy);
+            let reader = TestReader::new(buffer.clone());
+            let options = ArrowReaderOptions::default().with_page_index_policy(policy);
+            let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
+                .await
+                .unwrap();
 
-        let reader = TestReader::new(Bytes::from(buffer));
-        let options =
-            ArrowReaderOptions::default().with_page_index_policy(PageIndexPolicy::Optional);
-        let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
-            .await
-            .unwrap();
+            let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+            let num_row_groups = builder.metadata().num_row_groups();
 
-        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
-        let num_row_groups = builder.metadata().num_row_groups();
+            // Initial selection: skip middle 100 rows (tag='b') per row group
+            let mut selectors = Vec::new();
+            for _ in 0..num_row_groups {
+                selectors.push(RowSelector::select(100));
+                selectors.push(RowSelector::skip(100));
+                selectors.push(RowSelector::select(100));
+            }
+            let selection = RowSelection::from(selectors);
 
-        // Initial selection: skip middle 100 rows (tag='b') per row group
-        let mut selectors = Vec::new();
-        for _ in 0..num_row_groups {
-            selectors.push(RowSelector::select(100));
-            selectors.push(RowSelector::skip(100));
-            selectors.push(RowSelector::select(100));
-        }
-        let selection = RowSelection::from(selectors);
+            // Predicate 1: tag in ('a', 'c')
+            let tag_predicate =
+                ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [1]), |batch| {
+                    let col = batch.column(0).as_string::<i32>();
+                    Ok(BooleanArray::from_iter(
+                        col.iter().map(|t| t.map(|v| v == "a" || v == "c")),
+                    ))
+                });
 
-        // Predicate 1: tag in ('a', 'c')
-        let tag_predicate =
-            ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [1]), |batch| {
-                let col = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
-                Ok(BooleanArray::from_iter(
-                    col.iter().map(|t| t.map(|v| v == "a" || v == "c")),
-                ))
-            });
+            // Predicate 2: time >= START
+            let time_gte_predicate =
+                ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
+                    let col = batch.column(0).as_primitive::<TimestampNanosecondType>();
+                    Ok(BooleanArray::from_iter(
+                        col.iter().map(|t| t.map(|v| v >= TIME_IN_RANGE_START)),
+                    ))
+                });
 
-        // Predicate 2: time >= START
-        let time_gte_predicate =
-            ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
-                let col = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .unwrap();
-                Ok(BooleanArray::from_iter(
-                    col.iter().map(|t| t.map(|v| v >= TIME_IN_RANGE_START)),
-                ))
-            });
+            // Predicate 3: time < END
+            let time_lt_predicate =
+                ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
+                    let col = batch.column(0).as_primitive::<TimestampNanosecondType>();
+                    Ok(BooleanArray::from_iter(
+                        col.iter().map(|t| t.map(|v| v < TIME_IN_RANGE_END)),
+                    ))
+                });
 
-        // Predicate 3: time < END
-        let time_lt_predicate =
-            ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
-                let col = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .unwrap();
-                Ok(BooleanArray::from_iter(
-                    col.iter().map(|t| t.map(|v| v < TIME_IN_RANGE_END)),
-                ))
-            });
+            let row_filter = RowFilter::new(vec![
+                Box::new(tag_predicate),
+                Box::new(time_gte_predicate),
+                Box::new(time_lt_predicate),
+            ]);
 
-        let row_filter = RowFilter::new(vec![
-            Box::new(tag_predicate),
-            Box::new(time_gte_predicate),
-            Box::new(time_lt_predicate),
-        ]);
+            // Output projection: Only tag column (time not in output)
+            let projection = ProjectionMask::roots(&schema_descr, [1]);
 
-        // Output projection: Only tag column (time not in output)
-        let projection = ProjectionMask::roots(&schema_descr, [1]);
+            let stream = builder
+                .with_row_filter(row_filter)
+                .with_row_selection(selection)
+                .with_projection(projection)
+                .build()
+                .unwrap();
 
-        let mut stream = builder
-            .with_row_filter(row_filter)
-            .with_row_selection(selection)
-            .with_projection(projection)
-            .build()
-            .unwrap();
+            // Stream should complete without error and the same results
+            let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
 
-        // Stream should complete without error
-        while let Some(batch) = stream.next().await {
-            let _ = batch.unwrap();
+            let batch = concat_batches(&batches[0].schema(), &batches).unwrap();
+            assert_eq!(batch.num_columns(), 1);
+            let expected = StringArray::from_iter_values(
+                std::iter::repeat_n("a", 50)
+                    .chain(std::iter::repeat_n("c", 50))
+                    .chain(std::iter::repeat_n("a", 50))
+                    .chain(std::iter::repeat_n("c", 50)),
+            );
+            assert_eq!(batch.column(0).as_string(), &expected);
         }
     }
 }
