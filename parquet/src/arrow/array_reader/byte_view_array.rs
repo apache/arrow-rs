@@ -347,7 +347,7 @@ impl ByteViewArrayDecoderPlain {
         let mut utf8_validation_begin = end_offset;
 
         output.views.reserve(to_read);
-        
+
         // Safety: we reserved enough space in output.views
         // and we will only write up to to_read views / track how many views we wrote.
         // Ideally, we would use `Vec::extend` here, but this generates sub-optimal code.
@@ -396,11 +396,12 @@ impl ByteViewArrayDecoderPlain {
                 // If the length is larger than 128, then we validate the buffer before the length bytes, and move the water mark to the beginning of next string.
                 if len >= 128 {
                     // unfortunately, the len bytes may not be valid utf8, we need to wrap up and validate everything before it.
-                    check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..end_offset) })?;
+                    check_valid_utf8(unsafe {
+                        buf.get_unchecked(utf8_validation_begin..end_offset)
+                    })?;
                     // move the cursor to skip the len bytes.
                     utf8_validation_begin = start_offset;
                 }
-
             }
 
             let view = make_view(
@@ -412,7 +413,7 @@ impl ByteViewArrayDecoderPlain {
             unsafe {
                 views_ptr.add(i).write(view);
             }
-        };
+        }
 
         // Safety: we have written `to_read` views to `views_ptr`
         unsafe {
@@ -466,7 +467,7 @@ impl ByteViewArrayDecoderDictionary {
     /// Assumptions / Optimization
     /// This function checks if dict.buffers() are the last buffers in `output`, and if so
     /// reuses the dictionary page buffers directly without copying data
-    /// 
+    ///
     /// If the dictionary is empty, the buffer contains empty view.
     fn read(&mut self, output: &mut ViewBuffer, dict: &ViewBuffer, len: usize) -> Result<usize> {
         if dict.is_empty() || len == 0 {
@@ -500,7 +501,6 @@ impl ByteViewArrayDecoderDictionary {
 
         let mut error = None;
         let read = self.decoder.read(len, |keys| {
-
             if base_buffer_idx == 0 {
                 // the dictionary buffers are the last buffers in output, we can directly use the views
                 output
@@ -509,17 +509,13 @@ impl ByteViewArrayDecoderDictionary {
                         Some(&view) => view,
                         None => {
                             if error.is_none() {
-                                error = Some(general_err!(
-                                    "invalid key={} for dictionary",
-                                    *k
-                                ));
+                                error = Some(general_err!("invalid key={} for dictionary", *k));
                             }
                             0
                         }
                     }));
                 Ok(())
-            }
-            else {
+            } else {
                 output
                     .views
                     .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
