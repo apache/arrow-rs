@@ -397,7 +397,7 @@ impl ByteViewArrayDecoderPlain {
                 if len >= 128 {
                     // unfortunately, the len bytes may not be valid utf8, we need to wrap up and validate everything before it.
                     check_valid_utf8(unsafe {
-                        buf.get_unchecked(utf8_validation_begin..end_offset)
+                        buf.get_unchecked(utf8_validation_begin..start_offset - 4)
                     })?;
                     // move the cursor to skip the len bytes.
                     utf8_validation_begin = start_offset;
