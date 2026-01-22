@@ -305,9 +305,9 @@ impl<T> ArrowReaderBuilder<T> {
     /// It is recommended to enable reading the page index if using this functionality, to allow
     /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
     ///
-    /// For a running example see `parquet/examples/read_with_row_filter.rs`.
-    /// See <https://arrow.apache.org/blog/2025/12/11/parquet-late-materialization-deep-dive/>
-    /// for a technical explanation of late materialization.
+    /// See the [blog post on late materialization] for a more technical explanation.
+    ///
+    /// [blog post on late materialization]: https://arrow.apache.org/blog/2025/12/11/parquet-late-materialization-deep-dive
     ///
     /// # Example
     /// ```rust
@@ -321,16 +321,19 @@ impl<T> ArrowReaderBuilder<T> {
     /// # let file = File::open(&path)?;
     /// let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     /// let schema_desc = builder.metadata().file_metadata().schema_descr_ptr();
-    ///
-    /// // Create predicate: column id > 4. This col has index 0.
-    /// let projection = ProjectionMask::leaves(&schema_desc, [0]);
+    /// // Create predicate that evaluates `int_col != 1`.
+    /// // `int_col` column has index 4 (zero based) in the schema
+    /// let projection = ProjectionMask::leaves(&schema_desc, [4]);
+    /// // Only the projection columns are passed to the predicate so
+    /// // int_col is column 0 in the predicate
     /// let predicate = ArrowPredicateFn::new(projection, |batch| {
-    ///     let id_col = batch.column(0);
-    ///     arrow::compute::kernels::cmp::gt(id_col, &Int32Array::new_scalar(4))
+    ///     let int_col = batch.column(0);
+    ///     arrow::compute::kernels::cmp::neq(int_col, &Int32Array::new_scalar(1))
     /// });
-    ///
     /// let row_filter = RowFilter::new(vec![Box::new(predicate)]);
-    /// let _reader = builder.with_row_filter(row_filter).build()?;
+    /// // The filter will be invoked during the reading process
+    /// let reader = builder.with_row_filter(row_filter).build()?;
+    /// # for b in reader { let _ = b?; }
     /// # Ok(())
     /// # }
     /// ```
@@ -452,8 +455,10 @@ pub struct ArrowReaderOptions {
     ///
     /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
-    /// Policy for reading offset and column indexes.
-    pub(crate) page_index_policy: PageIndexPolicy,
+
+    pub(crate) column_index: PageIndexPolicy,
+    pub(crate) offset_index: PageIndexPolicy,
+
     /// Options to control reading of Parquet metadata
     metadata_options: ParquetMetaDataOptions,
     /// If encryption is enabled, the file decryption properties can be provided
@@ -506,22 +511,21 @@ impl ArrowReaderOptions {
     ///
     /// # Example
     /// ```
-    /// use std::io::Bytes;
-    /// use std::sync::Arc;
-    /// use tempfile::tempfile;
-    /// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
-    /// use arrow_schema::{DataType, Field, Schema, TimeUnit};
-    /// use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
-    /// use parquet::arrow::ArrowWriter;
-    ///
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// # use parquet::arrow::ArrowWriter;
     /// // Write data - schema is inferred from the data to be Int32
-    /// let file = tempfile().unwrap();
+    /// let mut file = Vec::new();
     /// let batch = RecordBatch::try_from_iter(vec![
     ///     ("col_1", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
     /// ]).unwrap();
-    /// let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), None).unwrap();
+    /// let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), None).unwrap();
     /// writer.write(&batch).unwrap();
     /// writer.close().unwrap();
+    /// let file = Bytes::from(file);
     ///
     /// // Read the file back.
     /// // Supply a schema that interprets the Int32 column as a Timestamp.
@@ -530,7 +534,7 @@ impl ArrowReaderOptions {
     /// ]));
     /// let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
     /// let mut builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
-    ///     file.try_clone().unwrap(),
+    ///     file.clone(),
     ///     options
     /// ).expect("Error if the schema is not compatible with the parquet file schema.");
     ///
@@ -546,24 +550,24 @@ impl ArrowReaderOptions {
     /// the dictionary encoding by specifying a `Dictionary` type in the schema hint:
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use tempfile::tempfile;
-    /// use arrow_array::{ArrayRef, RecordBatch, StringArray};
-    /// use arrow_schema::{DataType, Field, Schema};
-    /// use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
-    /// use parquet::arrow::ArrowWriter;
-    ///
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{ArrayRef, RecordBatch, StringArray};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// # use parquet::arrow::ArrowWriter;
     /// // Write a Parquet file with string data
-    /// let file = tempfile().unwrap();
+    /// let mut file = Vec::new();
     /// let schema = Arc::new(Schema::new(vec![
     ///     Field::new("city", DataType::Utf8, false)
     /// ]));
     /// let cities = StringArray::from(vec!["Berlin", "Berlin", "Paris", "Berlin", "Paris"]);
     /// let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(cities)]).unwrap();
     ///
-    /// let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), None).unwrap();
+    /// let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), None).unwrap();
     /// writer.write(&batch).unwrap();
     /// writer.close().unwrap();
+    /// let file = Bytes::from(file);
     ///
     /// // Read the file back, requesting dictionary encoding preservation
     /// let dict_schema = Arc::new(Schema::new(vec![
@@ -574,7 +578,7 @@ impl ArrowReaderOptions {
     /// ]));
     /// let options = ArrowReaderOptions::new().with_schema(dict_schema);
     /// let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
-    ///     file.try_clone().unwrap(),
+    ///     file.clone(),
     ///     options
     /// ).unwrap();
     ///
@@ -599,6 +603,7 @@ impl ArrowReaderOptions {
         }
     }
 
+    #[deprecated(since = "57.2.0", note = "Use `with_page_index_policy` instead")]
     /// Enable reading the [`PageIndex`] from the metadata, if present (defaults to `false`)
     ///
     /// The `PageIndex` can be used to push down predicates to the parquet scan,
@@ -612,22 +617,41 @@ impl ArrowReaderOptions {
     /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
     /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
-        let page_index_policy = PageIndexPolicy::from(page_index);
-
-        Self {
-            page_index_policy,
-            ..self
-        }
+        self.with_page_index_policy(PageIndexPolicy::from(page_index))
     }
 
-    /// Set the [`PageIndexPolicy`] to determine how page indexes should be read.
+    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
     ///
-    /// See [`Self::with_page_index`] for more details.
+    /// The `PageIndex` consists of two structures: the `ColumnIndex` and `OffsetIndex`.
+    /// This method sets the same policy for both. For fine-grained control, use
+    /// [`Self::with_column_index_policy`] and [`Self::with_offset_index_policy`].
+    ///
+    /// See [`Self::with_page_index`] for more details on page indexes.
     pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
-        Self {
-            page_index_policy: policy,
-            ..self
-        }
+        self.with_column_index_policy(policy)
+            .with_offset_index_policy(policy)
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the Parquet [ColumnIndex] structure.
+    ///
+    /// The `ColumnIndex` contains min/max statistics for each page, which can be used
+    /// for predicate pushdown and page-level pruning.
+    ///
+    /// [ColumnIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_column_index_policy(mut self, policy: PageIndexPolicy) -> Self {
+        self.column_index = policy;
+        self
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the Parquet [OffsetIndex] structure.
+    ///
+    /// The `OffsetIndex` contains the locations and sizes of each page, which enables
+    /// efficient page-level skipping and random access within column chunks.
+    ///
+    /// [OffsetIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_offset_index_policy(mut self, policy: PageIndexPolicy) -> Self {
+        self.offset_index = policy;
+        self
     }
 
     /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
@@ -698,31 +722,32 @@ impl ArrowReaderOptions {
 
     /// Include virtual columns in the output.
     ///
-    /// Virtual columns are columns that are not part of the Parquet schema, but are added to the output by the reader such as row numbers.
+    /// Virtual columns are columns that are not part of the Parquet schema, but are added to the output by the reader such as row numbers and row group indices.
     ///
     /// # Example
     /// ```
     /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
     /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::{ArrowWriter, RowNumber};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
-    /// # use tempfile::tempfile;
     /// #
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// // Create a simple record batch with some data
     /// let values = Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef;
     /// let batch = RecordBatch::try_from_iter(vec![("value", values)])?;
     ///
-    /// // Write the batch to a temporary parquet file
-    /// let file = tempfile()?;
+    /// // Write the batch to an in-memory buffer
+    /// let mut file = Vec::new();
     /// let mut writer = ArrowWriter::try_new(
-    ///     file.try_clone()?,
+    ///     &mut file,
     ///     batch.schema(),
     ///     None
     /// )?;
     /// writer.write(&batch)?;
     /// writer.close()?;
+    /// let file = Bytes::from(file);
     ///
     /// // Create a virtual column for row numbers
     /// let row_number_field = Arc::new(Field::new("row_number", DataType::Int64, false)
@@ -763,11 +788,34 @@ impl ArrowReaderOptions {
         })
     }
 
-    /// Retrieve the currently set page index behavior.
+    #[deprecated(
+        since = "57.2.0",
+        note = "Use `column_index_policy` or `offset_index_policy` instead"
+    )]
+    /// Returns whether page index reading is enabled.
     ///
-    /// This can be set via [`with_page_index`][Self::with_page_index].
+    /// This returns `true` if both the column index and offset index policies are not [`PageIndexPolicy::Skip`].
+    ///
+    /// This can be set via [`with_page_index`][Self::with_page_index] or
+    /// [`with_page_index_policy`][Self::with_page_index_policy].
     pub fn page_index(&self) -> bool {
-        self.page_index_policy != PageIndexPolicy::Skip
+        self.offset_index != PageIndexPolicy::Skip && self.column_index != PageIndexPolicy::Skip
+    }
+
+    /// Retrieve the currently set [`PageIndexPolicy`] for the offset index.
+    ///
+    /// This can be set via [`with_offset_index_policy`][Self::with_offset_index_policy]
+    /// or [`with_page_index_policy`][Self::with_page_index_policy].
+    pub fn offset_index_policy(&self) -> PageIndexPolicy {
+        self.offset_index
+    }
+
+    /// Retrieve the currently set [`PageIndexPolicy`] for the column index.
+    ///
+    /// This can be set via [`with_column_index_policy`][Self::with_column_index_policy]
+    /// or [`with_page_index_policy`][Self::with_page_index_policy].
+    pub fn column_index_policy(&self) -> PageIndexPolicy {
+        self.column_index
     }
 
     /// Retrieve the currently set metadata decoding options.
@@ -823,7 +871,8 @@ impl ArrowReaderMetadata {
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
-            .with_page_index_policy(options.page_index_policy)
+            .with_column_index_policy(options.column_index)
+            .with_offset_index_policy(options.offset_index)
             .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
@@ -990,17 +1039,19 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # writer.write(&batch).unwrap();
     /// # writer.close().unwrap();
     /// # let file = Bytes::from(file);
-    /// #
+    /// // Build the reader from anything that implements `ChunkReader`
+    /// // such as a `File`, or `Bytes`
     /// let mut builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-    ///
-    /// // Inspect metadata
+    /// // The builder has access to ParquetMetaData such
+    /// // as the number and layout of row groups
     /// assert_eq!(builder.metadata().num_row_groups(), 1);
-    ///
-    /// // Construct reader
-    /// let mut reader: ParquetRecordBatchReader = builder.with_row_groups(vec![0]).build().unwrap();
-    ///
+    /// // Call build to create the reader
+    /// let mut reader: ParquetRecordBatchReader = builder.build().unwrap();
     /// // Read data
-    /// let _batch = reader.next().unwrap().unwrap();
+    /// while let Some(batch) = reader.next().transpose()? {
+    ///     println!("Read {} rows", batch.num_rows());
+    /// }
+    /// # Ok::<(), parquet::errors::ParquetError>(())
     /// ```
     pub fn try_new(reader: T) -> Result<Self> {
         Self::try_new_with_options(reader, Default::default())
@@ -1536,7 +1587,10 @@ pub(crate) mod tests {
         ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
         RowSelectionPolicy, RowSelector,
     };
-    use crate::arrow::schema::{add_encoded_arrow_schema_to_metadata, virtual_type::RowNumber};
+    use crate::arrow::schema::{
+        add_encoded_arrow_schema_to_metadata,
+        virtual_type::{RowGroupIndex, RowNumber},
+    };
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, LogicalType, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
@@ -1545,7 +1599,7 @@ pub(crate) mod tests {
         FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
-    use crate::file::metadata::{ParquetMetaData, ParquetStatisticsPolicy};
+    use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetStatisticsPolicy};
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -3342,8 +3396,9 @@ pub(crate) mod tests {
 
         file.rewind().unwrap();
 
-        let options = ArrowReaderOptions::new()
-            .with_page_index(opts.enabled_statistics == EnabledStatistics::Page);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(
+            opts.enabled_statistics == EnabledStatistics::Page,
+        ));
 
         let mut builder =
             ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
@@ -4751,7 +4806,8 @@ pub(crate) mod tests {
             batch_size: usize,
             selections: RowSelection,
         ) -> ParquetRecordBatchReader {
-            let options = ArrowReaderOptions::new().with_page_index(true);
+            let options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
             let file = test_file.try_clone().unwrap();
             ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                 .unwrap()
@@ -4790,7 +4846,7 @@ pub(crate) mod tests {
             let test_file = File::open(path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
                 test_file,
-                ArrowReaderOptions::new().with_page_index(true),
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
             assert!(!builder.metadata().offset_index().unwrap()[0].is_empty());
@@ -4805,7 +4861,7 @@ pub(crate) mod tests {
             let test_file = File::open(path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
                 test_file,
-                ArrowReaderOptions::new().with_page_index(true),
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
@@ -5577,7 +5633,7 @@ pub(crate) mod tests {
         writer.close().unwrap();
         let data = Bytes::from(buffer);
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder =
             ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options).unwrap();
         let schema = builder.parquet_schema().clone();
@@ -5592,7 +5648,7 @@ pub(crate) mod tests {
             })
         };
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let predicate = make_predicate(filter_mask.clone());
 
         // The batch size is set to 12 to read all rows in one go after filtering
@@ -5935,6 +5991,183 @@ pub(crate) mod tests {
                     .expect("Could not read")
             },
         );
+    }
+
+    #[test]
+    fn test_read_row_group_indices() {
+        // create a parquet file with 3 row groups, 2 rows each
+        let array1 = Int64Array::from(vec![1, 2]);
+        let array2 = Int64Array::from(vec![3, 4]);
+        let array3 = Int64Array::from(vec![5, 6]);
+
+        let batch1 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array1) as ArrayRef)]).unwrap();
+        let batch2 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array2) as ArrayRef)]).unwrap();
+        let batch3 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array3) as ArrayRef)]).unwrap();
+
+        let mut buffer = Vec::new();
+        let options = WriterProperties::builder()
+            .set_max_row_group_size(2)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch1.schema(), Some(options)).unwrap();
+        writer.write(&batch1).unwrap();
+        writer.write(&batch2).unwrap();
+        writer.write(&batch3).unwrap();
+        writer.close().unwrap();
+
+        let file = Bytes::from(buffer);
+        let row_group_index_field = Arc::new(
+            Field::new("row_group_index", ArrowDataType::Int64, false)
+                .with_extension_type(RowGroupIndex),
+        );
+
+        let options = ArrowReaderOptions::new()
+            .with_virtual_columns(vec![row_group_index_field.clone()])
+            .unwrap();
+        let mut arrow_reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file.clone(), options)
+                .expect("reader builder with virtual columns")
+                .build()
+                .expect("reader with virtual columns");
+
+        let batch = arrow_reader.next().unwrap().unwrap();
+
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 6);
+
+        assert_eq!(
+            batch
+                .column(0)
+                .as_primitive::<types::Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6)]
+        );
+
+        assert_eq!(
+            batch
+                .column(1)
+                .as_primitive::<types::Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(0), Some(1), Some(1), Some(2), Some(2)]
+        );
+    }
+
+    #[test]
+    fn test_read_only_row_group_indices() {
+        let array1 = Int64Array::from(vec![1, 2, 3]);
+        let array2 = Int64Array::from(vec![4, 5]);
+
+        let batch1 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array1) as ArrayRef)]).unwrap();
+        let batch2 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array2) as ArrayRef)]).unwrap();
+
+        let mut buffer = Vec::new();
+        let options = WriterProperties::builder()
+            .set_max_row_group_size(3)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch1.schema(), Some(options)).unwrap();
+        writer.write(&batch1).unwrap();
+        writer.write(&batch2).unwrap();
+        writer.close().unwrap();
+
+        let file = Bytes::from(buffer);
+        let row_group_index_field = Arc::new(
+            Field::new("row_group_index", ArrowDataType::Int64, false)
+                .with_extension_type(RowGroupIndex),
+        );
+
+        let options = ArrowReaderOptions::new()
+            .with_virtual_columns(vec![row_group_index_field.clone()])
+            .unwrap();
+        let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
+        let num_columns = metadata
+            .metadata
+            .file_metadata()
+            .schema_descr()
+            .num_columns();
+
+        let mut arrow_reader = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
+            .with_projection(ProjectionMask::none(num_columns))
+            .build()
+            .expect("reader with virtual columns only");
+
+        let batch = arrow_reader.next().unwrap().unwrap();
+        let schema = Arc::new(Schema::new(vec![(*row_group_index_field).clone()]));
+
+        assert_eq!(batch.schema(), schema);
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), 5);
+
+        assert_eq!(
+            batch
+                .column(0)
+                .as_primitive::<types::Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(0), Some(0), Some(1), Some(1)]
+        );
+    }
+
+    #[test]
+    fn test_read_row_group_indices_with_selection() -> Result<()> {
+        let mut buffer = Vec::new();
+        let options = WriterProperties::builder()
+            .set_max_row_group_size(10)
+            .build();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            ArrowDataType::Int64,
+            false,
+        )]));
+
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(options))?;
+
+        // write out 3 batches of 10 rows each
+        for i in 0..3 {
+            let start = i * 10;
+            let array = Int64Array::from_iter_values(start..start + 10);
+            let batch = RecordBatch::try_from_iter(vec![("value", Arc::new(array) as ArrayRef)])?;
+            writer.write(&batch)?;
+        }
+        writer.close()?;
+
+        let file = Bytes::from(buffer);
+        let row_group_index_field = Arc::new(
+            Field::new("rg_idx", ArrowDataType::Int64, false).with_extension_type(RowGroupIndex),
+        );
+
+        let options =
+            ArrowReaderOptions::new().with_virtual_columns(vec![row_group_index_field])?;
+
+        // test row groups are read in reverse order
+        let arrow_reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file.clone(), options.clone())?
+                .with_row_groups(vec![2, 1, 0])
+                .build()?;
+
+        let batches: Vec<_> = arrow_reader.collect::<Result<Vec<_>, _>>()?;
+        let combined = concat_batches(&batches[0].schema(), &batches)?;
+
+        let values = combined.column(0).as_primitive::<types::Int64Type>();
+        let first_val = values.value(0);
+        let last_val = values.value(combined.num_rows() - 1);
+        // first row from rg 2
+        assert_eq!(first_val, 20);
+        // the last row from rg 0
+        assert_eq!(last_val, 9);
+
+        let rg_indices = combined.column(1).as_primitive::<types::Int64Type>();
+        assert_eq!(rg_indices.value(0), 2);
+        assert_eq!(rg_indices.value(10), 1);
+        assert_eq!(rg_indices.value(20), 0);
+
+        Ok(())
     }
 
     pub(crate) fn test_row_numbers_with_multiple_row_groups_helper<F>(

@@ -161,10 +161,12 @@
 #![warn(missing_docs)]
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use std::iter::Map;
+use std::slice::Windows;
 use std::sync::Arc;
 
 use arrow_array::cast::*;
-use arrow_array::types::{ArrowDictionaryKeyType, ByteViewType};
+use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -1118,6 +1120,9 @@ pub struct Rows {
     config: RowConfig,
 }
 
+/// The iterator type for [`Rows::lengths`]
+pub type RowLengthIter<'a> = Map<Windows<'a, usize>, fn(&'a [usize]) -> usize>;
+
 impl Rows {
     /// Append a [`Row`] to this [`Rows`]
     pub fn push(&mut self, row: Row<'_>) {
@@ -1154,6 +1159,19 @@ impl Rows {
             data,
             config: &self.config,
         }
+    }
+
+    /// Returns the number of bytes the row at index `row` is occupying,
+    /// that is, what is the length of the returned [`Row::data`] will be.
+    pub fn row_len(&self, row: usize) -> usize {
+        assert!(row + 1 < self.offsets.len());
+
+        self.offsets[row + 1] - self.offsets[row]
+    }
+
+    /// Get an iterator over the lengths of each row in this [`Rows`]
+    pub fn lengths(&self) -> RowLengthIter<'_> {
+        self.offsets.windows(2).map(|w| w[1] - w[0])
     }
 
     /// Sets the length of this [`Rows`] to 0
@@ -1545,27 +1563,11 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     array => tracker.push_fixed(fixed::encoded_len(array)),
                     DataType::Null => {},
                     DataType::Boolean => tracker.push_fixed(bool::ENCODED_LEN),
-                    DataType::Binary => tracker.push_variable(
-                        as_generic_binary_array::<i32>(array)
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
-                    DataType::LargeBinary => tracker.push_variable(
-                        as_generic_binary_array::<i64>(array)
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
+                    DataType::Binary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i32>(array)),
+                    DataType::LargeBinary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i64>(array)),
                     DataType::BinaryView => push_byte_view_array_lengths(&mut tracker, array.as_binary_view()),
-                    DataType::Utf8 => tracker.push_variable(
-                        array.as_string::<i32>()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
-                    DataType::LargeUtf8 => tracker.push_variable(
-                        array.as_string::<i64>()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
+                    DataType::Utf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i32>()),
+                    DataType::LargeUtf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i64>()),
                     DataType::Utf8View => push_byte_view_array_lengths(&mut tracker, array.as_string_view()),
                     DataType::FixedSizeBinary(len) => {
                         let len = len.to_usize().unwrap();
@@ -1579,7 +1581,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     array => {
                         tracker.push_variable(
                             array.keys().iter().map(|v| match v {
-                                Some(k) => values.row(k.as_usize()).data.len(),
+                                Some(k) => values.row_len(k.as_usize()),
                                 None => null.data.len(),
                             })
                         )
@@ -1589,10 +1591,19 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
             }
             Encoder::Struct(rows, null) => {
                 let array = as_struct_array(array);
-                tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
-                    true => 1 + rows.row(idx).as_ref().len(),
-                    false => 1 + null.data.len(),
-                }));
+                if rows.num_rows() > 0 {
+                    // Only calculate row length if there are rows
+                    tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
+                        true => 1 + rows.row_len(idx),
+                        false => 1 + null.data.len(),
+                    }));
+                } else {
+                    // Edge case for Struct([]) arrays (no child fields)
+                    tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
+                        true => 1,
+                        false => 1 + null.data.len(),
+                    }));
+                }
             }
             Encoder::List(rows) => match array.data_type() {
                 DataType::List(_) => {
@@ -1642,10 +1653,10 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 let lengths = (0..union_array.len()).map(|i| {
                     let type_id = type_ids[i];
                     let child_row_i = offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
-                    let child_row = child_rows[type_id as usize].row(child_row_i);
+                    let child_row_len = child_rows[type_id as usize].row_len(child_row_i);
 
                     // length: 1 byte type_id + child row bytes
-                    1 + child_row.as_ref().len()
+                    1 + child_row_len
                 });
 
                 tracker.push_variable(lengths);
@@ -1654,6 +1665,30 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
     }
 
     tracker
+}
+
+/// Add to [`LengthTracker`] the encoded length of each item in the [`GenericByteArray`]
+fn push_generic_byte_array_lengths<T: ByteArrayType>(
+    tracker: &mut LengthTracker,
+    array: &GenericByteArray<T>,
+) {
+    if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+        tracker.push_variable(
+            array
+                .offsets()
+                .lengths()
+                .zip(nulls.iter())
+                .map(|(length, is_valid)| if is_valid { Some(length) } else { None })
+                .map(variable::padded_length),
+        )
+    } else {
+        tracker.push_variable(
+            array
+                .offsets()
+                .lengths()
+                .map(variable::non_null_padded_length),
+        )
+    }
 }
 
 /// Add to [`LengthTracker`] the encoded length of each item in the [`GenericByteViewArray`]
@@ -1748,22 +1783,50 @@ fn encode_column(
             }
         }
         Encoder::Struct(rows, null) => {
+            fn struct_encode_helper<const NO_CHILD_FIELDS: bool>(
+                array: &StructArray,
+                offsets: &mut [usize],
+                null_sentinel: u8,
+                rows: &Rows,
+                null: &Row<'_>,
+                data: &mut [u8],
+            ) {
+                let empty_row = Row {
+                    data: &[],
+                    config: &rows.config,
+                };
+
+                offsets
+                    .iter_mut()
+                    .skip(1)
+                    .enumerate()
+                    .for_each(|(idx, offset)| {
+                        let (row, sentinel) = match array.is_valid(idx) {
+                            true => (
+                                if NO_CHILD_FIELDS {
+                                    empty_row
+                                } else {
+                                    rows.row(idx)
+                                },
+                                0x01,
+                            ),
+                            false => (*null, null_sentinel),
+                        };
+                        let end_offset = *offset + 1 + row.as_ref().len();
+                        data[*offset] = sentinel;
+                        data[*offset + 1..end_offset].copy_from_slice(row.as_ref());
+                        *offset = end_offset;
+                    })
+            }
+
             let array = as_struct_array(column);
             let null_sentinel = null_sentinel(opts);
-            offsets
-                .iter_mut()
-                .skip(1)
-                .enumerate()
-                .for_each(|(idx, offset)| {
-                    let (row, sentinel) = match array.is_valid(idx) {
-                        true => (rows.row(idx), 0x01),
-                        false => (*null, null_sentinel),
-                    };
-                    let end_offset = *offset + 1 + row.as_ref().len();
-                    data[*offset] = sentinel;
-                    data[*offset + 1..end_offset].copy_from_slice(row.as_ref());
-                    *offset = end_offset;
-                })
+            if rows.num_rows() == 0 {
+                // Edge case for Struct([]) arrays (no child fields)
+                struct_encode_helper::<true>(array, offsets, null_sentinel, rows, null, data);
+            } else {
+                struct_encode_helper::<false>(array, offsets, null_sentinel, rows, null, data);
+            }
         }
         Encoder::List(rows) => match column.data_type() {
             DataType::List(_) => list::encode(data, offsets, rows, opts, as_list_array(column)),
@@ -3691,6 +3754,38 @@ mod tests {
                 }
             }
 
+            // Validate rows length iterator
+            {
+                let mut rows_iter = rows.iter();
+                let mut rows_lengths_iter = rows.lengths();
+                for (index, row) in rows_iter.by_ref().enumerate() {
+                    let len = rows_lengths_iter
+                        .next()
+                        .expect("Reached end of length iterator while still have rows");
+                    assert_eq!(
+                        row.data.len(),
+                        len,
+                        "Row length mismatch: {} vs {}",
+                        row.data.len(),
+                        len
+                    );
+                    assert_eq!(
+                        len,
+                        rows.row_len(index),
+                        "Row length mismatch at index {}: {} vs {}",
+                        index,
+                        len,
+                        rows.row_len(index)
+                    );
+                }
+
+                assert_eq!(
+                    rows_lengths_iter.next(),
+                    None,
+                    "Length iterator did not reach end"
+                );
+            }
+
             // Convert rows produced from convert_columns().
             // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
             let back = converter.convert_rows(&rows).unwrap();
@@ -4311,6 +4406,28 @@ mod tests {
     }
 
     #[test]
+    fn test_struct_no_child_fields() {
+        fn run_test(array: ArrayRef) {
+            let sort_fields = vec![SortField::new(array.data_type().clone())];
+            let converter = RowConverter::new(sort_fields).unwrap();
+            let r = converter.convert_columns(&[Arc::clone(&array)]).unwrap();
+
+            let back = converter.convert_rows(&r).unwrap();
+            assert_eq!(back.len(), 1);
+            assert_eq!(&back[0], &array);
+        }
+
+        let s = Arc::new(StructArray::new_empty_fields(5, None)) as ArrayRef;
+        run_test(s);
+
+        let s = Arc::new(StructArray::new_empty_fields(
+            5,
+            Some(vec![true, false, true, false, false].into()),
+        )) as ArrayRef;
+        run_test(s);
+    }
+
+    #[test]
     fn reserve_should_increase_capacity_to_the_requested_size() {
         let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
         let mut empty_rows = row_converter.empty_rows(0, 0);
@@ -4342,5 +4459,14 @@ mod tests {
             empty_rows.size() > before_size,
             "Size should increase when reserving more space than previously reserved"
         );
+    }
+
+    #[test]
+    fn empty_rows_should_return_empty_lengths_iterator() {
+        let rows = RowConverter::new(vec![SortField::new(DataType::UInt8)])
+            .unwrap()
+            .empty_rows(0, 0);
+        let mut lengths_iter = rows.lengths();
+        assert_eq!(lengths_iter.next(), None);
     }
 }
