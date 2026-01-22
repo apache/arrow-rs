@@ -456,8 +456,10 @@ pub struct ArrowReaderOptions {
     ///
     /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
-    /// Policy for reading offset and column indexes.
-    pub(crate) page_index_policy: PageIndexPolicy,
+
+    pub(crate) column_index: PageIndexPolicy,
+    pub(crate) offset_index: PageIndexPolicy,
+
     /// Options to control reading of Parquet metadata
     metadata_options: ParquetMetaDataOptions,
     /// If encryption is enabled, the file decryption properties can be provided
@@ -602,6 +604,7 @@ impl ArrowReaderOptions {
         }
     }
 
+    #[deprecated(since = "57.2.0", note = "Use `with_page_index_policy` instead")]
     /// Enable reading the [`PageIndex`] from the metadata, if present (defaults to `false`)
     ///
     /// The `PageIndex` can be used to push down predicates to the parquet scan,
@@ -615,22 +618,41 @@ impl ArrowReaderOptions {
     /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
     /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
-        let page_index_policy = PageIndexPolicy::from(page_index);
-
-        Self {
-            page_index_policy,
-            ..self
-        }
+        self.with_page_index_policy(PageIndexPolicy::from(page_index))
     }
 
-    /// Set the [`PageIndexPolicy`] to determine how page indexes should be read.
+    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
     ///
-    /// See [`Self::with_page_index`] for more details.
+    /// The `PageIndex` consists of two structures: the `ColumnIndex` and `OffsetIndex`.
+    /// This method sets the same policy for both. For fine-grained control, use
+    /// [`Self::with_column_index_policy`] and [`Self::with_offset_index_policy`].
+    ///
+    /// See [`Self::with_page_index`] for more details on page indexes.
     pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
-        Self {
-            page_index_policy: policy,
-            ..self
-        }
+        self.with_column_index_policy(policy)
+            .with_offset_index_policy(policy)
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the Parquet [ColumnIndex] structure.
+    ///
+    /// The `ColumnIndex` contains min/max statistics for each page, which can be used
+    /// for predicate pushdown and page-level pruning.
+    ///
+    /// [ColumnIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_column_index_policy(mut self, policy: PageIndexPolicy) -> Self {
+        self.column_index = policy;
+        self
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the Parquet [OffsetIndex] structure.
+    ///
+    /// The `OffsetIndex` contains the locations and sizes of each page, which enables
+    /// efficient page-level skipping and random access within column chunks.
+    ///
+    /// [OffsetIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_offset_index_policy(mut self, policy: PageIndexPolicy) -> Self {
+        self.offset_index = policy;
+        self
     }
 
     /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
@@ -767,11 +789,34 @@ impl ArrowReaderOptions {
         })
     }
 
-    /// Retrieve the currently set page index behavior.
+    #[deprecated(
+        since = "57.2.0",
+        note = "Use `column_index_policy` or `offset_index_policy` instead"
+    )]
+    /// Returns whether page index reading is enabled.
     ///
-    /// This can be set via [`with_page_index`][Self::with_page_index].
+    /// This returns `true` if both the column index and offset index policies are not [`PageIndexPolicy::Skip`].
+    ///
+    /// This can be set via [`with_page_index`][Self::with_page_index] or
+    /// [`with_page_index_policy`][Self::with_page_index_policy].
     pub fn page_index(&self) -> bool {
-        self.page_index_policy != PageIndexPolicy::Skip
+        self.offset_index != PageIndexPolicy::Skip && self.column_index != PageIndexPolicy::Skip
+    }
+
+    /// Retrieve the currently set [`PageIndexPolicy`] for the offset index.
+    ///
+    /// This can be set via [`with_offset_index_policy`][Self::with_offset_index_policy]
+    /// or [`with_page_index_policy`][Self::with_page_index_policy].
+    pub fn offset_index_policy(&self) -> PageIndexPolicy {
+        self.offset_index
+    }
+
+    /// Retrieve the currently set [`PageIndexPolicy`] for the column index.
+    ///
+    /// This can be set via [`with_column_index_policy`][Self::with_column_index_policy]
+    /// or [`with_page_index_policy`][Self::with_page_index_policy].
+    pub fn column_index_policy(&self) -> PageIndexPolicy {
+        self.column_index
     }
 
     /// Retrieve the currently set metadata decoding options.
@@ -827,7 +872,8 @@ impl ArrowReaderMetadata {
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
-            .with_page_index_policy(options.page_index_policy)
+            .with_column_index_policy(options.column_index)
+            .with_offset_index_policy(options.offset_index)
             .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
@@ -994,17 +1040,19 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # writer.write(&batch).unwrap();
     /// # writer.close().unwrap();
     /// # let file = Bytes::from(file);
-    /// #
+    /// // Build the reader from anything that implements `ChunkReader`
+    /// // such as a `File`, or `Bytes`
     /// let mut builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-    ///
-    /// // Inspect metadata
+    /// // The builder has access to ParquetMetaData such
+    /// // as the number and layout of row groups
     /// assert_eq!(builder.metadata().num_row_groups(), 1);
-    ///
-    /// // Construct reader
-    /// let mut reader: ParquetRecordBatchReader = builder.with_row_groups(vec![0]).build().unwrap();
-    ///
+    /// // Call build to create the reader
+    /// let mut reader: ParquetRecordBatchReader = builder.build().unwrap();
     /// // Read data
-    /// let _batch = reader.next().unwrap().unwrap();
+    /// while let Some(batch) = reader.next().transpose()? {
+    ///     println!("Read {} rows", batch.num_rows());
+    /// }
+    /// # Ok::<(), parquet::errors::ParquetError>(())
     /// ```
     pub fn try_new(reader: T) -> Result<Self> {
         Self::try_new_with_options(reader, Default::default())
@@ -1562,7 +1610,7 @@ pub(crate) mod tests {
         FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
-    use crate::file::metadata::{ParquetMetaData, ParquetStatisticsPolicy};
+    use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetStatisticsPolicy};
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -3359,8 +3407,9 @@ pub(crate) mod tests {
 
         file.rewind().unwrap();
 
-        let options = ArrowReaderOptions::new()
-            .with_page_index(opts.enabled_statistics == EnabledStatistics::Page);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(
+            opts.enabled_statistics == EnabledStatistics::Page,
+        ));
 
         let mut builder =
             ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
@@ -4768,7 +4817,8 @@ pub(crate) mod tests {
             batch_size: usize,
             selections: RowSelection,
         ) -> ParquetRecordBatchReader {
-            let options = ArrowReaderOptions::new().with_page_index(true);
+            let options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
             let file = test_file.try_clone().unwrap();
             ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                 .unwrap()
@@ -4807,7 +4857,7 @@ pub(crate) mod tests {
             let test_file = File::open(path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
                 test_file,
-                ArrowReaderOptions::new().with_page_index(true),
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
             assert!(!builder.metadata().offset_index().unwrap()[0].is_empty());
@@ -4822,7 +4872,7 @@ pub(crate) mod tests {
             let test_file = File::open(path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
                 test_file,
-                ArrowReaderOptions::new().with_page_index(true),
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
@@ -5598,7 +5648,7 @@ pub(crate) mod tests {
         writer.close().unwrap();
         let data = Bytes::from(buffer);
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder =
             ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options).unwrap();
         let schema = builder.parquet_schema().clone();
@@ -5613,7 +5663,7 @@ pub(crate) mod tests {
             })
         };
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let predicate = make_predicate(filter_mask.clone());
 
         // Using Auto policy with page index enabled - page-aware mask should handle
