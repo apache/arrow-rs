@@ -420,7 +420,8 @@ impl ByteViewArrayDecoderPlain {
             output.views.set_len(output.views.len() + to_read);
         }
         if VALIDATE_UTF8 {
-            // validate the last part of the buffer
+            // validate values from the previously validated location up to (but not including)
+            // the length of this string
             check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..end_offset) })?;
         }
 
