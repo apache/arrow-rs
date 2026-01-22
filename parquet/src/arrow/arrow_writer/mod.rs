@@ -1804,7 +1804,9 @@ mod tests {
         let schema = Schema::new(vec![string_field, binary_field]);
 
         // There is special case validation for long values (greater than 128)
-        let long = "a".repeat(256);
+        // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
+        // trigger the long-string UTF-8 validation branch in the plain decoder.
+        let long = "a".repeat(128);
         let raw_string_values = vec!["foo", long.as_str(), "bar"];
         let raw_binary_values = vec![b"foo".to_vec(), long.as_bytes().to_vec(), b"bar".to_vec()];
 
