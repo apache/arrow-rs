@@ -19,7 +19,6 @@
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
-use arrow_buffer::ArrowNativeType;
 use arrow_buffer::MutableBuffer;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::ArrayData;
@@ -383,9 +382,7 @@ where
 
     let buffer = unsafe {
         MutableBuffer::from_trusted_len_iter((0..len).map(|idx| {
-            let res = op(unsafe { a.value_unchecked(idx) }, unsafe {
-                b.value_unchecked(idx)
-            });
+            let res = op(a.value_unchecked(idx), b.value_unchecked(idx));
             match res {
                 Err(err) => {
                     // capture the first error
