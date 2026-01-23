@@ -119,14 +119,13 @@
 //! use futures::{Stream, StreamExt};
 //! use std::task::{Poll, ready};
 //! use arrow_array::RecordBatch;
-//! use arrow_schema::ArrowError;
-//! use arrow_avro::reader::Decoder;
+//! use arrow_avro::{reader::Decoder, errors::AvroError};
 //!
 //! /// Decode a stream of Avro-framed bytes into RecordBatch values.
 //! fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
 //!     mut decoder: Decoder,
 //!     mut input: S,
-//! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
+//! ) -> impl Stream<Item = Result<RecordBatch, AvroError>> {
 //!     let mut buffered = Bytes::new();
 //!     futures::stream::poll_fn(move |cx| {
 //!         loop {
@@ -480,7 +479,7 @@
 //!
 //! ---
 use crate::codec::AvroFieldBuilder;
-use crate::errors::{AvroError, Result};
+use crate::errors::AvroError;
 use crate::reader::header::read_header;
 use crate::schema::{
     AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY,
@@ -675,7 +674,7 @@ impl Decoder {
     ///   `SchemaStore`;
     /// * The Avro body is malformed;
     /// * A strict‑mode union rule is violated (see `ReaderBuilder::with_strict_mode`).
-    pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
+    pub fn decode(&mut self, data: &[u8]) -> Result<usize, AvroError> {
         let mut total_consumed = 0usize;
         while total_consumed < data.len() && self.remaining_capacity > 0 {
             if self.awaiting_body {
@@ -698,7 +697,7 @@ impl Decoder {
                     self.awaiting_body = true;
                 }
                 None => {
-                    return Err(ArrowError::ParseError(
+                    return Err(AvroError::ParseError(
                         "Missing magic bytes and fingerprint".to_string(),
                     ));
                 }
@@ -711,7 +710,7 @@ impl Decoder {
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
-    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>> {
+    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, AvroError> {
         match self.fingerprint_algorithm {
             FingerprintAlgorithm::Rabin => {
                 self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
@@ -749,7 +748,7 @@ impl Decoder {
         buf: &[u8],
         magic: &[u8; MAGIC_LEN],
         fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
-    ) -> Result<Option<usize>> {
+    ) -> Result<Option<usize>, AvroError> {
         // Need at least the magic bytes to decide
         // 2 bytes for Avro Spec and 1 byte for Confluent Wire Protocol.
         if buf.len() < MAGIC_LEN {
@@ -774,7 +773,7 @@ impl Decoder {
         &mut self,
         buf: &[u8],
         fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
-    ) -> Result<Option<usize>> {
+    ) -> Result<Option<usize>, AvroError> {
         // Need enough bytes to get fingerprint (next N bytes)
         let Some(fingerprint_bytes) = buf.get(..N) else {
             return Ok(None); // insufficient bytes
@@ -816,7 +815,7 @@ impl Decoder {
         }
     }
 
-    fn flush_and_reset(&mut self) -> Result<Option<RecordBatch>> {
+    fn flush_and_reset(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         if self.batch_is_empty() {
             return Ok(None);
         }
@@ -831,11 +830,11 @@ impl Decoder {
     /// If a schema change was detected while decoding rows for the current batch, the
     /// schema switch is applied **after** flushing this batch, so the **next** batch
     /// (if any) may have a different schema.
-    pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    pub fn flush(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         // We must flush the active decoder before switching to the pending one.
         let batch = self.flush_and_reset();
         self.apply_pending_schema();
-        batch.map_err(ArrowError::from)
+        batch
     }
 
     /// Returns the number of rows that can be added to this decoder before it is full.
@@ -856,7 +855,7 @@ impl Decoder {
     // Decode either the block count or remaining capacity from `data` (an OCF block payload).
     //
     // Returns the number of bytes consumed from `data` along with the number of records decoded.
-    fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize)> {
+    fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize), AvroError> {
         // OCF decoding never interleaves records across blocks, so no chunking.
         let to_decode = std::cmp::min(count, self.remaining_capacity);
         if to_decode == 0 {
@@ -869,7 +868,7 @@ impl Decoder {
 
     // Produce a `RecordBatch` if at least one row is fully decoded, returning
     // `Ok(None)` if no new rows are available.
-    fn flush_block(&mut self) -> Result<Option<RecordBatch>> {
+    fn flush_block(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         self.flush_and_reset()
     }
 }
@@ -979,7 +978,7 @@ impl ReaderBuilder {
         &self,
         writer_schema: &Schema,
         reader_schema: Option<&Schema>,
-    ) -> Result<RecordDecoder> {
+    ) -> Result<RecordDecoder, AvroError> {
         let mut builder = AvroFieldBuilder::new(writer_schema);
         if let Some(reader_schema) = reader_schema {
             builder = builder.with_reader_schema(reader_schema);
@@ -995,7 +994,7 @@ impl ReaderBuilder {
         &self,
         writer_schema: &Schema,
         reader_schema: Option<&AvroSchema>,
-    ) -> Result<RecordDecoder> {
+    ) -> Result<RecordDecoder, AvroError> {
         let reader_schema_raw = reader_schema.map(|s| s.schema()).transpose()?;
         self.make_record_decoder(writer_schema, reader_schema_raw.as_ref())
     }
@@ -1023,14 +1022,11 @@ impl ReaderBuilder {
         &self,
         header: Option<&Header>,
         reader_schema: Option<&AvroSchema>,
-    ) -> Result<Decoder> {
+    ) -> Result<Decoder, AvroError> {
         if let Some(hdr) = header {
             let writer_schema = hdr
-                .schema()
-                .map_err(|e| AvroError::External(Box::new(e)))?
-                .ok_or_else(|| {
-                    AvroError::ParseError("No Avro schema present in file header".into())
-                })?;
+                .schema()?
+                .ok_or_else(|| AvroError::ParseError("No Avro schema present in file header".into()))?;
             let projected_reader_schema = self
                 .projection
                 .as_deref()
@@ -1337,7 +1333,7 @@ impl<R: BufRead> Reader<R> {
     ///
     /// Batches are bounded by `batch_size`; a single OCF block may yield multiple batches,
     /// and a batch may also span multiple blocks.
-    fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    fn read(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         'outer: while !self.finished && !self.decoder.batch_is_full() {
             while self.block_cursor == self.block_data.len() {
                 let buf = self.reader.fill_buf()?;
@@ -1351,7 +1347,8 @@ impl<R: BufRead> Reader<R> {
                 if let Some(block) = self.block_decoder.flush() {
                     // Successfully decoded a block.
                     self.block_data = if let Some(ref codec) = self.header.compression()? {
-                        codec.decompress(&block.data)?
+                        let decompressed: Vec<u8> = codec.decompress(&block.data)?;
+                        decompressed
                     } else {
                         block.data
                     };
@@ -1359,7 +1356,7 @@ impl<R: BufRead> Reader<R> {
                     self.block_cursor = 0;
                 } else if consumed == 0 {
                     // The block decoder made no progress on a non-empty buffer.
-                    return Err(ArrowError::ParseError(
+                    return Err(AvroError::ParseError(
                         "Could not decode next Avro block from partial data".to_string(),
                     ));
                 }
@@ -1373,7 +1370,7 @@ impl<R: BufRead> Reader<R> {
                 self.block_count -= records_decoded;
             }
         }
-        self.decoder.flush_block().map_err(ArrowError::from)
+        self.decoder.flush_block()
     }
 }
 
@@ -1381,7 +1378,7 @@ impl<R: BufRead> Iterator for Reader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.read().transpose()
+        self.read().map_err(ArrowError::from).transpose()
     }
 }
 

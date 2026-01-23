@@ -18,13 +18,13 @@
 //! Decoder for [`Header`]
 
 use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
-use crate::errors::{AvroError, Result};
+use crate::errors::AvroError;
 use crate::reader::vlq::VLQDecoder;
 use crate::schema::{SCHEMA_METADATA_KEY, Schema};
 use std::io::BufRead;
 
 /// Read the Avro file header (magic, metadata, sync marker) from `reader`.
-pub(crate) fn read_header<R: BufRead>(mut reader: R) -> Result<Header> {
+pub(crate) fn read_header<R: BufRead>(mut reader: R) -> Result<Header, AvroError> {
     let mut decoder = HeaderDecoder::default();
     loop {
         let buf = reader.fill_buf()?;
@@ -96,7 +96,7 @@ impl Header {
     }
 
     /// Returns the [`CompressionCodec`] if any
-    pub fn compression(&self) -> Result<Option<CompressionCodec>> {
+    pub fn compression(&self) -> Result<Option<CompressionCodec>, AvroError> {
         let v = self.get(CODEC_METADATA_KEY);
         match v {
             None | Some(b"null") => Ok(None),
@@ -113,7 +113,7 @@ impl Header {
     }
 
     /// Returns the `Schema` if any
-    pub(crate) fn schema(&self) -> Result<Option<Schema<'_>>> {
+    pub(crate) fn schema(&self) -> Result<Option<Schema<'_>>, AvroError> {
         self.get(SCHEMA_METADATA_KEY)
             .map(|x| {
                 serde_json::from_slice(x).map_err(|e| {
@@ -175,7 +175,7 @@ impl HeaderDecoder {
     /// input bytes, and the header can be obtained with [`Self::flush`]
     ///
     /// [`BufRead::fill_buf`]: std::io::BufRead::fill_buf
-    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize> {
+    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, AvroError> {
         let max_read = buf.len();
         while !buf.is_empty() {
             match self.state {
@@ -310,7 +310,7 @@ mod test {
         let mut decoder = HeaderDecoder::default();
         decoder.decode(b"Ob").unwrap();
         let err = decoder.decode(b"s").unwrap_err().to_string();
-        assert_eq!(err, "Parse error: Incorrect avro magic");
+        assert_eq!(err, "Parser error: Incorrect avro magic");
     }
 
     fn decode_file(file: &str) -> Header {

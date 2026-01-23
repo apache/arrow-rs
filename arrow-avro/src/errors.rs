@@ -21,7 +21,7 @@ use arrow_schema::ArrowError;
 use core::num::TryFromIntError;
 use std::error::Error;
 use std::string::FromUtf8Error;
-use std::{io, result, str};
+use std::{io, str};
 
 /// Avro error enumeration
 
@@ -77,7 +77,7 @@ impl std::fmt::Display for AvroError {
             AvroError::InvalidArgument(message) => {
                 write!(fmt, "Invalid argument: {message}")
             }
-            AvroError::ParseError(message) => write!(fmt, "Parse error: {message}"),
+            AvroError::ParseError(message) => write!(fmt, "Parser error: {message}"),
             AvroError::SchemaError(message) => write!(fmt, "Schema error: {message}"),
             AvroError::External(e) => write!(fmt, "External: {e}"),
             AvroError::IoError(message, e) => write!(fmt, "I/O Error: {message}: {e}"),
@@ -129,9 +129,6 @@ impl From<ArrowError> for AvroError {
         AvroError::ArrowError(Box::new(e))
     }
 }
-
-/// A specialized `Result` for Avro errors.
-pub type Result<T, E = AvroError> = result::Result<T, E>;
 
 impl From<AvroError> for io::Error {
     fn from(e: AvroError) -> Self {

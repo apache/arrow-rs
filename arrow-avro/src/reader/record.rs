@@ -21,7 +21,7 @@ use crate::codec::{
     AvroDataType, AvroField, AvroLiteral, Codec, Promotion, ResolutionInfo, ResolvedRecord,
     ResolvedUnion,
 };
-use crate::errors::{AvroError, Result};
+use crate::errors::AvroError;
 use crate::reader::cursor::AvroCursor;
 use crate::schema::Nullability;
 #[cfg(feature = "small_decimals")]
@@ -115,7 +115,7 @@ impl RecordDecoder {
     ///
     /// # Errors
     /// This function will return an error if the provided `data_type` is not a `Record`.
-    pub(crate) fn try_new_with_options(data_type: &AvroDataType) -> Result<Self> {
+    pub(crate) fn try_new_with_options(data_type: &AvroDataType) -> Result<Self, AvroError> {
         match data_type.codec() {
             Codec::Struct(reader_fields) => {
                 // Build Arrow schema fields and per-child decoders
@@ -149,7 +149,7 @@ impl RecordDecoder {
     }
 
     /// Decode `count` records from `buf`
-    pub(crate) fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize> {
+    pub(crate) fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, AvroError> {
         let mut cursor = AvroCursor::new(buf);
         match self.projector.as_mut() {
             Some(proj) => {
@@ -169,7 +169,7 @@ impl RecordDecoder {
     }
 
     /// Flush the decoded records into a [`RecordBatch`]
-    pub(crate) fn flush(&mut self) -> Result<RecordBatch> {
+    pub(crate) fn flush(&mut self) -> Result<RecordBatch, AvroError> {
         let arrays = self
             .fields
             .iter_mut()
@@ -246,7 +246,7 @@ enum Decoder {
 }
 
 impl Decoder {
-    fn try_new(data_type: &AvroDataType) -> Result<Self> {
+    fn try_new(data_type: &AvroDataType) -> Result<Self, AvroError> {
         if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
             if info.writer_is_union && !info.reader_is_union {
                 let mut clone = data_type.clone();
@@ -264,7 +264,7 @@ impl Decoder {
         Self::try_new_internal(data_type)
     }
 
-    fn try_new_internal(data_type: &AvroDataType) -> Result<Self> {
+    fn try_new_internal(data_type: &AvroDataType) -> Result<Self, AvroError> {
         // Extract just the Promotion (if any) to simplify pattern matching
         let promotion = match data_type.resolution.as_ref() {
             Some(ResolutionInfo::Promotion(p)) => Some(p),
@@ -525,7 +525,7 @@ impl Decoder {
     }
 
     /// Append a null record
-    fn append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<(), AvroError> {
         match self {
             Self::Null(count) => *count += 1,
             Self::Boolean(b) => b.append(false),
@@ -593,7 +593,7 @@ impl Decoder {
     }
 
     /// Append a single default literal into the decoder's buffers
-    fn append_default(&mut self, lit: &AvroLiteral) -> Result<()> {
+    fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), AvroError> {
         match self {
             Self::Nullable(_, nb, inner, _) => {
                 if matches!(lit, AvroLiteral::Null) {
@@ -850,7 +850,7 @@ impl Decoder {
     }
 
     /// Decode a single record from `buf`
-    fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<()> {
+    fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), AvroError> {
         match self {
             Self::Null(x) => *x += 1,
             Self::Boolean(values) => values.append(buf.get_bool()?),
@@ -994,7 +994,7 @@ impl Decoder {
         &mut self,
         buf: &mut AvroCursor<'_>,
         promotion: Promotion,
-    ) -> Result<()> {
+    ) -> Result<(), AvroError> {
         #[cfg(feature = "avro_custom_types")]
         if let Self::RunEndEncoded(_, len, inner) = self {
             *len += 1;
@@ -1055,7 +1055,7 @@ impl Decoder {
     }
 
     /// Flush decoded records to an [`ArrayRef`]
-    fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
+    fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, AvroError> {
         Ok(match self {
             Self::Nullable(_, n, e, _) => e.flush(n.finish())?,
             Self::Null(size) => Arc::new(NullArray::new(std::mem::replace(size, 0))),
@@ -1314,7 +1314,9 @@ struct DispatchLookupTable {
 const NO_SOURCE: i8 = -1;
 
 impl DispatchLookupTable {
-    fn from_writer_to_reader(promotion_map: &[Option<(usize, Promotion)>]) -> Result<Self> {
+    fn from_writer_to_reader(
+        promotion_map: &[Option<(usize, Promotion)>],
+    ) -> Result<Self, AvroError> {
         let mut to_reader = Vec::with_capacity(promotion_map.len());
         let mut promotion = Vec::with_capacity(promotion_map.len());
         for map in promotion_map {
@@ -1399,7 +1401,7 @@ impl UnionDecoder {
         fields: UnionFields,
         branches: Vec<Decoder>,
         resolved: Option<ResolvedUnion>,
-    ) -> Result<Self> {
+    ) -> Result<Self, AvroError> {
         let reader_type_codes = fields.iter().map(|(tid, _)| tid).collect::<Vec<i8>>();
         let null_branch = branches.iter().position(|b| matches!(b, Decoder::Null(_)));
         let default_emit_idx = 0;
@@ -1428,7 +1430,10 @@ impl UnionDecoder {
         })
     }
 
-    fn try_new_from_writer_union(info: ResolvedUnion, target: Box<Decoder>) -> Result<Self> {
+    fn try_new_from_writer_union(
+        info: ResolvedUnion,
+        target: Box<Decoder>,
+    ) -> Result<Self, AvroError> {
         // This constructor is only for writer-union to single-type resolution
         debug_assert!(info.writer_is_union && !info.reader_is_union);
         let lookup_table = DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader)?;
@@ -1441,7 +1446,7 @@ impl UnionDecoder {
         })
     }
 
-    fn plan_from_resolved(resolved: Option<ResolvedUnion>) -> Result<UnionReadPlan> {
+    fn plan_from_resolved(resolved: Option<ResolvedUnion>) -> Result<UnionReadPlan, AvroError> {
         let Some(info) = resolved else {
             return Ok(UnionReadPlan::Passthrough);
         };
@@ -1477,7 +1482,7 @@ impl UnionDecoder {
     }
 
     #[inline]
-    fn read_tag(buf: &mut AvroCursor<'_>) -> Result<usize> {
+    fn read_tag(buf: &mut AvroCursor<'_>) -> Result<usize, AvroError> {
         // Avro unions are encoded by first writing the zero-based branch index.
         // In Avro 1.11.1 this is specified as an *int*; older specs said *long*,
         // but both use zig-zag varint encoding, so decoding as long is compatible
@@ -1497,7 +1502,7 @@ impl UnionDecoder {
     }
 
     #[inline]
-    fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder> {
+    fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder, AvroError> {
         let branches_len = self.branches.len();
         let Some(reader_branch) = self.branches.get_mut(reader_idx) else {
             return Err(AvroError::ParseError(format!(
@@ -1511,9 +1516,9 @@ impl UnionDecoder {
     }
 
     #[inline]
-    fn on_decoder<F>(&mut self, fallback_idx: usize, action: F) -> Result<()>
+    fn on_decoder<F>(&mut self, fallback_idx: usize, action: F) -> Result<(), AvroError>
     where
-        F: FnOnce(&mut Decoder) -> Result<()>,
+        F: FnOnce(&mut Decoder) -> Result<(), AvroError>,
     {
         if let UnionReadPlan::ToSingle { target, .. } = &mut self.plan {
             return action(target);
@@ -1525,15 +1530,15 @@ impl UnionDecoder {
         self.emit_to(reader_idx).and_then(action)
     }
 
-    fn append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<(), AvroError> {
         self.on_decoder(self.null_emit_idx, |decoder| decoder.append_null())
     }
 
-    fn append_default(&mut self, lit: &AvroLiteral) -> Result<()> {
+    fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), AvroError> {
         self.on_decoder(self.default_emit_idx, |decoder| decoder.append_default(lit))
     }
 
-    fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<()> {
+    fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), AvroError> {
         let (reader_idx, promotion) = match &mut self.plan {
             UnionReadPlan::Passthrough => (Self::read_tag(buf)?, Promotion::Direct),
             UnionReadPlan::ReaderUnion { lookup_table } => {
@@ -1565,7 +1570,7 @@ impl UnionDecoder {
         decoder.decode_with_promotion(buf, promotion)
     }
 
-    fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
+    fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, AvroError> {
         if let UnionReadPlan::ToSingle { target, .. } = &mut self.plan {
             return target.flush(nulls);
         }
@@ -1623,7 +1628,7 @@ impl UnionDecoderBuilder {
         self
     }
 
-    fn build(self) -> Result<UnionDecoder> {
+    fn build(self) -> Result<UnionDecoder, AvroError> {
         match (self.resolved, self.fields, self.branches, self.target) {
             (resolved, Some(fields), Some(branches), None) => {
                 UnionDecoder::try_new(fields, branches, resolved)
@@ -1652,8 +1657,8 @@ enum NegativeBlockBehavior {
 #[inline]
 fn skip_blocks(
     buf: &mut AvroCursor,
-    mut skip_item: impl FnMut(&mut AvroCursor) -> Result<()>,
-) -> Result<usize> {
+    mut skip_item: impl FnMut(&mut AvroCursor) -> Result<(), AvroError>,
+) -> Result<usize, AvroError> {
     process_blockwise(
         buf,
         move |c| skip_item(c),
@@ -1666,7 +1671,7 @@ fn flush_dict(
     indices: &mut Vec<i32>,
     symbols: &[String],
     nulls: Option<NullBuffer>,
-) -> Result<ArrayRef> {
+) -> Result<ArrayRef, AvroError> {
     let keys = flush_primitive::<Int32Type>(indices, nulls);
     let values = Arc::new(StringArray::from_iter_values(
         symbols.iter().map(|s| s.as_str()),
@@ -1679,17 +1684,17 @@ fn flush_dict(
 #[inline]
 fn read_blocks(
     buf: &mut AvroCursor,
-    decode_entry: impl FnMut(&mut AvroCursor) -> Result<()>,
-) -> Result<usize> {
+    decode_entry: impl FnMut(&mut AvroCursor) -> Result<(), AvroError>,
+) -> Result<usize, AvroError> {
     process_blockwise(buf, decode_entry, NegativeBlockBehavior::ProcessItems)
 }
 
 #[inline]
 fn process_blockwise(
     buf: &mut AvroCursor,
-    mut on_item: impl FnMut(&mut AvroCursor) -> Result<()>,
+    mut on_item: impl FnMut(&mut AvroCursor) -> Result<(), AvroError>,
     negative_behavior: NegativeBlockBehavior,
-) -> Result<usize> {
+) -> Result<usize, AvroError> {
     let mut total = 0usize;
     loop {
         // Read the block count
@@ -1751,7 +1756,7 @@ fn flush_primitive<T: ArrowPrimitiveType>(
 fn read_decimal_bytes_be<const N: usize>(
     buf: &mut AvroCursor<'_>,
     size: &Option<usize>,
-) -> Result<[u8; N]> {
+) -> Result<[u8; N], AvroError> {
     match size {
         Some(n) if *n == N => {
             let raw = buf.get_fixed(N)?;
@@ -1779,7 +1784,7 @@ fn read_decimal_bytes_be<const N: usize>(
 /// If `raw.len() > N`, all truncated leading bytes must match the sign-extension byte
 /// and the MSB of the first kept byte must match the sign (to avoid silent overflow).
 #[inline]
-fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N]> {
+fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], AvroError> {
     let len = raw.len();
     // Fast path: exact width, just copy
     if len == N {
@@ -1858,7 +1863,7 @@ impl<'a> ProjectorBuilder<'a> {
     }
 
     #[inline]
-    fn build(self) -> Result<Projector> {
+    fn build(self) -> Result<Projector, AvroError> {
         let reader_fields = self.reader_fields;
         let mut field_defaults: Vec<Option<AvroLiteral>> = Vec::with_capacity(reader_fields.len());
         for avro_field in reader_fields.as_ref() {
@@ -1899,7 +1904,7 @@ impl<'a> ProjectorBuilder<'a> {
 
 impl Projector {
     #[inline]
-    fn project_default(&self, decoder: &mut Decoder, index: usize) -> Result<()> {
+    fn project_default(&self, decoder: &mut Decoder, index: usize) -> Result<(), AvroError> {
         // SAFETY: `index` is obtained by listing the reader's record fields (i.e., from
         // `decoders.iter_mut().enumerate()`), and `field_defaults` was built in
         // `ProjectorBuilder::build` to have exactly one element per reader field.
@@ -1918,7 +1923,7 @@ impl Projector {
         &mut self,
         buf: &mut AvroCursor<'_>,
         encodings: &mut [Decoder],
-    ) -> Result<()> {
+    ) -> Result<(), AvroError> {
         debug_assert_eq!(
             self.writer_to_reader.len(),
             self.skip_decoders.len(),
@@ -1981,7 +1986,7 @@ enum Skipper {
 }
 
 impl Skipper {
-    fn from_avro(dt: &AvroDataType) -> Result<Self> {
+    fn from_avro(dt: &AvroDataType) -> Result<Self, AvroError> {
         let mut base = match dt.codec() {
             Codec::Null => Self::Null,
             Codec::Boolean => Self::Boolean,
@@ -2041,7 +2046,7 @@ impl Skipper {
         Ok(base)
     }
 
-    fn skip(&mut self, buf: &mut AvroCursor<'_>) -> Result<()> {
+    fn skip(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), AvroError> {
         match self {
             Self::Null => Ok(()),
             Self::Boolean => {
@@ -4428,7 +4433,7 @@ mod tests {
     }
 
     #[test]
-    fn skipper_interval_is_fixed12_and_skips_12_bytes() -> Result<()> {
+    fn skipper_interval_is_fixed12_and_skips_12_bytes() -> Result<(), AvroError> {
         let dt = make_avro_dt(Codec::Interval, None);
         let mut s = Skipper::from_avro(&dt)?;
         match s {

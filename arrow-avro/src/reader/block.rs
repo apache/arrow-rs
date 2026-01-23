@@ -17,7 +17,7 @@
 
 //! Decoder for [`Block`]
 
-use crate::errors::{AvroError, Result};
+use crate::errors::AvroError;
 use crate::reader::vlq::VLQDecoder;
 
 /// A file data block
@@ -75,7 +75,7 @@ impl BlockDecoder {
     /// can then be used again to read the next block, if any
     ///
     /// [`BufRead::fill_buf`]: std::io::BufRead::fill_buf
-    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize> {
+    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, AvroError> {
         let max_read = buf.len();
         while !buf.is_empty() {
             match self.state {

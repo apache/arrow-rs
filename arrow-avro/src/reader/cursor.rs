@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::errors::{AvroError, Result};
+use crate::errors::AvroError;
 use crate::reader::vlq::read_varint;
 
 /// A wrapper around a byte slice, providing low-level decoding for Avro
@@ -43,7 +43,7 @@ impl<'a> AvroCursor<'a> {
 
     /// Read a single `u8`
     #[inline]
-    pub(crate) fn get_u8(&mut self) -> Result<u8> {
+    pub(crate) fn get_u8(&mut self) -> Result<u8, AvroError> {
         match self.buf.first().copied() {
             Some(x) => {
                 self.buf = &self.buf[1..];
@@ -54,11 +54,11 @@ impl<'a> AvroCursor<'a> {
     }
 
     #[inline]
-    pub(crate) fn get_bool(&mut self) -> Result<bool> {
+    pub(crate) fn get_bool(&mut self) -> Result<bool, AvroError> {
         Ok(self.get_u8()? != 0)
     }
 
-    pub(crate) fn read_vlq(&mut self) -> Result<u64> {
+    pub(crate) fn read_vlq(&mut self) -> Result<u64, AvroError> {
         let (val, offset) =
             read_varint(self.buf).ok_or_else(|| AvroError::ParseError("bad varint".to_string()))?;
         self.buf = &self.buf[offset..];
@@ -66,7 +66,7 @@ impl<'a> AvroCursor<'a> {
     }
 
     #[inline]
-    pub(crate) fn get_int(&mut self) -> Result<i32> {
+    pub(crate) fn get_int(&mut self) -> Result<i32, AvroError> {
         let varint = self.read_vlq()?;
         let val: u32 = varint
             .try_into()
@@ -75,12 +75,12 @@ impl<'a> AvroCursor<'a> {
     }
 
     #[inline]
-    pub(crate) fn get_long(&mut self) -> Result<i64> {
+    pub(crate) fn get_long(&mut self) -> Result<i64, AvroError> {
         let val = self.read_vlq()?;
         Ok((val >> 1) as i64 ^ -((val & 1) as i64))
     }
 
-    pub(crate) fn get_bytes(&mut self) -> Result<&'a [u8]> {
+    pub(crate) fn get_bytes(&mut self) -> Result<&'a [u8], AvroError> {
         let len: usize = self
             .get_long()?
             .try_into()
@@ -95,7 +95,7 @@ impl<'a> AvroCursor<'a> {
     }
 
     #[inline]
-    pub(crate) fn get_float(&mut self) -> Result<f32> {
+    pub(crate) fn get_float(&mut self) -> Result<f32, AvroError> {
         if self.buf.len() < 4 {
             return Err(AvroError::EOF("Unexpected EOF reading float".to_string()));
         }
@@ -105,9 +105,9 @@ impl<'a> AvroCursor<'a> {
     }
 
     #[inline]
-    pub(crate) fn get_double(&mut self) -> Result<f64> {
+    pub(crate) fn get_double(&mut self) -> Result<f64, AvroError> {
         if self.buf.len() < 8 {
-            return Err(AvroError::EOF("Unexpected EOF reading float".to_string()));
+            return Err(AvroError::EOF("Unexpected EOF reading double".to_string()));
         }
         let ret = f64::from_le_bytes(self.buf[..8].try_into().unwrap());
         self.buf = &self.buf[8..];
@@ -115,7 +115,7 @@ impl<'a> AvroCursor<'a> {
     }
 
     /// Read exactly `n` bytes from the buffer (e.g. for Avro `fixed`).
-    pub(crate) fn get_fixed(&mut self, n: usize) -> Result<&'a [u8]> {
+    pub(crate) fn get_fixed(&mut self, n: usize) -> Result<&'a [u8], AvroError> {
         if self.buf.len() < n {
             return Err(AvroError::EOF("Unexpected EOF reading fixed".to_string()));
         }

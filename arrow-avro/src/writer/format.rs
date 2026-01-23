@@ -18,7 +18,7 @@
 //! Avro Writer Formats for Arrow.
 
 use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
-use crate::errors::{AvroError, Result};
+use crate::errors::AvroError;
 use crate::schema::{AvroSchema, AvroSchemaOptions, SCHEMA_METADATA_KEY};
 use crate::writer::encoder::write_long;
 use arrow_schema::Schema;
@@ -41,7 +41,7 @@ pub trait AvroFormat: Debug + Default {
         writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
-    ) -> Result<()>;
+    ) -> Result<(), AvroError>;
 
     /// Return the 16‑byte sync marker (OCF) or `None` (binary stream).
     fn sync_marker(&self) -> Option<&[u8; 16]>;
@@ -60,7 +60,7 @@ impl AvroFormat for AvroOcfFormat {
         writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
-    ) -> Result<()> {
+    ) -> Result<(), AvroError> {
         let mut rng = rand::rng();
         rng.fill_bytes(&mut self.sync_marker);
         // Choose the Avro schema JSON that the file will advertise.
@@ -72,7 +72,8 @@ impl AvroFormat for AvroOcfFormat {
                 null_order: None,
                 strip_metadata: true,
             }),
-        )?;
+        )
+        .map_err(|e| AvroError::SchemaError(format!("{:?}", e)))?;
         // Magic
         writer.write_all(b"Obj\x01")?;
         // File metadata map: { "avro.schema": <json>, "avro.codec": <codec> }
@@ -118,7 +119,7 @@ impl AvroFormat for AvroSoeFormat {
         _writer: &mut W,
         _schema: &Schema,
         compression: Option<CompressionCodec>,
-    ) -> Result<()> {
+    ) -> Result<(), AvroError> {
         if compression.is_some() {
             return Err(AvroError::InvalidArgument(
                 "Compression not supported for Avro SOE streaming".to_string(),
@@ -133,12 +134,12 @@ impl AvroFormat for AvroSoeFormat {
 }
 
 #[inline]
-fn write_string<W: Write>(writer: &mut W, s: &str) -> Result<()> {
+fn write_string<W: Write>(writer: &mut W, s: &str) -> Result<(), AvroError> {
     write_bytes(writer, s.as_bytes())
 }
 
 #[inline]
-fn write_bytes<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<()> {
+fn write_bytes<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<(), AvroError> {
     write_long(writer, bytes.len() as i64)?;
     writer.write_all(bytes)?;
     Ok(())
