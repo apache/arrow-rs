@@ -2332,8 +2332,6 @@ mod tests {
     /// Regression test for adaptive predicate pushdown attempting to read skipped pages.
     /// Related issue: https://github.com/apache/arrow-rs/issues/9239
     #[tokio::test]
-    /// TODO: Remove should_panic once the bug is fixed
-    #[should_panic(expected = "Invalid offset in sparse column chunk data")]
     async fn test_predicate_pushdown_with_skipped_pages() {
         use arrow_array::TimestampNanosecondArray;
         use arrow_schema::TimeUnit;

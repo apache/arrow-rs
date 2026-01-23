@@ -240,9 +240,13 @@ impl RowGroupReaderBuilder {
                 "Internal Error: next_row_group called while still reading a row group. Expected Finished state, got {state:?}"
             )));
         }
+        let offset_index_metadata = self
+            .row_group_offset_index(row_group_idx)
+            .map(|columns| columns.to_vec().into());
         let plan_builder = ReadPlanBuilder::new(self.batch_size)
             .with_selection(selection)
-            .with_row_selection_policy(self.row_selection_policy);
+            .with_row_selection_policy(self.row_selection_policy)
+            .with_offset_index_metadata(offset_index_metadata);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
@@ -582,9 +586,8 @@ impl RowGroupReaderBuilder {
                     &mut self.buffers,
                 )?;
 
-                // before plan is build below
-                // check if plan is bitmask and if it is, put it in a variable
-                let page_offsets = if plan_builder.resolve_selection_strategy()
+                // For mask-based selection, attach offset index metadata for page-aware chunking.
+                let offset_index_metadata = if plan_builder.resolve_selection_strategy()
                     == RowSelectionStrategy::Mask
                     && plan_builder.selection().is_some_and(|selection| {
                         selection.requires_page_aware_mask(
@@ -593,11 +596,12 @@ impl RowGroupReaderBuilder {
                         )
                     }) {
                     self.row_group_offset_index(row_group_idx)
-                        .and_then(|columns| columns.first())
-                        .map(|column| column.page_locations())
+                        .map(|columns| columns.to_vec().into())
                 } else {
                     None
                 };
+
+                let plan_builder = plan_builder.with_offset_index_metadata(offset_index_metadata);
 
                 let plan = plan_builder.build();
 
@@ -614,8 +618,7 @@ impl RowGroupReaderBuilder {
                         .build_array_reader(self.fields.as_deref(), &self.projection)
                 }?;
 
-                let reader =
-                    ParquetRecordBatchReader::new(array_reader, plan, page_offsets.cloned());
+                let reader = ParquetRecordBatchReader::new(array_reader, plan);
                 NextState::result(RowGroupDecoderState::Finished, DecodeResult::Data(reader))
             }
             RowGroupDecoderState::Finished => {
@@ -656,7 +659,7 @@ impl RowGroupReaderBuilder {
         mask.without_nested_types(self.metadata.file_metadata().schema_descr())
     }
 
-    /// Get the offset index for the specified row group, if any
+    /// Get the column offset indexes for the specified row group, if any
     fn row_group_offset_index(&self, row_group_idx: usize) -> Option<&[OffsetIndexMetaData]> {
         self.metadata
             .offset_index()
@@ -673,6 +676,6 @@ mod tests {
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 216);
     }
 }

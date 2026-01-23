@@ -25,9 +25,11 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]
@@ -37,6 +39,8 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
+    /// Offset index metadata for each column chunk, used for page-aware mask chunking
+    offset_index_metadata: Option<Arc<[OffsetIndexMetaData]>>,
 }
 
 impl ReadPlanBuilder {
@@ -46,6 +50,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
+            offset_index_metadata: None,
         }
     }
 
@@ -148,7 +153,7 @@ impl ReadPlanBuilder {
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
     ) -> Result<Self> {
-        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build(), None);
+        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
         let mut filters = vec![];
         for maybe_batch in reader {
             let maybe_batch = maybe_batch?;
@@ -175,6 +180,15 @@ impl ReadPlanBuilder {
         Ok(self)
     }
 
+    /// Add offset index metadata for each column in a row group to this `ReadPlanBuilder`
+    pub fn with_offset_index_metadata(
+        mut self,
+        metadata: Option<Arc<[OffsetIndexMetaData]>>,
+    ) -> Self {
+        self.offset_index_metadata = metadata;
+        self
+    }
+
     /// Create a final `ReadPlan` the read plan for the scan
     pub fn build(mut self) -> ReadPlan {
         // If selection is empty, truncate
@@ -189,6 +203,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
+            offset_index_metadata,
         } = self;
 
         let selection = selection.map(|s| s.trim());
@@ -209,6 +224,7 @@ impl ReadPlanBuilder {
         ReadPlan {
             batch_size,
             row_selection_cursor,
+            offset_index_metadata,
         }
     }
 }
@@ -307,6 +323,8 @@ pub struct ReadPlan {
     batch_size: usize,
     /// Row ranges to be selected from the data source
     row_selection_cursor: RowSelectionCursor,
+    /// Offset index metadata for each column chunk
+    offset_index_metadata: Option<Arc<[OffsetIndexMetaData]>>,
 }
 
 impl ReadPlan {
@@ -329,6 +347,11 @@ impl ReadPlan {
     #[inline(always)]
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    /// Return the offset index metadata for the columns in this row group
+    pub fn offset_index_metadata(&self) -> Option<Arc<[OffsetIndexMetaData]>> {
+        self.offset_index_metadata.clone()
     }
 }
 
