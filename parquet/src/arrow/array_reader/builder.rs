@@ -26,6 +26,7 @@ use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::row_group_cache::RowGroupCache;
+use crate::arrow::array_reader::row_group_index::RowGroupIndexReader;
 use crate::arrow::array_reader::row_number::RowNumberReader;
 use crate::arrow::array_reader::{
     ArrayReader, FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
@@ -169,6 +170,9 @@ impl<'a> ArrayReaderBuilder<'a> {
                 // They need to be built by specialized readers
                 match virtual_type {
                     VirtualColumnType::RowNumber => Ok(Some(self.build_row_number_reader()?)),
+                    VirtualColumnType::RowGroupIndex => {
+                        Ok(Some(self.build_row_group_index_reader()?))
+                    }
                 }
             }
             ParquetFieldType::Group { .. } => match &field.arrow_type {
@@ -189,6 +193,18 @@ impl<'a> ArrayReaderBuilder<'a> {
             )
         })?;
         Ok(Box::new(RowNumberReader::try_new(
+            parquet_metadata,
+            self.row_groups.row_groups(),
+        )?))
+    }
+
+    fn build_row_group_index_reader(&self) -> Result<Box<dyn ArrayReader>> {
+        let parquet_metadata = self.parquet_metadata.ok_or_else(|| {
+            ParquetError::General(
+                "ParquetMetaData is required to read virtual row group index columns.".to_string(),
+            )
+        })?;
+        Ok(Box::new(RowGroupIndexReader::try_new(
             parquet_metadata,
             self.row_groups.row_groups(),
         )?))

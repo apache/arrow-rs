@@ -123,9 +123,7 @@ impl ParquetMetaDataReader {
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     #[deprecated(since = "56.1.0", note = "Use `with_page_index_policy` instead")]
     pub fn with_page_indexes(self, val: bool) -> Self {
-        let policy = PageIndexPolicy::from(val);
-        self.with_column_index_policy(policy)
-            .with_offset_index_policy(policy)
+        self.with_page_index_policy(PageIndexPolicy::from(val))
     }
 
     /// Enable or disable reading the Parquet [ColumnIndex] structure.

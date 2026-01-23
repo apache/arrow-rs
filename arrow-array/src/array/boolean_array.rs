@@ -286,6 +286,8 @@ impl BooleanArray {
     }
 }
 
+impl super::private::Sealed for BooleanArray {}
+
 impl Array for BooleanArray {
     fn as_any(&self) -> &dyn Any {
         self
@@ -387,24 +389,21 @@ impl From<Vec<Option<bool>>> for BooleanArray {
 
 impl From<ArrayData> for BooleanArray {
     fn from(data: ArrayData) -> Self {
+        let (data_type, len, nulls, offset, mut buffers, _child_data) = data.into_parts();
         assert_eq!(
-            data.data_type(),
-            &DataType::Boolean,
-            "BooleanArray expected ArrayData with type {} got {}",
+            data_type,
             DataType::Boolean,
-            data.data_type()
+            "BooleanArray expected ArrayData with type Boolean got {data_type:?}",
         );
         assert_eq!(
-            data.buffers().len(),
+            buffers.len(),
             1,
             "BooleanArray data should contain a single buffer only (values buffer)"
         );
-        let values = BooleanBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
+        let buffer = buffers.pop().expect("checked above");
+        let values = BooleanBuffer::new(buffer, offset, len);
 
-        Self {
-            values,
-            nulls: data.nulls().cloned(),
-        }
+        Self { values, nulls }
     }
 }
 

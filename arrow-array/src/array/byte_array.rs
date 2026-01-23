@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{get_offsets, print_long_array};
+use crate::array::{get_offsets_from_buffer, print_long_array};
 use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::ByteArrayType;
@@ -462,6 +462,8 @@ impl<T: ByteArrayType> std::fmt::Debug for GenericByteArray<T> {
     }
 }
 
+impl<T: ByteArrayType> super::private::Sealed for GenericByteArray<T> {}
+
 impl<T: ByteArrayType> Array for GenericByteArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
@@ -540,30 +542,34 @@ impl<'a, T: ByteArrayType> ArrayAccessor for &'a GenericByteArray<T> {
 
 impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
     fn from(data: ArrayData) -> Self {
+        let (data_type, len, nulls, offset, mut buffers, _child_data) = data.into_parts();
         assert_eq!(
-            data.data_type(),
-            &Self::DATA_TYPE,
+            data_type,
+            Self::DATA_TYPE,
             "{}{}Array expects DataType::{}",
             T::Offset::PREFIX,
             T::PREFIX,
             Self::DATA_TYPE
         );
         assert_eq!(
-            data.buffers().len(),
+            buffers.len(),
             2,
             "{}{}Array data should contain 2 buffers only (offsets and values)",
             T::Offset::PREFIX,
             T::PREFIX,
         );
+        // buffers are offset then value, so pop in reverse
+        let value_data = buffers.pop().expect("checked above");
+        let offset_buffer = buffers.pop().expect("checked above");
+
         // SAFETY:
         // ArrayData is valid, and verified type above
-        let value_offsets = unsafe { get_offsets(&data) };
-        let value_data = data.buffers()[1].clone();
+        let value_offsets = unsafe { get_offsets_from_buffer(offset_buffer, offset, len) };
         Self {
             value_offsets,
             value_data,
-            data_type: T::DATA_TYPE,
-            nulls: data.nulls().cloned(),
+            data_type,
+            nulls,
         }
     }
 }

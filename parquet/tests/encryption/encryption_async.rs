@@ -35,6 +35,7 @@ use parquet::arrow::{
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
@@ -439,7 +440,7 @@ async fn test_decrypt_page_index(
 
     let options = ArrowReaderOptions::new()
         .with_file_decryption_properties(decryption_properties)
-        .with_page_index(true);
+        .with_page_index_policy(PageIndexPolicy::from(true));
 
     let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await?;
 

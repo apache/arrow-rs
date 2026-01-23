@@ -34,6 +34,7 @@ use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
@@ -453,7 +454,7 @@ fn uniform_encryption_roundtrip(
 
     let options = ArrowReaderOptions::new()
         .with_file_decryption_properties(decryption_properties)
-        .with_page_index(page_index);
+        .with_page_index_policy(PageIndexPolicy::from(page_index));
 
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)?;
     assert_eq!(&row_group_sizes(builder.metadata()), &[50, 50, 50]);
@@ -557,7 +558,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
 
     let options = ArrowReaderOptions::new()
         .with_file_decryption_properties(decryption_properties)
-        .with_page_index(page_index);
+        .with_page_index_policy(PageIndexPolicy::from(page_index));
 
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)?;
 
@@ -1041,7 +1042,7 @@ fn test_decrypt_page_index(
     let file = File::open(path)?;
     let options = ArrowReaderOptions::default()
         .with_file_decryption_properties(decryption_properties)
-        .with_page_index(true);
+        .with_page_index_policy(PageIndexPolicy::from(true));
 
     let arrow_metadata = ArrowReaderMetadata::load(&file, options)?;
 

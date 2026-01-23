@@ -19,7 +19,7 @@
 use crate::{Array, ArrayRef, make_array};
 use arrow_buffer::bit_chunk_iterator::{BitChunkIterator, BitChunks};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{BooleanBuffer, MutableBuffer, ScalarBuffer};
+use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
@@ -680,32 +680,36 @@ impl UnionArray {
 
 impl From<ArrayData> for UnionArray {
     fn from(data: ArrayData) -> Self {
-        let (fields, mode) = match data.data_type() {
-            DataType::Union(fields, mode) => (fields, *mode),
+        let (data_type, len, _nulls, offset, buffers, child_data) = data.into_parts();
+
+        let (fields, mode) = match &data_type {
+            DataType::Union(fields, mode) => (fields, mode),
             d => panic!("UnionArray expected ArrayData with type Union got {d}"),
         };
+
         let (type_ids, offsets) = match mode {
-            UnionMode::Sparse => (
-                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len()),
-                None,
-            ),
-            UnionMode::Dense => (
-                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len()),
-                Some(ScalarBuffer::new(
-                    data.buffers()[1].clone(),
-                    data.offset(),
-                    data.len(),
-                )),
-            ),
+            UnionMode::Sparse => {
+                let [buffer]: [Buffer; 1] = buffers.try_into().expect("1 buffer for type_ids");
+                (ScalarBuffer::new(buffer, offset, len), None)
+            }
+            UnionMode::Dense => {
+                let [type_ids_buffer, offsets_buffer]: [Buffer; 2] = buffers
+                    .try_into()
+                    .expect("2 buffers for type_ids and offsets");
+                (
+                    ScalarBuffer::new(type_ids_buffer, offset, len),
+                    Some(ScalarBuffer::new(offsets_buffer, offset, len)),
+                )
+            }
         };
 
         let max_id = fields.iter().map(|(i, _)| i).max().unwrap_or_default() as usize;
         let mut boxed_fields = vec![None; max_id + 1];
-        for (cd, (field_id, _)) in data.child_data().iter().zip(fields.iter()) {
-            boxed_fields[field_id as usize] = Some(make_array(cd.clone()));
+        for (cd, (field_id, _)) in child_data.into_iter().zip(fields.iter()) {
+            boxed_fields[field_id as usize] = Some(make_array(cd));
         }
         Self {
-            data_type: data.data_type().clone(),
+            data_type,
             type_ids,
             offsets,
             fields: boxed_fields,
@@ -737,6 +741,8 @@ impl From<UnionArray> for ArrayData {
         unsafe { builder.build_unchecked() }
     }
 }
+
+impl super::private::Sealed for UnionArray {}
 
 impl Array for UnionArray {
     fn as_any(&self) -> &dyn Any {

@@ -23,7 +23,7 @@ use arrow_buffer::{BooleanBuffer, NullBuffer, bitwise_unary_op_helper};
 use arrow_schema::{ArrowError, DataType};
 
 /// Returns a new array with the same values and the validity bit to false where
-/// the corresponding element of`right` is true.
+/// the corresponding element of `right` is true.
 ///
 /// This can be used to implement SQL `NULLIF`
 ///

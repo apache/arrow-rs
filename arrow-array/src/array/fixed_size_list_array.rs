@@ -114,7 +114,7 @@ use std::sync::Arc;
 /// ```
 ///
 /// [`StringArray`]: crate::array::StringArray
-/// [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
+/// [fixed length lists]: https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout
 #[derive(Clone)]
 pub struct FixedSizeListArray {
     data_type: DataType, // Must be DataType::FixedSizeList(value_length)
@@ -429,8 +429,10 @@ impl FixedSizeListArray {
 
 impl From<ArrayData> for FixedSizeListArray {
     fn from(data: ArrayData) -> Self {
-        let value_length = match data.data_type() {
-            DataType::FixedSizeList(_, len) => *len,
+        let (data_type, len, nulls, offset, _buffers, child_data) = data.into_parts();
+
+        let value_length = match data_type {
+            DataType::FixedSizeList(_, len) => len,
             data_type => {
                 panic!(
                     "FixedSizeListArray data should contain a FixedSizeList data type, got {data_type}"
@@ -439,14 +441,13 @@ impl From<ArrayData> for FixedSizeListArray {
         };
 
         let size = value_length as usize;
-        let values =
-            make_array(data.child_data()[0].slice(data.offset() * size, data.len() * size));
+        let values = make_array(child_data[0].slice(offset * size, len * size));
         Self {
-            data_type: data.data_type().clone(),
+            data_type,
             values,
-            nulls: data.nulls().cloned(),
+            nulls,
             value_length,
-            len: data.len(),
+            len,
         }
     }
 }
@@ -461,6 +462,8 @@ impl From<FixedSizeListArray> for ArrayData {
         unsafe { builder.build_unchecked() }
     }
 }
+
+impl super::private::Sealed for FixedSizeListArray {}
 
 impl Array for FixedSizeListArray {
     fn as_any(&self) -> &dyn Any {
