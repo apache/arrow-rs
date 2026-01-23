@@ -185,15 +185,13 @@ impl ReadPlanBuilder {
         mut self,
         metadata: Option<Arc<[OffsetIndexMetaData]>>,
     ) -> Self {
-        self.page_locations = metadata
-            .as_ref()
-            .and_then(|columns| {
-                columns
-                    .iter()
-                    .filter(|column| !column.page_locations().is_empty())
-                    .max_by_key(|column| column.page_locations().len())
-                    .map(|column| column.page_locations().clone().into())
-            });
+        self.page_locations = metadata.as_ref().and_then(|columns| {
+            columns
+                .iter()
+                .filter(|column| !column.page_locations().is_empty())
+                .max_by_key(|column| column.page_locations().len())
+                .map(|column| column.page_locations().clone().into())
+        });
         self
     }
 
