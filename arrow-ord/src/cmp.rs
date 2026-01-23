@@ -568,6 +568,11 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
         let l_view = unsafe { l.0.views().get_unchecked(l.1) };
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
+            // For eq case, we can directly compare the inlined bytes
+            return l_view == r_view;
+        }
+
         if l_view == r_view {
             if (*l_view as u32) <= 12 || std::ptr::eq(l.0, r.0) {
                 return true;
