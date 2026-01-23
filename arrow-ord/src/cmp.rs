@@ -573,18 +573,19 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             return l_view == r_view;
         }
 
-        if l_view == r_view {
-            if (*l_view as u32) <= 12 || std::ptr::eq(l.0, r.0) {
-                return true;
-            }
+        // Fast path for same view
+        if l_view == r_view && *l_view as u32 <= 12 {
+            return true;
         }
 
         let l_len = *l_view as u32;
         let r_len = *r_view as u32;
+        // Lengths differ
         if l_len != r_len {
             return false;
         }
 
+        // Both are empty
         if l_len == 0 {
             return true;
         }
@@ -594,6 +595,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             return false;
         }
 
+        // Both are inlined, and prefixes are equal
         if l_len <= 12 {
             return false;
         }
