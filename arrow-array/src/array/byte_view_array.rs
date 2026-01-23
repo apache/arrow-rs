@@ -793,19 +793,20 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// key("bar\0") = 0x0000000000000000000062617200000004
     /// ⇒ key("bar") < key("bar\0")
     /// ```
+    /// - `raw` is treated as a 128-bit integer with its bits laid out as follows:
+    ///   - bits 0–31: length (little-endian)
+    ///   - bits 32–127: data (little-endian)
+    ///
     /// # Inlining and Endianness
     ///
-    /// This function uses target-endian independent bitwise operations to construct a 128-bit key:
-    /// - `raw.to_be() << 32` effectively clears the length bits and shifts the 12-byte inline data
+    /// This function uses platform-independent bitwise operations to construct a 128-bit key:
+    /// - `raw.swap_bytes() << 32` effectively clears the length bits and shifts the 12-byte inline data
     ///   into the high 96 bits in Big-Endian order. This ensures the first byte of the string
     ///   is the most significant byte of the resulting `u128`.
-    /// - `raw.to_le() as u32` extracts the length as a native-endian integer, which is then
-    ///   placed in the low 32 bits.
-    /// - The combination ensures that a single `u128` comparison correctly orders by inline data
-    ///   first (lexicographically), then by length (numerically).
+    /// - `raw as u32` extracts the length as a numeric integer, which is then placed in the low 32 bits.
     #[inline(always)]
     pub fn inline_key_fast(raw: u128) -> u128 {
-        (raw.to_be() << 32) | (raw.to_le() as u32 as u128)
+        (raw.swap_bytes() << 32) | (raw as u32 as u128)
     }
 }
 
