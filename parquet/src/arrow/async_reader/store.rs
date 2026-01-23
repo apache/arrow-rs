@@ -93,7 +93,7 @@ impl ParquetObjectReader {
     /// Providing this size up front is an important optimization to avoid extra calls when the
     /// underlying store does not support suffix range requests.
     ///
-    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`].
+    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStoreExt::head`].
     pub fn with_file_size(self, file_size: u64) -> Self {
         Self {
             file_size: Some(file_size),
