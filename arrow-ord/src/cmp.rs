@@ -706,6 +706,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::{DictionaryArray, Int32Array, Scalar, StringArray};
+    use arrow_buffer::{Buffer, ScalarBuffer};
 
     use super::*;
 
@@ -934,6 +935,115 @@ mod tests {
             lt(&a, &b).unwrap(),
             BooleanArray::from(vec![true, false, true, false])
         );
+    }
+
+    #[test]
+    fn test_string_view_eq_prefix_mismatch() {
+        // Prefix mismatch should short-circuit equality for long values.
+        let a =
+            arrow_array::StringViewArray::from(vec![Some("very long apple exceeding 12 bytes")]);
+        let b =
+            arrow_array::StringViewArray::from(vec![Some("very long banana exceeding 12 bytes")]);
+        assert_eq!(eq(&a, &b).unwrap(), BooleanArray::from(vec![Some(false)]));
+    }
+
+    #[test]
+    fn test_string_view_lt_prefix_mismatch() {
+        // Prefix mismatch should decide ordering without full compare for long values.
+        let a =
+            arrow_array::StringViewArray::from(vec![Some("apple long string exceeding 12 bytes")]);
+        let b =
+            arrow_array::StringViewArray::from(vec![Some("banana long string exceeding 12 bytes")]);
+        assert_eq!(lt(&a, &b).unwrap(), BooleanArray::from(vec![true]));
+    }
+
+    #[test]
+    fn test_string_view_eq_inline_fast_path() {
+        // Inline-only arrays should compare by view equality fast path.
+        let a = arrow_array::StringViewArray::from(vec![Some("ab")]);
+        let b = arrow_array::StringViewArray::from(vec![Some("ab")]);
+        assert!(!has_buffers(&a));
+        assert!(!has_buffers(&b));
+        assert_eq!(eq(&a, &b).unwrap(), BooleanArray::from(vec![Some(true)]));
+    }
+
+    #[test]
+    fn test_string_view_eq_inline_prefix_mismatch_with_buffers() {
+        // Non-empty buffers force the prefix mismatch branch for inline values.
+        let a = arrow_array::StringViewArray::from(vec![
+            Some("ab"),
+            Some("long string to allocate buffers"),
+        ]);
+        let b = arrow_array::StringViewArray::from(vec![
+            Some("ac"),
+            Some("long string to allocate buffers"),
+        ]);
+        assert!(has_buffers(&a));
+        assert!(has_buffers(&b));
+        assert_eq!(
+            eq(&a, &b).unwrap(),
+            BooleanArray::from(vec![Some(false), Some(true)])
+        );
+    }
+
+    #[test]
+    fn test_string_view_eq_empty_len_branch() {
+        // Reach the zero-length branch by bypassing the inline fast path with a dummy buffer.
+        let raw_a = 0u128;
+        let raw_b = 1u128 << 96;
+        let views_a = ScalarBuffer::from(vec![raw_a]);
+        let views_b = ScalarBuffer::from(vec![raw_b]);
+        let buffers: Arc<[Buffer]> = Arc::from([Buffer::from_slice_ref([0u8])]);
+        let a =
+            unsafe { arrow_array::StringViewArray::new_unchecked(views_a, buffers.clone(), None) };
+        let b = unsafe { arrow_array::StringViewArray::new_unchecked(views_b, buffers, None) };
+        assert!(has_buffers(&a));
+        assert!(has_buffers(&b));
+        assert!(<&arrow_array::StringViewArray as ArrayOrd>::is_eq(
+            (&a, 0),
+            (&b, 0)
+        ));
+    }
+
+    #[test]
+    fn test_string_view_long_prefix_mismatch_array_ord() {
+        // Long strings with differing prefixes should short-circuit on prefix ordering.
+        let a =
+            arrow_array::StringViewArray::from(vec![Some("apple long string exceeding 12 bytes")]);
+        let b =
+            arrow_array::StringViewArray::from(vec![Some("banana long string exceeding 12 bytes")]);
+        assert!(has_buffers(&a));
+        assert!(has_buffers(&b));
+        assert!(<&arrow_array::StringViewArray as ArrayOrd>::is_lt(
+            (&a, 0),
+            (&b, 0)
+        ));
+    }
+
+    #[test]
+    fn test_string_view_inline_mismatch_array_ord() {
+        // Long strings with differing prefixes should short-circuit on prefix ordering.
+        let a = arrow_array::StringViewArray::from(vec![Some("ap")]);
+        let b = arrow_array::StringViewArray::from(vec![Some("ba")]);
+        assert!(!has_buffers(&a));
+        assert!(!has_buffers(&b));
+        assert!(<&arrow_array::StringViewArray as ArrayOrd>::is_lt(
+            (&a, 0),
+            (&b, 0)
+        ));
+    }
+    #[test]
+    fn test_compare_byte_view_inline_fast_path() {
+        // Inline-only views should compare via inline key in compare_byte_view.
+        let a = arrow_array::StringViewArray::from(vec![Some("ab")]);
+        let b = arrow_array::StringViewArray::from(vec![Some("ac")]);
+        assert!(!has_buffers(&a));
+        assert!(!has_buffers(&b));
+        assert_eq!(compare_byte_view(&a, 0, &b, 0), Ordering::Less);
+    }
+
+    fn has_buffers<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
+        !array.data_buffers().is_empty()
     }
 
     #[test]
