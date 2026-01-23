@@ -25,7 +25,7 @@ use bytes::Bytes;
 use futures::{FutureExt, TryFutureExt, future::BoxFuture};
 use object_store::ObjectStoreExt;
 use object_store::{GetOptions, GetRange};
-use object_store::{ObjectStore, ObjectStoreExt, path::Path};
+use object_store::{ObjectStore, path::Path};
 use tokio::runtime::Handle;
 /// Reads Parquet files in object storage using [`ObjectStore`].
 ///
