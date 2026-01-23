@@ -1024,9 +1024,9 @@ impl ReaderBuilder {
         reader_schema: Option<&AvroSchema>,
     ) -> Result<Decoder, AvroError> {
         if let Some(hdr) = header {
-            let writer_schema = hdr
-                .schema()?
-                .ok_or_else(|| AvroError::ParseError("No Avro schema present in file header".into()))?;
+            let writer_schema = hdr.schema()?.ok_or_else(|| {
+                AvroError::ParseError("No Avro schema present in file header".into())
+            })?;
             let projected_reader_schema = self
                 .projection
                 .as_deref()
