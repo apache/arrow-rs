@@ -1371,12 +1371,12 @@ impl ParquetRecordBatchReader {
         if batch_size == 0 {
             return Ok(None);
         }
-        let offset_index_metadata = self.read_plan.offset_index_metadata();
+        let page_locations = self.read_plan.page_locations();
         match self.read_plan.row_selection_cursor_mut() {
             RowSelectionCursor::Mask(mask_cursor) => {
                 // Stream the record batch reader using contiguous segments of the selection
                 // mask, avoiding the need to materialize intermediate `RowSelector` ranges.
-                let page_locations = offset_index_metadata;
+                let page_locations = page_locations;
 
                 while !mask_cursor.is_empty() {
                     let Some(mask_chunk) =

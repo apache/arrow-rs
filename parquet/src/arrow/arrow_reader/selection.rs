@@ -779,11 +779,11 @@ impl MaskCursor {
     }
 
     /// Advance through the mask representation, producing the next chunk summary.
-    /// Optionally clips chunk boundaries to the nearest page boundary across columns.
+    /// Optionally clips chunk boundaries to page boundaries.
     pub fn next_mask_chunk(
         &mut self,
         batch_size: usize,
-        offset_index_metadata: Option<&[OffsetIndexMetaData]>,
+        page_locations: Option<&[PageLocation]>,
     ) -> Option<MaskChunk> {
         let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
             let mask = &self.mask;
@@ -806,23 +806,14 @@ impl MaskCursor {
             let mut chunk_rows = 0;
             let mut selected_rows = 0;
 
-            let max_chunk_rows = offset_index_metadata
-                .and_then(|columns| {
-                    columns
-                        .iter()
-                        .filter_map(|column| {
-                            let pages = column.page_locations();
-                            if pages.is_empty() {
-                                return None;
-                            }
-                            let next_idx = pages
-                                .partition_point(|loc| loc.first_row_index as usize <= mask_start);
-                            pages.get(next_idx).and_then(|loc| {
-                                let page_start = loc.first_row_index as usize;
-                                (page_start > mask_start).then_some(page_start - mask_start)
-                            })
-                        })
-                        .min()
+            let max_chunk_rows = page_locations
+                .and_then(|pages| {
+                    let next_idx =
+                        pages.partition_point(|loc| loc.first_row_index as usize <= mask_start);
+                    pages.get(next_idx).and_then(|loc| {
+                        let page_start = loc.first_row_index as usize;
+                        (page_start > mask_start).then_some(page_start - mask_start)
+                    })
                 })
                 .unwrap_or(usize::MAX);
 
@@ -1144,19 +1135,15 @@ mod tests {
                 first_row_index: 12,
             },
         ];
-        let columns = vec![OffsetIndexMetaData {
-            page_locations: pages,
-            unencoded_byte_array_data_bytes: None,
-        }];
         // First chunk is page 1
-        let chunk = cursor.next_mask_chunk(100, Some(&columns)).unwrap();
+        let chunk = cursor.next_mask_chunk(100, Some(&pages)).unwrap();
         assert_eq!(chunk.initial_skip, 2);
         assert_eq!(chunk.mask_start, 2);
         assert_eq!(chunk.chunk_rows, 2);
         assert_eq!(chunk.selected_rows, 2);
 
         // Second chunk is page 2
-        let chunk = cursor.next_mask_chunk(100, Some(&columns)).unwrap();
+        let chunk = cursor.next_mask_chunk(100, Some(&pages)).unwrap();
         assert_eq!(chunk.initial_skip, 0);
         assert_eq!(chunk.mask_start, 4);
         assert_eq!(chunk.chunk_rows, 4);

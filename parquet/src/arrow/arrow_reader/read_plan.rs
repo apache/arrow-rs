@@ -25,7 +25,7 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
@@ -39,8 +39,8 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
-    /// Offset index metadata for each column chunk, used for page-aware mask chunking
-    offset_index_metadata: Option<Arc<[OffsetIndexMetaData]>>,
+    /// Precomputed page locations for mask chunking
+    page_locations: Option<Arc<[PageLocation]>>,
 }
 
 impl ReadPlanBuilder {
@@ -50,7 +50,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
-            offset_index_metadata: None,
+            page_locations: None,
         }
     }
 
@@ -185,7 +185,15 @@ impl ReadPlanBuilder {
         mut self,
         metadata: Option<Arc<[OffsetIndexMetaData]>>,
     ) -> Self {
-        self.offset_index_metadata = metadata;
+        self.page_locations = metadata
+            .as_ref()
+            .and_then(|columns| {
+                columns
+                    .iter()
+                    .filter(|column| !column.page_locations().is_empty())
+                    .max_by_key(|column| column.page_locations().len())
+                    .map(|column| column.page_locations().clone().into())
+            });
         self
     }
 
@@ -203,7 +211,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
-            offset_index_metadata,
+            page_locations: _,
         } = self;
 
         let selection = selection.map(|s| s.trim());
@@ -224,7 +232,7 @@ impl ReadPlanBuilder {
         ReadPlan {
             batch_size,
             row_selection_cursor,
-            offset_index_metadata,
+            page_locations: self.page_locations,
         }
     }
 }
@@ -323,8 +331,8 @@ pub struct ReadPlan {
     batch_size: usize,
     /// Row ranges to be selected from the data source
     row_selection_cursor: RowSelectionCursor,
-    /// Offset index metadata for each column chunk
-    offset_index_metadata: Option<Arc<[OffsetIndexMetaData]>>,
+    /// Precomputed page locations for mask chunking
+    page_locations: Option<Arc<[PageLocation]>>,
 }
 
 impl ReadPlan {
@@ -349,9 +357,9 @@ impl ReadPlan {
         self.batch_size
     }
 
-    /// Return the offset index metadata for the columns in this row group
-    pub fn offset_index_metadata(&self) -> Option<Arc<[OffsetIndexMetaData]>> {
-        self.offset_index_metadata.clone()
+    /// Return the page locations used for mask chunking
+    pub fn page_locations(&self) -> Option<Arc<[PageLocation]>> {
+        self.page_locations.clone()
     }
 }
 
