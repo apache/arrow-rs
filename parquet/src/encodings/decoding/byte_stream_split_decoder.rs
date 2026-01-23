@@ -47,8 +47,6 @@ impl<T: DataType> ByteStreamSplitDecoder<T> {
 // Here we assume src contains the full data (which it must, since we're
 // can only know where to split the streams once all data is collected),
 // but dst can be just a slice starting from the given index.
-// We iterate over the output bytes and fill them in from their strided
-// input byte locations.
 fn join_streams_const<const TYPE_SIZE: usize>(
     src: &[u8],
     dst: &mut [u8],
@@ -56,14 +54,29 @@ fn join_streams_const<const TYPE_SIZE: usize>(
     values_decoded: usize,
 ) {
     let sub_src = &src[values_decoded..];
-    for i in 0..dst.len() / TYPE_SIZE {
+    let num_values = dst.len() / TYPE_SIZE;
+
+    let mut i = 0;
+
+    // Process 8 values at a time using blocked transpose
+    while i + 8 <= num_values {
+        for j in 0..TYPE_SIZE {
+            let s = j * stride + i;
+            for k in 0..8 {
+                dst[(i + k) * TYPE_SIZE + j] = sub_src[s + k];
+            }
+        }
+        i += 8;
+    }
+
+    while i < num_values {
         for j in 0..TYPE_SIZE {
             dst[i * TYPE_SIZE + j] = sub_src[i + j * stride];
         }
+        i += 1;
     }
 }
 
-// Like the above, but type_size is not known at compile time.
 fn join_streams_variable(
     src: &[u8],
     dst: &mut [u8],
@@ -72,10 +85,26 @@ fn join_streams_variable(
     values_decoded: usize,
 ) {
     let sub_src = &src[values_decoded..];
-    for i in 0..dst.len() / type_size {
+    let num_values = dst.len() / type_size;
+
+    let mut i = 0;
+
+    // Process 8 values at a time using blocked transpose
+    while i + 8 <= num_values {
+        for j in 0..type_size {
+            let s = j * stride + i;
+            for k in 0..8 {
+                dst[(i + k) * type_size + j] = sub_src[s + k];
+            }
+        }
+        i += 8;
+    }
+
+    while i < num_values {
         for j in 0..type_size {
             dst[i * type_size + j] = sub_src[i + j * stride];
         }
+        i += 1;
     }
 }
 
