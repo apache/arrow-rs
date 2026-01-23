@@ -573,7 +573,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             return l_view == r_view;
         }
 
-        // Fast path for same view
+        // Fast path for same view (and both inlined)
         if l_view == r_view && *l_view as u32 <= 12 {
             return true;
         }
