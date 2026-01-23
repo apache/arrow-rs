@@ -595,7 +595,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             return false;
         }
 
-        // Both are inlined, and prefixes are equal
+        // Both are inlined, and prefixes are equal (so they differ in rest of inlined bytes)
         if l_len <= 12 {
             return false;
         }
