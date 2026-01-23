@@ -33,7 +33,7 @@ use tokio::runtime::Handle;
 /// # use std::io::stdout;
 /// # use std::sync::Arc;
 /// # use object_store::azure::MicrosoftAzureBuilder;
-/// # use object_store::ObjectStore;
+/// # use object_store::{ObjectStore, ObjectStoreExt};
 /// # use object_store::path::Path;
 /// # use parquet::arrow::async_reader::ParquetObjectReader;
 /// # use parquet::arrow::ParquetRecordBatchStreamBuilder;
