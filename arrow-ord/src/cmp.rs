@@ -624,6 +624,12 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         let l_view = unsafe { l.0.views().get_unchecked(l.1) };
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
 
+        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
+            // For lt case, we can directly compare the inlined bytes
+            return GenericByteViewArray::<T>::inline_key_fast(*l_view)
+                < GenericByteViewArray::<T>::inline_key_fast(*r_view);
+        }
+
         if (*l_view as u32) <= 12 && (*r_view as u32) <= 12 {
             return GenericByteViewArray::<T>::inline_key_fast(*l_view)
                 < GenericByteViewArray::<T>::inline_key_fast(*r_view);
@@ -641,7 +647,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         unsafe {
             let l_data: &[u8] = l.0.value_unchecked(l.1).as_ref();
             let r_data: &[u8] = r.0.value_unchecked(r.1).as_ref();
-            l_data[4..] < r_data[4..]
+            l_data < r_data
         }
     }
 
@@ -871,7 +877,10 @@ mod tests {
         // "apple" < "apple_long_string" -> true
         // "apple" < "appl" -> false
         // "apple_long_string" < "apple" -> false
-        assert_eq!(lt(&a, &b).unwrap(), BooleanArray::from(vec![true, false, false]));
+        assert_eq!(
+            lt(&a, &b).unwrap(),
+            BooleanArray::from(vec![true, false, false])
+        );
     }
 
     #[test]
