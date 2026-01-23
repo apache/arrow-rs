@@ -609,13 +609,12 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             let l_data = l.0.data_buffers().get_unchecked(l_buffer_idx as usize);
             let r_data = r.0.data_buffers().get_unchecked(r_buffer_idx as usize);
 
-            // We already compared the first 4 bytes in the prefix
             let l_slice = l_data
                 .as_slice()
-                .get_unchecked((l_offset + 4) as usize..(l_offset + l_len) as usize);
+                .get_unchecked(l_offset as usize..(l_offset + l_len) as usize);
             let r_slice = r_data
                 .as_slice()
-                .get_unchecked((r_offset + 4) as usize..(r_offset + r_len) as usize);
+                .get_unchecked(r_offset as usize..(r_offset + r_len) as usize);
             l_slice == r_slice
         }
     }
