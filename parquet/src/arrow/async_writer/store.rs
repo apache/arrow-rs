@@ -126,7 +126,7 @@ mod tests {
     use crate::arrow::AsyncArrowWriter;
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use object_store::ObjectStoreExt;
-    
+
     #[tokio::test]
     async fn test_async_writer() {
         let store = Arc::new(InMemory::new());
