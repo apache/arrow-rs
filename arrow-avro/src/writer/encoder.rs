@@ -199,7 +199,7 @@ fn write_optional_index<W: Write + ?Sized>(
 ) -> Result<(), AvroError> {
     let byte = union_value_branch_byte(null_order, is_null);
     out.write_all(&[byte])
-        .map_err(|e| AvroError::General(format!("write union branch: {e}")))
+        .map_err(|e| AvroError::IoError(format!("write union branch: {e}"), e))
 }
 
 #[derive(Debug, Clone)]
