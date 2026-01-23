@@ -858,6 +858,24 @@ mod tests {
     }
 
     #[test]
+    fn test_string_view_mixed_lt() {
+        let a = arrow_array::StringViewArray::from(vec![
+            Some("apple"),
+            Some("apple"),
+            Some("apple_long_string"),
+        ]);
+        let b = arrow_array::StringViewArray::from(vec![
+            Some("apple_long_string"),
+            Some("appl"),
+            Some("apple"),
+        ]);
+        // "apple" < "apple_long_string" -> true
+        // "apple" < "appl" -> false
+        // "apple_long_string" < "apple" -> false
+        assert_eq!(lt(&a, &b).unwrap(), BooleanArray::from(vec![true, false, false]));
+    }
+
+    #[test]
     fn test_string_view_eq() {
         let a = arrow_array::StringViewArray::from(vec![
             Some("hello"),
@@ -871,7 +889,10 @@ mod tests {
             None,
             Some("very long string exceeding 12 bytes"),
         ]);
-        assert_eq!(eq(&a, &b).unwrap(), BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]));
+        assert_eq!(
+            eq(&a, &b).unwrap(),
+            BooleanArray::from(vec![Some(true), Some(true), None, Some(true)])
+        );
 
         let c = arrow_array::StringViewArray::from(vec![
             Some("hello"),
@@ -879,7 +900,10 @@ mod tests {
             None,
             Some("very long string exceeding 12 bytes!"),
         ]);
-        assert_eq!(eq(&a, &c).unwrap(), BooleanArray::from(vec![Some(true), Some(false), None, Some(false)]));
+        assert_eq!(
+            eq(&a, &c).unwrap(),
+            BooleanArray::from(vec![Some(true), Some(false), None, Some(false)])
+        );
     }
 
     #[test]
@@ -896,24 +920,30 @@ mod tests {
             Some("very long banana exceeding 12 bytes"),
             Some("very long apple exceeding 12 bytes"),
         ]);
-        assert_eq!(lt(&a, &b).unwrap(), BooleanArray::from(vec![true, false, true, false]));
+        assert_eq!(
+            lt(&a, &b).unwrap(),
+            BooleanArray::from(vec![true, false, true, false])
+        );
     }
 
     #[test]
-    fn test_string_view_mixed_lt() {
+    fn test_compare_byte_view() {
         let a = arrow_array::StringViewArray::from(vec![
             Some("apple"),
-            Some("apple"),
-            Some("apple_long_string"),
+            Some("banana"),
+            Some("very long apple exceeding 12 bytes"),
+            Some("very long banana exceeding 12 bytes"),
         ]);
         let b = arrow_array::StringViewArray::from(vec![
-            Some("apple_long_string"),
-            Some("appl"),
             Some("apple"),
+            Some("apple"),
+            Some("very long apple exceeding 12 bytes"),
+            Some("very long apple exceeding 12 bytes"),
         ]);
-        // "apple" < "apple_long_string" -> true
-        // "apple" < "appl" -> false
-        // "apple_long_string" < "apple" -> false
-        assert_eq!(lt(&a, &b).unwrap(), BooleanArray::from(vec![true, false, false]));
+
+        assert_eq!(compare_byte_view(&a, 0, &b, 0), Ordering::Equal);
+        assert_eq!(compare_byte_view(&a, 1, &b, 1), Ordering::Greater);
+        assert_eq!(compare_byte_view(&a, 2, &b, 2), Ordering::Equal);
+        assert_eq!(compare_byte_view(&a, 3, &b, 3), Ordering::Greater);
     }
 }
