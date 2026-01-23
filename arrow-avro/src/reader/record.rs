@@ -4326,7 +4326,7 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn skipper_from_avro_maps_custom_duration_variants_to_int64() -> Result<()> {
+    fn skipper_from_avro_maps_custom_duration_variants_to_int64() -> Result<(), AvroError> {
         for codec in [
             Codec::DurationNanos,
             Codec::DurationMicros,
@@ -4345,7 +4345,7 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn skipper_skip_consumes_one_long_for_custom_durations() -> Result<()> {
+    fn skipper_skip_consumes_one_long_for_custom_durations() -> Result<(), AvroError> {
         let values: [i64; 7] = [0, 1, -1, 150, -150, i64::MAX / 3, i64::MIN / 3];
         for codec in [
             Codec::DurationNanos,
@@ -4373,7 +4373,7 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn skipper_nullable_custom_duration_respects_null_first() -> Result<()> {
+    fn skipper_nullable_custom_duration_respects_null_first() -> Result<(), AvroError> {
         let dt = make_avro_dt(Codec::DurationNanos, Some(Nullability::NullFirst));
         let mut s = Skipper::from_avro(&dt)?;
         match &s {
@@ -4402,7 +4402,7 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn skipper_nullable_custom_duration_respects_null_second() -> Result<()> {
+    fn skipper_nullable_custom_duration_respects_null_second() -> Result<(), AvroError> {
         let dt = make_avro_dt(Codec::DurationMicros, Some(Nullability::NullSecond));
         let mut s = Skipper::from_avro(&dt)?;
         match &s {

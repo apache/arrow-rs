@@ -686,7 +686,7 @@ impl Decoder {
                         continue;
                     }
                     Err(ref e) if is_incomplete_data(e) => break,
-                    Err(e) => return Err(e.into()),
+                    Err(e) => return Err(e),
                 };
             }
             match self.handle_prefix(&data[total_consumed..])? {
