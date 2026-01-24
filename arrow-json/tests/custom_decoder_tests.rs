@@ -70,6 +70,7 @@ impl DecoderFactory for TypeBasedLenientStringFactory {
         _coerce_primitive: bool,
         _strict_mode: bool,
         _struct_mode: StructMode,
+        _factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         match data_type {
             DataType::Utf8 => Ok(Some(Box::new(LenientStringDecoder))),
@@ -128,6 +129,7 @@ impl DecoderFactory for AnnotatedLenientStringFactory {
         _coerce_primitive: bool,
         _strict_mode: bool,
         _struct_mode: StructMode,
+        _factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         let config = field_metadata
             .get("test:decoder:config")
@@ -274,13 +276,15 @@ impl DecoderFactory for TypeBasedLenientStructFactory {
         coerce_primitive: bool,
         strict_mode: bool,
         struct_mode: StructMode,
+        factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         if !matches!(data_type, DataType::Struct(_)) {
             return Ok(None);
         }
 
         // Create standard struct decoder (using make_delegate_decoder to avoid infinite recursion)
-        let primary = self.make_delegate_decoder(
+        let primary = Self::make_delegate_decoder(
+            factory_override.unwrap_or(self),
             data_type,
             is_nullable,
             coerce_primitive,
@@ -396,6 +400,7 @@ impl DecoderFactory for TypeBasedQuirkyListFactory {
         coerce_primitive: bool,
         strict_mode: bool,
         struct_mode: StructMode,
+        factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         let field = match data_type {
             DataType::List(f) if *f.data_type() == DataType::Utf8 => f.clone(),
@@ -406,7 +411,8 @@ impl DecoderFactory for TypeBasedQuirkyListFactory {
         // Fallback: standard list decoder for normal JSON lists
         Ok(Some(Box::new(InterleavedDecoder {
             primary: Box::new(StringToListDecoder { field }),
-            fallback: self.make_delegate_decoder(
+            fallback: Self::make_delegate_decoder(
+                factory_override.unwrap_or(self),
                 data_type,
                 is_nullable,
                 coerce_primitive,
@@ -483,6 +489,7 @@ impl DecoderFactory for ComposedDecoderFactory {
         coerce_primitive: bool,
         strict_mode: bool,
         struct_mode: StructMode,
+        factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         // Try each child factory in order until one returns Some or Err
         for factory in &self.factories {
@@ -493,6 +500,7 @@ impl DecoderFactory for ComposedDecoderFactory {
                 coerce_primitive,
                 strict_mode,
                 struct_mode,
+                Some(factory_override.unwrap_or(self)),
             )? {
                 return Ok(Some(decoder));
             }
@@ -669,6 +677,7 @@ impl DecoderFactory for PathBasedDecoderFactory {
         coerce_primitive: bool,
         strict_mode: bool,
         struct_mode: StructMode,
+        factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         // O(1) lookup using temporary DataType variant for identity comparison
         let key = DataTypeIdentity::DataType(data_type);
@@ -684,6 +693,7 @@ impl DecoderFactory for PathBasedDecoderFactory {
             coerce_primitive,
             strict_mode,
             struct_mode,
+            Some(factory_override.unwrap_or(self)),
         )
     }
 }
@@ -797,4 +807,82 @@ fn test_path_based_routing() {
     assert_eq!(comments.value(0), "Good");
     assert!(comments.is_null(1)); // 100 -> NULL
     assert!(comments.is_null(2)); // true -> NULL
+}
+
+// ============================================================================
+// Test 7: Recursive factory propagation
+// ============================================================================
+
+#[test]
+fn test_recursive_factory_propagation() {
+    // Schema with nested struct containing string fields
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new(
+            "person",
+            DataType::Struct(
+                vec![
+                    Field::new("name", DataType::Utf8, true), // Make nullable
+                    Field::new("email", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            true,
+        ),
+    ]));
+
+    let json = r#"
+{"id": 1, "person": {"name": "Alice", "email": "alice@example.com"}}
+{"id": 2, "person": 42}
+{"id": 3, "person": {"name": 123, "email": "charlie@example.com"}}
+{"id": 4, "person": {"name": "Dave", "email": true}}
+"#;
+
+    // Compose lenient struct + lenient string factories
+    // This tests that the factory propagates through struct decoder creation
+    let factories = vec![
+        Arc::new(TypeBasedLenientStructFactory) as Arc<dyn DecoderFactory>,
+        Arc::new(TypeBasedLenientStringFactory) as Arc<dyn DecoderFactory>,
+    ];
+    let factory = Arc::new(ComposedDecoderFactory { factories });
+
+    let mut reader = ReaderBuilder::new(schema)
+        .with_decoder_factory(factory)
+        .build(Cursor::new(json))
+        .unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+
+    // ID column: all valid
+    let ids = batch
+        .column(0)
+        .as_primitive::<arrow_array::types::Int32Type>();
+    assert_eq!(ids.value(0), 1);
+    assert_eq!(ids.value(1), 2);
+    assert_eq!(ids.value(2), 3);
+    assert_eq!(ids.value(3), 4);
+
+    // Person struct column
+    let person = batch.column(1).as_struct();
+
+    // Row 0: Valid struct with valid strings
+    assert!(!person.is_null(0));
+    let names = person.column(0).as_string::<i32>();
+    let emails = person.column(1).as_string::<i32>();
+    assert_eq!(names.value(0), "Alice");
+    assert_eq!(emails.value(0), "alice@example.com");
+
+    // Row 1: Not a struct (42) -> NULL from struct factory
+    assert!(person.is_null(1));
+
+    // Row 2: Valid struct but name has type mismatch (123)
+    // This tests that the string factory was invoked for the nested field!
+    assert!(!person.is_null(2));
+    assert!(names.is_null(2)); // 123 -> NULL from string factory
+    assert_eq!(emails.value(2), "charlie@example.com");
+
+    // Row 3: Valid struct but email has type mismatch (true)
+    assert!(!person.is_null(3));
+    assert_eq!(names.value(3), "Dave");
+    assert!(emails.is_null(3)); // true -> NULL from string factory
 }

@@ -472,16 +472,21 @@ pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
         coerce_primitive: bool,
         strict_mode: bool,
         struct_mode: StructMode,
+        factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError>;
 
     /// Create a decoder for a type, without allowing this factory to directly intercept it,
-    /// but still allowing the factory to intercept children of complex types.
+    /// but still allowing the specified factory to intercept children of complex types.
     ///
     /// Solves the delegation pattern: When a factory intercepts a type and wants to
     /// delegate to the default implementation, calling `make_decoder` would cause
     /// infinite recursion (the factory intercepts its own `make_decoder` call). This method
     /// skips the factory check at the current level but still passes the factory through so
     /// child fields are customized.
+    ///
+    /// # Parameters
+    ///
+    /// * `decoder_factory` - The factory to use for child decoders of complex types
     ///
     /// # Example
     ///
@@ -503,10 +508,15 @@ pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
     ///         coerce_primitive: bool,
     ///         strict_mode: bool,
     ///         struct_mode: StructMode,
+    ///         decoder_factory: Option<&dyn DecoderFactory>,
     ///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
     ///         if matches!(data_type, DataType::Struct(_)) {
-    ///             // Bypass self-interception, children still use this factory
-    ///             let delegate = self.make_delegate_decoder(
+    ///             // Decide which factory children should use
+    ///             let factory = decoder_factory.unwrap_or(self);
+    ///
+    ///             // Bypass self-interception, children use the specified factory
+    ///             let delegate = Self::make_delegate_decoder(
+    ///                 factory,
     ///                 data_type,
     ///                 is_nullable,
     ///                 coerce_primitive,
@@ -523,7 +533,7 @@ pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
     /// }
     /// ```
     fn make_delegate_decoder(
-        &self,
+        decoder_factory: &dyn DecoderFactory,
         data_type: &DataType,
         is_nullable: bool,
         coerce_primitive: bool,
@@ -539,7 +549,7 @@ pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
             coerce_primitive,
             strict_mode,
             struct_mode,
-            Some(self),
+            Some(decoder_factory),
         )
     }
 }
@@ -892,6 +902,7 @@ pub fn make_decoder(
             coerce_primitive,
             strict_mode,
             struct_mode,
+            decoder_factory,
         )? {
             return Ok(decoder);
         }
@@ -3069,6 +3080,7 @@ mod tests {
                 _coerce_primitive: bool,
                 _strict_mode: bool,
                 _struct_mode: StructMode,
+                _factory_override: Option<&dyn DecoderFactory>,
             ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
                 match data_type {
                     DataType::Utf8 => Ok(Some(Box::new(AlwaysNullStringArrayDecoder))),
