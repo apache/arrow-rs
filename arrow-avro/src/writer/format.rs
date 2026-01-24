@@ -169,6 +169,50 @@ impl AvroFormat for AvroBinaryFormat {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_schema::{DataType, Field, Schema};
+
+    fn test_schema() -> Schema {
+        Schema::new(vec![Field::new("x", DataType::Int32, false)])
+    }
+
+    #[test]
+    fn avro_binary_format_rejects_compression() {
+        let mut format = AvroBinaryFormat::default();
+        let schema = test_schema();
+        let err = format
+            .start_stream(
+                &mut Vec::<u8>::new(),
+                &schema,
+                Some(CompressionCodec::Snappy),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Compression not supported for Avro binary streaming")
+        );
+    }
+
+    #[test]
+    fn avro_soe_format_rejects_compression() {
+        let mut format = AvroSoeFormat::default();
+        let schema = test_schema();
+        let err = format
+            .start_stream(
+                &mut Vec::<u8>::new(),
+                &schema,
+                Some(CompressionCodec::Snappy),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Compression not supported for Avro SOE streaming")
+        );
+    }
+}
+
 #[inline]
 fn write_string<W: Write>(writer: &mut W, s: &str) -> Result<(), ArrowError> {
     write_bytes(writer, s.as_bytes())
