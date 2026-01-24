@@ -637,17 +637,13 @@ impl<'a> FieldEncoder<'a> {
         // Compute the effective null state from writer-declared nullability and data nulls.
         let null_state = match nullability {
             None => NullState::NonNullable,
-            Some(null_order) => {
-                match array.nulls() {
-                    Some(nulls) if array.null_count() > 0 => {
-                        NullState::Nullable { nulls, null_order }
-                    }
-                    _ => NullState::NullableNoNulls {
-                        // Nullable site with no null buffer for this view
-                        union_value_byte: union_value_branch_byte(null_order, false),
-                    },
-                }
-            }
+            Some(null_order) => match array.nulls() {
+                Some(nulls) if array.null_count() > 0 => NullState::Nullable { nulls, null_order },
+                _ => NullState::NullableNoNulls {
+                    // Nullable site with no null buffer for this view
+                    union_value_byte: union_value_branch_byte(null_order, false),
+                },
+            },
         };
         Ok(Self {
             encoder,
@@ -848,25 +844,13 @@ impl RecordEncoder {
         batch: &RecordBatch,
         row_capacity: usize,
         out: &mut BytesMut,
-        offsets: &mut Vec<u64>,
+        offsets: &mut Vec<usize>,
     ) -> Result<(), ArrowError> {
-        let last_offset = *offsets.last().ok_or_else(|| {
-            ArrowError::AvroError(
-                "encode_rows requires offsets to be non-empty and seeded with a 0 sentinel"
-                    .to_string(),
-            )
-        })?;
-        // The first offset must be 0. (Safe index [0] because last() exists ensures len >= 1).
-        if offsets[0] != 0 {
+        let out_len = out.len();
+        if offsets.first() != Some(&0) || offsets.last() != Some(&out_len) {
             return Err(ArrowError::AvroError(
-                "encode_rows requires offsets[0] == 0".to_string(),
+                "encode_rows requires offsets to start with 0 and end at out.len()".to_string(),
             ));
-        }
-        let out_len_u64 = out.len() as u64;
-        if last_offset != out_len_u64 {
-            return Err(ArrowError::AvroError(format!(
-                "encode_rows requires offsets.last() == out.len() ({last_offset} != {out_len_u64})",
-            )));
         }
         let n = batch.num_rows();
         if n == 0 {
@@ -880,49 +864,31 @@ impl RecordEncoder {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         offsets.reserve(n);
         let prefix_bytes = self.prefix.as_ref().map(|p| p.as_slice());
-        let prefix_len = prefix_bytes.map_or(0usize, |p| p.len());
-        let per_row_hint = match row_capacity {
-            0 => prefix_len,
-            _ => row_capacity.max(prefix_len),
-        };
-        if per_row_hint != 0 {
-            if let Some(additional) = n.checked_mul(per_row_hint) {
-                if out.len().checked_add(additional).is_some() {
-                    out.reserve(additional);
-                }
-            }
+        let prefix_len = prefix_bytes.map_or(0, |p| p.len());
+        let per_row_hint = row_capacity.max(prefix_len);
+        if let Some(additional) = n
+            .checked_mul(per_row_hint)
+            .filter(|&a| out_len.checked_add(a).is_some())
+        {
+            out.reserve(additional);
         }
         let start_out_len = out.len();
         let start_offsets_len = offsets.len();
         let res = (|| -> Result<(), ArrowError> {
-            if column_encoders.is_empty() {
-                if let Some(prefix) = prefix_bytes {
-                    let inc = prefix.len() as u64;
-                    let mut cur = out_len_u64;
-                    for _ in 0..n {
-                        out.extend_from_slice(prefix);
-                        cur += inc;
-                        offsets.push(cur);
-                    }
-                } else {
-                    offsets.extend(std::iter::repeat_n(out_len_u64, n));
-                }
-                return Ok(());
-            }
             let mut w = out.writer();
             if let [enc0] = column_encoders.as_mut_slice() {
                 for_rows_with_prefix!(n, prefix_bytes, w, |row| {
                     enc0.encode(&mut w, row)?;
-                    offsets.push(w.get_ref().len() as u64);
+                    offsets.push(w.get_ref().len());
                 });
-                return Ok(());
+            } else {
+                for_rows_with_prefix!(n, prefix_bytes, w, |row| {
+                    for enc in column_encoders.iter_mut() {
+                        enc.encode(&mut w, row)?;
+                    }
+                    offsets.push(w.get_ref().len());
+                });
             }
-            for_rows_with_prefix!(n, prefix_bytes, w, |row| {
-                for enc in column_encoders.iter_mut() {
-                    enc.encode(&mut w, row)?;
-                }
-                offsets.push(w.get_ref().len() as u64);
-            });
             Ok(())
         })();
         if res.is_err() {
@@ -931,7 +897,7 @@ impl RecordEncoder {
         } else {
             debug_assert_eq!(
                 *offsets.last().unwrap(),
-                out.len() as u64,
+                out.len(),
                 "encode_rows: offsets/out length mismatch after successful encode"
             );
         }
@@ -2088,9 +2054,9 @@ mod tests {
         }
     }
 
-    fn row_slice<'a>(buf: &'a [u8], offsets: &[u64], row: usize) -> &'a [u8] {
-        let start = offsets[row] as usize;
-        let end = offsets[row + 1] as usize;
+    fn row_slice<'a>(buf: &'a [u8], offsets: &[usize], row: usize) -> &'a [u8] {
+        let start = offsets[row];
+        let end = offsets[row + 1];
         &buf[start..end]
     }
 
@@ -3177,12 +3143,12 @@ mod tests {
             prefix: None,
         };
         let mut out = BytesMut::new();
-        let mut offsets: Vec<u64> = vec![0];
+        let mut offsets: Vec<usize> = vec![0];
         encoder
             .encode_rows(&batch, 16, &mut out, &mut offsets)
             .unwrap();
         assert_eq!(offsets.len(), 4);
-        assert_eq!(*offsets.last().unwrap(), out.len() as u64);
+        assert_eq!(*offsets.last().unwrap(), out.len());
         assert_bytes_eq(row_slice(&out, &offsets, 0), &avro_long_bytes(1));
         assert_bytes_eq(row_slice(&out, &offsets, 1), &avro_long_bytes(2));
         assert_bytes_eq(row_slice(&out, &offsets, 2), &avro_long_bytes(3));
@@ -3217,12 +3183,12 @@ mod tests {
             prefix: None,
         };
         let mut out = BytesMut::new();
-        let mut offsets: Vec<u64> = vec![0];
+        let mut offsets: Vec<usize> = vec![0];
         encoder
             .encode_rows(&batch, 32, &mut out, &mut offsets)
             .unwrap();
         assert_eq!(offsets.len(), 3);
-        assert_eq!(*offsets.last().unwrap(), out.len() as u64);
+        assert_eq!(*offsets.last().unwrap(), out.len());
         let mut expected_row0 = Vec::new();
         expected_row0.extend(avro_long_bytes(10));
         expected_row0.extend(avro_len_prefixed_bytes(b"hello"));
@@ -3252,7 +3218,7 @@ mod tests {
             .build()
             .unwrap();
         let mut out = BytesMut::new();
-        let mut offsets: Vec<u64> = vec![0];
+        let mut offsets: Vec<usize> = vec![0];
         encoder
             .encode_rows(&batch, 32, &mut out, &mut offsets)
             .unwrap();
@@ -3277,11 +3243,11 @@ mod tests {
             prefix: None,
         };
         let mut out = BytesMut::new();
-        let mut offsets: Vec<u64> = vec![0];
+        let mut offsets: Vec<usize> = vec![0];
         encoder
             .encode_rows(&batch, 16, &mut out, &mut offsets)
             .unwrap();
-        assert_eq!(offsets, vec![0u64]);
+        assert_eq!(offsets, vec![0]);
         assert!(out.is_empty());
     }
 
@@ -3316,7 +3282,7 @@ mod tests {
         let mut stream_buf = Vec::new();
         encoder.encode(&mut stream_buf, &batch).unwrap();
         let mut out = BytesMut::new();
-        let mut offsets: Vec<u64> = vec![0];
+        let mut offsets: Vec<usize> = vec![0];
         encoder
             .encode_rows(&batch, 32, &mut out, &mut offsets)
             .unwrap();
@@ -3339,12 +3305,12 @@ mod tests {
         };
         let mut out = BytesMut::new();
         out.extend_from_slice(&[0xAA, 0xBB]);
-        let mut offsets: Vec<u64> = vec![0, out.len() as u64];
+        let mut offsets: Vec<usize> = vec![0, out.len()];
         encoder
             .encode_rows(&batch, 16, &mut out, &mut offsets)
             .unwrap();
         assert_eq!(offsets.len(), 4);
-        assert_eq!(*offsets.last().unwrap(), out.len() as u64);
+        assert_eq!(*offsets.last().unwrap(), out.len());
         assert_bytes_eq(row_slice(&out, &offsets, 0), &[0xAA, 0xBB]);
         assert_bytes_eq(row_slice(&out, &offsets, 1), &avro_long_bytes(5));
         assert_bytes_eq(row_slice(&out, &offsets, 2), &avro_long_bytes(6));
@@ -3364,7 +3330,7 @@ mod tests {
             prefix: None,
         };
         let mut out = BytesMut::new();
-        let mut offsets: Vec<u64> = vec![0];
+        let mut offsets: Vec<usize> = vec![0];
         encoder
             .encode_rows(&batch, 16, &mut out, &mut offsets)
             .unwrap();

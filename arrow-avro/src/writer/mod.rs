@@ -135,8 +135,7 @@
 //! assert_eq!(rows.len(), 3);
 //!
 //! // Each row has Confluent wire format: magic byte + 4-byte schema ID + body
-//! for row in rows.rows() {
-//!     let row = row?;
+//! for row in rows.iter() {
 //!     assert_eq!(row[0], 0x00); // Confluent magic byte
 //! }
 //! # Ok(())
@@ -162,19 +161,20 @@ mod encoder;
 /// Logic for different Avro container file formats.
 pub mod format;
 
-/// A contiguous set of encoded rows.
+/// A contiguous set of Avro encoded rows.
 ///
 /// `EncodedRows` stores:
 /// - a single backing byte buffer (`bytes::Bytes`)
-/// - a `Vec<u64>` of row boundary offsets (length = `rows + 1`)
+/// - a `Vec<usize>` of row boundary offsets (length = `rows + 1`)
 ///
 /// This lets callers get per-row payloads as zero-copy `Bytes` slices.
 ///
-/// For compatibility with APIs that require owned `Vec<u8>`, use [`EncodedRows::to_vecs`].
+/// For compatibility with APIs that require owned `Vec<u8>`, use:
+/// `let vecs: Vec<Vec<u8>> = rows.iter().map(|b| b.to_vec()).collect();`
 #[derive(Debug, Clone)]
 pub struct EncodedRows {
     data: Bytes,
-    offsets: Vec<u64>,
+    offsets: Vec<usize>,
 }
 
 impl EncodedRows {
@@ -182,41 +182,50 @@ impl EncodedRows {
     ///
     /// `offsets` must have length `rows + 1`, and be monotonically non-decreasing.
     /// The last offset should equal `data.len()`.
-    pub fn new(data: Bytes, offsets: Vec<u64>) -> Self {
+    pub fn new(data: Bytes, offsets: Vec<usize>) -> Self {
         Self { data, offsets }
     }
 
-    /// Number of rows in this buffer.
+    /// Returns the number of encoded rows stored in this container.
     #[inline]
     pub fn len(&self) -> usize {
         self.offsets.len().saturating_sub(1)
     }
 
-    /// Returns `true` if there are no rows.
+    /// Returns `true` if this container holds no encoded rows.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Returns the backing buffer.
+    /// Returns a reference to the single contiguous backing buffer.
     ///
-    /// Note: individual rows should typically be accessed via [`Self::row`] or [`Self::rows`].
+    /// This buffer contains the payloads of all rows concatenated together.
+    ///
+    /// # Note
+    ///
+    /// To access individual row payloads, prefer using [`Self::row`] or [`Self::iter`]
+    /// rather than slicing this buffer manually.
     #[inline]
     pub fn bytes(&self) -> &Bytes {
         &self.data
     }
 
-    /// Returns the row boundary offsets (length = `len() + 1`).
+    /// Returns the row boundary offsets.
+    ///
+    /// The returned slice always has the length `self.len() + 1`. The `n`th row payload
+    /// corresponds to `bytes[offsets[n] ... offsets[n+1]]`.
     #[inline]
-    pub fn offsets(&self) -> &[u64] {
+    pub fn offsets(&self) -> &[usize] {
         &self.offsets
     }
 
-    /// Return the `i`th row as a zero-copy `Bytes` slice.
+    /// Return the `n`th row as a zero-copy `Bytes` slice.
     ///
     /// # Errors
     ///
-    /// Returns an error if the row offsets are invalid (e.g. exceed `usize::MAX`).
+    /// Returns an error if `n` is out of bounds or if the internal offsets are invalid
+    /// (e.g., offsets are not within the backing buffer).
     ///
     /// # Examples
     ///
@@ -238,39 +247,40 @@ impl EncodedRows {
     /// encoder.encode(&batch)?;
     /// let rows = encoder.flush();
     ///
-    /// // Access the first row (index 0)
-    /// let row0 = rows.row(0)?;
-    /// assert!(!row0.is_empty());
+    /// assert_eq!(rows.iter().count(), 2);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn row(&self, i: usize) -> Result<Bytes, ArrowError> {
-        if i >= self.len() {
+    pub fn row(&self, n: usize) -> Result<Bytes, ArrowError> {
+        if n >= self.len() {
             return Err(ArrowError::AvroError(format!(
-                "Row index {i} out of bounds for len {}",
+                "Row index {n} out of bounds for len {}",
                 self.len()
             )));
         }
         // SAFETY:
         // self.len() is defined as self.offsets.len().saturating_sub(1).
-        // The check `i >= self.len()` above ensures that `i < self.offsets.len() - 1`.
-        // Therefore, both `i` and `i + 1` are strictly within the bounds of `self.offsets`.
-        let (start_u64, end_u64) = unsafe {
+        // The check `n >= self.len()` above ensures that `n < self.offsets.len() - 1`.
+        // Therefore, both `n` and `n + 1` are strictly within the bounds of `self.offsets`.
+        let (start, end) = unsafe {
             (
-                *self.offsets.get_unchecked(i),
-                *self.offsets.get_unchecked(i + 1),
+                *self.offsets.get_unchecked(n),
+                *self.offsets.get_unchecked(n + 1),
             )
         };
-        let start = usize::try_from(start_u64).map_err(|e| {
-            ArrowError::AvroError(format!("row start offset does not fit in usize: {e}"))
-        })?;
-        let end = usize::try_from(end_u64).map_err(|e| {
-            ArrowError::AvroError(format!("row end offset does not fit in usize: {e}"))
-        })?;
+        if start > end || end > self.data.len() {
+            return Err(ArrowError::AvroError(format!(
+                "Invalid row offsets for row {n}: start={start}, end={end}, data_len={}",
+                self.data.len()
+            )));
+        }
         Ok(self.data.slice(start..end))
     }
 
     /// Iterate over rows as zero-copy `Bytes` slices.
+    ///
+    /// This iterator is infallible and is intended for the common case where
+    /// `EncodedRows` is produced by [`Encoder::flush`], which guarantees valid offsets.
     ///
     /// # Examples
     ///
@@ -292,55 +302,16 @@ impl EncodedRows {
     /// encoder.encode(&batch)?;
     /// let rows = encoder.flush();
     ///
-    /// let mut count = 0;
-    /// for row in rows.rows() {
-    ///     let _bytes = row?;
-    ///     count += 1;
-    /// }
-    /// assert_eq!(count, 2);
+    /// assert_eq!(rows.iter().count(), 2);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn rows(&self) -> impl Iterator<Item = Result<Bytes, ArrowError>> + '_ {
-        (0..self.len()).map(|i| self.row(i))
-    }
-
-    /// Copy all rows into independent `Vec<u8>` buffers.
-    ///
-    /// This is useful for compatibility with APIs that require owned, mutable byte vectors.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
-    /// use arrow_schema::{DataType, Field, Schema};
-    /// use arrow_avro::writer::WriterBuilder;
-    /// use arrow_avro::writer::format::AvroSoeFormat;
-    ///
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)]);
-    /// let batch = RecordBatch::try_new(
-    ///     Arc::new(schema.clone()),
-    ///     vec![Arc::new(Int32Array::from(vec![100])) as ArrayRef],
-    /// )?;
-    ///
-    /// let mut encoder = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
-    /// encoder.encode(&batch)?;
-    /// let rows = encoder.flush();
-    ///
-    /// let vecs = rows.to_vecs()?;
-    /// assert_eq!(vecs.len(), 1);
-    /// assert!(!vecs[0].is_empty());
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn to_vecs(&self) -> Result<Vec<Vec<u8>>, ArrowError> {
-        let mut out = Vec::with_capacity(self.len());
-        for i in 0..self.len() {
-            out.push(self.row(i)?.to_vec());
-        }
-        Ok(out)
+    #[inline]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = Bytes> + '_ {
+        self.offsets.windows(2).map(|w| {
+            debug_assert!(w[0] <= w[1] && w[1] <= self.data.len());
+            self.data.slice(w[0]..w[1])
+        })
     }
 }
 
@@ -480,21 +451,58 @@ impl WriterBuilder {
     }
 }
 
-/// A row-by-row streaming encoder for Avro **Single Object Encoding** (SOE) streams.
+/// A row-by-row encoder for Avro *stream/message* formats (SOE / registry wire formats / raw binary).
 ///
-/// Unlike [`Writer`], which writes directly to an output sink, `Encoder` buffers rows in a
-/// single contiguous backing buffer and returns per-row payloads as zero-copy [`bytes::Bytes`]
-/// slices via [`EncodedRows`].
+/// Unlike [`Writer`], which emits a single continuous byte stream to a [`std::io::Write`] sink,
+/// `Encoder` tracks row boundaries during encoding and returns an [`EncodedRows`] containing:
+/// - one backing buffer (`Bytes`)
+/// - row boundary offsets
 ///
-/// To get owned `Vec<u8>` payloads for compatibility with APIs that require owned buffers,
-/// call [`EncodedRows::to_vecs`].
+/// This enables zero-copy per-row payloads (for instance, one Kafka message per Arrow row) without
+/// re-encoding or decoding the byte stream to recover record boundaries.
+///
+/// ### Example
+///
+/// ```
+/// use std::sync::Arc;
+/// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+/// use arrow_schema::{DataType, Field, Schema};
+/// use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
+/// use arrow_avro::schema::FingerprintStrategy;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let schema = Schema::new(vec![Field::new("value", DataType::Int32, false)]);
+/// let batch = RecordBatch::try_new(
+///     Arc::new(schema.clone()),
+///     vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+/// )?;
+///
+/// // Configure the encoder (here: Confluent Wire Format with schema ID 100)
+/// let mut encoder = WriterBuilder::new(schema)
+///     .with_fingerprint_strategy(FingerprintStrategy::Id(100))
+///     .build_encoder::<AvroSoeFormat>()?;
+///
+/// // Encode the batch
+/// encoder.encode(&batch)?;
+///
+/// // Get the encoded rows
+/// let rows = encoder.flush();
+///
+/// // Convert to owned Vec<u8> payloads (e.g., for a Kafka producer)
+/// let payloads: Vec<Vec<u8>> = rows.iter().map(|row| row.to_vec()).collect();
+///
+/// assert_eq!(payloads.len(), 3);
+/// assert_eq!(payloads[0][0], 0x00); // Magic byte
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct Encoder {
     schema: SchemaRef,
     encoder: RecordEncoder,
     row_capacity: Option<usize>,
     buffer: BytesMut,
-    offsets: Vec<u64>,
+    offsets: Vec<usize>,
 }
 
 impl Encoder {
@@ -525,7 +533,6 @@ impl Encoder {
     /// Drain and return all currently buffered encoded rows.
     ///
     /// The returned [`EncodedRows`] provides per-row payloads as `Bytes` slices.
-    /// For owned buffers, use [`EncodedRows::to_vecs`].
     pub fn flush(&mut self) -> EncodedRows {
         let data = self.buffer.split().freeze();
         let mut offsets = Vec::with_capacity(self.offsets.len());
@@ -2877,8 +2884,7 @@ mod tests {
         let mut row_writer = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
         row_writer.encode(&batch)?;
         let rows = row_writer.flush();
-        // NOTE: EncodedRows is now zero-copy; `to_vecs()` is an explicit compatibility copy.
-        let row_bytes: Vec<u8> = rows.to_vecs()?.concat();
+        let row_bytes: Vec<u8> = rows.bytes().to_vec();
         assert_eq!(stream_bytes, row_bytes);
         Ok(())
     }
@@ -2910,8 +2916,7 @@ mod tests {
             .with_writer_schema_store(store)
             .with_batch_size(1024)
             .build_decoder()?;
-        for row in rows.rows() {
-            let row = row?;
+        for row in rows.iter() {
             let consumed = decoder.decode(row.as_ref())?;
             assert_eq!(
                 consumed,
@@ -2938,8 +2943,7 @@ mod tests {
         let mut stream: Vec<u8> = Vec::new();
         let mut boundaries: Vec<usize> = Vec::with_capacity(rows.len() + 1);
         boundaries.push(0usize);
-        for row in rows.rows() {
-            let row = row?;
+        for row in rows.iter() {
             stream.extend_from_slice(row.as_ref());
             boundaries.push(stream.len());
         }
@@ -2994,8 +2998,7 @@ mod tests {
             .with_writer_schema_store(store)
             .with_batch_size(1024)
             .build_decoder()?;
-        for row in rows.rows() {
-            let row = row?;
+        for row in rows.iter() {
             let consumed = decoder.decode(row.as_ref())?;
             assert_eq!(consumed, row.len());
         }
@@ -3005,7 +3008,6 @@ mod tests {
         assert_eq!(expected, actual);
         Ok(())
     }
-
     #[test]
     fn test_encoder_encode_batches_flush_and_encoded_rows_methods_with_avro_binary_format()
     -> Result<(), ArrowError> {
@@ -3037,9 +3039,10 @@ mod tests {
         assert_eq!(EncodedRows::len(&empty), 0);
         assert!(EncodedRows::is_empty(&empty));
         assert_eq!(EncodedRows::bytes(&empty).as_ref(), &[] as &[u8]);
-        assert_eq!(EncodedRows::offsets(&empty), &[0_u64]);
-        assert_eq!(EncodedRows::rows(&empty).count(), 0);
-        assert!(EncodedRows::to_vecs(&empty)?.is_empty());
+        assert_eq!(EncodedRows::offsets(&empty), &[0usize]);
+        assert_eq!(EncodedRows::iter(&empty).count(), 0);
+        let empty_vecs: Vec<Vec<u8>> = empty.iter().map(|b| b.to_vec()).collect();
+        assert!(empty_vecs.is_empty());
         let batches = vec![batch1, batch2];
         Encoder::encode_batches(&mut encoder, &batches)?;
         assert_eq!(encoder.buffered_len(), 5);
@@ -3051,7 +3054,7 @@ mod tests {
         );
         assert_eq!(EncodedRows::len(&rows), 5);
         assert!(!EncodedRows::is_empty(&rows));
-        let expected_offsets: &[u64] = &[0, 2, 4, 6, 8, 10];
+        let expected_offsets: &[usize] = &[0, 2, 4, 6, 8, 10];
         assert_eq!(EncodedRows::offsets(&rows), expected_offsets);
         let expected_rows: Vec<Vec<u8>> = vec![
             vec![2, 20],
@@ -3068,13 +3071,8 @@ mod tests {
         for (i, expected) in expected_rows.iter().enumerate() {
             assert_eq!(EncodedRows::row(&rows, i)?.as_ref(), expected.as_slice());
         }
-        let iter_rows: Vec<Vec<u8>> = EncodedRows::rows(&rows)
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .map(|b| b.to_vec())
-            .collect();
+        let iter_rows: Vec<Vec<u8>> = EncodedRows::iter(&rows).map(|b| b.to_vec()).collect();
         assert_eq!(iter_rows, expected_rows);
-        assert_eq!(EncodedRows::to_vecs(&rows)?, expected_rows);
         let recreated = EncodedRows::new(
             EncodedRows::bytes(&rows).clone(),
             EncodedRows::offsets(&rows).to_vec(),
@@ -3085,10 +3083,8 @@ mod tests {
             EncodedRows::offsets(&recreated),
             EncodedRows::offsets(&rows)
         );
-        assert_eq!(
-            EncodedRows::to_vecs(&recreated)?,
-            EncodedRows::to_vecs(&rows)?
-        );
+        let rec_vecs: Vec<Vec<u8>> = recreated.iter().map(|b| b.to_vec()).collect();
+        assert_eq!(rec_vecs, iter_rows);
         let empty_again = Encoder::flush(&mut encoder);
         assert!(EncodedRows::is_empty(&empty_again));
         Ok(())
@@ -3161,8 +3157,7 @@ mod tests {
             .with_writer_schema_store(store)
             .with_batch_size(1024)
             .build_decoder()?;
-        for body in binary_rows.rows() {
-            let body = body?;
+        for body in binary_rows.iter() {
             let mut framed = Vec::with_capacity(SOE_PREFIX_LEN + body.len());
             framed.extend_from_slice(&SOE_MAGIC);
             framed.extend_from_slice(&fp_le_bytes);
@@ -3198,8 +3193,7 @@ mod tests {
         const SOE_MAGIC: [u8; 2] = [0xC3, 0x01];
         const SOE_PREFIX_LEN: usize = 2 + 8;
         let mut stream: Vec<u8> = Vec::new();
-        for body in rows.rows() {
-            let body = body?;
+        for body in rows.iter() {
             let msg_len: u32 = (SOE_PREFIX_LEN + body.len())
                 .try_into()
                 .expect("message length must fit in u32");

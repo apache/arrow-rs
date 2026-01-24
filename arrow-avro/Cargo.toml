@@ -95,3 +95,7 @@ harness = false
 [[bench]]
 name = "avro_writer"
 harness = false
+
+[[bench]]
+name = "encoder"
+harness = false
