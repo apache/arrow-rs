@@ -308,10 +308,7 @@ impl EncodedRows {
     /// ```
     #[inline]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = Bytes> + '_ {
-        self.offsets.windows(2).map(|w| {
-            debug_assert!(w[0] <= w[1] && w[1] <= self.data.len());
-            self.data.slice(w[0]..w[1])
-        })
+        self.offsets.windows(2).map(|w| self.data.slice(w[0]..w[1]))
     }
 }
 
