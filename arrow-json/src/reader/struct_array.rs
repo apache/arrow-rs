@@ -16,14 +16,12 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{ArrayDecoder, JSON_DECODER_CONFIG_KEY, StructMode, make_decoder};
+use crate::reader::{ArrayDecoder, StructMode, make_decoder};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field, Fields};
-use std::borrow::Cow;
+use arrow_schema::{ArrowError, DataType, Fields};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Reusable buffer for tape positions, indexed by (field_idx, row_idx).
 /// A value of 0 indicates the field is absent for that row.
@@ -74,7 +72,6 @@ use super::DecoderFactory;
 
 pub struct StructArrayDecoder {
     data_type: DataType,
-    type_changed: bool,
     decoders: Vec<Box<dyn ArrayDecoder>>,
     strict_mode: bool,
     is_nullable: bool,
@@ -94,54 +91,22 @@ impl StructArrayDecoder {
     ) -> Result<Self, ArrowError> {
         let fields = struct_fields(data_type);
 
-        // Create decoders and track whether any fields need modification
         let mut decoders = Vec::with_capacity(fields.len());
-        let mut output_fields: Vec<Cow<'_, Arc<Field>>> = Vec::with_capacity(fields.len());
-        let mut type_changed = false;
-
         for field in fields {
             // If this struct nullable, need to permit nullability in child array
             // StructArrayDecoder::decode verifies that if the child is not nullable
             // it doesn't contain any nulls not masked by its parent
-            let nullable = field.is_nullable() || is_nullable;
             let decoder = make_decoder(
                 field.data_type(),
-                nullable,
+                field.is_nullable() || is_nullable,
                 field.metadata(),
                 coerce_primitive,
                 strict_mode,
                 struct_mode,
                 decoder_factory,
             )?;
-
-            // Check if field needs modification
-            let has_decoder_metadata = field.metadata().contains_key(JSON_DECODER_CONFIG_KEY);
-            let child_type_changed = decoder.output_data_type().is_some();
-
-            let field = if child_type_changed || has_decoder_metadata {
-                type_changed = true;
-                // Strip decoder metadata and update data type if needed
-                let data_type = decoder.output_data_type().unwrap_or(field.data_type());
-                let mut metadata = field.metadata().clone();
-                metadata.remove(JSON_DECODER_CONFIG_KEY);
-
-                let field = Field::new(field.name(), data_type.clone(), field.is_nullable());
-                Cow::Owned(Arc::new(field.with_metadata(metadata)))
-            } else {
-                Cow::Borrowed(field)
-            };
-
             decoders.push(decoder);
-            output_fields.push(field);
         }
-
-        // Only create new DataType if something actually changed
-        let data_type = if type_changed {
-            let owned: Vec<Arc<Field>> = output_fields.into_iter().map(Cow::into_owned).collect();
-            DataType::Struct(owned.into())
-        } else {
-            data_type.clone()
-        };
 
         let field_name_to_index = if struct_mode == StructMode::ObjectOnly {
             build_field_index(fields)
@@ -150,8 +115,7 @@ impl StructArrayDecoder {
         };
 
         Ok(Self {
-            data_type,
-            type_changed,
+            data_type: data_type.clone(),
             decoders,
             strict_mode,
             is_nullable,
@@ -163,10 +127,6 @@ impl StructArrayDecoder {
 }
 
 impl ArrayDecoder for StructArrayDecoder {
-    fn output_data_type(&self) -> Option<&DataType> {
-        self.type_changed.then_some(&self.data_type)
-    }
-
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let fields = struct_fields(&self.data_type);
         let row_count = pos.len();

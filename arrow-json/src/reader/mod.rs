@@ -395,28 +395,27 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 /// This allows overriding the default decoders for specific data types,
 /// or adding new decoders for custom data types.
 ///
-/// # Examples
+/// # Example
 ///
 /// ```
-/// use arrow_json::{ArrayDecoder, DecoderFactory, TapeElement, Tape, ReaderBuilder, StructMode};
-/// use arrow_schema::ArrowError;
-/// use arrow_schema::{DataType, Field, FieldRef, Fields, Schema};
-/// use arrow_array::cast::AsArray;
-/// use arrow_array::Array;
-/// use arrow_array::builder::StringBuilder;
-/// use arrow_data::ArrayData;
-/// use std::sync::Arc;
-///
-/// struct IncorrectStringAsNullDecoder {}
+/// # use arrow_json::{ArrayDecoder, DecoderFactory, TapeElement, Tape, ReaderBuilder, StructMode};
+/// # use arrow_schema::ArrowError;
+/// # use arrow_schema::{DataType, Field, FieldRef, Fields, Schema};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_array::Array;
+/// # use arrow_array::builder::StringBuilder;
+/// # use arrow_data::ArrayData;
+/// # use std::collections::HashMap;
+/// # use std::sync::Arc;
+/// #
+/// struct IncorrectStringAsNullDecoder;
 ///
 /// impl ArrayDecoder for IncorrectStringAsNullDecoder {
 ///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
 ///         let mut builder = StringBuilder::new();
 ///         for p in pos {
 ///             match tape.get(*p) {
-///                 TapeElement::String(idx) => {
-///                     builder.append_value(tape.get_string(idx));
-///                 }
+///                 TapeElement::String(idx) => builder.append_value(tape.get_string(idx)),
 ///                 _ => builder.append_null(),
 ///             }
 ///         }
@@ -436,10 +435,9 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 ///         _coerce_primitive: bool,
 ///         _strict_mode: bool,
 ///         _struct_mode: StructMode,
-///         _decoder_factory: Option<&dyn DecoderFactory>,
 ///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
 ///         match data_type {
-///             DataType::Utf8 => Ok(Some(Box::new(IncorrectStringAsNullDecoder {}))),
+///             DataType::Utf8 => Ok(Some(Box::new(IncorrectStringAsNullDecoder))),
 ///             _ => Ok(None),
 ///         }
 ///     }
@@ -449,17 +447,14 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 /// {"a": "a"}
 /// {"a": 12}
 /// "#;
-/// let batch = ReaderBuilder::new(Arc::new(Schema::new(Fields::from(vec![Field::new(
-///     "a",
-///     DataType::Utf8,
-///     true,
-/// )]))))
-/// .with_decoder_factory(Arc::new(IncorrectStringAsNullDecoderFactory))
-/// .build(json.as_bytes())
-/// .unwrap()
-/// .next()
-/// .unwrap()
-/// .unwrap();
+/// let fields = vec![Field::new("a", DataType::Utf8, true)];
+/// let batch = ReaderBuilder::new(Arc::new(Schema::new(fields.into())))
+///     .with_decoder_factory(Arc::new(IncorrectStringAsNullDecoderFactory))
+///     .build(json.as_bytes())
+///     .unwrap()
+///     .next()
+///     .unwrap()
+///     .unwrap();
 ///
 /// let values = batch.column(0).as_string::<i32>();
 /// assert_eq!(values.len(), 2);
@@ -471,25 +466,83 @@ pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
     /// This can be used to override how e.g. error in decoding are handled.
     fn make_custom_decoder(
         &self,
-        _data_type: &DataType,
-        _is_nullable: bool,
-        _field_metadata: &HashMap<String, String>,
-        _coerce_primitive: bool,
-        _strict_mode: bool,
-        _struct_mode: StructMode,
-        _decoder_factory: Option<&dyn DecoderFactory>,
+        data_type: &DataType,
+        is_nullable: bool,
+        field_metadata: &HashMap<String, String>,
+        coerce_primitive: bool,
+        strict_mode: bool,
+        struct_mode: StructMode,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError>;
-}
 
-///
-/// Metadata key for JSON decoder configuration.
-///
-/// This well-known metadata key can be used to annotate schema fields with
-/// custom decoding instructions. Custom [`DecoderFactory`] implementations
-/// can inspect this metadata to determine how to decode specific fields.
-///
-/// This metadata key is automatically stripped from the output array schema.
-pub const JSON_DECODER_CONFIG_KEY: &str = "arrow-rs:json:decoder";
+    /// Create a decoder for a type, without allowing this factory to directly intercept it,
+    /// but still allowing the factory to intercept children of complex types.
+    ///
+    /// Solves the delegation pattern: When a factory intercepts a type and wants to
+    /// delegate to the default implementation, calling `make_decoder` would cause
+    /// infinite recursion (the factory intercepts its own `make_decoder` call). This method
+    /// skips the factory check at the current level but still passes the factory through so
+    /// child fields are customized.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_json::reader::{DecoderFactory, ArrayDecoder};
+    /// # use arrow_json::StructMode;
+    /// # use arrow_schema::{DataType, ArrowError};
+    /// # use std::collections::HashMap;
+    /// #
+    /// #[derive(Debug)]
+    /// struct NoOpFactory;
+    ///
+    /// impl DecoderFactory for NoOpFactory {
+    ///     fn make_custom_decoder(
+    ///         &self,
+    ///         data_type: &DataType,
+    ///         is_nullable: bool,
+    ///         _field_metadata: &HashMap<String, String>,
+    ///         coerce_primitive: bool,
+    ///         strict_mode: bool,
+    ///         struct_mode: StructMode,
+    ///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+    ///         if matches!(data_type, DataType::Struct(_)) {
+    ///             // Bypass self-interception, children still use this factory
+    ///             let delegate = self.make_delegate_decoder(
+    ///                 data_type,
+    ///                 is_nullable,
+    ///                 coerce_primitive,
+    ///                 strict_mode,
+    ///                 struct_mode,
+    ///             )?;
+    ///
+    ///             // In real usage: wrap the delegate with some custom behavior
+    ///             Ok(Some(delegate))
+    ///         } else {
+    ///             Ok(None)
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    fn make_delegate_decoder(
+        &self,
+        data_type: &DataType,
+        is_nullable: bool,
+        coerce_primitive: bool,
+        strict_mode: bool,
+        struct_mode: StructMode,
+    ) -> Result<Box<dyn ArrayDecoder>, ArrowError>
+    where
+        Self: Sized,
+    {
+        make_decoder_impl(
+            data_type,
+            is_nullable,
+            coerce_primitive,
+            strict_mode,
+            struct_mode,
+            Some(self),
+        )
+    }
+}
 
 /// A low-level interface for reading JSON data from a byte stream
 ///
@@ -794,22 +847,6 @@ impl Decoder {
 
 /// A trait to decode JSON values into arrow arrays
 pub trait ArrayDecoder: Send {
-    /// Returns the output data type if it differs from the input data type.
-    ///
-    /// Custom decoders may produce output with a different data type than was
-    /// specified in the input schema. For example, a custom decoder might strip
-    /// extension metadata or change the type entirely.
-    ///
-    /// Returns:
-    /// - `Some(&DataType)` if the decoder's output type differs from its input
-    /// - `None` if the decoder produces the same type as its input
-    ///
-    /// This is used by parent decoders (Struct, List, Map) to determine whether
-    /// they need to update their output type to reflect child type changes.
-    fn output_data_type(&self) -> Option<&DataType> {
-        None
-    }
-
     /// Decode elements from `tape` starting at the indexes contained in `pos`
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError>;
 }
@@ -833,7 +870,7 @@ macro_rules! primitive_decoder {
 ///
 /// * `data_type` - The Arrow data type to decode into
 /// * `is_nullable` - Whether the field is nullable
-/// * `field_metadata` - Schema metadata for the field (can contain [`JSON_DECODER_CONFIG_KEY`])
+/// * `field_metadata` - Schema metadata for the field
 /// * `coerce_primitive` - Whether to coerce primitive types (e.g., string to number)
 /// * `strict_mode` - Whether to validate struct fields strictly
 /// * `struct_mode` - How to decode struct fields
@@ -855,12 +892,31 @@ pub fn make_decoder(
             coerce_primitive,
             strict_mode,
             struct_mode,
-            decoder_factory,
         )? {
             return Ok(decoder);
         }
     }
 
+    make_decoder_impl(
+        data_type,
+        is_nullable,
+        coerce_primitive,
+        strict_mode,
+        struct_mode,
+        decoder_factory,
+    )
+}
+
+/// Private implementation of decoder creation that skips factory checks.
+/// Used by both `make_decoder` and `DecoderFactory::make_delegate_decoder`.
+fn make_decoder_impl(
+    data_type: &DataType,
+    is_nullable: bool,
+    coerce_primitive: bool,
+    strict_mode: bool,
+    struct_mode: StructMode,
+    decoder_factory: Option<&dyn DecoderFactory>,
+) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
         *data_type => (primitive_decoder, data_type),
         DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
@@ -3013,7 +3069,6 @@ mod tests {
                 _coerce_primitive: bool,
                 _strict_mode: bool,
                 _struct_mode: StructMode,
-                _decoder_factory: Option<&dyn DecoderFactory>,
             ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
                 match data_type {
                     DataType::Utf8 => Ok(Some(Box::new(AlwaysNullStringArrayDecoder))),

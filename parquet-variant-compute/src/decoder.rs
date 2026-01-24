@@ -79,13 +79,10 @@ impl DecoderFactory for VariantArrayDecoderFactory {
         _coerce_primitive: bool,
         _strict_mode: bool,
         _struct_mode: StructMode,
-        _decoder_factory: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         // Check if this is a Variant extension type using metadata
-        if VariantType::try_from_parts(field_metadata, data_type).is_ok() {
-            return Ok(Some(Box::new(VariantArrayDecoder)));
-        }
-        Ok(None)
+        let result = VariantType::try_from_parts(field_metadata, data_type);
+        Ok(result.ok().map(|_| Box::new(VariantArrayDecoder) as _))
     }
 }
 
