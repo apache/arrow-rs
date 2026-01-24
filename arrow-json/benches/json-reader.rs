@@ -179,7 +179,13 @@ fn bench_binary_hex(c: &mut Criterion) {
     bench_decode_binary(c, "decode_binary_view_hex_json", &binary_data, view_field);
 }
 
-fn bench_decode_schema(c: &mut Criterion, name: &str, data: &[u8], schema: Arc<Schema>) {
+fn bench_decode_schema(
+    c: &mut Criterion,
+    name: &str,
+    data: &[u8],
+    schema: Arc<Schema>,
+    projection: bool,
+) {
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.sample_size(50);
@@ -190,6 +196,7 @@ fn bench_decode_schema(c: &mut Criterion, name: &str, data: &[u8], schema: Arc<S
         b.iter(|| {
             let mut decoder = ReaderBuilder::new(schema.clone())
                 .with_batch_size(BATCH_SIZE)
+                .with_projection(projection)
                 .build_decoder()
                 .unwrap();
             decode_and_flush(&mut decoder, data);
@@ -228,6 +235,7 @@ fn bench_wide_projection(c: &mut Criterion) {
         "decode_wide_projection_full_json",
         &wide_projection_data,
         full_schema,
+        false,
     );
 
     // Projected schema: only 3 fields (f0, f10, f50) out of 100
@@ -237,6 +245,7 @@ fn bench_wide_projection(c: &mut Criterion) {
         "decode_wide_projection_narrow_json",
         &wide_projection_data,
         projected_schema,
+        true,
     );
 }
 
