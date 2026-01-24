@@ -3380,4 +3380,50 @@ mod tests {
         expected_row2.extend(avro_long_bytes(3)); // value
         assert_bytes_eq(row_slice(&out, &offsets, 2), &expected_row2);
     }
+
+    #[test]
+    fn encode_prefix_write_error() {
+        use crate::codec::AvroFieldBuilder;
+        use crate::schema::{AvroSchema, FingerprintAlgorithm};
+        use std::io;
+
+        struct FailWriter {
+            failed: bool,
+        }
+
+        impl io::Write for FailWriter {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                if !self.failed {
+                    self.failed = true;
+                    Err(io::Error::other("fail write"))
+                } else {
+                    Ok(0)
+                }
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let schema = ArrowSchema::new(vec![Field::new("x", DataType::Int32, false)]);
+        let arr = Int32Array::from(vec![42]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(arr)]).unwrap();
+        let avro_schema = AvroSchema::try_from(&schema).unwrap();
+        let fingerprint = avro_schema
+            .fingerprint(FingerprintAlgorithm::Rabin)
+            .unwrap();
+        let avro_root = AvroFieldBuilder::new(&avro_schema.schema().unwrap())
+            .build()
+            .unwrap();
+        let encoder = RecordEncoderBuilder::new(&avro_root, &schema)
+            .with_fingerprint(Some(fingerprint))
+            .build()
+            .unwrap();
+
+        let mut writer = FailWriter { failed: false };
+        let err = encoder.encode(&mut writer, &batch).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("write prefix"), "unexpected error: {msg}");
+    }
 }
