@@ -229,6 +229,9 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
+        if num_values == 0 {
+            return Ok(0);
+        }
         let encoding = self
             .current_encoding
             .expect("current_encoding should be set");
@@ -246,6 +249,9 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        if num_values == 0 {
+            return Ok(0);
+        }
         let encoding = self
             .current_encoding
             .expect("current_encoding should be set");

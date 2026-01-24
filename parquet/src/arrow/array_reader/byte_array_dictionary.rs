@@ -313,7 +313,19 @@ where
     }
 
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
-        match self.decoder.as_mut().expect("decoder set") {
+        // Handle case where set_data was skipped for all-null page
+        let Some(decoder) = self.decoder.as_mut() else {
+            // Still need to update dictionary state even with no values,
+            // but only if the dictionary is non-empty (empty dict means all NULL)
+            if let Some(dict) = self.dict.as_ref() {
+                if !dict.is_empty() {
+                    out.as_keys(dict);
+                }
+            }
+            return Ok(0);
+        };
+
+        match decoder {
             MaybeDictionaryDecoder::Fallback(decoder) => {
                 decoder.read(out.spill_values()?, num_values, None)
             }
@@ -373,6 +385,9 @@ where
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        if num_values == 0 {
+            return Ok(0);
+        }
         match self.decoder.as_mut().expect("decoder set") {
             MaybeDictionaryDecoder::Fallback(decoder) => decoder.skip::<V>(num_values, None),
             MaybeDictionaryDecoder::Dict {

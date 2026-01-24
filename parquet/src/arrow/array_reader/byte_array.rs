@@ -232,6 +232,9 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
     }
 
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
+        if num_values == 0 {
+            return Ok(0);
+        }
         let decoder = self
             .decoder
             .as_mut()
@@ -241,6 +244,9 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        if num_values == 0 {
+            return Ok(0);
+        }
         let decoder = self
             .decoder
             .as_mut()

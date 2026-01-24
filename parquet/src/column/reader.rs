@@ -527,12 +527,18 @@ where
                                 )?;
                             }
 
-                            self.values_decoder.set_data(
-                                encoding,
-                                buf.slice((rep_levels_byte_len + def_levels_byte_len) as usize..),
-                                num_values as usize,
-                                Some((num_values - num_nulls) as usize),
-                            )?;
+                            // OPTIMIZATION: only do values decoder setup for pages that is not all-null
+                            if num_nulls != num_values {
+                                self.values_decoder.set_data(
+                                    encoding,
+                                    buf.slice(
+                                        (rep_levels_byte_len + def_levels_byte_len) as usize..,
+                                    ),
+                                    num_values as usize,
+                                    Some((num_values - num_nulls) as usize),
+                                )?;
+                            }
+
                             return Ok(true);
                         }
                     };

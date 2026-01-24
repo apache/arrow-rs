@@ -406,6 +406,10 @@ impl ColumnValueDecoder for ValueDecoder {
             None => out.byte_length = Some(self.byte_length),
         }
 
+        if num_values == 0 {
+            return Ok(0);
+        }
+
         match self.decoder.as_mut().unwrap() {
             Decoder::Plain { offset, buf } => {
                 let to_read =
@@ -466,6 +470,9 @@ impl ColumnValueDecoder for ValueDecoder {
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        if num_values == 0 {
+            return Ok(0);
+        }
         match self.decoder.as_mut().unwrap() {
             Decoder::Plain { offset, buf } => {
                 let to_read = num_values.min((buf.len() - *offset) / self.byte_length);
