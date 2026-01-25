@@ -35,17 +35,9 @@ use arrow::compute::{like, nlike, or};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 use arrow_array::{ArrayRef, ArrowPrimitiveType, BooleanArray, PrimitiveArray, StringViewArray};
 use arrow_schema::{ArrowError, DataType, Schema};
-use async_trait::async_trait;
-use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
-use futures::stream::BoxStream;
 use object_store::local::LocalFileSystem;
-use object_store::path::Path as ObjectStorePath;
-use object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutOptions,
-    PutPayload, PutResult, Result,
-};
 use parquet::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
     ParquetRecordBatchReaderBuilder, RowFilter,
@@ -726,105 +718,6 @@ struct ReadTest {
     expected_row_count: usize,
 }
 
-#[derive(Debug)]
-struct LocalFileSystemOneFile {
-    file: std::fs::File,
-    inner: LocalFileSystem,
-}
-
-impl LocalFileSystemOneFile {
-    fn new(path: &Path, inner: LocalFileSystem) -> Self {
-        let file = std::fs::File::open(path).expect("Failed to open file");
-        Self { file, inner }
-    }
-}
-
-impl Display for LocalFileSystemOneFile {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LocalFileSystemOneFile")
-    }
-}
-
-pub(crate) async fn maybe_spawn_blocking<F, T>(f: F) -> Result<T>
-where
-    F: FnOnce() -> Result<T> + Send + 'static,
-    T: Send + 'static,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(runtime) => runtime.spawn_blocking(f).await?,
-        Err(_) => f(),
-    }
-}
-
-#[async_trait]
-impl ObjectStore for LocalFileSystemOneFile {
-    async fn put_opts(
-        &self,
-        location: &ObjectStorePath,
-        payload: PutPayload,
-        opts: PutOptions,
-    ) -> Result<PutResult> {
-        self.inner.put_opts(location, payload, opts).await
-    }
-
-    async fn put_multipart_opts(
-        &self,
-        location: &ObjectStorePath,
-        opts: object_store::PutMultipartOptions,
-    ) -> Result<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, opts).await
-    }
-
-    async fn get_opts(&self, location: &ObjectStorePath, options: GetOptions) -> Result<GetResult> {
-        self.inner.get_opts(location, options).await
-    }
-
-    async fn get_ranges(
-        &self,
-        _location: &ObjectStorePath,
-        ranges: &[std::ops::Range<u64>],
-    ) -> Result<Vec<Bytes>> {
-        use std::os::unix::fs::FileExt;
-        let mut result = Vec::with_capacity(ranges.len());
-        for range in ranges {
-            let mut buf = vec![0u8; (range.end - range.start) as usize];
-
-            self.file
-                .read_at(&mut buf, range.start)
-                .map_err(|e| object_store::Error::Generic {
-                    store: "LocalFileSystemOneFile",
-                    source: Box::new(e),
-                })?;
-            result.push(buf.into());
-        }
-        Ok(result)
-    }
-
-    fn list(&self, prefix: Option<&ObjectStorePath>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.inner.list(prefix)
-    }
-
-    async fn list_with_delimiter(&self, prefix: Option<&ObjectStorePath>) -> Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
-    }
-
-    async fn copy_opts(
-        &self,
-        from: &ObjectStorePath,
-        to: &ObjectStorePath,
-        opts: object_store::CopyOptions,
-    ) -> Result<()> {
-        self.inner.copy_opts(from, to, opts).await
-    }
-
-    fn delete_stream(
-        &self,
-        paths: BoxStream<'static, Result<ObjectStorePath>>,
-    ) -> BoxStream<'static, Result<ObjectStorePath>> {
-        self.inner.delete_stream(paths)
-    }
-}
-
 impl ReadTest {
     fn new(query: Query) -> Self {
         let Query {
@@ -903,8 +796,7 @@ impl ReadTest {
         let hits_path = hits_1();
         let parent = hits_path.parent().unwrap();
         let file_name = hits_path.file_name().unwrap().to_str().unwrap();
-        let inner = LocalFileSystem::new_with_prefix(parent).unwrap();
-        let store = Arc::new(LocalFileSystemOneFile::new(hits_path, inner));
+        let store = Arc::new(LocalFileSystem::new_with_prefix(parent).unwrap());
         let location = object_store::path::Path::from(file_name);
 
         let reader = ParquetObjectReader::new(store, location);
