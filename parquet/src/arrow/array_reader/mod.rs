@@ -52,7 +52,7 @@ mod test_util;
 
 // Note that this crate is public under the `experimental` feature flag.
 use crate::file::metadata::RowGroupMetaData;
-pub use builder::{ArrayReaderBuilder, CacheOptionsBuilder};
+pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[allow(unused_imports)] // Only used for benchmarks
