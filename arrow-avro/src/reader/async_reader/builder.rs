@@ -131,12 +131,17 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
         // Start by reading the header from the beginning of the avro file
         // take the writer schema from the header
         let (header, header_len) = self.read_header().await?;
-        let writer_schema = header
-            .schema()
-            .map_err(|e| ArrowError::ExternalError(Box::new(e)))?
-            .ok_or_else(|| {
-                ArrowError::ParseError("No Avro schema present in file header".into())
+        let writer_schema = {
+            let raw = header.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
+                ArrowError::ParseError("No Avro schema present in file header".to_string())
             })?;
+            let json_string = std::str::from_utf8(raw)
+                .map_err(|e| {
+                    ArrowError::ParseError(format!("Invalid UTF-8 in Avro schema header: {e}"))
+                })?
+                .to_string();
+            AvroSchema::new(json_string)
+        };
 
         // If projection exists, project the reader schema,
         // if no reader schema is provided, parse it from the header(get the raw writer schema), and project that
@@ -146,19 +151,9 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
             .as_deref()
             .map(|projection| {
                 let base_schema = if let Some(reader_schema) = &self.reader_schema {
-                    reader_schema.clone()
+                    reader_schema
                 } else {
-                    let raw = header.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
-                        ArrowError::ParseError("No Avro schema present in file header".to_string())
-                    })?;
-                    let json_string = std::str::from_utf8(raw)
-                        .map_err(|e| {
-                            ArrowError::ParseError(format!(
-                                "Invalid UTF-8 in Avro schema header: {e}"
-                            ))
-                        })?
-                        .to_string();
-                    AvroSchema::new(json_string)
+                    &writer_schema
                 };
                 base_schema.project(projection)
             })
@@ -173,6 +168,7 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
             .transpose()?;
 
         let root = {
+            let writer_schema = writer_schema.schema()?;
             let mut builder = AvroFieldBuilder::new(&writer_schema);
             if let Some(reader_schema) = &effective_reader_schema {
                 builder = builder.with_reader_schema(reader_schema);
