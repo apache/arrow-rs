@@ -158,8 +158,13 @@ impl ArrayReader for StructArrayReader {
                     }
                 }
                 None => {
-                    for def_level in def_levels {
-                        bitmap_builder.append(*def_level >= self.struct_def_level)
+                    // Safety: slice iterator has a trusted length
+                    unsafe {
+                        bitmap_builder.extend_trusted_len(
+                            def_levels
+                                .iter()
+                                .map(|level| *level >= self.struct_def_level),
+                        )
                     }
                 }
             }
