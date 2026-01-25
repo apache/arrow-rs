@@ -581,13 +581,19 @@ impl ArrayData {
         assert!((offset + length) <= self.len());
 
         if let DataType::Struct(_) = self.data_type() {
+            assert!(
+                self.buffers.is_empty(),
+                "StructArrays should not contain buffers"
+            );
             // Slice into children
-            let new_offset = self.offset + offset;
             ArrayData {
                 data_type: self.data_type().clone(),
                 len: length,
-                offset: new_offset,
-                buffers: self.buffers.clone(),
+                // Offset here is for buffers & child_data; buffers is empty for
+                // structs and child_data offset is cumulative, so we maintain
+                // our current offset since we update the children offsets below
+                offset: self.offset,
+                buffers: vec![],
                 // Slice child data, to propagate offsets down to them
                 child_data: self
                     .child_data()
