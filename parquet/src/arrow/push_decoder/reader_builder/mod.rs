@@ -246,7 +246,7 @@ impl RowGroupReaderBuilder {
         let plan_builder = ReadPlanBuilder::new(self.batch_size)
             .with_selection(selection)
             .with_row_selection_policy(self.row_selection_policy)
-            .with_offset_index_metadata(offset_index_metadata);
+            .with_offset_index_metadata(offset_index_metadata, &self.projection);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
@@ -441,6 +441,11 @@ impl RowGroupReaderBuilder {
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
+                let offset_index_metadata = self
+                    .row_group_offset_index(row_group_idx)
+                    .map(|columns| columns.to_vec().into());
+                plan_builder = plan_builder
+                    .with_offset_index_metadata(offset_index_metadata, predicate.projection());
                 plan_builder =
                     plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
 
@@ -601,7 +606,8 @@ impl RowGroupReaderBuilder {
                     None
                 };
 
-                let plan_builder = plan_builder.with_offset_index_metadata(offset_index_metadata);
+                let plan_builder = plan_builder
+                    .with_offset_index_metadata(offset_index_metadata, &self.projection);
 
                 let plan = plan_builder.build();
 
