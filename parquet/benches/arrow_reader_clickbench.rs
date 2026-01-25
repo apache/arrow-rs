@@ -76,7 +76,7 @@ fn async_reader(c: &mut Criterion) {
 }
 
 fn async_reader_object_store(c: &mut Criterion) {
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -728,14 +728,14 @@ struct ReadTest {
 
 #[derive(Debug)]
 struct LocalFileSystemOneFile {
-    file: std::fs::File,
+    file: Arc<std::fs::File>,
     inner: LocalFileSystem,
 }
 
 impl LocalFileSystemOneFile {
     fn new(path: &Path, inner: LocalFileSystem) -> Self {
         let file = std::fs::File::open(path).expect("Failed to open file");
-        Self { file, inner }
+        Self { file: Arc::new(file), inner }
     }
 }
 
@@ -785,19 +785,26 @@ impl ObjectStore for LocalFileSystemOneFile {
         ranges: &[std::ops::Range<u64>],
     ) -> Result<Vec<Bytes>> {
         use std::os::unix::fs::FileExt;
-        let mut result = Vec::with_capacity(ranges.len());
-        for range in ranges {
-            let mut buf = vec![0u8; (range.end - range.start) as usize];
 
-            self.file
-                .read_at(&mut buf, range.start)
-                .map_err(|e| object_store::Error::Generic {
-                    store: "LocalFileSystemOneFile",
-                    source: Box::new(e),
-                })?;
-            result.push(buf.into());
-        }
-        Ok(result)
+        let file = Arc::clone(&self.file);
+        let ranges = ranges.to_owned();
+        // This blocking operation is performed in a separate thread
+        // This slows down the benchmark, but avoids blocking the async runtime
+        maybe_spawn_blocking(move || {
+            let mut result = Vec::with_capacity(ranges.len());
+            for range in ranges {
+                let mut buf = vec![0u8; (range.end - range.start) as usize];
+
+                file
+                    .read_at(&mut buf, range.start)
+                    .map_err(|e| object_store::Error::Generic {
+                        store: "LocalFileSystemOneFile",
+                        source: Box::new(e),
+                    })?;
+                result.push(buf.into());
+            }
+            Ok(result)
+        }).await
     }
 
     fn list(&self, prefix: Option<&ObjectStorePath>) -> BoxStream<'static, Result<ObjectMeta>> {
