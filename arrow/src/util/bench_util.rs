@@ -722,7 +722,7 @@ pub fn create_f16_array(size: usize, nan_density: f32) -> Float16Array {
             if rng.random::<f32>() < nan_density {
                 Some(f16::NAN)
             } else {
-                Some(f16::from_f32(rng.random()))
+                Some(rng.random())
             }
         })
         .collect()
