@@ -82,20 +82,49 @@ where
     OffsetSize: OffsetSizeTrait,
 {
     let array = array.as_fixed_size_list();
-    if to.data_type() != &array.value_type() {
+    let (inner_field, size) = if let DataType::FixedSizeList(inner_field, size) = array.data_type()
+    {
+        (inner_field, size)
+    } else {
+        unreachable!()
+    };
+    if to.data_type() != inner_field.data_type() {
         // To transform inner type, can first cast to FSL with new inner type.
-        let size = if let DataType::FixedSizeList(_, size) = array.data_type() {
-            *size
-        } else {
-            unreachable!()
-        };
-        let fsl_to = DataType::FixedSizeList(to.clone(), size);
+        let fsl_to = DataType::FixedSizeList(to.clone(), *size);
         let array = cast_with_options(array, &fsl_to, cast_options)?;
         let array = array.as_fixed_size_list();
         let list: GenericListArray<OffsetSize> = array.clone().into();
         Ok(Arc::new(list))
     } else {
         let list: GenericListArray<OffsetSize> = array.clone().into();
+        Ok(Arc::new(list))
+    }
+}
+
+pub(crate) fn cast_fixed_size_list_to_list_view<OffsetSize>(
+    array: &dyn Array,
+    to: &FieldRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let array = array.as_fixed_size_list();
+    let (inner_field, size) = if let DataType::FixedSizeList(inner_field, size) = array.data_type()
+    {
+        (inner_field, size)
+    } else {
+        unreachable!()
+    };
+    if to.data_type() != inner_field.data_type() {
+        // To transform inner type, can first cast to FSL with new inner type.
+        let fsl_to = DataType::FixedSizeList(to.clone(), *size);
+        let array = cast_with_options(array, &fsl_to, cast_options)?;
+        let array = array.as_fixed_size_list();
+        let list: GenericListViewArray<OffsetSize> = array.clone().into();
+        Ok(Arc::new(list))
+    } else {
+        let list: GenericListViewArray<OffsetSize> = array.clone().into();
         Ok(Arc::new(list))
     }
 }

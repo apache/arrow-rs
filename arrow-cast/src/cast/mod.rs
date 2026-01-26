@@ -134,10 +134,10 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             ListView(list_from) | LargeListView(list_from),
             ListView(list_to) | LargeListView(list_to),
         ) => can_cast_types(list_from.data_type(), list_to.data_type()),
-        (FixedSizeList(list_from, _), List(list_to))
-        | (FixedSizeList(list_from, _), LargeList(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
+        (
+            FixedSizeList(list_from, _),
+            List(list_to) | LargeList(list_to) | ListView(list_to) | LargeListView(list_to),
+        ) => can_cast_types(list_from.data_type(), list_to.data_type()),
         (FixedSizeList(inner, size), FixedSizeList(inner_to, size_to)) if size == size_to => {
             can_cast_types(inner.data_type(), inner_to.data_type())
         }
@@ -884,6 +884,12 @@ pub fn cast_with_options(
         }
         (FixedSizeList(_, _), LargeList(list_to)) => {
             cast_fixed_size_list_to_list::<i64>(array, list_to, cast_options)
+        }
+        (FixedSizeList(_, _), ListView(list_to)) => {
+            cast_fixed_size_list_to_list_view::<i32>(array, list_to, cast_options)
+        }
+        (FixedSizeList(_, _), LargeListView(list_to)) => {
+            cast_fixed_size_list_to_list_view::<i64>(array, list_to, cast_options)
         }
         (FixedSizeList(_, size), _) if *size == 1 => {
             cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
@@ -8351,7 +8357,7 @@ mod tests {
     fn test_cast_fixed_size_list_to_list() {
         // Important cases:
         // 1. With/without nulls
-        // 2. LargeList and List
+        // 2. List/LargeList/ListView/LargeListView
         // 3. With and without inner casts
 
         let cases = [
@@ -8398,6 +8404,48 @@ mod tests {
                     None,
                     Some([Some(2), Some(2)]),
                 ])) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => list_view<i32>
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [[1, 1].map(Some), [2, 2].map(Some)].map(Some),
+                    2,
+                )) as ArrayRef,
+                Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>([
+                    Some([Some(1), Some(1)]),
+                    Some([Some(2), Some(2)]),
+                ])) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => list_view<i32> (nullable)
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [None, Some([Some(2), Some(2)])],
+                    2,
+                )) as ArrayRef,
+                Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>([
+                    None,
+                    Some([Some(2), Some(2)]),
+                ])) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => large_list_view<i64>
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [[1, 1].map(Some), [2, 2].map(Some)].map(Some),
+                    2,
+                )) as ArrayRef,
+                Arc::new(LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(
+                    [Some([Some(1), Some(1)]), Some([Some(2), Some(2)])],
+                )) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => large_list_view<i64> (nullable)
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [None, Some([Some(2), Some(2)])],
+                    2,
+                )) as ArrayRef,
+                Arc::new(LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(
+                    [None, Some([Some(2), Some(2)])],
+                )) as ArrayRef,
             ),
         ];
 
