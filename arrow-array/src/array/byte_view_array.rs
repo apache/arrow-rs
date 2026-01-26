@@ -820,9 +820,8 @@ impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
     }
 }
 
-impl<T: ByteViewType + ?Sized> super::private::Sealed for GenericByteViewArray<T> {}
-
-impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
