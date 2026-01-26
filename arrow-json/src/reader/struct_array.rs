@@ -264,10 +264,10 @@ impl ArrayDecoder for StructArrayDecoder {
 }
 
 fn struct_fields(data_type: &DataType) -> &Fields {
-    let DataType::Struct(f) = data_type else {
-        unreachable!()
-    };
-    f
+    match &data_type {
+        DataType::Struct(f) => f,
+        _ => unreachable!(),
+    }
 }
 
 fn build_field_index(fields: &Fields) -> Option<HashMap<String, usize>> {
