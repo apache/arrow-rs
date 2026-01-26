@@ -226,8 +226,12 @@ impl AsyncFileReader for ParquetObjectReader {
             // When page_index_policy is Optional or Required, override the preload flags
             // to ensure the specified policy takes precedence.
             if let Some(options) = options {
-                if options.page_index_policy != PageIndexPolicy::Skip {
-                    metadata = metadata.with_page_index_policy(options.page_index_policy);
+                if options.column_index_policy() != PageIndexPolicy::Skip
+                    || options.offset_index_policy() != PageIndexPolicy::Skip
+                {
+                    metadata = metadata
+                        .with_column_index_policy(options.column_index_policy())
+                        .with_offset_index_policy(options.offset_index_policy());
                 }
             }
 
@@ -426,8 +430,7 @@ mod tests {
             .with_preload_offset_index(true);
 
         // Create options with page_index_policy set to Skip (default)
-        let mut options = ArrowReaderOptions::new();
-        options.page_index_policy = PageIndexPolicy::Skip;
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
 
         // Get metadata - Skip means use reader's preload flags (true)
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
@@ -447,8 +450,7 @@ mod tests {
             .with_preload_offset_index(false);
 
         // Create options with page_index_policy set to Optional
-        let mut options = ArrowReaderOptions::new();
-        options.page_index_policy = PageIndexPolicy::Optional;
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
 
         // Get metadata - Optional overrides preload flags and attempts to load indexes
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
@@ -468,8 +470,7 @@ mod tests {
             .with_preload_column_index(false)
             .with_preload_offset_index(false);
 
-        let mut options1 = ArrowReaderOptions::new();
-        options1.page_index_policy = PageIndexPolicy::Skip;
+        let options1 = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
         let metadata1 = reader1.get_metadata(Some(&options1)).await.unwrap();
 
         // Test 2: preload=false + Optional policy -> overrides to try loading
@@ -478,8 +479,7 @@ mod tests {
             .with_preload_column_index(false)
             .with_preload_offset_index(false);
 
-        let mut options2 = ArrowReaderOptions::new();
-        options2.page_index_policy = PageIndexPolicy::Optional;
+        let options2 = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
         let metadata2 = reader2.get_metadata(Some(&options2)).await.unwrap();
 
         // Both should succeed (no panic/error)

@@ -36,14 +36,15 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
         .chain(unaligned.chunks().iter().cloned())
         .chain(unaligned.suffix());
 
-    iter.rev().flat_map(move |mut chunk| {
+    iter.rev().flat_map(move |chunk| {
         let chunk_idx = chunk_end_idx - 64;
         chunk_end_idx = chunk_idx;
+        let mut rev_chunk = chunk.reverse_bits();
         std::iter::from_fn(move || {
-            if chunk != 0 {
-                let bit_pos = 63 - chunk.leading_zeros();
-                chunk ^= 1 << bit_pos;
-                return Some(chunk_idx + (bit_pos as usize));
+            if rev_chunk != 0 {
+                let bit_pos = rev_chunk.trailing_zeros();
+                rev_chunk &= rev_chunk - 1;
+                return Some(chunk_idx + (63 - bit_pos as usize));
             }
             None
         })
