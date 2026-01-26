@@ -8342,14 +8342,14 @@ mod tests {
     #[test]
     fn test_can_cast_types_fixed_size_list_to_list() {
         // DataType::List
-        let array1 = Arc::new(make_fixed_size_list_array()) as ArrayRef;
+        let array1 = make_fixed_size_list_array();
         assert!(can_cast_types(
             array1.data_type(),
             &DataType::List(Arc::new(Field::new("", DataType::Int32, false)))
         ));
 
         // DataType::LargeList
-        let array2 = Arc::new(make_fixed_size_list_array_for_large_list()) as ArrayRef;
+        let array2 = make_fixed_size_list_array_for_large_list();
         assert!(can_cast_types(
             array2.data_type(),
             &DataType::LargeList(Arc::new(Field::new("", DataType::Int64, false)))
@@ -8536,7 +8536,7 @@ mod tests {
     #[test]
     fn test_cast_list_containers() {
         // large-list to list
-        let array = Arc::new(make_large_list_array()) as ArrayRef;
+        let array = make_large_list_array();
         let list_array = cast(
             &array,
             &DataType::List(Arc::new(Field::new("", DataType::Int32, false))),
@@ -8550,7 +8550,7 @@ mod tests {
         assert_eq!(&expected.value(2), &actual.value(2));
 
         // list to large-list
-        let array = Arc::new(make_list_array()) as ArrayRef;
+        let array = make_list_array();
         let large_list_array = cast(
             &array,
             &DataType::LargeList(Arc::new(Field::new("", DataType::Int32, false))),
@@ -8767,109 +8767,66 @@ mod tests {
         assert_eq!(expected.as_ref(), actual.as_ref());
     }
 
-    fn make_list_array() -> ListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
-
-        // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        ListArray::from(list_data)
-    }
-
-    fn make_large_list_array() -> LargeListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8]);
-
-        // Construct a list array from the above two
-        let list_data_type =
-            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        LargeListArray::from(list_data)
-    }
-
-    fn make_list_view_array() -> ListViewArray {
+    fn make_list_array() -> ArrayRef {
         // [[0, 1, 2], [3, 4, 5], [6, 7]]
-        ListViewArray::new(
+        Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::from_lengths(vec![3, 3, 2]),
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
+    }
+
+    fn make_large_list_array() -> ArrayRef {
+        // [[0, 1, 2], [3, 4, 5], [6, 7]]
+        Arc::new(LargeListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::from_lengths(vec![3, 3, 2]),
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
+    }
+
+    fn make_list_view_array() -> ArrayRef {
+        // [[0, 1, 2], [3, 4, 5], [6, 7]]
+        Arc::new(ListViewArray::new(
             Field::new_list_field(DataType::Int32, true).into(),
             vec![0, 3, 6].into(),
             vec![3, 3, 2].into(),
             Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
             None,
-        )
+        ))
     }
 
-    fn make_large_list_view_array() -> LargeListViewArray {
+    fn make_large_list_view_array() -> ArrayRef {
         // [[0, 1, 2], [3, 4, 5], [6, 7]]
-        LargeListViewArray::new(
+        Arc::new(LargeListViewArray::new(
             Field::new_list_field(DataType::Int32, true).into(),
             vec![0, 3, 6].into(),
             vec![3, 3, 2].into(),
             Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
             None,
-        )
+        ))
     }
 
-    fn make_fixed_size_list_array() -> FixedSizeListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 4);
-        let list_data = ArrayData::builder(list_data_type)
-            .len(2)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        FixedSizeListArray::from(list_data)
+    fn make_fixed_size_list_array() -> ArrayRef {
+        // [[0, 1, 2, 3], [4, 5, 6, 7]]
+        Arc::new(FixedSizeListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            4,
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
     }
 
-    fn make_fixed_size_list_array_for_large_list() -> FixedSizeListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int64)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0i64, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, true)), 4);
-        let list_data = ArrayData::builder(list_data_type)
-            .len(2)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        FixedSizeListArray::from(list_data)
+    fn make_fixed_size_list_array_for_large_list() -> ArrayRef {
+        // [[0, 1, 2, 3], [4, 5, 6, 7]]
+        Arc::new(FixedSizeListArray::new(
+            Field::new_list_field(DataType::Int64, true).into(),
+            4,
+            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
     }
 
     #[test]
@@ -9131,7 +9088,7 @@ mod tests {
     fn test_list_cast_offsets() {
         // test if offset of the array is taken into account during cast
         let array1 = make_list_array().slice(1, 2);
-        let array2 = Arc::new(make_list_array()) as ArrayRef;
+        let array2 = make_list_array();
 
         let dt = DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let out1 = cast(&array1, &dt).unwrap();
@@ -9182,16 +9139,16 @@ mod tests {
 
         assert_cast(&array, &["[a, b, c]", "[d, e, f]", "[g, h]"]);
 
-        let array = Arc::new(make_list_array()) as ArrayRef;
+        let array = make_list_array();
         assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
 
-        let array = Arc::new(make_large_list_array()) as ArrayRef;
+        let array = make_large_list_array();
         assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
 
-        let array = Arc::new(make_list_view_array()) as ArrayRef;
+        let array = make_list_view_array();
         assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
 
-        let array = Arc::new(make_large_list_view_array()) as ArrayRef;
+        let array = make_large_list_view_array();
         assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
     }
 
