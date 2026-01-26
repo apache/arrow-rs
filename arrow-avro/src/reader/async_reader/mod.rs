@@ -49,7 +49,7 @@ enum FetchNextBehaviour {
     ContinueDecoding,
 }
 
-enum ReaderState<R: AsyncFileReader> {
+enum ReaderState<R> {
     /// Intermediate state to fix ownership issues
     InvalidState,
     /// Initial state, fetch initial range
@@ -85,7 +85,7 @@ enum ReaderState<R: AsyncFileReader> {
 /// 4. If a block is incomplete (due to range ending mid-block), fetching the remaining bytes from the [`AsyncFileReader`].
 /// 5. If no range was originally provided, reads the full file.
 /// 6. If the range is 0, file_size is 0, or `range.end` is less than the header length, finish immediately.
-pub struct AsyncAvroFileReader<R: AsyncFileReader> {
+pub struct AsyncAvroFileReader<R> {
     // Members required to fetch data
     range: Range<u64>,
     file_size: u64,
@@ -101,7 +101,7 @@ pub struct AsyncAvroFileReader<R: AsyncFileReader> {
     finishing_partial_block: bool,
 }
 
-impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
+impl<R> AsyncAvroFileReader<R> {
     /// Returns a builder for a new [`Self`], allowing some optional parameters.
     pub fn builder(reader: R, file_size: u64, batch_size: usize) -> AsyncAvroFileReaderBuilder<R> {
         AsyncAvroFileReaderBuilder::new(reader, file_size, batch_size)
@@ -184,7 +184,9 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
             Err(e) => self.finish_with_error(e),
         }
     }
+}
 
+impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
     // The forbid question mark thing shouldn't apply here, as it is within the future,
     // so exported this to a separate function.
     async fn fetch_bytes(mut reader: R, range: Range<u64>) -> Result<(R, Bytes), ArrowError> {
