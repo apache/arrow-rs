@@ -130,12 +130,10 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (ListView(list_from) | LargeListView(list_from), List(list_to) | LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
-        (ListView(list_from), LargeListView(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
-        (LargeListView(list_from), ListView(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
+        (
+            ListView(list_from) | LargeListView(list_from),
+            ListView(list_to) | LargeListView(list_to),
+        ) => can_cast_types(list_from.data_type(), list_to.data_type()),
         (FixedSizeList(list_from, _), List(list_to))
         | (FixedSizeList(list_from, _), LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
@@ -847,6 +845,10 @@ pub fn cast_with_options(
                 values,
                 array.nulls().cloned(),
             )?))
+        }
+        (ListView(_), ListView(to)) => cast_list_view_values::<i32>(array, to, cast_options),
+        (LargeListView(_), LargeListView(to)) => {
+            cast_list_view_values::<i64>(array, to, cast_options)
         }
         // Casting between different types of lists
         // List
@@ -8565,6 +8567,49 @@ mod tests {
         assert_eq!(&expected.value(0), &actual.value(0));
         assert_eq!(&expected.value(1), &actual.value(1));
         assert_eq!(&expected.value(2), &actual.value(2));
+    }
+
+    #[test]
+    fn test_cast_list_view() {
+        // cast between list view and list view
+        let array = make_list_view_array();
+        let to = DataType::ListView(Field::new_list_field(DataType::Float32, true).into());
+        assert!(can_cast_types(array.data_type(), &to));
+        let actual = cast(&array, &to).unwrap();
+        let actual = actual.as_list_view::<i32>();
+
+        assert_eq!(
+            &Float32Array::from(vec![0.0, 1.0, 2.0]) as &dyn Array,
+            actual.value(0).as_ref()
+        );
+        assert_eq!(
+            &Float32Array::from(vec![3.0, 4.0, 5.0]) as &dyn Array,
+            actual.value(1).as_ref()
+        );
+        assert_eq!(
+            &Float32Array::from(vec![6.0, 7.0]) as &dyn Array,
+            actual.value(2).as_ref()
+        );
+
+        // cast between large list view and large list view
+        let array = make_large_list_view_array();
+        let to = DataType::LargeListView(Field::new_list_field(DataType::Float32, true).into());
+        assert!(can_cast_types(array.data_type(), &to));
+        let actual = cast(&array, &to).unwrap();
+        let actual = actual.as_list_view::<i64>();
+
+        assert_eq!(
+            &Float32Array::from(vec![0.0, 1.0, 2.0]) as &dyn Array,
+            actual.value(0).as_ref()
+        );
+        assert_eq!(
+            &Float32Array::from(vec![3.0, 4.0, 5.0]) as &dyn Array,
+            actual.value(1).as_ref()
+        );
+        assert_eq!(
+            &Float32Array::from(vec![6.0, 7.0]) as &dyn Array,
+            actual.value(2).as_ref()
+        );
     }
 
     #[test]

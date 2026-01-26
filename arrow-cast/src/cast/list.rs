@@ -160,6 +160,23 @@ pub(crate) fn cast_list_values<O: OffsetSizeTrait>(
     )?))
 }
 
+/// Helper function that takes an Generic list view container and casts the inner datatype.
+pub(crate) fn cast_list_view_values<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    to: &FieldRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let list = array.as_list_view::<O>();
+    let values = cast_with_options(list.values(), to.data_type(), cast_options)?;
+    Ok(Arc::new(GenericListViewArray::<O>::try_new(
+        to.clone(),
+        list.offsets().clone(),
+        list.sizes().clone(),
+        values,
+        list.nulls().cloned(),
+    )?))
+}
+
 /// Cast the container type of List/Largelist array along with the inner datatype
 pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     array: &dyn Array,
