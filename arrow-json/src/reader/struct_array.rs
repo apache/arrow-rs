@@ -87,15 +87,13 @@ impl StructArrayDecoder {
         let struct_mode = ctx.struct_mode();
         let fields = struct_fields(&data_type);
 
-        let mut decoders = Vec::with_capacity(fields.len());
-        for field in fields {
-            // If this struct nullable, need to permit nullability in child array
-            // StructArrayDecoder::decode verifies that if the child is not nullable
-            // it doesn't contain any nulls not masked by its parent
-            let nullable = f.is_nullable() || is_nullable;
-            let decoder = ctx.make_decoder(field.data_type().clone(), nullable)?;
-            decoders.push(decoder);
-        }
+        // If this struct nullable, need to permit nullability in child array
+        // StructArrayDecoder::decode verifies that if the child is not nullable
+        // it doesn't contain any nulls not masked by its parent
+        let decoders = fields
+            .iter()
+            .map(|f| ctx.make_decoder(f.data_type().clone(), f.is_nullable() || is_nullable))
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         let field_name_to_index = if struct_mode == StructMode::ObjectOnly {
             build_field_index(fields)
