@@ -2898,6 +2898,54 @@ mod tests {
     }
 
     #[test]
+    fn test_array_decoding_writer_nonunion_items_reader_nullable_items() {
+        use crate::schema::Array;
+        let writer_schema = Schema::Complex(ComplexType::Array(Array {
+            items: Box::new(Schema::TypeName(TypeName::Primitive(PrimitiveType::Int))),
+            attributes: Attributes::default(),
+        }));
+        let reader_schema = Schema::Complex(ComplexType::Array(Array {
+            items: Box::new(Schema::Union(vec![
+                Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
+                Schema::TypeName(TypeName::Primitive(PrimitiveType::Int)),
+            ])),
+            attributes: Attributes::default(),
+        }));
+        let dt = resolved_root_datatype(writer_schema, reader_schema, false, false);
+        if let Codec::List(inner) = dt.codec() {
+            assert_eq!(
+                inner.nullability(),
+                Some(Nullability::NullFirst),
+                "items should be nullable"
+            );
+        } else {
+            panic!("expected List codec");
+        }
+        let mut decoder = Decoder::try_new(&dt).unwrap();
+        let mut data = encode_avro_long(2);
+        data.extend(encode_avro_int(10));
+        data.extend(encode_avro_int(20));
+        data.extend(encode_avro_long(0));
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        assert_eq!(
+            cursor.position(),
+            data.len(),
+            "all bytes should be consumed"
+        );
+        let array = decoder.flush(None).unwrap();
+        let list_arr = array.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list_arr.len(), 1, "one list/row");
+        assert_eq!(list_arr.value_length(0), 2, "two items in the list");
+        let values = list_arr.values().as_primitive::<Int32Type>();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values.value(0), 10);
+        assert_eq!(values.value(1), 20);
+        assert!(!values.is_null(0));
+        assert!(!values.is_null(1));
+    }
+
+    #[test]
     fn test_decimal_decoding_fixed256() {
         let dt = avro_from_codec(Codec::Decimal(50, Some(2), Some(32)));
         let mut decoder = Decoder::try_new(&dt).unwrap();
