@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::StructMode;
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{ArrayDecoder, make_decoder};
+use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::buffer::NullBuffer;
@@ -33,46 +32,41 @@ pub struct MapArrayDecoder {
 
 impl MapArrayDecoder {
     pub fn new(
-        data_type: DataType,
-        coerce_primitive: bool,
-        strict_mode: bool,
+        ctx: &DecoderContext,
+        data_type: &DataType,
         is_nullable: bool,
-        struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
-        let fields = match &data_type {
-            DataType::Map(_, true) => {
-                return Err(ArrowError::NotYetImplemented(
-                    "Decoding MapArray with sorted fields".to_string(),
-                ));
-            }
-            DataType::Map(f, _) => match f.data_type() {
-                DataType::Struct(fields) if fields.len() == 2 => fields,
-                d => {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "MapArray must contain struct with two fields, got {d}"
-                    )));
-                }
-            },
-            _ => unreachable!(),
+        let DataType::Map(f, false) = data_type else {
+            return Err(ArrowError::NotYetImplemented(
+                "Decoding MapArray with sorted fields".to_string(),
+            ));
         };
 
-        let keys = make_decoder(
-            fields[0].data_type().clone(),
-            coerce_primitive,
-            strict_mode,
-            fields[0].is_nullable(),
-            struct_mode,
+        // TODO: Once MSRV bumps to 1.88+, use an if-let chain to directly unpack the slice
+        let fields = match f.data_type() {
+            DataType::Struct(fields) if fields.len() == 2 => fields,
+            d => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "MapArray must contain struct with two fields, got {d}"
+                )));
+            }
+        };
+
+        let (key_field, value_field) = (&fields[0], &fields[1]);
+
+        let keys = ctx.make_decoder(
+            key_field.data_type(),
+            key_field.is_nullable(),
+            key_field.metadata(),
         )?;
-        let values = make_decoder(
-            fields[1].data_type().clone(),
-            coerce_primitive,
-            strict_mode,
-            fields[1].is_nullable(),
-            struct_mode,
+        let values = ctx.make_decoder(
+            value_field.data_type(),
+            value_field.is_nullable(),
+            value_field.metadata(),
         )?;
 
         Ok(Self {
-            data_type,
+            data_type: data_type.clone(),
             keys,
             values,
             is_nullable,
@@ -82,12 +76,11 @@ impl MapArrayDecoder {
 
 impl ArrayDecoder for MapArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        let s = match &self.data_type {
-            DataType::Map(f, _) => match f.data_type() {
-                s @ DataType::Struct(_) => s,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
+        let DataType::Map(f, _) = &self.data_type else {
+            unreachable!()
+        };
+        let s @ DataType::Struct(_) = f.data_type() else {
+            unreachable!()
         };
 
         let mut offsets = BufferBuilder::<i32>::new(pos.len() + 1);
