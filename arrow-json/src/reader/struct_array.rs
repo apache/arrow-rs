@@ -92,10 +92,8 @@ impl StructArrayDecoder {
             // If this struct nullable, need to permit nullability in child array
             // StructArrayDecoder::decode verifies that if the child is not nullable
             // it doesn't contain any nulls not masked by its parent
-            let decoder = ctx.make_decoder(
-                field.data_type().clone(),
-                field.is_nullable() || is_nullable,
-            )?;
+            let nullable = f.is_nullable() || is_nullable;
+            let decoder = ctx.make_decoder(field.data_type().clone(), nullable)?;
             decoders.push(decoder);
         }
 
