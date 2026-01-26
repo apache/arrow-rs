@@ -17,8 +17,6 @@
 
 //! Trait definitions specific to using Arrow with async.
 
-use std::sync::Arc;
-
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::record_batch::RecordBatch;
