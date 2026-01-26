@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{ArrayDecoder, StructMode, make_decoder};
+use crate::reader::{ArrayDecoder, DecoderContext, StructMode};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -68,8 +68,6 @@ impl FieldTapePositions {
     }
 }
 
-use super::DecoderFactory;
-
 pub struct StructArrayDecoder {
     data_type: DataType,
     decoders: Vec<Box<dyn ArrayDecoder>>,
@@ -82,13 +80,11 @@ pub struct StructArrayDecoder {
 
 impl StructArrayDecoder {
     pub fn new(
+        ctx: &DecoderContext,
         data_type: &DataType,
-        coerce_primitive: bool,
-        strict_mode: bool,
         is_nullable: bool,
-        struct_mode: StructMode,
-        decoder_factory: Option<&dyn DecoderFactory>,
     ) -> Result<Self, ArrowError> {
+        let struct_mode = ctx.struct_mode();
         let fields = struct_fields(data_type);
 
         let mut decoders = Vec::with_capacity(fields.len());
@@ -96,14 +92,10 @@ impl StructArrayDecoder {
             // If this struct nullable, need to permit nullability in child array
             // StructArrayDecoder::decode verifies that if the child is not nullable
             // it doesn't contain any nulls not masked by its parent
-            let decoder = make_decoder(
+            let decoder = ctx.make_decoder(
                 field.data_type(),
                 field.is_nullable() || is_nullable,
                 field.metadata(),
-                coerce_primitive,
-                strict_mode,
-                struct_mode,
-                decoder_factory,
             )?;
             decoders.push(decoder);
         }
@@ -117,7 +109,7 @@ impl StructArrayDecoder {
         Ok(Self {
             data_type: data_type.clone(),
             decoders,
-            strict_mode,
+            strict_mode: ctx.strict_mode(),
             is_nullable,
             struct_mode,
             field_name_to_index,

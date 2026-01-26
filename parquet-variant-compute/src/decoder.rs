@@ -18,14 +18,11 @@
 use crate::{VariantArrayBuilder, VariantType};
 use arrow_array::{Array, StructArray};
 use arrow_data::ArrayData;
-use arrow_json::{DecoderFactory, StructMode};
+use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape, TapeElement};
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType};
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt};
 use std::collections::HashMap;
-
-use arrow_json::reader::ArrayDecoder;
-use arrow_json::reader::{Tape, TapeElement};
 
 /// An [`ArrayDecoder`] implementation that decodes JSON values into a Variant array.
 ///
@@ -73,12 +70,10 @@ pub struct VariantArrayDecoderFactory;
 impl DecoderFactory for VariantArrayDecoderFactory {
     fn make_custom_decoder(
         &self,
+        _ctx: &DecoderContext,
         data_type: &DataType,
         _is_nullable: bool,
         field_metadata: &HashMap<String, String>,
-        _coerce_primitive: bool,
-        _strict_mode: bool,
-        _struct_mode: StructMode,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         // Check if this is a Variant extension type using metadata
         let result = VariantType::try_from_parts(field_metadata, data_type);

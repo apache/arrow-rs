@@ -15,16 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::StructMode;
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{ArrayDecoder, make_decoder};
+use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
-
-use super::DecoderFactory;
 
 pub struct MapArrayDecoder {
     data_type: DataType,
@@ -35,12 +32,9 @@ pub struct MapArrayDecoder {
 
 impl MapArrayDecoder {
     pub fn new(
+        ctx: &DecoderContext,
         data_type: &DataType,
-        coerce_primitive: bool,
-        strict_mode: bool,
         is_nullable: bool,
-        struct_mode: StructMode,
-        decoder_factory: Option<&dyn DecoderFactory>,
     ) -> Result<Self, ArrowError> {
         let DataType::Map(f, false) = data_type else {
             return Err(ArrowError::NotYetImplemented(
@@ -60,23 +54,15 @@ impl MapArrayDecoder {
 
         let (key_field, value_field) = (&fields[0], &fields[1]);
 
-        let keys = make_decoder(
+        let keys = ctx.make_decoder(
             key_field.data_type(),
             key_field.is_nullable(),
             key_field.metadata(),
-            coerce_primitive,
-            strict_mode,
-            struct_mode,
-            decoder_factory,
         )?;
-        let values = make_decoder(
+        let values = ctx.make_decoder(
             value_field.data_type(),
             value_field.is_nullable(),
             value_field.metadata(),
-            coerce_primitive,
-            strict_mode,
-            struct_mode,
-            decoder_factory,
         )?;
 
         Ok(Self {

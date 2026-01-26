@@ -29,8 +29,8 @@ use arrow_array::Array as _;
 use arrow_array::builder::StringBuilder;
 use arrow_array::cast::AsArray;
 use arrow_data::ArrayData;
-use arrow_json::reader::{ArrayDecoder, DecoderFactory};
-use arrow_json::{ReaderBuilder, StructMode, Tape, TapeElement};
+use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory};
+use arrow_json::{ReaderBuilder, Tape, TapeElement};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -64,13 +64,10 @@ struct TypeBasedLenientStringFactory;
 impl DecoderFactory for TypeBasedLenientStringFactory {
     fn make_custom_decoder(
         &self,
+        _ctx: &DecoderContext,
         data_type: &DataType,
         _is_nullable: bool,
         _field_metadata: &HashMap<String, String>,
-        _coerce_primitive: bool,
-        _strict_mode: bool,
-        _struct_mode: StructMode,
-        _factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         match data_type {
             DataType::Utf8 => Ok(Some(Box::new(LenientStringDecoder))),
@@ -123,13 +120,10 @@ struct AnnotatedLenientStringFactory;
 impl DecoderFactory for AnnotatedLenientStringFactory {
     fn make_custom_decoder(
         &self,
+        _ctx: &DecoderContext,
         data_type: &DataType,
         _is_nullable: bool,
         field_metadata: &HashMap<String, String>,
-        _coerce_primitive: bool,
-        _strict_mode: bool,
-        _struct_mode: StructMode,
-        _factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         let config = field_metadata
             .get("test:decoder:config")
@@ -270,36 +264,21 @@ struct TypeBasedLenientStructFactory;
 impl DecoderFactory for TypeBasedLenientStructFactory {
     fn make_custom_decoder(
         &self,
+        ctx: &DecoderContext,
         data_type: &DataType,
         is_nullable: bool,
         _field_metadata: &HashMap<String, String>,
-        coerce_primitive: bool,
-        strict_mode: bool,
-        struct_mode: StructMode,
-        factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         if !matches!(data_type, DataType::Struct(_)) {
             return Ok(None);
         }
 
-        // Create standard struct decoder (using make_delegate_decoder to avoid infinite recursion)
-        let primary = Self::make_delegate_decoder(
-            factory_override.unwrap_or(self),
-            data_type,
-            is_nullable,
-            coerce_primitive,
-            strict_mode,
-            struct_mode,
-        )?;
-
-        // Create null decoder as fallback
-        let fallback = Box::new(NullDecoder {
-            data_type: data_type.clone(),
-        });
-
+        // Delegate to a standard struct decoder for objects, with a null decoder as fallback.
         Ok(Some(Box::new(InterleavedDecoder {
-            primary,
-            fallback,
+            primary: ctx.make_delegate_decoder(data_type, is_nullable)?,
+            fallback: Box::new(NullDecoder {
+                data_type: data_type.clone(),
+            }),
             filter: |elem| matches!(elem, TapeElement::StartObject(_)),
         })))
     }
@@ -394,31 +373,20 @@ struct TypeBasedQuirkyListFactory;
 impl DecoderFactory for TypeBasedQuirkyListFactory {
     fn make_custom_decoder(
         &self,
+        ctx: &DecoderContext,
         data_type: &DataType,
         is_nullable: bool,
         _field_metadata: &HashMap<String, String>,
-        coerce_primitive: bool,
-        strict_mode: bool,
-        struct_mode: StructMode,
-        factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         let field = match data_type {
             DataType::List(f) if *f.data_type() == DataType::Utf8 => f.clone(),
             _ => return Ok(None),
         };
 
-        // Primary: parse string representations
-        // Fallback: standard list decoder for normal JSON lists
+        // Intercept and attempt to parse strings; all others fall back to standard list decoder
         Ok(Some(Box::new(InterleavedDecoder {
             primary: Box::new(StringToListDecoder { field }),
-            fallback: Self::make_delegate_decoder(
-                factory_override.unwrap_or(self),
-                data_type,
-                is_nullable,
-                coerce_primitive,
-                strict_mode,
-                struct_mode,
-            )?,
+            fallback: ctx.make_delegate_decoder(data_type, is_nullable)?,
             filter: |elem| matches!(elem, TapeElement::String(_)),
         })))
     }
@@ -483,25 +451,16 @@ struct ComposedDecoderFactory {
 impl DecoderFactory for ComposedDecoderFactory {
     fn make_custom_decoder(
         &self,
+        ctx: &DecoderContext,
         data_type: &DataType,
         is_nullable: bool,
         field_metadata: &HashMap<String, String>,
-        coerce_primitive: bool,
-        strict_mode: bool,
-        struct_mode: StructMode,
-        factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         // Try each child factory in order until one returns Some or Err
         for factory in &self.factories {
-            if let Some(decoder) = factory.make_custom_decoder(
-                data_type,
-                is_nullable,
-                field_metadata,
-                coerce_primitive,
-                strict_mode,
-                struct_mode,
-                Some(factory_override.unwrap_or(self)),
-            )? {
+            if let Some(decoder) =
+                factory.make_custom_decoder(ctx, data_type, is_nullable, field_metadata)?
+            {
                 return Ok(Some(decoder));
             }
         }
@@ -671,13 +630,10 @@ impl PathBasedDecoderFactory {
 impl DecoderFactory for PathBasedDecoderFactory {
     fn make_custom_decoder(
         &self,
+        ctx: &DecoderContext,
         data_type: &DataType,
         is_nullable: bool,
         field_metadata: &HashMap<String, String>,
-        coerce_primitive: bool,
-        strict_mode: bool,
-        struct_mode: StructMode,
-        factory_override: Option<&dyn DecoderFactory>,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         // O(1) lookup using temporary DataType variant for identity comparison
         let key = DataTypeIdentity::DataType(data_type);
@@ -686,15 +642,7 @@ impl DecoderFactory for PathBasedDecoderFactory {
         };
 
         // Delegate to the route-specific factory
-        factory.make_custom_decoder(
-            data_type,
-            is_nullable,
-            field_metadata,
-            coerce_primitive,
-            strict_mode,
-            struct_mode,
-            Some(factory_override.unwrap_or(self)),
-        )
+        factory.make_custom_decoder(ctx, data_type, is_nullable, field_metadata)
     }
 }
 

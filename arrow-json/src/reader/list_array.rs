@@ -15,17 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::StructMode;
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{ArrayDecoder, make_decoder};
+use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_array::OffsetSizeTrait;
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
-
-use super::DecoderFactory;
 
 pub struct ListArrayDecoder<O> {
     data_type: DataType,
@@ -36,27 +33,16 @@ pub struct ListArrayDecoder<O> {
 
 impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
     pub fn new(
+        ctx: &DecoderContext,
         data_type: &DataType,
-        coerce_primitive: bool,
-        strict_mode: bool,
         is_nullable: bool,
-        struct_mode: StructMode,
-        decoder_factory: Option<&dyn DecoderFactory>,
     ) -> Result<Self, ArrowError> {
         let field = match data_type {
             DataType::List(f) if !O::IS_LARGE => f,
             DataType::LargeList(f) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
-        let decoder = make_decoder(
-            field.data_type(),
-            field.is_nullable(),
-            field.metadata(),
-            coerce_primitive,
-            strict_mode,
-            struct_mode,
-            decoder_factory,
-        )?;
+        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable(), field.metadata())?;
 
         Ok(Self {
             data_type: data_type.clone(),
