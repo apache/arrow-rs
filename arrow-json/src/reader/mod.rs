@@ -298,10 +298,11 @@ impl ReaderBuilder {
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
         let (data_type, nullable) = if self.is_field {
             let field = &self.schema.fields[0];
-            (Cow::Borrowed(field.data_type()), field.is_nullable())
+            let data_type = Cow::Borrowed(field.data_type());
+            (data_type, field.is_nullable())
         } else {
-            let data_type = DataType::Struct(self.schema.fields.clone());
-            (Cow::Owned(data_type), false)
+            let data_type = Cow::Owned(DataType::Struct(self.schema.fields.clone()));
+            (data_type, false)
         };
 
         let decoder = make_decoder(
