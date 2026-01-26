@@ -332,22 +332,32 @@ pub(crate) fn cast_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     )?))
 }
 
-pub(crate) fn cast_list_to_list_view<OffsetSize: OffsetSizeTrait>(
+pub(crate) fn cast_list_to_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     array: &dyn Array,
     to_field: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let list = array.as_list::<OffsetSize>();
+    let list = array.as_list::<I>();
     let (_field, offsets, values, nulls) = list.clone().into_parts();
+
+    if !O::IS_LARGE && offsets.last().unwrap().as_usize() > i32::MAX as usize {
+        return Err(ArrowError::ComputeError(
+            "LargeList too large to cast to ListView".into(),
+        ));
+    }
+
     let len = offsets.len() - 1;
     let mut sizes = Vec::with_capacity(len);
     let mut view_offsets = Vec::with_capacity(len);
     for (i, offset) in offsets.iter().enumerate().take(len) {
-        view_offsets.push(*offset);
-        sizes.push(offsets[i + 1] - offsets[i]);
+        let offset = O::usize_as(offset.as_usize());
+        let offset_plus_one = O::usize_as(offsets[i + 1].as_usize());
+
+        view_offsets.push(offset);
+        sizes.push(offset_plus_one - offset);
     }
     let values = cast_with_options(&values, to_field.data_type(), cast_options)?;
-    let array = GenericListViewArray::<OffsetSize>::new(
+    let array = GenericListViewArray::<O>::new(
         to_field.clone(),
         view_offsets.into(),
         sizes.into(),
