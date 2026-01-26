@@ -1579,7 +1579,7 @@ pub(crate) mod tests {
     use std::fs::File;
     use std::io::Seek;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{Arc, OnceLock};
 
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng, random, rng};
@@ -5600,6 +5600,38 @@ pub(crate) mod tests {
         c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
     }
 
+    /// Write the keys and values to a Parquet file with two columns named "key"
+    /// and "value" with specified properties.
+    fn write_key_values_to_parquet(keys: &[i64], values: &[i64], props: WriterProperties) -> Bytes {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", arrow_schema::DataType::Int64, false),
+            Field::new("value", arrow_schema::DataType::Int64, false),
+        ]));
+
+        let keys_array = Int64Array::from(keys.to_vec());
+        let values_array = Int64Array::from(values.to_vec());
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(keys_array) as ArrayRef,
+                Arc::new(values_array) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        Bytes::from(buffer)
+    }
+
+    fn read_to_batch(reader: ParquetRecordBatchReader) -> RecordBatch {
+        let schema = reader.schema().clone();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        concat_batches(&schema, &batches).unwrap()
+    }
+
     #[test]
     fn test_page_aware_mask_handles_page_skip() {
         // Test that when using Auto policy with page-aware bitmask, the reader
@@ -5613,32 +5645,16 @@ pub(crate) mod tests {
         let last_value: i64 = 9999;
         let num_rows: usize = 12;
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", arrow_schema::DataType::Int64, false),
-            Field::new("value", arrow_schema::DataType::Int64, false),
-        ]));
-
         let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
         int_values[0] = first_value;
         int_values[num_rows - 1] = last_value;
-        let keys = Int64Array::from(int_values.clone());
-        let values = Int64Array::from(int_values.clone());
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
-        )
-        .unwrap();
 
         let props = WriterProperties::builder()
             .set_write_batch_size(2)
             .set_data_page_row_count_limit(2)
             .build();
 
-        let mut buffer = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        let data = Bytes::from(buffer);
+        let data = write_key_values_to_parquet(&int_values, &int_values, props);
 
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder =
@@ -5646,6 +5662,7 @@ pub(crate) mod tests {
         let schema = builder.parquet_schema().clone();
         let filter_mask = ProjectionMask::leaves(&schema, [0]);
 
+        // Predicate: key == first_value or key == last_value
         let make_predicate = |mask: ProjectionMask| {
             ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
                 let column = batch.column(0);
@@ -5668,9 +5685,7 @@ pub(crate) mod tests {
             .build()
             .unwrap();
 
-        let schema = reader.schema().clone();
-        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
-        let result = concat_batches(&schema, &batches).unwrap();
+        let result = read_to_batch(reader);
         assert_eq!(result.num_rows(), 2);
         assert_eq!(
             result.column(0).as_ref(),
@@ -5707,33 +5722,16 @@ pub(crate) mod tests {
         // Page 9: [18, 19]  -> select 19
         //
         // This forces the reader to handle skipped pages correctly while using Mask policy.
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", arrow_schema::DataType::Int64, false),
-            Field::new("value", arrow_schema::DataType::Int64, false),
-        ]));
-
         let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
         int_values[0] = first_value;
         int_values[num_rows - 1] = last_value;
-        let keys = Int64Array::from(int_values.clone());
-        let values = Int64Array::from(int_values.clone());
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
-        )
-        .unwrap();
 
         // Configure small pages to create multiple page boundaries
         let props = WriterProperties::builder()
             .set_write_batch_size(2)
             .set_data_page_row_count_limit(2)
             .build();
-
-        let mut buffer = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        let data = Bytes::from(buffer);
+        let data = write_key_values_to_parquet(&int_values, &int_values, props);
 
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder =
@@ -5761,10 +5759,7 @@ pub(crate) mod tests {
             .with_row_selection_policy(RowSelectionPolicy::Mask)
             .build()
             .unwrap();
-
-        let schema = reader.schema().clone();
-        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
-        let result = concat_batches(&schema, &batches).unwrap();
+        let result = read_to_batch(reader);
 
         // Should have exactly 2 rows: first and last
         assert_eq!(result.num_rows(), 2);
@@ -5775,6 +5770,15 @@ pub(crate) mod tests {
         assert_eq!(key_col.value(1), last_value);
     }
 
+    /// Single column schema with int64 id
+    fn id_schema() -> SchemaRef {
+        static ID_SCHEMA: OnceLock<SchemaRef> = OnceLock::new();
+        Arc::clone(ID_SCHEMA.get_or_init(|| {
+            let field = Field::new("id", arrow_schema::DataType::Int64, false);
+            Arc::new(Schema::new(vec![field]))
+        }))
+    }
+
     /// Test that page-aware bitmask handles edge cases at exact page boundaries.
     /// When mask_start aligns exactly with a page boundary, verify correct behavior.
     #[test]
@@ -5783,11 +5787,7 @@ pub(crate) mod tests {
         let rows_per_page: usize = 2;
 
         // Create a file with 10 rows, 2 rows per page = 5 pages.
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int64,
-            false,
-        )]));
+        let schema = id_schema();
 
         let ids: Vec<i64> = (0..num_rows as i64).collect();
         let id_array = Int64Array::from(ids);
@@ -5862,11 +5862,7 @@ pub(crate) mod tests {
         // Page 1: [3, 4, 5]
         // Page 2: [6, 7, 8]
         // Page 3: [9, 10, 11]
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            arrow_schema::DataType::Int64,
-            false,
-        )]));
+        let schema = id_schema();
 
         let ids: Vec<i64> = (0..num_rows as i64).collect();
         let id_array = Int64Array::from(ids);
