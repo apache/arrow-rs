@@ -5691,9 +5691,22 @@ pub(crate) mod tests {
         let last_value: i64 = 9999;
         let num_rows: usize = 20;
 
-        // Create a file with 20 rows, ~2 rows per page = 10 pages
-        // Selection will be: first row, skip middle rows, last row
-        // This forces the reader to handle skipped pages correctly
+        // Create a file with 20 rows, 2 rows per page = 10 pages.
+        // Selection will be: first row, skip middle rows, last row.
+        //
+        // Diagram (rows grouped by 2 per page):
+        // Page 0: [ 0,  1]  -> select 0
+        // Page 1: [ 2,  3]  -> skip
+        // Page 2: [ 4,  5]  -> skip
+        // Page 3: [ 6,  7]  -> skip
+        // Page 4: [ 8,  9]  -> skip
+        // Page 5: [10, 11]  -> skip
+        // Page 6: [12, 13]  -> skip
+        // Page 7: [14, 15]  -> skip
+        // Page 8: [16, 17]  -> skip
+        // Page 9: [18, 19]  -> select 19
+        //
+        // This forces the reader to handle skipped pages correctly while using Mask policy.
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", arrow_schema::DataType::Int64, false),
             Field::new("value", arrow_schema::DataType::Int64, false),
@@ -5769,7 +5782,7 @@ pub(crate) mod tests {
         let num_rows: usize = 10;
         let rows_per_page: usize = 2;
 
-        // Create a file with 10 rows, 2 rows per page = 5 pages
+        // Create a file with 10 rows, 2 rows per page = 5 pages.
         let schema = Arc::new(Schema::new(vec![Field::new(
             "id",
             arrow_schema::DataType::Int64,
@@ -5792,8 +5805,14 @@ pub(crate) mod tests {
         writer.close().unwrap();
         let data = Bytes::from(buffer);
 
-        // Create a selection that starts exactly at page boundaries
-        // Select rows 0-1 (page 0), skip 2-5 (pages 1-2), select 6-9 (pages 3-4)
+        // Create a selection that starts exactly at page boundaries.
+        //
+        // Diagram (rows grouped by 2 per page):
+        // Page 0: [0, 1] -> select (rows 0-1)
+        // Page 1: [2, 3] -> skip
+        // Page 2: [4, 5] -> skip
+        // Page 3: [6, 7] -> select
+        // Page 4: [8, 9] -> select
         let selection = RowSelection::from(vec![
             RowSelector::select(2), // Page 0: rows 0-1
             RowSelector::skip(4),   // Pages 1-2: rows 2-5
@@ -5836,11 +5855,13 @@ pub(crate) mod tests {
         let num_rows: usize = 12;
         let rows_per_page: usize = 3;
 
-        // Create a file with 12 rows, 3 rows per page = 4 pages
-        // Page 0: rows 0-2
-        // Page 1: rows 3-5
-        // Page 2: rows 6-8
-        // Page 3: rows 9-11
+        // Create a file with 12 rows, 3 rows per page = 4 pages.
+        //
+        // Diagram (rows grouped by 3 per page):
+        // Page 0: [0, 1, 2]
+        // Page 1: [3, 4, 5]
+        // Page 2: [6, 7, 8]
+        // Page 3: [9, 10, 11]
         let schema = Arc::new(Schema::new(vec![Field::new(
             "id",
             arrow_schema::DataType::Int64,
@@ -5863,7 +5884,13 @@ pub(crate) mod tests {
         writer.close().unwrap();
         let data = Bytes::from(buffer);
 
-        // Select mid-page: skip first, select row 1-2, skip row 3-7 (cross pages), select row 8-10
+        // Select mid-page: skip first, select row 1-2, skip row 3-7 (cross pages), select row 8-10.
+        //
+        // Diagram (K=keep, S=skip):
+        // Page 0: [S, K, K]  -> rows 0-2
+        // Page 1: [S, S, S]  -> rows 3-5
+        // Page 2: [S, S, K]  -> rows 6-8
+        // Page 3: [K, K, S]  -> rows 9-11
         let selection = RowSelection::from(vec![
             RowSelector::skip(1),   // Skip row 0
             RowSelector::select(2), // Select rows 1-2 (partial page 0)
