@@ -575,7 +575,7 @@ impl Field {
     /// }
     /// ```
     pub fn try_extension_type<E: ExtensionType>(&self) -> Result<E, ArrowError> {
-        E::try_from_parts(self.metadata(), self.data_type())
+        E::try_new_from_field_metadata(self.data_type(), self.metadata())
     }
 
     /// Returns an instance of the given [`ExtensionType`] of this [`Field`],

@@ -272,24 +272,29 @@ pub trait ExtensionType: Sized {
     /// [`Field`] instance, useful when only metadata and data type are available.
     ///
     /// [`Field`]: crate::Field
-    fn try_from_parts(
-        metadata: &HashMap<String, String>,
+    fn try_new_from_field_metadata(
         data_type: &DataType,
+        metadata: &HashMap<String, String>,
     ) -> Result<Self, ArrowError> {
+        // Check the extension name in the metadata
         match metadata.get(EXTENSION_TYPE_NAME_KEY).map(|s| s.as_str()) {
-            Some(Self::NAME) => {
+            // It should match the name of the given extension type
+            Some(name) if name == Self::NAME => {
+                // Deserialize the metadata and try to construct the extension type
                 let ext_metadata = metadata
                     .get(EXTENSION_TYPE_METADATA_KEY)
                     .map(|s| s.as_str());
                 let parsed = Self::deserialize_metadata(ext_metadata)?;
                 Self::try_new(data_type, parsed)
             }
+            // Name mismatch
             Some(name) => Err(ArrowError::InvalidArgumentError(format!(
                 "Extension type name mismatch: expected {}, got {name}",
                 Self::NAME
             ))),
+            // Name missing
             None => Err(ArrowError::InvalidArgumentError(
-                "Extension type name missing".to_string()
+                "Extension type name missing".to_string(),
             )),
         }
     }
