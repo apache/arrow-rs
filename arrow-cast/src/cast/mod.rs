@@ -116,7 +116,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (List(list_from) | LargeList(list_from), List(list_to) | LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
-        (List(list_from) | LargeList(list_from), Utf8 | LargeUtf8) => {
+        (List(list_from) | LargeList(list_from), Utf8 | LargeUtf8 | Utf8View) => {
             can_cast_types(list_from.data_type(), to_type)
         }
         (List(list_from) | LargeList(list_from), FixedSizeList(list_to, _)) => {
@@ -902,6 +902,7 @@ pub fn cast_with_options(
         (List(_) | LargeList(_), _) => match to_type {
             Utf8 => value_to_string::<i32>(array, cast_options),
             LargeUtf8 => value_to_string::<i64>(array, cast_options),
+            Utf8View => value_to_string_view(array, cast_options),
             _ => Err(ArrowError::CastError(
                 "Cannot cast list to non-list data types".to_string(),
             )),
@@ -9117,6 +9118,7 @@ mod tests {
     #[test]
     fn test_list_to_string() {
         fn assert_cast(array: &ArrayRef, expected: &[&str]) {
+            assert!(can_cast_types(array.data_type(), &DataType::Utf8));
             let out = cast(array, &DataType::Utf8).unwrap();
             let out = out
                 .as_string::<i32>()
@@ -9125,9 +9127,19 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(out, expected);
 
+            assert!(can_cast_types(array.data_type(), &DataType::LargeUtf8));
             let out = cast(array, &DataType::LargeUtf8).unwrap();
             let out = out
                 .as_string::<i64>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(out, expected);
+
+            assert!(can_cast_types(array.data_type(), &DataType::Utf8View));
+            let out = cast(array, &DataType::Utf8View).unwrap();
+            let out = out
+                .as_string_view()
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
