@@ -269,40 +269,58 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     )?))
 }
 
-pub(crate) fn cast_list_view_to_list<O: OffsetSizeTrait>(
+pub(crate) fn cast_list_view_to_list<I, O>(
     array: &dyn Array,
     to: &FieldRef,
     cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    let list_view = array.as_list_view::<O>();
+) -> Result<ArrayRef, ArrowError>
+where
+    I: OffsetSizeTrait,
+    // We need ArrowPrimitiveType here to be able to create indices array for the
+    // take kernel.
+    O: ArrowPrimitiveType,
+    O::Native: OffsetSizeTrait,
+{
+    let list_view = array.as_list_view::<I>();
     let list_view_offsets = list_view.offsets();
     let sizes = list_view.sizes();
-    let source_values = list_view.values();
 
-    // Construct the indices and offsets for the new list array by iterating over the list view subarrays
-    let mut indices = Vec::with_capacity(list_view.values().len());
-    let mut offsets = Vec::with_capacity(list_view.len() + 1);
-    // Add the offset for the first subarray
-    offsets.push(O::usize_as(0));
+    let mut take_indices: Vec<O::Native> = Vec::with_capacity(list_view.values().len());
+    let mut offsets: Vec<O::Native> = Vec::with_capacity(list_view.len() + 1);
+    use num_traits::Zero;
+    offsets.push(O::Native::zero());
+
     for i in 0..list_view.len() {
-        // For each subarray, add the indices of the values to take
+        if list_view.is_null(i) {
+            offsets.push(O::Native::usize_as(take_indices.len()));
+            continue;
+        }
+
         let offset = list_view_offsets[i].as_usize();
         let size = sizes[i].as_usize();
-        let end = offset + size;
-        for j in offset..end {
-            indices.push(j as i32);
+
+        for value_index in offset..offset + size {
+            take_indices.push(O::Native::usize_as(value_index));
         }
-        // Add the offset for the next subarray
-        offsets.push(O::usize_as(indices.len()));
+
+        // Must guard all cases since ListView<i32> can overflow List<i32>
+        // e.g. if offsets of [0, 0, 0] and sizes [i32::MAX, i32::MAX, i32::MAX]
+        if take_indices.len() > O::Native::MAX_OFFSET {
+            return Err(ArrowError::ComputeError(format!(
+                "Offset overflow when casting from {} to {}",
+                array.data_type(),
+                to.data_type()
+            )));
+        }
+        offsets.push(O::Native::usize_as(take_indices.len()));
     }
 
-    // Take the values from the source values using the indices, creating a new array
-    let values = arrow_select::take::take(source_values, &Int32Array::from(indices), None)?;
-
-    // Cast the values to the target data type
+    // Form a contiguous values array
+    let take_indices = PrimitiveArray::<O>::from_iter_values(take_indices);
+    let values = arrow_select::take::take(list_view.values(), &take_indices, None)?;
     let values = cast_with_options(&values, to.data_type(), cast_options)?;
 
-    Ok(Arc::new(GenericListArray::<O>::try_new(
+    Ok(Arc::new(GenericListArray::<O::Native>::try_new(
         to.clone(),
         OffsetBuffer::new(offsets.into()),
         values,

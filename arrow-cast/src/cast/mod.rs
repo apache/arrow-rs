@@ -875,13 +875,21 @@ pub fn cast_with_options(
             cast_list_to_list_view::<i64, i64>(array, list_to, cast_options)
         }
         // ListView
-        (ListView(_), List(list_to)) => cast_list_view_to_list::<i32>(array, list_to, cast_options),
+        (ListView(_), List(list_to)) => {
+            cast_list_view_to_list::<i32, Int32Type>(array, list_to, cast_options)
+        }
+        (ListView(_), LargeList(list_to)) => {
+            cast_list_view_to_list::<i32, Int64Type>(array, list_to, cast_options)
+        }
         (ListView(_), LargeListView(list_to)) => {
             cast_list_view::<i32, i64>(array, list_to, cast_options)
         }
         // LargeListView
         (LargeListView(_), LargeList(list_to)) => {
-            cast_list_view_to_list::<i64>(array, list_to, cast_options)
+            cast_list_view_to_list::<i64, Int64Type>(array, list_to, cast_options)
+        }
+        (LargeListView(_), List(list_to)) => {
+            cast_list_view_to_list::<i64, Int32Type>(array, list_to, cast_options)
         }
         (LargeListView(_), ListView(list_to)) => {
             cast_list_view::<i64, i32>(array, list_to, cast_options)
@@ -12251,6 +12259,18 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_list_view_to_large_list() {
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i64>();
+        let expected_list =
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
     fn test_cast_list_to_list_view() {
         let list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
@@ -12314,6 +12334,19 @@ mod tests {
 
         let expected_list =
             LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_large_list_view_to_list() {
+        let list_view =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i32>();
+
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got_list, &expected_list);
     }
 
