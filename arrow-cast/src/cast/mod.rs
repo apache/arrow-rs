@@ -9116,52 +9116,40 @@ mod tests {
 
     #[test]
     fn test_list_to_string() {
-        let str_array = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g", "h"]);
-        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
-        let value_data = str_array.into_data();
+        fn assert_cast(array: &ArrayRef, expected: &[&str]) {
+            let out = cast(array, &DataType::Utf8).unwrap();
+            let out = out
+                .as_string::<i32>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(out, expected);
 
-        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        let array = Arc::new(ListArray::from(list_data)) as ArrayRef;
+            let out = cast(array, &DataType::LargeUtf8).unwrap();
+            let out = out
+                .as_string::<i64>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(out, expected);
+        }
 
-        let out = cast(&array, &DataType::Utf8).unwrap();
-        let out = out
-            .as_string::<i32>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&out, &vec!["[a, b, c]", "[d, e, f]", "[g, h]"]);
+        let array = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Utf8, true).into(),
+            OffsetBuffer::from_lengths(vec![3, 3, 2]),
+            Arc::new(StringArray::from(vec![
+                "a", "b", "c", "d", "e", "f", "g", "h",
+            ])),
+            None,
+        )) as ArrayRef;
 
-        let out = cast(&array, &DataType::LargeUtf8).unwrap();
-        let out = out
-            .as_string::<i64>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&out, &vec!["[a, b, c]", "[d, e, f]", "[g, h]"]);
+        assert_cast(&array, &["[a, b, c]", "[d, e, f]", "[g, h]"]);
 
         let array = Arc::new(make_list_array()) as ArrayRef;
-        let out = cast(&array, &DataType::Utf8).unwrap();
-        let out = out
-            .as_string::<i32>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&out, &vec!["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+        assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
 
         let array = Arc::new(make_large_list_array()) as ArrayRef;
-        let out = cast(&array, &DataType::LargeUtf8).unwrap();
-        let out = out
-            .as_string::<i64>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&out, &vec!["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+        assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
     }
 
     #[test]
