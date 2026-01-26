@@ -829,37 +829,52 @@ pub fn cast_with_options(
                 "Casting from type {from_type} to dictionary type {to_type} not supported",
             ))),
         },
+        // Casting between lists of same types (cast inner values)
         (List(_), List(to)) => cast_list_values::<i32>(array, to, cast_options),
         (LargeList(_), LargeList(to)) => cast_list_values::<i64>(array, to, cast_options),
+        (FixedSizeList(_, size_from), FixedSizeList(list_to, size_to)) => {
+            if size_from != size_to {
+                return Err(ArrowError::CastError(
+                    "cannot cast fixed-size-list to fixed-size-list with different size".into(),
+                ));
+            }
+            let array = array.as_fixed_size_list();
+            let values = cast_with_options(array.values(), list_to.data_type(), cast_options)?;
+            Ok(Arc::new(FixedSizeListArray::try_new(
+                list_to.clone(),
+                *size_from,
+                values,
+                array.nulls().cloned(),
+            )?))
+        }
+        // Casting between different types of lists
+        // List
         (List(_), LargeList(list_to)) => cast_list::<i32, i64>(array, list_to, cast_options),
-        (LargeList(_), List(list_to)) => cast_list::<i64, i32>(array, list_to, cast_options),
         (List(_), FixedSizeList(field, size)) => {
             let array = array.as_list::<i32>();
             cast_list_to_fixed_size_list::<i32>(array, field, *size, cast_options)
         }
+        (List(_), ListView(_)) => cast_list_to_list_view::<i32>(array),
+        // LargeList
+        (LargeList(_), List(list_to)) => cast_list::<i64, i32>(array, list_to, cast_options),
         (LargeList(_), FixedSizeList(field, size)) => {
             let array = array.as_list::<i64>();
             cast_list_to_fixed_size_list::<i64>(array, field, *size, cast_options)
         }
+        (LargeList(_), LargeListView(_)) => cast_list_to_list_view::<i64>(array),
+        // ListView
         (ListView(_), List(list_to)) => cast_list_view_to_list::<i32>(array, list_to, cast_options),
-        (LargeListView(_), LargeList(list_to)) => {
-            cast_list_view_to_list::<i64>(array, list_to, cast_options)
-        }
         (ListView(_), LargeListView(list_to)) => {
             cast_list_view::<i32, i64>(array, list_to, cast_options)
+        }
+        // LargeListView
+        (LargeListView(_), LargeList(list_to)) => {
+            cast_list_view_to_list::<i64>(array, list_to, cast_options)
         }
         (LargeListView(_), ListView(list_to)) => {
             cast_list_view::<i64, i32>(array, list_to, cast_options)
         }
-        (List(_), ListView(_)) => cast_list_to_list_view::<i32>(array),
-        (LargeList(_), LargeListView(_)) => cast_list_to_list_view::<i64>(array),
-        (List(_) | LargeList(_), _) => match to_type {
-            Utf8 => value_to_string::<i32>(array, cast_options),
-            LargeUtf8 => value_to_string::<i64>(array, cast_options),
-            _ => Err(ArrowError::CastError(
-                "Cannot cast list to non-list data types".to_string(),
-            )),
-        },
+        // FixedSizeList
         (FixedSizeList(list_from, size), List(list_to)) => {
             if list_to.data_type() != list_from.data_type() {
                 // To transform inner type, can first cast to FSL with new inner type.
@@ -880,29 +895,23 @@ pub fn cast_with_options(
                 cast_fixed_size_list_to_list::<i64>(array)
             }
         }
-        (FixedSizeList(_, size_from), FixedSizeList(list_to, size_to)) => {
-            if size_from != size_to {
-                return Err(ArrowError::CastError(
-                    "cannot cast fixed-size-list to fixed-size-list with different size".into(),
-                ));
-            }
-            let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
-            let values = cast_with_options(array.values(), list_to.data_type(), cast_options)?;
-            Ok(Arc::new(FixedSizeListArray::try_new(
-                list_to.clone(),
-                *size_from,
-                values,
-                array.nulls().cloned(),
-            )?))
+        (FixedSizeList(_, size), _) if *size == 1 => {
+            cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
         }
+        // List to/from other types
+        (List(_) | LargeList(_), _) => match to_type {
+            Utf8 => value_to_string::<i32>(array, cast_options),
+            LargeUtf8 => value_to_string::<i64>(array, cast_options),
+            _ => Err(ArrowError::CastError(
+                "Cannot cast list to non-list data types".to_string(),
+            )),
+        },
         (_, List(to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(to)) => cast_values_to_list::<i64>(array, to, cast_options),
         (_, FixedSizeList(to, size)) if *size == 1 => {
             cast_values_to_fixed_size_list(array, to, *size, cast_options)
         }
-        (FixedSizeList(_, size), _) if *size == 1 => {
-            cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
-        }
+        // Map
         (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
             cast_map_values(array.as_map(), to_type, cast_options, ordered1.to_owned())
         }
@@ -9122,9 +9131,7 @@ mod tests {
 
         let out = cast(&array, &DataType::Utf8).unwrap();
         let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
+            .as_string::<i32>()
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
@@ -9132,9 +9139,7 @@ mod tests {
 
         let out = cast(&array, &DataType::LargeUtf8).unwrap();
         let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
+            .as_string::<i64>()
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
@@ -9143,9 +9148,7 @@ mod tests {
         let array = Arc::new(make_list_array()) as ArrayRef;
         let out = cast(&array, &DataType::Utf8).unwrap();
         let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
+            .as_string::<i32>()
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
@@ -9154,9 +9157,7 @@ mod tests {
         let array = Arc::new(make_large_list_array()) as ArrayRef;
         let out = cast(&array, &DataType::LargeUtf8).unwrap();
         let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
+            .as_string::<i64>()
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
