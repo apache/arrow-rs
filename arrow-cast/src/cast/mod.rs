@@ -899,12 +899,12 @@ pub fn cast_with_options(
         (FixedSizeList(_, _), LargeListView(list_to)) => {
             cast_fixed_size_list_to_list_view::<i64>(array, list_to, cast_options)
         }
+        // List to/from other types
         (FixedSizeList(_, size), _) if *size == 1 => {
             cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
         }
-        // List to/from other types
         // NOTE: we could support FSL to string here too but might be confusing
-        //       since behaviour for size 1 would be different (see arm below this)
+        //       since behaviour for size 1 would be different (see arm above)
         (List(_) | LargeList(_) | ListView(_) | LargeListView(_), _) => match to_type {
             Utf8 => value_to_string::<i32>(array, cast_options),
             LargeUtf8 => value_to_string::<i64>(array, cast_options),
