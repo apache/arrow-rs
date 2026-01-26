@@ -141,8 +141,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (FixedSizeList(inner, size), FixedSizeList(inner_to, size_to)) if size == size_to => {
             can_cast_types(inner.data_type(), inner_to.data_type())
         }
-        (_, List(list_to)) => can_cast_types(from_type, list_to.data_type()),
-        (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
+        (_, List(list_to) | LargeList(list_to) | ListView(list_to) | LargeListView(list_to)) => {
+            can_cast_types(from_type, list_to.data_type())
+        }
         (_, FixedSizeList(list_to, size)) if *size == 1 => {
             can_cast_types(from_type, list_to.data_type())
         }
@@ -914,6 +915,8 @@ pub fn cast_with_options(
         },
         (_, List(to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(to)) => cast_values_to_list::<i64>(array, to, cast_options),
+        (_, ListView(to)) => cast_values_to_list_view::<i32>(array, to, cast_options),
+        (_, LargeListView(to)) => cast_values_to_list_view::<i64>(array, to, cast_options),
         (_, FixedSizeList(to, size)) if *size == 1 => {
             cast_values_to_fixed_size_list(array, to, *size, cast_options)
         }
@@ -8610,6 +8613,37 @@ mod tests {
             &Float32Array::from(vec![6.0, 7.0]) as &dyn Array,
             actual.value(2).as_ref()
         );
+    }
+
+    #[test]
+    fn test_non_list_to_list_view() {
+        let input = Arc::new(Int32Array::from(vec![Some(0), None, Some(2)])) as ArrayRef;
+        let expected_primitive =
+            Arc::new(Float32Array::from(vec![Some(0.0), None, Some(2.0)])) as ArrayRef;
+
+        // [[0], [NULL], [2]]
+        let expected = ListViewArray::new(
+            Field::new_list_field(DataType::Float32, true).into(),
+            vec![0, 1, 2].into(),
+            vec![1, 1, 1].into(),
+            expected_primitive.clone(),
+            None,
+        );
+        assert!(can_cast_types(input.data_type(), expected.data_type()));
+        let actual = cast(&input, expected.data_type()).unwrap();
+        assert_eq!(actual.as_ref(), &expected);
+
+        // [[0], [NULL], [2]]
+        let expected = LargeListViewArray::new(
+            Field::new_list_field(DataType::Float32, true).into(),
+            vec![0, 1, 2].into(),
+            vec![1, 1, 1].into(),
+            expected_primitive.clone(),
+            None,
+        );
+        assert!(can_cast_types(input.data_type(), expected.data_type()));
+        let actual = cast(&input, expected.data_type()).unwrap();
+        assert_eq!(actual.as_ref(), &expected);
     }
 
     #[test]

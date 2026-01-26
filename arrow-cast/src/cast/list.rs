@@ -29,6 +29,29 @@ pub(crate) fn cast_values_to_list<O: OffsetSizeTrait>(
     Ok(Arc::new(list))
 }
 
+/// Helper function that takes a primitive array and casts to a (generic) list view array.
+pub(crate) fn cast_values_to_list_view<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    to: &FieldRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    if O::from_usize(array.len()).is_none() {
+        return Err(ArrowError::OffsetOverflowError(array.len()));
+    }
+    let values = cast_with_options(array, to.data_type(), cast_options)?;
+    let offsets = (0..values.len())
+        .map(|index| O::usize_as(index))
+        .collect::<Vec<O>>();
+    let list = GenericListViewArray::<O>::try_new(
+        to.clone(),
+        offsets.into(),
+        vec![O::one(); values.len()].into(),
+        values,
+        None,
+    )?;
+    Ok(Arc::new(list))
+}
+
 /// Helper function that takes a primitive array and casts to a fixed size list array.
 pub(crate) fn cast_values_to_fixed_size_list(
     array: &dyn Array,
