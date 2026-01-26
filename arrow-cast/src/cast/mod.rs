@@ -856,14 +856,16 @@ pub fn cast_with_options(
             let array = array.as_list::<i32>();
             cast_list_to_fixed_size_list::<i32>(array, field, *size, cast_options)
         }
-        (List(_), ListView(_)) => cast_list_to_list_view::<i32>(array),
+        (List(_), ListView(list_to)) => cast_list_to_list_view::<i32>(array, list_to, cast_options),
         // LargeList
         (LargeList(_), List(list_to)) => cast_list::<i64, i32>(array, list_to, cast_options),
         (LargeList(_), FixedSizeList(field, size)) => {
             let array = array.as_list::<i64>();
             cast_list_to_fixed_size_list::<i64>(array, field, *size, cast_options)
         }
-        (LargeList(_), LargeListView(_)) => cast_list_to_list_view::<i64>(array),
+        (LargeList(_), LargeListView(list_to)) => {
+            cast_list_to_list_view::<i64>(array, list_to, cast_options)
+        }
         // ListView
         (ListView(_), List(list_to)) => cast_list_view_to_list::<i32>(array, list_to, cast_options),
         (ListView(_), LargeListView(list_to)) => {
@@ -12254,6 +12256,27 @@ mod tests {
         let expected_list_view =
             ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got_list_view, &expected_list_view);
+
+        // inner types get cast
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![None, Some(3)]),
+        ]);
+        let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Float32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
+
+        let got_list_view = cast_result
+            .as_any()
+            .downcast_ref::<ListViewArray>()
+            .unwrap();
+        let expected_list_view = ListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
+            Some(vec![Some(1.0), Some(2.0)]),
+            None,
+            Some(vec![None, Some(3.0)]),
+        ]);
+        assert_eq!(got_list_view, &expected_list_view);
     }
 
     #[test]
@@ -12287,6 +12310,29 @@ mod tests {
             .unwrap();
         let expected_list_view =
             LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got_list_view, &expected_list_view);
+
+        // inner types get cast
+        let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![None, Some(3)]),
+        ]);
+        let target_type =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Float32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
+
+        let got_list_view = cast_result
+            .as_any()
+            .downcast_ref::<LargeListViewArray>()
+            .unwrap();
+        let expected_list_view =
+            LargeListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
+                Some(vec![Some(1.0), Some(2.0)]),
+                None,
+                Some(vec![None, Some(3.0)]),
+            ]);
         assert_eq!(got_list_view, &expected_list_view);
     }
 

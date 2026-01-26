@@ -329,11 +329,27 @@ pub(crate) fn cast_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     )?))
 }
 
-pub(crate) fn cast_list_to_list_view<OffsetSize>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
-where
-    OffsetSize: OffsetSizeTrait,
-{
+pub(crate) fn cast_list_to_list_view<OffsetSize: OffsetSizeTrait>(
+    array: &dyn Array,
+    to_field: &FieldRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list::<OffsetSize>();
-    let list_view: GenericListViewArray<OffsetSize> = list.clone().into();
-    Ok(Arc::new(list_view))
+    let (_field, offsets, values, nulls) = list.clone().into_parts();
+    let len = offsets.len() - 1;
+    let mut sizes = Vec::with_capacity(len);
+    let mut view_offsets = Vec::with_capacity(len);
+    for (i, offset) in offsets.iter().enumerate().take(len) {
+        view_offsets.push(*offset);
+        sizes.push(offsets[i + 1] - offsets[i]);
+    }
+    let values = cast_with_options(&values, to_field.data_type(), cast_options)?;
+    let array = GenericListViewArray::<OffsetSize>::new(
+        to_field.clone(),
+        view_offsets.into(),
+        sizes.into(),
+        values,
+        nulls,
+    );
+    Ok(Arc::new(array))
 }
