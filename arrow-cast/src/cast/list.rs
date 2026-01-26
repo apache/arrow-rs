@@ -75,13 +75,29 @@ pub(crate) fn cast_single_element_fixed_size_list_to_values(
 
 pub(crate) fn cast_fixed_size_list_to_list<OffsetSize>(
     array: &dyn Array,
+    to: &FieldRef,
+    cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
     OffsetSize: OffsetSizeTrait,
 {
-    let fixed_size_list: &FixedSizeListArray = array.as_fixed_size_list();
-    let list: GenericListArray<OffsetSize> = fixed_size_list.clone().into();
-    Ok(Arc::new(list))
+    let array = array.as_fixed_size_list();
+    if to.data_type() != &array.value_type() {
+        // To transform inner type, can first cast to FSL with new inner type.
+        let size = if let DataType::FixedSizeList(_, size) = array.data_type() {
+            *size
+        } else {
+            unreachable!()
+        };
+        let fsl_to = DataType::FixedSizeList(to.clone(), size);
+        let array = cast_with_options(array, &fsl_to, cast_options)?;
+        let array = array.as_fixed_size_list();
+        let list: GenericListArray<OffsetSize> = array.clone().into();
+        Ok(Arc::new(list))
+    } else {
+        let list: GenericListArray<OffsetSize> = array.clone().into();
+        Ok(Arc::new(list))
+    }
 }
 
 pub(crate) fn cast_list_to_fixed_size_list<OffsetSize>(

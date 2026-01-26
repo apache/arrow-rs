@@ -879,25 +879,11 @@ pub fn cast_with_options(
             cast_list_view::<i64, i32>(array, list_to, cast_options)
         }
         // FixedSizeList
-        (FixedSizeList(list_from, size), List(list_to)) => {
-            if list_to.data_type() != list_from.data_type() {
-                // To transform inner type, can first cast to FSL with new inner type.
-                let fsl_to = DataType::FixedSizeList(list_to.clone(), *size);
-                let array = cast_with_options(array, &fsl_to, cast_options)?;
-                cast_fixed_size_list_to_list::<i32>(array.as_ref())
-            } else {
-                cast_fixed_size_list_to_list::<i32>(array)
-            }
+        (FixedSizeList(_, _), List(list_to)) => {
+            cast_fixed_size_list_to_list::<i32>(array, list_to, cast_options)
         }
-        (FixedSizeList(list_from, size), LargeList(list_to)) => {
-            if list_to.data_type() != list_from.data_type() {
-                // To transform inner type, can first cast to FSL with new inner type.
-                let fsl_to = DataType::FixedSizeList(list_to.clone(), *size);
-                let array = cast_with_options(array, &fsl_to, cast_options)?;
-                cast_fixed_size_list_to_list::<i64>(array.as_ref())
-            } else {
-                cast_fixed_size_list_to_list::<i64>(array)
-            }
+        (FixedSizeList(_, _), LargeList(list_to)) => {
+            cast_fixed_size_list_to_list::<i64>(array, list_to, cast_options)
         }
         (FixedSizeList(_, size), _) if *size == 1 => {
             cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
