@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::{get_offsets_from_buffer, make_array, print_long_array};
-use crate::builder::{GenericListBuilder, PrimitiveBuilder};
+use crate::builder::{ArrayBuilder, GenericListBuilder, PrimitiveBuilder};
 use crate::{
     Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray,
     iterator::GenericListArrayIter, new_empty_array,
@@ -419,17 +419,38 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         P: IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
         I: IntoIterator<Item = Option<P>>,
     {
+        Self::from_nested_iter::<T::Native, PrimitiveBuilder<T>, P, I>(iter)
+    }
+
+    /// Creates a [`GenericListArray`] from an iterator of primitive values
+    /// # Example
+    /// ```
+    /// # use arrow_array::ListArray;
+    /// # use arrow_array::builder::Int32Builder;
+    ///
+    /// let data = vec![
+    ///    Some(vec![Some(0), Some(1), Some(2)]),
+    ///    None,
+    ///    Some(vec![Some(3), None, Some(5)]),
+    ///    Some(vec![Some(6), Some(7)]),
+    /// ];
+    /// let list_array = ListArray::from_nested_iter::<i32, Int32Builder, _, _>(data);
+    /// println!("{:?}", list_array);
+    /// ```
+    pub fn from_nested_iter<T, B, P, I>(iter: I) -> Self
+    where
+        B: ArrayBuilder + Default + Extend<Option<T>>,
+        P: IntoIterator<Item = Option<T>>,
+        I: IntoIterator<Item = Option<P>>,
+    {
         let iter = iter.into_iter();
         let size_hint = iter.size_hint().0;
-        let mut builder =
-            GenericListBuilder::with_capacity(PrimitiveBuilder::<T>::new(), size_hint);
+        let mut builder = GenericListBuilder::with_capacity(B::default(), size_hint);
 
         for i in iter {
             match i {
                 Some(p) => {
-                    for t in p {
-                        builder.values().append_option(t);
-                    }
+                    builder.values().extend(p);
                     builder.append(true);
                 }
                 None => builder.append(false),
@@ -635,10 +656,15 @@ pub type LargeListArray = GenericListArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{FixedSizeListBuilder, Int32Builder, ListBuilder, UnionBuilder};
+    use crate::builder::{
+        BooleanBuilder, FixedSizeListBuilder, Int32Builder, ListBuilder, StringBuilder,
+        StringDictionaryBuilder, UnionBuilder,
+    };
     use crate::cast::AsArray;
-    use crate::types::Int32Type;
-    use crate::{Int32Array, Int64Array};
+    use crate::types::{Int8Type, Int32Type};
+    use crate::{
+        BooleanArray, Int8Array, Int8DictionaryArray, Int32Array, Int64Array, StringArray,
+    };
     use arrow_buffer::{Buffer, ScalarBuffer, bit_util};
     use arrow_schema::Field;
 
@@ -1294,5 +1320,61 @@ mod tests {
         let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let array = ListArray::new_null(field, 5);
         assert_eq!(array.len(), 5);
+    }
+
+    #[test]
+    fn test_list_from_iter_i32() {
+        let array = ListArray::from_nested_iter::<i32, Int32Builder, _, _>(vec![
+            None,
+            Some(vec![Some(1), None, Some(2)]),
+        ]);
+        let expected_offsets = &[0, 0, 3];
+        let expected_values: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        assert_eq!(array.value_offsets(), expected_offsets);
+        assert_eq!(array.values(), &expected_values);
+    }
+
+    #[test]
+    fn test_list_from_iter_bool() {
+        let array = ListArray::from_nested_iter::<bool, BooleanBuilder, _, _>(vec![
+            Some(vec![None, Some(false), Some(true)]),
+            None,
+        ]);
+        let expected_offsets = &[0, 3, 3];
+        let expected_values: ArrayRef =
+            Arc::new(BooleanArray::from(vec![None, Some(false), Some(true)]));
+        assert_eq!(array.value_offsets(), expected_offsets);
+        assert_eq!(array.values(), &expected_values);
+    }
+
+    #[test]
+    fn test_list_from_iter_str() {
+        let array = ListArray::from_nested_iter::<&str, StringBuilder, _, _>(vec![
+            Some(vec![Some("foo"), None, Some("bar")]),
+            None,
+        ]);
+        let expected_offsets = &[0, 3, 3];
+        let expected_values: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("foo"), None, Some("bar")]));
+        assert_eq!(array.value_offsets(), expected_offsets);
+        assert_eq!(array.values(), &expected_values);
+    }
+
+    #[test]
+    fn test_list_from_iter_dict_str() {
+        let array =
+            ListArray::from_nested_iter::<&str, StringDictionaryBuilder<Int8Type>, _, _>(vec![
+                Some(vec![Some("foo"), None, Some("bar"), Some("foo")]),
+                None,
+            ]);
+        let expected_offsets = &[0, 4, 4];
+        let expected_dict_values: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("foo"), Some("bar")]));
+        let expected_dict_keys = Int8Array::from(vec![Some(0), None, Some(1), Some(0)]);
+        let expected_values: ArrayRef = Arc::new(
+            Int8DictionaryArray::try_new(expected_dict_keys, expected_dict_values).unwrap(),
+        );
+        assert_eq!(array.value_offsets(), expected_offsets);
+        assert_eq!(array.values(), &expected_values);
     }
 }
