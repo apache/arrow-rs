@@ -12237,7 +12237,7 @@ mod tests {
         let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
-        let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
+        let got_list = cast_result.as_list::<i32>();
         let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got_list, &expected_list);
     }
@@ -12249,10 +12249,7 @@ mod tests {
         assert!(can_cast_types(list.data_type(), &target_type));
         let cast_result = cast(&list, &target_type).unwrap();
 
-        let got_list_view = cast_result
-            .as_any()
-            .downcast_ref::<ListViewArray>()
-            .unwrap();
+        let got_list_view = cast_result.as_list_view::<i32>();
         let expected_list_view =
             ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got_list_view, &expected_list_view);
@@ -12267,10 +12264,7 @@ mod tests {
         assert!(can_cast_types(list.data_type(), &target_type));
         let cast_result = cast(&list, &target_type).unwrap();
 
-        let got_list_view = cast_result
-            .as_any()
-            .downcast_ref::<ListViewArray>()
-            .unwrap();
+        let got_list_view = cast_result.as_list_view::<i32>();
         let expected_list_view = ListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
             Some(vec![Some(1.0), Some(2.0)]),
             None,
@@ -12286,10 +12280,7 @@ mod tests {
         let target_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
         assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
-        let got_list = cast_result
-            .as_any()
-            .downcast_ref::<LargeListArray>()
-            .unwrap();
+        let got_list = cast_result.as_list::<i64>();
 
         let expected_list =
             LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
@@ -12304,10 +12295,7 @@ mod tests {
         assert!(can_cast_types(list.data_type(), &target_type));
         let cast_result = cast(&list, &target_type).unwrap();
 
-        let got_list_view = cast_result
-            .as_any()
-            .downcast_ref::<LargeListViewArray>()
-            .unwrap();
+        let got_list_view = cast_result.as_list_view::<i64>();
         let expected_list_view =
             LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got_list_view, &expected_list_view);
@@ -12323,10 +12311,7 @@ mod tests {
         assert!(can_cast_types(list.data_type(), &target_type));
         let cast_result = cast(&list, &target_type).unwrap();
 
-        let got_list_view = cast_result
-            .as_any()
-            .downcast_ref::<LargeListViewArray>()
-            .unwrap();
+        let got_list_view = cast_result.as_list_view::<i64>();
         let expected_list_view =
             LargeListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
                 Some(vec![Some(1.0), Some(2.0)]),
@@ -12348,7 +12333,7 @@ mod tests {
         let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
-        let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
+        let got_list = cast_result.as_list::<i32>();
         let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             Some(vec![Some(7), Some(8), Some(9)]),
@@ -12369,7 +12354,7 @@ mod tests {
         let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
-        let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
+        let got_list = cast_result.as_list::<i32>();
         let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1)]),
             Some(vec![Some(1), Some(2)]),
@@ -12384,7 +12369,7 @@ mod tests {
         let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
-        let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
+        let got_list = cast_result.as_list::<i32>();
         let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(values);
         assert_eq!(got_list, &expected_list);
     }
@@ -12396,7 +12381,7 @@ mod tests {
         let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
         assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
-        let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
+        let got_list = cast_result.as_list::<i32>();
 
         let expected_list =
             ListArray::from_iter_primitive::<Int64Type, _, _>(values.into_iter().map(|list| {
@@ -12421,7 +12406,7 @@ mod tests {
         let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
         assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
-        let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
+        let got_list = cast_result.as_list::<i32>();
         let expected_list = ListArray::new(
             Arc::new(Field::new("item", DataType::Int32, true)),
             OffsetBuffer::from_lengths([3, 3, 3]),
@@ -12438,10 +12423,7 @@ mod tests {
             DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
         assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
-        let got = cast_result
-            .as_any()
-            .downcast_ref::<LargeListViewArray>()
-            .unwrap();
+        let got = cast_result.as_list_view::<i64>();
 
         let expected =
             LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
@@ -12455,10 +12437,7 @@ mod tests {
         let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
         assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
-        let got = cast_result
-            .as_any()
-            .downcast_ref::<ListViewArray>()
-            .unwrap();
+        let got = cast_result.as_list_view::<i32>();
 
         let expected = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got, &expected);
