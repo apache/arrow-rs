@@ -137,6 +137,7 @@ use crate::StructMode;
 use crate::reader::binary_array::{
     BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
 };
+use std::borrow::Cow;
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -295,16 +296,15 @@ impl ReaderBuilder {
 
     /// Create a [`Decoder`]
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
-        let (data_type, nullable) = match self.is_field {
-            false => (DataType::Struct(self.schema.fields.clone()), false),
-            true => {
-                let field = &self.schema.fields[0];
-                (field.data_type().clone(), field.is_nullable())
-            }
+        let (data_type, nullable) = if self.is_field {
+            let field = &self.schema.fields[0];
+            (Cow::Borrowed(field.data_type()), field.is_nullable())
+        } else {
+            (Cow::Owned(DataType::Struct(self.schema.fields.clone())), false)
         };
 
         let decoder = make_decoder(
-            data_type,
+            data_type.as_ref(),
             self.coerce_primitive,
             self.strict_mode,
             nullable,
@@ -686,14 +686,14 @@ macro_rules! primitive_decoder {
 }
 
 fn make_decoder(
-    data_type: DataType,
+    data_type: &DataType,
     coerce_primitive: bool,
     strict_mode: bool,
     is_nullable: bool,
     struct_mode: StructMode,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
-        data_type => (primitive_decoder, data_type),
+        *data_type => (primitive_decoder, data_type),
         DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
         DataType::Float16 => primitive_decoder!(Float16Type, data_type),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
@@ -752,7 +752,7 @@ fn make_decoder(
         DataType::FixedSizeBinary(len) => Ok(Box::new(FixedSizeBinaryArrayDecoder::new(len))),
         DataType::BinaryView => Ok(Box::new(BinaryViewDecoder::default())),
         DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
+        _ => Err(ArrowError::NotYetImplemented(format!("Support for {data_type} in JSON reader")))
     }
 }
 

@@ -80,14 +80,14 @@ pub struct StructArrayDecoder {
 
 impl StructArrayDecoder {
     pub fn new(
-        data_type: DataType,
+        data_type: &DataType,
         coerce_primitive: bool,
         strict_mode: bool,
         is_nullable: bool,
         struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
         let (decoders, field_name_to_index) = {
-            let fields = struct_fields(&data_type);
+            let fields = struct_fields(data_type);
             let decoders = fields
                 .iter()
                 .map(|f| {
@@ -96,7 +96,7 @@ impl StructArrayDecoder {
                     // it doesn't contain any nulls not masked by its parent
                     let nullable = f.is_nullable() || is_nullable;
                     make_decoder(
-                        f.data_type().clone(),
+                        f.data_type(),
                         coerce_primitive,
                         strict_mode,
                         nullable,
@@ -113,7 +113,7 @@ impl StructArrayDecoder {
         };
 
         Ok(Self {
-            data_type,
+            data_type: data_type.clone(),
             decoders,
             strict_mode,
             is_nullable,
