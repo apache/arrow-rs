@@ -116,9 +116,10 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (List(list_from) | LargeList(list_from), List(list_to) | LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
-        (List(list_from) | LargeList(list_from), Utf8 | LargeUtf8 | Utf8View) => {
-            can_cast_types(list_from.data_type(), to_type)
-        }
+        (
+            List(list_from) | LargeList(list_from) | ListView(list_from) | LargeListView(list_from),
+            Utf8 | LargeUtf8 | Utf8View,
+        ) => can_cast_types(list_from.data_type(), to_type),
         (List(list_from) | LargeList(list_from), FixedSizeList(list_to, _)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
@@ -901,7 +902,7 @@ pub fn cast_with_options(
         // List to/from other types
         // NOTE: we could support FSL to string here too but might be confusing
         //       since behaviour for size 1 would be different (see arm below this)
-        (List(_) | LargeList(_), _) => match to_type {
+        (List(_) | LargeList(_) | ListView(_) | LargeListView(_), _) => match to_type {
             Utf8 => value_to_string::<i32>(array, cast_options),
             LargeUtf8 => value_to_string::<i64>(array, cast_options),
             Utf8View => value_to_string_view(array, cast_options),
@@ -8813,6 +8814,28 @@ mod tests {
         LargeListArray::from(list_data)
     }
 
+    fn make_list_view_array() -> ListViewArray {
+        // [[0, 1, 2], [3, 4, 5], [6, 7]]
+        ListViewArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            vec![0, 3, 6].into(),
+            vec![3, 3, 2].into(),
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        )
+    }
+
+    fn make_large_list_view_array() -> LargeListViewArray {
+        // [[0, 1, 2], [3, 4, 5], [6, 7]]
+        LargeListViewArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            vec![0, 3, 6].into(),
+            vec![3, 3, 2].into(),
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        )
+    }
+
     fn make_fixed_size_list_array() -> FixedSizeListArray {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
@@ -9163,6 +9186,12 @@ mod tests {
         assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
 
         let array = Arc::new(make_large_list_array()) as ArrayRef;
+        assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+
+        let array = Arc::new(make_list_view_array()) as ArrayRef;
+        assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+
+        let array = Arc::new(make_large_list_view_array()) as ArrayRef;
         assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
     }
 
