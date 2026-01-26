@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::errors::AvroError;
 use arrow_schema::ArrowError;
 #[cfg(any(
     feature = "deflate",
@@ -47,7 +48,7 @@ pub enum CompressionCodec {
 
 impl CompressionCodec {
     #[allow(unused_variables)]
-    pub(crate) fn decompress(&self, block: &[u8]) -> Result<Vec<u8>, ArrowError> {
+    pub(crate) fn decompress(&self, block: &[u8]) -> Result<Vec<u8>, AvroError> {
         match self {
             #[cfg(feature = "deflate")]
             CompressionCodec::Deflate => {
@@ -57,7 +58,7 @@ impl CompressionCodec {
                 Ok(out)
             }
             #[cfg(not(feature = "deflate"))]
-            CompressionCodec::Deflate => Err(ArrowError::ParseError(
+            CompressionCodec::Deflate => Err(AvroError::ParseError(
                 "Deflate codec requires deflate feature".to_string(),
             )),
             #[cfg(feature = "snappy")]
@@ -70,16 +71,16 @@ impl CompressionCodec {
                 let mut decoder = snap::raw::Decoder::new();
                 let decoded = decoder
                     .decompress_vec(block)
-                    .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+                    .map_err(|e| AvroError::External(Box::new(e)))?;
 
                 let checksum = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(&decoded);
                 if checksum != u32::from_be_bytes(crc.try_into().unwrap()) {
-                    return Err(ArrowError::ParseError("Snappy CRC mismatch".to_string()));
+                    return Err(AvroError::ParseError("Snappy CRC mismatch".to_string()));
                 }
                 Ok(decoded)
             }
             #[cfg(not(feature = "snappy"))]
-            CompressionCodec::Snappy => Err(ArrowError::ParseError(
+            CompressionCodec::Snappy => Err(AvroError::ParseError(
                 "Snappy codec requires snappy feature".to_string(),
             )),
 
@@ -87,33 +88,39 @@ impl CompressionCodec {
             CompressionCodec::ZStandard => {
                 let mut decoder = zstd::Decoder::new(block)?;
                 let mut out = Vec::new();
-                decoder.read_to_end(&mut out)?;
+                decoder
+                    .read_to_end(&mut out)
+                    .map_err(|e| AvroError::External(Box::new(e)))?;
                 Ok(out)
             }
             #[cfg(not(feature = "zstd"))]
-            CompressionCodec::ZStandard => Err(ArrowError::ParseError(
+            CompressionCodec::ZStandard => Err(AvroError::ParseError(
                 "ZStandard codec requires zstd feature".to_string(),
             )),
             #[cfg(feature = "bzip2")]
             CompressionCodec::Bzip2 => {
                 let mut decoder = bzip2::read::BzDecoder::new(block);
                 let mut out = Vec::new();
-                decoder.read_to_end(&mut out)?;
+                decoder
+                    .read_to_end(&mut out)
+                    .map_err(|e| AvroError::External(Box::new(e)))?;
                 Ok(out)
             }
             #[cfg(not(feature = "bzip2"))]
-            CompressionCodec::Bzip2 => Err(ArrowError::ParseError(
+            CompressionCodec::Bzip2 => Err(AvroError::ParseError(
                 "Bzip2 codec requires bzip2 feature".to_string(),
             )),
             #[cfg(feature = "xz")]
             CompressionCodec::Xz => {
                 let mut decoder = xz::read::XzDecoder::new(block);
                 let mut out = Vec::new();
-                decoder.read_to_end(&mut out)?;
+                decoder
+                    .read_to_end(&mut out)
+                    .map_err(|e| AvroError::External(Box::new(e)))?;
                 Ok(out)
             }
             #[cfg(not(feature = "xz"))]
-            CompressionCodec::Xz => Err(ArrowError::ParseError(
+            CompressionCodec::Xz => Err(AvroError::ParseError(
                 "XZ codec requires xz feature".to_string(),
             )),
         }

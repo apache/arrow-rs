@@ -145,13 +145,14 @@
 //! ---
 use crate::codec::AvroFieldBuilder;
 use crate::compression::CompressionCodec;
+use crate::errors::AvroError;
 use crate::schema::{
     AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, SCHEMA_METADATA_KEY,
 };
 use crate::writer::encoder::{RecordEncoder, RecordEncoderBuilder, write_long};
 use crate::writer::format::{AvroFormat, AvroOcfFormat, AvroSoeFormat};
 use arrow_array::RecordBatch;
-use arrow_schema::{ArrowError, Schema, SchemaRef};
+use arrow_schema::{Schema, SchemaRef};
 use bytes::{Bytes, BytesMut};
 use std::io::Write;
 use std::sync::Arc;
@@ -251,9 +252,9 @@ impl EncodedRows {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn row(&self, n: usize) -> Result<Bytes, ArrowError> {
+    pub fn row(&self, n: usize) -> Result<Bytes, AvroError> {
         if n >= self.len() {
-            return Err(ArrowError::AvroError(format!(
+            return Err(AvroError::General(format!(
                 "Row index {n} out of bounds for len {}",
                 self.len()
             )));
@@ -269,7 +270,7 @@ impl EncodedRows {
             )
         };
         if start > end || end > self.data.len() {
-            return Err(ArrowError::AvroError(format!(
+            return Err(AvroError::General(format!(
                 "Invalid row offsets for row {n}: start={start}, end={end}, data_len={}",
                 self.data.len()
             )));
@@ -369,7 +370,7 @@ impl WriterBuilder {
         self
     }
 
-    fn prepare_encoder<F: AvroFormat>(&self) -> Result<(Arc<Schema>, RecordEncoder), ArrowError> {
+    fn prepare_encoder<F: AvroFormat>(&self) -> Result<(Arc<Schema>, RecordEncoder), AvroError> {
         let avro_schema = match self.schema.metadata.get(SCHEMA_METADATA_KEY) {
             Some(json) => AvroSchema::new(json.clone()),
             None => AvroSchema::try_from(&self.schema)?,
@@ -406,9 +407,9 @@ impl WriterBuilder {
     ///
     /// `Encoder` only supports stream formats (no OCF sync markers). Attempting to build an
     /// encoder with an OCF format (e.g. [`AvroOcfFormat`]) will return an error.
-    pub fn build_encoder<F: AvroFormat>(self) -> Result<Encoder, ArrowError> {
+    pub fn build_encoder<F: AvroFormat>(self) -> Result<Encoder, AvroError> {
         if F::default().sync_marker().is_some() {
-            return Err(ArrowError::InvalidArgumentError(
+            return Err(AvroError::InvalidArgument(
                 "Encoder only supports stream formats (no OCF header/sync marker)".to_string(),
             ));
         }
@@ -423,14 +424,14 @@ impl WriterBuilder {
     }
 
     /// Build a new [`Writer`] with the specified [`AvroFormat`] and builder options.
-    pub fn build<W, F>(self, mut writer: W) -> Result<Writer<W, F>, ArrowError>
+    pub fn build<W, F>(self, mut writer: W) -> Result<Writer<W, F>, AvroError>
     where
         W: Write,
         F: AvroFormat,
     {
         let mut format = F::default();
         if format.sync_marker().is_none() && !F::NEEDS_PREFIX {
-            return Err(ArrowError::InvalidArgumentError(
+            return Err(AvroError::InvalidArgument(
                 "AvroBinaryFormat is only supported with Encoder, use build_encoder instead"
                     .to_string(),
             ));
@@ -504,9 +505,9 @@ pub struct Encoder {
 
 impl Encoder {
     /// Serialize one [`RecordBatch`] into the internal buffer.
-    pub fn encode(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+    pub fn encode(&mut self, batch: &RecordBatch) -> Result<(), AvroError> {
         if batch.schema().fields() != self.schema.fields() {
-            return Err(ArrowError::AvroError(
+            return Err(AvroError::SchemaError(
                 "Schema of RecordBatch differs from Writer schema".to_string(),
             ));
         }
@@ -520,7 +521,7 @@ impl Encoder {
     }
 
     /// A convenience method to write a slice of [`RecordBatch`] values.
-    pub fn encode_batches(&mut self, batches: &[RecordBatch]) -> Result<(), ArrowError> {
+    pub fn encode_batches(&mut self, batches: &[RecordBatch]) -> Result<(), AvroError> {
         for b in batches {
             self.encode(b)?;
         }
@@ -670,7 +671,7 @@ impl<W: Write> Writer<W, AvroOcfFormat> {
     /// assert!(!bytes.is_empty());
     /// # Ok(()) }
     /// ```
-    pub fn new(writer: W, schema: Schema) -> Result<Self, ArrowError> {
+    pub fn new(writer: W, schema: Schema) -> Result<Self, AvroError> {
         WriterBuilder::new(schema).build::<W, AvroOcfFormat>(writer)
     }
 
@@ -708,16 +709,16 @@ impl<W: Write> Writer<W, AvroSoeFormat> {
     /// assert!(!bytes.is_empty());
     /// # Ok(()) }
     /// ```
-    pub fn new(writer: W, schema: Schema) -> Result<Self, ArrowError> {
+    pub fn new(writer: W, schema: Schema) -> Result<Self, AvroError> {
         WriterBuilder::new(schema).build::<W, AvroSoeFormat>(writer)
     }
 }
 
 impl<W: Write, F: AvroFormat> Writer<W, F> {
     /// Serialize one [`RecordBatch`] to the output.
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<(), AvroError> {
         if batch.schema().fields() != self.schema.fields() {
-            return Err(ArrowError::SchemaError(
+            return Err(AvroError::SchemaError(
                 "Schema of RecordBatch differs from Writer schema".to_string(),
             ));
         }
@@ -730,7 +731,7 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
     /// A convenience method to write a slice of [`RecordBatch`].
     ///
     /// This is equivalent to calling `write` for each batch in the slice.
-    pub fn write_batches(&mut self, batches: &[&RecordBatch]) -> Result<(), ArrowError> {
+    pub fn write_batches(&mut self, batches: &[&RecordBatch]) -> Result<(), AvroError> {
         for b in batches {
             self.write(b)?;
         }
@@ -738,10 +739,10 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
     }
 
     /// Flush remaining buffered data and (for OCF) ensure the header is present.
-    pub fn finish(&mut self) -> Result<(), ArrowError> {
+    pub fn finish(&mut self) -> Result<(), AvroError> {
         self.writer
             .flush()
-            .map_err(|e| ArrowError::IoError(format!("Error flushing writer: {e}"), e))
+            .map_err(|e| AvroError::IoError(format!("Error flushing writer: {e}"), e))
     }
 
     /// Consume the writer, returning the underlying output object.
@@ -749,7 +750,7 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
         self.writer
     }
 
-    fn write_ocf_block(&mut self, batch: &RecordBatch, sync: &[u8; 16]) -> Result<(), ArrowError> {
+    fn write_ocf_block(&mut self, batch: &RecordBatch, sync: &[u8; 16]) -> Result<(), AvroError> {
         let mut buf = Vec::<u8>::with_capacity(self.capacity);
         self.encoder.encode(&mut buf, batch)?;
         let encoded = match self.compression {
@@ -760,14 +761,14 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
         write_long(&mut self.writer, encoded.len() as i64)?;
         self.writer
             .write_all(&encoded)
-            .map_err(|e| ArrowError::IoError(format!("Error writing Avro block: {e}"), e))?;
+            .map_err(|e| AvroError::IoError(format!("Error writing Avro block: {e}"), e))?;
         self.writer
             .write_all(sync)
-            .map_err(|e| ArrowError::IoError(format!("Error writing Avro sync: {e}"), e))?;
+            .map_err(|e| AvroError::IoError(format!("Error writing Avro sync: {e}"), e))?;
         Ok(())
     }
 
-    fn write_stream(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+    fn write_stream(&mut self, batch: &RecordBatch) -> Result<(), AvroError> {
         self.encoder.encode(&mut self.writer, batch)?;
         Ok(())
     }
@@ -844,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_writer_writes_prefix_per_row_rt() -> Result<(), ArrowError> {
+    fn test_stream_writer_writes_prefix_per_row_rt() -> Result<(), AvroError> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -1062,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn test_union_nonzero_type_ids() -> Result<(), ArrowError> {
+    fn test_union_nonzero_type_ids() -> Result<(), AvroError> {
         use arrow_array::UnionArray;
         use arrow_buffer::Buffer;
         use arrow_schema::UnionFields;
@@ -1107,7 +1108,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_writer_with_id_fingerprint_rt() -> Result<(), ArrowError> {
+    fn test_stream_writer_with_id_fingerprint_rt() -> Result<(), AvroError> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -1141,7 +1142,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_writer_with_id64_fingerprint_rt() -> Result<(), ArrowError> {
+    fn test_stream_writer_with_id64_fingerprint_rt() -> Result<(), AvroError> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -1175,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ocf_writer_generates_header_and_sync() -> Result<(), ArrowError> {
+    fn test_ocf_writer_generates_header_and_sync() -> Result<(), AvroError> {
         let batch = make_batch();
         let buffer: Vec<u8> = Vec::new();
         let mut writer = AvroWriter::new(buffer, make_schema())?;
@@ -1195,11 +1196,11 @@ mod tests {
         let buffer = Vec::<u8>::new();
         let mut writer = AvroWriter::new(buffer, alt_schema).unwrap();
         let err = writer.write(&batch).unwrap_err();
-        assert!(matches!(err, ArrowError::SchemaError(_)));
+        assert!(matches!(err, AvroError::SchemaError(_)));
     }
 
     #[test]
-    fn test_write_batches_accumulates_multiple() -> Result<(), ArrowError> {
+    fn test_write_batches_accumulates_multiple() -> Result<(), AvroError> {
         let batch1 = make_batch();
         let batch2 = make_batch();
         let buffer = Vec::<u8>::new();
@@ -1212,7 +1213,7 @@ mod tests {
     }
 
     #[test]
-    fn test_finish_without_write_adds_header() -> Result<(), ArrowError> {
+    fn test_finish_without_write_adds_header() -> Result<(), AvroError> {
         let buffer = Vec::<u8>::new();
         let mut writer = AvroWriter::new(buffer, make_schema())?;
         writer.finish()?;
@@ -1222,7 +1223,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_long_encodes_zigzag_varint() -> Result<(), ArrowError> {
+    fn test_write_long_encodes_zigzag_varint() -> Result<(), AvroError> {
         let mut buf = Vec::new();
         write_long(&mut buf, 0)?;
         write_long(&mut buf, -1)?;
@@ -1237,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn test_roundtrip_alltypes_roundtrip_writer() -> Result<(), ArrowError> {
+    fn test_roundtrip_alltypes_roundtrip_writer() -> Result<(), AvroError> {
         for rel in files() {
             let path = arrow_test_data(rel);
             let rdr_file = File::open(&path).expect("open input avro");
@@ -1286,7 +1287,7 @@ mod tests {
     }
 
     #[test]
-    fn test_roundtrip_nested_records_writer() -> Result<(), ArrowError> {
+    fn test_roundtrip_nested_records_writer() -> Result<(), AvroError> {
         let path = arrow_test_data("avro/nested_records.avro");
         let rdr_file = File::open(&path).expect("open nested_records.avro");
         let reader = ReaderBuilder::new()
@@ -1320,7 +1321,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "snappy")]
-    fn test_roundtrip_nested_lists_writer() -> Result<(), ArrowError> {
+    fn test_roundtrip_nested_lists_writer() -> Result<(), AvroError> {
         let path = arrow_test_data("avro/nested_lists.snappy.avro");
         let rdr_file = File::open(&path).expect("open nested_lists.snappy.avro");
         let reader = ReaderBuilder::new()
@@ -1355,7 +1356,7 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_simple_fixed_ocf() -> Result<(), ArrowError> {
+    fn test_round_trip_simple_fixed_ocf() -> Result<(), AvroError> {
         let path = arrow_test_data("avro/simple_fixed.avro");
         let rdr_file = File::open(&path).expect("open avro/simple_fixed.avro");
         let reader = ReaderBuilder::new()
@@ -1386,7 +1387,7 @@ mod tests {
     // Strict equality (schema + values) only when canonical extension types are enabled
     #[test]
     #[cfg(feature = "canonical_extension_types")]
-    fn test_round_trip_duration_and_uuid_ocf() -> Result<(), ArrowError> {
+    fn test_round_trip_duration_and_uuid_ocf() -> Result<(), AvroError> {
         use arrow_schema::{DataType, IntervalUnit};
         let in_file =
             File::open("test/data/duration_uuid.avro").expect("open test/data/duration_uuid.avro");
@@ -1434,8 +1435,7 @@ mod tests {
     // Feature OFF: only values are asserted equal; schema may legitimately differ (uuid as fixed(16))
     #[test]
     #[cfg(not(feature = "canonical_extension_types"))]
-    fn test_duration_and_uuid_ocf_without_extensions_round_trips_values() -> Result<(), ArrowError>
-    {
+    fn test_duration_and_uuid_ocf_without_extensions_round_trips_values() -> Result<(), AvroError> {
         use arrow::datatypes::{DataType, IntervalUnit};
         use std::io::BufReader;
 
@@ -1516,7 +1516,7 @@ mod tests {
     #[test]
     // TODO: avoid requiring snappy for this file
     #[cfg(feature = "snappy")]
-    fn test_nonnullable_impala_roundtrip_writer() -> Result<(), ArrowError> {
+    fn test_nonnullable_impala_roundtrip_writer() -> Result<(), AvroError> {
         // Load source Avro with Map fields
         let path = arrow_test_data("avro/nonnullable.impala.avro");
         let rdr_file = File::open(&path).expect("open avro/nonnullable.impala.avro");
@@ -1563,7 +1563,7 @@ mod tests {
     #[test]
     // TODO: avoid requiring snappy for these files
     #[cfg(feature = "snappy")]
-    fn test_roundtrip_decimals_via_writer() -> Result<(), ArrowError> {
+    fn test_roundtrip_decimals_via_writer() -> Result<(), AvroError> {
         // (file, resolve via ARROW_TEST_DATA?)
         let files: [(&str, bool); 8] = [
             ("avro/fixed_length_decimal.avro", true), // fixed-backed -> Decimal128(25,2)
@@ -1612,7 +1612,7 @@ mod tests {
     }
 
     #[test]
-    fn test_named_types_complex_roundtrip() -> Result<(), ArrowError> {
+    fn test_named_types_complex_roundtrip() -> Result<(), AvroError> {
         // 1. Read the new, more complex named references file.
         let path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/data/named_types_complex.avro");
@@ -1909,7 +1909,7 @@ mod tests {
     }
 
     #[test]
-    fn test_union_roundtrip() -> Result<(), ArrowError> {
+    fn test_union_roundtrip() -> Result<(), AvroError> {
         let file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test/data/union_fields.avro")
             .to_string_lossy()
@@ -1943,7 +1943,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enum_roundtrip_uses_reader_fixture() -> Result<(), ArrowError> {
+    fn test_enum_roundtrip_uses_reader_fixture() -> Result<(), AvroError> {
         // Read the known-good enum file (same as reader::test_simple)
         let path = arrow_test_data("avro/simple_enum.avro");
         let rdr_file = File::open(&path).expect("open avro/simple_enum.avro");
@@ -1986,7 +1986,7 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_propagates_capacity_to_writer() -> Result<(), ArrowError> {
+    fn test_builder_propagates_capacity_to_writer() -> Result<(), AvroError> {
         let cap = 64 * 1024;
         let buffer = Vec::<u8>::new();
         let mut writer = WriterBuilder::new(make_schema())
@@ -2002,7 +2002,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_writer_stores_capacity_direct_writes() -> Result<(), ArrowError> {
+    fn test_stream_writer_stores_capacity_direct_writes() -> Result<(), AvroError> {
         use arrow_array::{ArrayRef, Int32Array};
         use arrow_schema::{DataType, Field, Schema};
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
@@ -2022,7 +2022,7 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_duration_logical_types_ocf() -> Result<(), ArrowError> {
+    fn test_roundtrip_duration_logical_types_ocf() -> Result<(), AvroError> {
         let file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test/data/duration_logical_types.avro")
             .to_string_lossy()
@@ -2086,7 +2086,7 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_run_end_encoded_roundtrip_writer() -> Result<(), ArrowError> {
+    fn test_run_end_encoded_roundtrip_writer() -> Result<(), AvroError> {
         let run_ends = Int32Array::from(vec![3, 5, 7, 8]);
         let run_values = Int32Array::from(vec![Some(1), Some(2), None, Some(3)]);
         let ree = RunArray::<Int32Type>::try_new(&run_ends, &run_values)?;
@@ -2130,7 +2130,7 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_run_end_encoded_string_values_int16_run_ends_roundtrip_writer() -> Result<(), ArrowError>
+    fn test_run_end_encoded_string_values_int16_run_ends_roundtrip_writer() -> Result<(), AvroError>
     {
         let run_ends = Int16Array::from(vec![2, 5, 7]); // end indices
         let run_values = StringArray::from(vec![Some("a"), None, Some("c")]);
@@ -2173,8 +2173,8 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_run_end_encoded_int64_run_ends_numeric_values_roundtrip_writer()
-    -> Result<(), ArrowError> {
+    fn test_run_end_encoded_int64_run_ends_numeric_values_roundtrip_writer() -> Result<(), AvroError>
+    {
         let run_ends = Int64Array::from(vec![4_i64, 8_i64]);
         let run_values = Int32Array::from(vec![Some(999), Some(-5)]);
         let ree = RunArray::<Int64Type>::try_new(&run_ends, &run_values)?;
@@ -2213,7 +2213,7 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_run_end_encoded_sliced_roundtrip_writer() -> Result<(), ArrowError> {
+    fn test_run_end_encoded_sliced_roundtrip_writer() -> Result<(), AvroError> {
         let run_ends = Int32Array::from(vec![3, 5, 7, 8]);
         let run_values = Int32Array::from(vec![Some(1), Some(2), None, Some(3)]);
         let base = RunArray::<Int32Type>::try_new(&run_ends, &run_values)?;
@@ -2321,7 +2321,7 @@ mod tests {
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_run_end_encoded_roundtrip_writer_feature_off() -> Result<(), ArrowError> {
+    fn test_run_end_encoded_roundtrip_writer_feature_off() -> Result<(), AvroError> {
         use arrow_schema::{DataType, Field, Schema};
         let run_ends = arrow_array::Int32Array::from(vec![3, 5, 7, 8]);
         let run_values = arrow_array::Int32Array::from(vec![Some(1), Some(2), None, Some(3)]);
@@ -2366,7 +2366,7 @@ mod tests {
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn test_run_end_encoded_string_values_int16_run_ends_roundtrip_writer_feature_off()
-    -> Result<(), ArrowError> {
+    -> Result<(), AvroError> {
         use arrow_schema::{DataType, Field, Schema};
         let run_ends = arrow_array::Int16Array::from(vec![2, 5, 7]);
         let run_values = arrow_array::StringArray::from(vec![Some("a"), None, Some("c")]);
@@ -2410,7 +2410,7 @@ mod tests {
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn test_run_end_encoded_int64_run_ends_numeric_values_roundtrip_writer_feature_off()
-    -> Result<(), ArrowError> {
+    -> Result<(), AvroError> {
         use arrow_schema::{DataType, Field, Schema};
         let run_ends = arrow_array::Int64Array::from(vec![4_i64, 8_i64]);
         let run_values = Int32Array::from(vec![Some(999), Some(-5)]);
@@ -2454,7 +2454,7 @@ mod tests {
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_run_end_encoded_sliced_roundtrip_writer_feature_off() -> Result<(), ArrowError> {
+    fn test_run_end_encoded_sliced_roundtrip_writer_feature_off() -> Result<(), AvroError> {
         use arrow_schema::{DataType, Field, Schema};
         let run_ends = Int32Array::from(vec![2, 4, 6]);
         let run_values = Int32Array::from(vec![Some(1), Some(2), None]);
@@ -2490,7 +2490,7 @@ mod tests {
     #[test]
     // TODO: avoid requiring snappy for this file
     #[cfg(feature = "snappy")]
-    fn test_nullable_impala_roundtrip() -> Result<(), ArrowError> {
+    fn test_nullable_impala_roundtrip() -> Result<(), AvroError> {
         let path = arrow_test_data("avro/nullable.impala.avro");
         let rdr_file = File::open(&path).expect("open avro/nullable.impala.avro");
         let reader = ReaderBuilder::new()
@@ -2525,7 +2525,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "snappy")]
-    fn test_datapage_v2_roundtrip() -> Result<(), ArrowError> {
+    fn test_datapage_v2_roundtrip() -> Result<(), AvroError> {
         let path = arrow_test_data("avro/datapage_v2.snappy.avro");
         let rdr_file = File::open(&path).expect("open avro/datapage_v2.snappy.avro");
         let reader = ReaderBuilder::new()
@@ -2555,7 +2555,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "snappy")]
-    fn test_single_nan_roundtrip() -> Result<(), ArrowError> {
+    fn test_single_nan_roundtrip() -> Result<(), AvroError> {
         let path = arrow_test_data("avro/single_nan.avro");
         let in_file = File::open(&path).expect("open avro/single_nan.avro");
         let reader = ReaderBuilder::new()
@@ -2585,7 +2585,7 @@ mod tests {
     #[test]
     // TODO: avoid requiring snappy for this file
     #[cfg(feature = "snappy")]
-    fn test_dict_pages_offset_zero_roundtrip() -> Result<(), ArrowError> {
+    fn test_dict_pages_offset_zero_roundtrip() -> Result<(), AvroError> {
         let path = arrow_test_data("avro/dict-page-offset-zero.avro");
         let rdr_file = File::open(&path).expect("open avro/dict-page-offset-zero.avro");
         let reader = ReaderBuilder::new()
@@ -2616,7 +2616,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "snappy")]
-    fn test_repeated_no_annotation_roundtrip() -> Result<(), ArrowError> {
+    fn test_repeated_no_annotation_roundtrip() -> Result<(), AvroError> {
         let path = arrow_test_data("avro/repeated_no_annotation.avro");
         let in_file = File::open(&path).expect("open avro/repeated_no_annotation.avro");
         let reader = ReaderBuilder::new()
@@ -2645,7 +2645,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nested_record_type_reuse_roundtrip() -> Result<(), ArrowError> {
+    fn test_nested_record_type_reuse_roundtrip() -> Result<(), AvroError> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test/data/nested_record_reuse.avro")
             .to_string_lossy()
@@ -2677,7 +2677,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enum_type_reuse_roundtrip() -> Result<(), ArrowError> {
+    fn test_enum_type_reuse_roundtrip() -> Result<(), AvroError> {
         let path =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/data/enum_reuse.avro");
         let rdr_file = std::fs::File::open(&path).expect("open test/data/enum_reuse.avro");
@@ -2707,7 +2707,7 @@ mod tests {
     }
 
     #[test]
-    fn comprehensive_e2e_test_roundtrip() -> Result<(), ArrowError> {
+    fn comprehensive_e2e_test_roundtrip() -> Result<(), AvroError> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test/data/comprehensive_e2e.avro");
         let rdr_file = File::open(&path).expect("open test/data/comprehensive_e2e.avro");
@@ -2738,7 +2738,7 @@ mod tests {
     }
 
     #[test]
-    fn test_roundtrip_new_time_encoders_writer() -> Result<(), ArrowError> {
+    fn test_roundtrip_new_time_encoders_writer() -> Result<(), AvroError> {
         let schema = Schema::new(vec![
             Field::new("d32", DataType::Date32, false),
             Field::new("t32_ms", DataType::Time32(TimeUnit::Millisecond), false),
@@ -2811,7 +2811,7 @@ mod tests {
         .expect("failed to build test RecordBatch")
     }
 
-    fn make_real_avro_schema_and_batch() -> Result<(Schema, RecordBatch, AvroSchema), ArrowError> {
+    fn make_real_avro_schema_and_batch() -> Result<(Schema, RecordBatch, AvroSchema), AvroError> {
         let avro_json = r#"
         {
           "type": "record",
@@ -2871,7 +2871,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_writer_matches_stream_writer_soe() -> Result<(), ArrowError> {
+    fn test_row_writer_matches_stream_writer_soe() -> Result<(), AvroError> {
         let schema = make_encoder_schema();
         let batch = make_encoder_batch(&schema);
         let mut stream = AvroStreamWriter::new(Vec::<u8>::new(), schema.clone())?;
@@ -2887,7 +2887,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_writer_flush_clears_buffer() -> Result<(), ArrowError> {
+    fn test_row_writer_flush_clears_buffer() -> Result<(), AvroError> {
         let schema = make_encoder_schema();
         let batch = make_encoder_batch(&schema);
         let mut row_writer = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
@@ -2902,7 +2902,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_writer_roundtrip_decoder_soe_real_avro_data() -> Result<(), ArrowError> {
+    fn test_row_writer_roundtrip_decoder_soe_real_avro_data() -> Result<(), AvroError> {
         let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
         let mut store = SchemaStore::new();
         store.register(avro_schema.clone())?;
@@ -2929,7 +2929,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_writer_roundtrip_decoder_soe_streaming_chunks() -> Result<(), ArrowError> {
+    fn test_row_writer_roundtrip_decoder_soe_streaming_chunks() -> Result<(), AvroError> {
         let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
         let mut store = SchemaStore::new();
         store.register(avro_schema.clone())?;
@@ -2981,7 +2981,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_writer_roundtrip_decoder_confluent_wire_format_id() -> Result<(), ArrowError> {
+    fn test_row_writer_roundtrip_decoder_confluent_wire_format_id() -> Result<(), AvroError> {
         let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
         let schema_id: u32 = 42;
         let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
@@ -3007,7 +3007,7 @@ mod tests {
     }
     #[test]
     fn test_encoder_encode_batches_flush_and_encoded_rows_methods_with_avro_binary_format()
-    -> Result<(), ArrowError> {
+    -> Result<(), AvroError> {
         use crate::writer::format::AvroBinaryFormat;
         use arrow_array::{ArrayRef, Int32Array, RecordBatch};
         use arrow_schema::{DataType, Field, Schema};
@@ -3096,7 +3096,7 @@ mod tests {
             .build::<_, AvroBinaryFormat>(Vec::<u8>::new())
             .unwrap_err();
         match err {
-            ArrowError::InvalidArgumentError(msg) => assert_eq!(
+            AvroError::InvalidArgument(msg) => assert_eq!(
                 msg,
                 "AvroBinaryFormat is only supported with Encoder, use build_encoder instead"
             ),
@@ -3105,7 +3105,7 @@ mod tests {
     }
     #[test]
     fn test_row_encoder_avro_binary_format_roundtrip_decoder_with_soe_framing()
-    -> Result<(), ArrowError> {
+    -> Result<(), AvroError> {
         use crate::writer::format::AvroBinaryFormat;
         let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
         let batches: Vec<RecordBatch> = vec![batch.clone(), batch.slice(1, 2)];
@@ -3175,7 +3175,7 @@ mod tests {
 
     #[test]
     fn test_row_encoder_avro_binary_format_roundtrip_decoder_streaming_chunks()
-    -> Result<(), ArrowError> {
+    -> Result<(), AvroError> {
         use crate::writer::format::AvroBinaryFormat;
         let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
         let mut encoder = WriterBuilder::new(schema).build_encoder::<AvroBinaryFormat>()?;
