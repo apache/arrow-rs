@@ -73,14 +73,11 @@ pub(crate) fn cast_single_element_fixed_size_list_to_values(
     cast_with_options(values, to, cast_options)
 }
 
-pub(crate) fn cast_fixed_size_list_to_list<OffsetSize>(
+fn cast_fixed_size_list_to_list_inner<OffsetSize: OffsetSizeTrait, const IS_LIST_VIEW: bool>(
     array: &dyn Array,
     to: &FieldRef,
     cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    OffsetSize: OffsetSizeTrait,
-{
+) -> Result<ArrayRef, ArrowError> {
     let array = array.as_fixed_size_list();
     let (inner_field, size) = if let DataType::FixedSizeList(inner_field, size) = array.data_type()
     {
@@ -88,45 +85,37 @@ where
     } else {
         unreachable!()
     };
-    if to.data_type() != inner_field.data_type() {
+    let array = if to.data_type() != inner_field.data_type() {
         // To transform inner type, can first cast to FSL with new inner type.
         let fsl_to = DataType::FixedSizeList(to.clone(), *size);
         let array = cast_with_options(array, &fsl_to, cast_options)?;
-        let array = array.as_fixed_size_list();
-        let list: GenericListArray<OffsetSize> = array.clone().into();
+        array.as_fixed_size_list().clone()
+    } else {
+        array.clone()
+    };
+    if IS_LIST_VIEW {
+        let list: GenericListViewArray<OffsetSize> = array.into();
         Ok(Arc::new(list))
     } else {
-        let list: GenericListArray<OffsetSize> = array.clone().into();
+        let list: GenericListArray<OffsetSize> = array.into();
         Ok(Arc::new(list))
     }
 }
 
-pub(crate) fn cast_fixed_size_list_to_list_view<OffsetSize>(
+pub(crate) fn cast_fixed_size_list_to_list<OffsetSize: OffsetSizeTrait>(
     array: &dyn Array,
     to: &FieldRef,
     cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    OffsetSize: OffsetSizeTrait,
-{
-    let array = array.as_fixed_size_list();
-    let (inner_field, size) = if let DataType::FixedSizeList(inner_field, size) = array.data_type()
-    {
-        (inner_field, size)
-    } else {
-        unreachable!()
-    };
-    if to.data_type() != inner_field.data_type() {
-        // To transform inner type, can first cast to FSL with new inner type.
-        let fsl_to = DataType::FixedSizeList(to.clone(), *size);
-        let array = cast_with_options(array, &fsl_to, cast_options)?;
-        let array = array.as_fixed_size_list();
-        let list: GenericListViewArray<OffsetSize> = array.clone().into();
-        Ok(Arc::new(list))
-    } else {
-        let list: GenericListViewArray<OffsetSize> = array.clone().into();
-        Ok(Arc::new(list))
-    }
+) -> Result<ArrayRef, ArrowError> {
+    cast_fixed_size_list_to_list_inner::<OffsetSize, false>(array, to, cast_options)
+}
+
+pub(crate) fn cast_fixed_size_list_to_list_view<OffsetSize: OffsetSizeTrait>(
+    array: &dyn Array,
+    to: &FieldRef,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    cast_fixed_size_list_to_list_inner::<OffsetSize, true>(array, to, cast_options)
 }
 
 pub(crate) fn cast_list_to_fixed_size_list<OffsetSize>(
