@@ -36,7 +36,10 @@ pub(crate) fn cast_values_to_list_view<O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     if O::from_usize(array.len()).is_none() {
-        return Err(ArrowError::OffsetOverflowError(array.len()));
+        return Err(ArrowError::ComputeError(format!(
+            "{} array too large to cast to ListView",
+            array.data_type()
+        )));
     }
     let values = cast_with_options(array, to.data_type(), cast_options)?;
     let offsets = (0..values.len())
