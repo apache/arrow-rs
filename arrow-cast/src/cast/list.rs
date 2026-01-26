@@ -23,6 +23,13 @@ pub(crate) fn cast_values_to_list<O: OffsetSizeTrait>(
     to: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
+    if array.len() > O::MAX_OFFSET {
+        return Err(ArrowError::ComputeError(format!(
+            "Offset overflow when casting from {} to {}",
+            array.data_type(),
+            to.data_type()
+        )));
+    }
     let values = cast_with_options(array, to.data_type(), cast_options)?;
     let offsets = OffsetBuffer::from_repeated_length(1, values.len());
     let list = GenericListArray::<O>::try_new(to.clone(), offsets, values, None)?;
@@ -35,10 +42,11 @@ pub(crate) fn cast_values_to_list_view<O: OffsetSizeTrait>(
     to: &FieldRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    if O::from_usize(array.len()).is_none() {
+    if array.len() > O::MAX_OFFSET {
         return Err(ArrowError::ComputeError(format!(
-            "{} array too large to cast to ListView",
-            array.data_type()
+            "Offset overflow when casting from {} to {}",
+            array.data_type(),
+            to.data_type()
         )));
     }
     let values = cast_with_options(array, to.data_type(), cast_options)?;
@@ -248,10 +256,12 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     let offsets = list.offsets();
     let nulls = list.nulls().cloned();
 
-    if !O::IS_LARGE && values.len() > i32::MAX as usize {
-        return Err(ArrowError::ComputeError(
-            "LargeList too large to cast to List".into(),
-        ));
+    if offsets.last().unwrap().as_usize() > O::MAX_OFFSET {
+        return Err(ArrowError::ComputeError(format!(
+            "Offset overflow when casting from {} to {}",
+            array.data_type(),
+            field.data_type()
+        )));
     }
 
     // Recursively cast values
@@ -334,19 +344,46 @@ pub(crate) fn cast_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list_view = array.as_list_view::<I>();
-    let (_field, offsets, sizes, values, nulls) = list_view.clone().into_parts();
 
     // Recursively cast values
-    let values = cast_with_options(&values, to_field.data_type(), cast_options)?;
+    let values = cast_with_options(list_view.values(), to_field.data_type(), cast_options)?;
 
-    let new_offsets: Vec<_> = offsets.iter().map(|x| O::usize_as(x.as_usize())).collect();
-    let new_sizes: Vec<_> = sizes.iter().map(|x| O::usize_as(x.as_usize())).collect();
+    let offsets = list_view
+        .offsets()
+        .iter()
+        .map(|offset| {
+            let offset = offset.as_usize();
+            if offset > O::MAX_OFFSET {
+                return Err(ArrowError::ComputeError(format!(
+                    "Offset overflow when casting from {} to {}",
+                    array.data_type(),
+                    to_field.data_type()
+                )));
+            }
+            Ok(O::usize_as(offset))
+        })
+        .collect::<Result<Vec<O>, _>>()?;
+    let sizes = list_view
+        .sizes()
+        .iter()
+        .map(|size| {
+            let size = size.as_usize();
+            if size > O::MAX_OFFSET {
+                return Err(ArrowError::ComputeError(format!(
+                    "Offset overflow when casting from {} to {}",
+                    array.data_type(),
+                    to_field.data_type()
+                )));
+            }
+            Ok(O::usize_as(size))
+        })
+        .collect::<Result<Vec<O>, _>>()?;
     Ok(Arc::new(GenericListViewArray::<O>::try_new(
         to_field.clone(),
-        new_offsets.into(),
-        new_sizes.into(),
+        offsets.into(),
+        sizes.into(),
         values,
-        nulls,
+        list_view.nulls().cloned(),
     )?))
 }
 
@@ -358,21 +395,23 @@ pub(crate) fn cast_list_to_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     let list = array.as_list::<I>();
     let (_field, offsets, values, nulls) = list.clone().into_parts();
 
-    if !O::IS_LARGE && offsets.last().unwrap().as_usize() > i32::MAX as usize {
-        return Err(ArrowError::ComputeError(
-            "LargeList too large to cast to ListView".into(),
-        ));
-    }
-
     let len = offsets.len() - 1;
     let mut sizes = Vec::with_capacity(len);
     let mut view_offsets = Vec::with_capacity(len);
     for (i, offset) in offsets.iter().enumerate().take(len) {
-        let offset = O::usize_as(offset.as_usize());
-        let offset_plus_one = O::usize_as(offsets[i + 1].as_usize());
+        let offset = offset.as_usize();
+        let size = offsets[i + 1].as_usize() - offset;
 
-        view_offsets.push(offset);
-        sizes.push(offset_plus_one - offset);
+        if offset > O::MAX_OFFSET || size > O::MAX_OFFSET {
+            return Err(ArrowError::ComputeError(format!(
+                "Offset overflow when casting from {} to {}",
+                array.data_type(),
+                to_field.data_type()
+            )));
+        }
+
+        view_offsets.push(O::usize_as(offset));
+        sizes.push(O::usize_as(size));
     }
     let values = cast_with_options(&values, to_field.data_type(), cast_options)?;
     let array = GenericListViewArray::<O>::new(
