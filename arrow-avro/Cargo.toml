@@ -46,7 +46,7 @@ small_decimals = []
 avro_custom_types = ["dep:arrow-select"]
 
 # Enable async APIs
-async = ["futures", "tokio", "dep:bytes"]
+async = ["futures", "tokio"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
 
@@ -58,7 +58,7 @@ arrow-select = { workspace = true, optional = true }
 
 object_store = { version = "0.12", default-features = false, optional = true }
 
-bytes = { version = "1.11.0", default-features = false, features = ["std"], optional = true }
+bytes = { version = "1.11.0", default-features = false, features = ["std"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.188", features = ["derive"] }
 flate2 = { version = "1.0", default-features = false, features = [
@@ -88,7 +88,7 @@ rand = { version = "0.9.1", default-features = false, features = [
 ] }
 criterion = { workspace = true, default-features = false }
 tempfile = "3.3"
-arrow = { workspace = true }
+arrow = { workspace = true, features = ["prettyprint"] }
 futures = "0.3.31"
 async-stream = "0.3.6"
 apache-avro = "0.21.0"
@@ -107,4 +107,8 @@ harness = false
 
 [[bench]]
 name = "avro_writer"
+harness = false
+
+[[bench]]
+name = "encoder"
 harness = false
