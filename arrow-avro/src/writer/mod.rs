@@ -4090,4 +4090,71 @@ mod tests {
         assert_eq!(got, &IntervalMonthDayNanoArray::from(expected));
         Ok(())
     }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_roundtrip_interval_month_day_nano_custom_types() -> Result<(), AvroError> {
+        use arrow_array::IntervalMonthDayNanoArray;
+        use arrow_buffer::IntervalMonthDayNano;
+        let schema = Schema::new(vec![Field::new(
+            "val",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            true,
+        )]);
+        let values: Vec<Option<IntervalMonthDayNano>> = vec![
+            Some(IntervalMonthDayNano::new(0, 0, 0)),
+            Some(IntervalMonthDayNano::new(1, 2, 3)), // sub-millisecond nanos ok
+            None,
+            Some(IntervalMonthDayNano::new(-4, -5, -6)),
+        ];
+        let array = IntervalMonthDayNanoArray::from(values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
+        let roundtrip = roundtrip_ocf(&batch)?;
+        assert_eq!(
+            roundtrip.schema().field(0).data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano),
+            "Expected Interval(MonthDayNano) with avro_custom_types enabled"
+        );
+        let got = roundtrip
+            .column(0)
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .expect("IntervalMonthDayNanoArray");
+        assert_eq!(got, &IntervalMonthDayNanoArray::from(values));
+        Ok(())
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn test_roundtrip_interval_month_day_nano_no_custom() -> Result<(), AvroError> {
+        use arrow_array::IntervalMonthDayNanoArray;
+        use arrow_buffer::IntervalMonthDayNano;
+        let schema = Schema::new(vec![Field::new(
+            "val",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            true,
+        )]);
+        // Only representable values for Avro duration: non-negative and whole milliseconds
+        let values: Vec<Option<IntervalMonthDayNano>> = vec![
+            Some(IntervalMonthDayNano::new(0, 0, 0)),
+            Some(IntervalMonthDayNano::new(1, 2, 3_000_000)),
+            None,
+            Some(IntervalMonthDayNano::new(4, 5, 6_000_000)),
+        ];
+        let array = IntervalMonthDayNanoArray::from(values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
+        let roundtrip = roundtrip_ocf(&batch)?;
+        assert_eq!(
+            roundtrip.schema().field(0).data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano),
+            "Expected Interval(MonthDayNano) without avro_custom_types"
+        );
+        let got = roundtrip
+            .column(0)
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .expect("IntervalMonthDayNanoArray");
+        assert_eq!(got, &IntervalMonthDayNanoArray::from(values));
+        Ok(())
+    }
 }

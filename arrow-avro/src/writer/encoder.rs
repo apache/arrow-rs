@@ -424,9 +424,16 @@ impl<'a> FieldEncoder<'a> {
                     )),
                 },
                 DataType::Interval(unit) => match unit {
+                    #[cfg(not(feature = "avro_custom_types"))]
                     IntervalUnit::MonthDayNano => Encoder::IntervalMonthDayNano(DurationEncoder(
                         array.as_primitive::<IntervalMonthDayNanoType>(),
                     )),
+                    #[cfg(feature = "avro_custom_types")]
+                    IntervalUnit::MonthDayNano => {
+                        Encoder::IntervalMonthDayNanoFixed(IntervalMonthDayNanoFixedEncoder(
+                            array.as_primitive::<IntervalMonthDayNanoType>(),
+                        ))
+                    }
                     #[cfg(not(feature = "avro_custom_types"))]
                     IntervalUnit::YearMonth => Encoder::IntervalYearMonth(DurationEncoder(
                         array.as_primitive::<IntervalYearMonthType>(),
@@ -1160,7 +1167,7 @@ impl FieldPlan {
                     IntervalUnit::MonthDayNano | IntervalUnit::YearMonth | IntervalUnit::DayTime,
                 ) => Ok(FieldPlan::Scalar),
                 other => Err(AvroError::SchemaError(format!(
-                    "Avro duration logical type requires Arrow Interval(MonthDayNano), found: {other:?}"
+                    "Avro 'duration' logical type requires an Arrow Interval (MonthDayNano, YearMonth, or DayTime), found: {other:?}"
                 ))),
             },
             Codec::Union(avro_branches, _, UnionMode::Dense) => {
@@ -1258,8 +1265,14 @@ enum Encoder<'a> {
     Fixed(FixedEncoder<'a>),
     /// Avro `uuid` logical type encoder (string with RFC‑4122 hyphenated text)
     Uuid(UuidEncoder<'a>),
-    /// Avro `duration` logical type (Arrow Interval(MonthDayNano)) encoder
+    /// Avro `duration` logical type encoder (`fixed(12)` months/days/millis).
+    ///
+    /// This is the interop-first representation used when `avro_custom_types` is disabled.
+    #[cfg(not(feature = "avro_custom_types"))]
     IntervalMonthDayNano(DurationEncoder<'a, IntervalMonthDayNanoType>),
+    /// Arrow Interval(MonthDayNano) custom logical type encoder (`fixed(16)` months/days/nanos)
+    #[cfg(feature = "avro_custom_types")]
+    IntervalMonthDayNanoFixed(IntervalMonthDayNanoFixedEncoder<'a>),
     /// Avro `duration` logical type (Arrow Interval(YearMonth)) encoder
     #[cfg(not(feature = "avro_custom_types"))]
     IntervalYearMonth(DurationEncoder<'a, IntervalYearMonthType>),
@@ -1364,7 +1377,10 @@ impl<'a> Encoder<'a> {
             Encoder::Struct(e) => e.encode(out, idx),
             Encoder::Fixed(e) => (e).encode(out, idx),
             Encoder::Uuid(e) => (e).encode(out, idx),
+            #[cfg(not(feature = "avro_custom_types"))]
             Encoder::IntervalMonthDayNano(e) => (e).encode(out, idx),
+            #[cfg(feature = "avro_custom_types")]
+            Encoder::IntervalMonthDayNanoFixed(e) => e.encode(out, idx),
             #[cfg(not(feature = "avro_custom_types"))]
             Encoder::IntervalYearMonth(e) => (e).encode(out, idx),
             #[cfg(not(feature = "avro_custom_types"))]
@@ -1553,6 +1569,27 @@ impl Float16FixedEncoder<'_> {
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         let v = self.0.value(idx);
         out.write_all(&v.to_le_bytes())?;
+        Ok(())
+    }
+}
+
+/// Interval(MonthDayNano) encoder for the Arrow-specific logical type
+/// `arrow.interval-month-day-nano`.
+///
+/// The representation is `fixed(16)` containing:
+/// - i32 months (LE)
+/// - i32 days (LE)
+/// - i64 nanoseconds (LE)
+#[cfg(feature = "avro_custom_types")]
+struct IntervalMonthDayNanoFixedEncoder<'a>(&'a PrimitiveArray<IntervalMonthDayNanoType>);
+#[cfg(feature = "avro_custom_types")]
+impl IntervalMonthDayNanoFixedEncoder<'_> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
+        let v = self.0.value(idx);
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(v);
+        out.write_all(&months.to_le_bytes())?;
+        out.write_all(&days.to_le_bytes())?;
+        out.write_all(&nanos.to_le_bytes())?;
         Ok(())
     }
 }
@@ -2112,6 +2149,7 @@ impl UuidEncoder<'_> {
     }
 }
 
+#[cfg(not(feature = "avro_custom_types"))]
 #[derive(Copy, Clone)]
 struct DurationParts {
     months: u32,
@@ -2119,27 +2157,29 @@ struct DurationParts {
     millis: u32,
 }
 /// Trait mapping an Arrow interval native value to Avro duration `(months, days, millis)`.
+#[cfg(not(feature = "avro_custom_types"))]
 trait IntervalToDurationParts: ArrowPrimitiveType {
     fn duration_parts(native: Self::Native) -> Result<DurationParts, AvroError>;
 }
+#[cfg(not(feature = "avro_custom_types"))]
 impl IntervalToDurationParts for IntervalMonthDayNanoType {
     fn duration_parts(native: Self::Native) -> Result<DurationParts, AvroError> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(native);
         if months < 0 || days < 0 || nanos < 0 {
             return Err(AvroError::InvalidArgument(
-                "Avro 'duration' cannot encode negative months/days/nanoseconds".into(),
+                "Avro 'duration' cannot encode negative months/days/nanoseconds; enable `avro_custom_types` to round-trip signed Arrow intervals".into(),
             ));
         }
         if nanos % 1_000_000 != 0 {
             return Err(AvroError::InvalidArgument(
-                "Avro 'duration' requires whole milliseconds; nanoseconds must be divisible by 1_000_000"
+                "Avro 'duration' requires whole milliseconds; nanoseconds must be divisible by 1_000_000 (enable `avro_custom_types` to preserve nanosecond intervals)"
                     .into(),
             ));
         }
         let millis = nanos / 1_000_000;
         if millis > u32::MAX as i64 {
             return Err(AvroError::InvalidArgument(
-                "Avro 'duration' milliseconds exceed u32::MAX".into(),
+                "Avro 'duration' milliseconds exceed u32::MAX; enable `avro_custom_types` to preserve full Arrow Interval(MonthDayNano) range".into(),
             ));
         }
         Ok(DurationParts {
@@ -2149,11 +2189,12 @@ impl IntervalToDurationParts for IntervalMonthDayNanoType {
         })
     }
 }
+#[cfg(not(feature = "avro_custom_types"))]
 impl IntervalToDurationParts for IntervalYearMonthType {
     fn duration_parts(native: Self::Native) -> Result<DurationParts, AvroError> {
         if native < 0 {
             return Err(AvroError::InvalidArgument(
-                "Avro 'duration' cannot encode negative months".into(),
+                "Avro 'duration' cannot encode negative months; enable `avro_custom_types` to round-trip signed Arrow Interval(YearMonth)".into(),
             ));
         }
         Ok(DurationParts {
@@ -2163,12 +2204,13 @@ impl IntervalToDurationParts for IntervalYearMonthType {
         })
     }
 }
+#[cfg(not(feature = "avro_custom_types"))]
 impl IntervalToDurationParts for IntervalDayTimeType {
     fn duration_parts(native: Self::Native) -> Result<DurationParts, AvroError> {
         let (days, millis) = IntervalDayTimeType::to_parts(native);
         if days < 0 || millis < 0 {
             return Err(AvroError::InvalidArgument(
-                "Avro 'duration' cannot encode negative days or milliseconds".into(),
+                "Avro 'duration' cannot encode negative days or milliseconds; enable `avro_custom_types` to round-trip signed Arrow Interval(DayTime)".into(),
             ));
         }
         Ok(DurationParts {
@@ -2181,7 +2223,9 @@ impl IntervalToDurationParts for IntervalDayTimeType {
 
 /// Single generic encoder used for all three interval units.
 /// Writes Avro `fixed(12)` as three little-endian u32 values in one call.
+#[cfg(not(feature = "avro_custom_types"))]
 struct DurationEncoder<'a, P: ArrowPrimitiveType + IntervalToDurationParts>(&'a PrimitiveArray<P>);
+#[cfg(not(feature = "avro_custom_types"))]
 impl<'a, P: ArrowPrimitiveType + IntervalToDurationParts> DurationEncoder<'a, P> {
     #[inline(always)]
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
@@ -2375,12 +2419,24 @@ mod tests {
         out
     }
 
+    #[cfg(not(feature = "avro_custom_types"))]
     fn duration_fixed12(months: u32, days: u32, millis: u32) -> [u8; 12] {
         let m = months.to_le_bytes();
         let d = days.to_le_bytes();
         let ms = millis.to_le_bytes();
         [
             m[0], m[1], m[2], m[3], d[0], d[1], d[2], d[3], ms[0], ms[1], ms[2], ms[3],
+        ]
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    fn interval_mdn_fixed16(months: i32, days: i32, nanos: i64) -> [u8; 16] {
+        let m = months.to_le_bytes();
+        let d = days.to_le_bytes();
+        let n = nanos.to_le_bytes();
+        [
+            m[0], m[1], m[2], m[3], d[0], d[1], d[2], d[3], n[0], n[1], n[2], n[3], n[4], n[5],
+            n[6], n[7],
         ]
     }
 
@@ -3136,6 +3192,22 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn interval_month_day_nano_fixed_encoder_happy_path() {
+        // Custom encoding stores raw i32/i32/i64 values in fixed(16)
+        let v0 = IntervalMonthDayNanoType::make_value(1, 2, 3); // sub-millisecond nanos OK
+        let v1 = IntervalMonthDayNanoType::make_value(-4, -5, -6);
+        let arr: PrimitiveArray<IntervalMonthDayNanoType> = vec![v0, v1].into();
+
+        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&interval_mdn_fixed16(1, 2, 3));
+        expected.extend_from_slice(&interval_mdn_fixed16(-4, -5, -6));
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_encoder_month_day_nano_happy_path() {
         let v0 = IntervalMonthDayNanoType::make_value(1, 2, 3_000_000); // -> millis = 3
@@ -3148,6 +3220,7 @@ mod tests {
         assert_bytes_eq(&got, &expected);
     }
 
+    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_encoder_month_day_nano_rejects_non_ms_multiple() {
         let bad = IntervalMonthDayNanoType::make_value(0, 0, 1);
@@ -3194,6 +3267,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_month_day_nano_overflow_millis() {
         // nanos leading to millis > u32::MAX
