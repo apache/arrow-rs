@@ -445,7 +445,13 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
         None => indices
             .values()
             .iter()
-            .map(|index| values[index.as_usize()])
+            .map(|index| {
+                let index = index.as_usize();
+                // Safety: we either checked already bounds (passed check_bounds = true) or the user
+                //         guarantees the value to be in range.
+                //         Avoiding bound checks allows the compiler to vectorize it and do better loop unrolling
+                unsafe { *values.get_unchecked(index) }
+            })
             .collect(),
     }
 }
