@@ -353,8 +353,8 @@ impl FileEncryptor {
 
     /// Get the BlockEncryptor for the footer
     pub(crate) fn get_footer_encryptor(&self) -> Result<Box<dyn BlockEncryptor>> {
-        Ok(Box::new(RingGcmBlockEncryptor::new(
-            &self.properties.footer_key.key,
+        Ok(Box::new(RingGcmBlockEncryptor::new_with_algorithm(
+            &self.properties.algorithm, &self.properties.footer_key.key,
         )?))
     }
 
@@ -369,7 +369,7 @@ impl FileEncryptor {
         }
         match self.properties.column_keys.get(column_path) {
             None => Err(general_err!("Column '{}' is not encrypted", column_path)),
-            Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new(column_key.key())?)),
+            Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new_with_algorithm(&self.properties.algorithm, column_key.key())?)),
         }
     }
 }
