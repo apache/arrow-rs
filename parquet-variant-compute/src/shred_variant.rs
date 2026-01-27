@@ -533,7 +533,7 @@ impl ShreddedSchemaBuilder {
     ///
     /// # Arguments
     ///
-    /// * `path` - Anything convertible to [`VariantPath`] (e.g., a `&str`)
+    /// * `path` - Anything convertible to [`VariantPath`]
     /// * `field` - Anything convertible via [`IntoShreddingField`] (e.g. `FieldRef`,
     ///   `&DataType`, or `(&DataType, bool)` to control nullability)
     pub fn with_path<'a, P, F>(mut self, path: P, field: F) -> Self
@@ -1596,8 +1596,8 @@ mod tests {
         // Create target schema: struct<score: float64, age: int64>
         // Both types are supported for shredding
         let target_schema = ShreddedSchemaBuilder::default()
-            .with_path("score", &DataType::Float64)
-            .with_path("age", &DataType::Int64)
+            .with_path(VariantPath::from_str_unchecked("score"), &DataType::Float64)
+            .with_path(VariantPath::from_str_unchecked("age"), &DataType::Int64)
             .build();
 
         let result = shred_variant(&input, &target_schema).unwrap();
@@ -2008,7 +2008,7 @@ mod tests {
 
         // Test with schema containing only id field
         let schema1 = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::Int32)
+            .with_path(VariantPath::from_str_unchecked("id"), &DataType::Int32)
             .build();
         let result1 = shred_variant(&input, &schema1).unwrap();
         let value_field1 = result1.value_field().unwrap();
@@ -2016,8 +2016,8 @@ mod tests {
 
         // Test with schema containing id and age fields
         let schema2 = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::Int32)
-            .with_path("age", &DataType::Int64)
+            .with_path(VariantPath::from_str_unchecked("id"), &DataType::Int32)
+            .with_path(VariantPath::from_str_unchecked("age"), &DataType::Int64)
             .build();
         let result2 = shred_variant(&input, &schema2).unwrap();
         let value_field2 = result2.value_field().unwrap();
@@ -2025,9 +2025,9 @@ mod tests {
 
         // Test with schema containing all fields
         let schema3 = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::Int32)
-            .with_path("age", &DataType::Int64)
-            .with_path("score", &DataType::Float64)
+            .with_path(VariantPath::from_str_unchecked("id"), &DataType::Int32)
+            .with_path(VariantPath::from_str_unchecked("age"), &DataType::Int64)
+            .with_path(VariantPath::from_str_unchecked("score"), &DataType::Float64)
             .build();
         let result3 = shred_variant(&input, &schema3).unwrap();
         let value_field3 = result3.value_field().unwrap();
@@ -2069,8 +2069,14 @@ mod tests {
         ]);
 
         let target_schema = ShreddedSchemaBuilder::default()
-            .with_path("id", DataType::FixedSizeBinary(16))
-            .with_path("session_id", DataType::FixedSizeBinary(16))
+            .with_path(
+                VariantPath::from_str_unchecked("id"),
+                DataType::FixedSizeBinary(16),
+            )
+            .with_path(
+                VariantPath::from_str_unchecked("session_id"),
+                DataType::FixedSizeBinary(16),
+            )
             .build();
 
         let result = shred_variant(&input, &target_schema).unwrap();
@@ -2253,8 +2259,8 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_simple() {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("a", &DataType::Int64)
-            .with_path("b", &DataType::Float64)
+            .with_path(VariantPath::from_str_unchecked("a"), &DataType::Int64)
+            .with_path(VariantPath::from_str_unchecked("b"), &DataType::Float64)
             .build();
 
         assert_eq!(
@@ -2269,9 +2275,9 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_nested() {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("a", &DataType::Int64)
-            .with_path("b.c", &DataType::Utf8)
-            .with_path("b.d", &DataType::Float64)
+            .with_path(VariantPath::from_str_unchecked("a"), &DataType::Int64)
+            .with_path(VariantPath::from_str_unchecked("b.c"), &DataType::Utf8)
+            .with_path(VariantPath::from_str_unchecked("b.d"), &DataType::Float64)
             .build();
 
         assert_eq!(
@@ -2311,10 +2317,13 @@ mod tests {
     fn test_variant_schema_builder_custom_nullability() {
         let shredding_type = ShreddedSchemaBuilder::default()
             .with_path(
-                "foo",
+                VariantPath::from_str_unchecked("foo"),
                 Arc::new(Field::new("should_be_renamed", DataType::Utf8, false)),
             )
-            .with_path("bar", (&DataType::Int64, false))
+            .with_path(
+                VariantPath::from_str_unchecked("bar"),
+                (&DataType::Int64, false),
+            )
             .build();
 
         let DataType::Struct(fields) = shredding_type else {
@@ -2346,8 +2355,8 @@ mod tests {
         ]);
 
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("time", &DataType::Int64)
-            .with_path("hostname", &DataType::Utf8)
+            .with_path(VariantPath::from_str_unchecked("time"), &DataType::Int64)
+            .with_path(VariantPath::from_str_unchecked("hostname"), &DataType::Utf8)
             .build();
 
         let result = shred_variant(&input, &shredding_type).unwrap();
@@ -2429,8 +2438,8 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_conflicting_path() {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("a", &DataType::Int64)
-            .with_path("a", &DataType::Float64)
+            .with_path(VariantPath::from_str_unchecked("a"), &DataType::Int64)
+            .with_path(VariantPath::from_str_unchecked("a"), &DataType::Float64)
             .build();
 
         assert_eq!(
@@ -2454,7 +2463,7 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_empty_path() {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("", &DataType::Int64)
+            .with_path(VariantPath::from_str_unchecked(""), &DataType::Int64)
             .build();
 
         assert_eq!(shredding_type, DataType::Int64);
