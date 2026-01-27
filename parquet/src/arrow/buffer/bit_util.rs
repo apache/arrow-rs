@@ -30,11 +30,7 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
     let unaligned = UnalignedBitChunk::new(bytes, 0, bit_length);
     let mut chunk_end_idx = bit_length + unaligned.lead_padding() + unaligned.trailing_padding();
 
-    let iter = unaligned
-        .prefix()
-        .into_iter()
-        .chain(unaligned.chunks().iter().cloned())
-        .chain(unaligned.suffix());
+    let iter = unaligned.iter();
 
     iter.rev().flat_map(move |chunk| {
         let chunk_idx = chunk_end_idx - 64;
