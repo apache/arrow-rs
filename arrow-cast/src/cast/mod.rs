@@ -111,30 +111,21 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (RunEndEncoded(_, value_type), _) => can_cast_types(value_type.data_type(), to_type),
         (_, RunEndEncoded(_, value_type)) => can_cast_types(from_type, value_type.data_type()),
         (_, Dictionary(_, value_type)) => can_cast_types(from_type, value_type),
-        (List(list_from) | LargeList(list_from), List(list_to) | LargeList(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
+        (
+            List(list_from) | LargeList(list_from) | ListView(list_from) | LargeListView(list_from),
+            List(list_to) | LargeList(list_to) | ListView(list_to) | LargeListView(list_to),
+        ) => can_cast_types(list_from.data_type(), list_to.data_type()),
         (
             List(list_from) | LargeList(list_from) | ListView(list_from) | LargeListView(list_from),
             Utf8 | LargeUtf8 | Utf8View,
         ) => can_cast_types(list_from.data_type(), to_type),
-        (List(list_from) | LargeList(list_from), FixedSizeList(list_to, _)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
-        (List(list_from) | LargeList(list_from), ListView(list_to) | LargeListView(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
-        (List(_), _) => false,
-        (ListView(list_from) | LargeListView(list_from), List(list_to) | LargeList(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
-        (
-            ListView(list_from) | LargeListView(list_from),
-            ListView(list_to) | LargeListView(list_to),
-        ) => can_cast_types(list_from.data_type(), list_to.data_type()),
         (
             FixedSizeList(list_from, _),
             List(list_to) | LargeList(list_to) | ListView(list_to) | LargeListView(list_to),
+        ) => can_cast_types(list_from.data_type(), list_to.data_type()),
+        (
+            List(list_from) | LargeList(list_from) | ListView(list_from) | LargeListView(list_from),
+            FixedSizeList(list_to, _),
         ) => can_cast_types(list_from.data_type(), list_to.data_type()),
         (FixedSizeList(inner, size), FixedSizeList(inner_to, size_to)) if size == size_to => {
             can_cast_types(inner.data_type(), inner_to.data_type())
@@ -9046,21 +9037,25 @@ mod tests {
 
         // list
         let array = new_empty_array(&DataType::List(inner_field.clone()));
+        assert!(can_cast_types(array.data_type(), &target_type));
         let actual = cast(array.as_ref(), &target_type).unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
 
         // largelist
         let array = new_empty_array(&DataType::LargeList(inner_field.clone()));
+        assert!(can_cast_types(array.data_type(), &target_type));
         let actual = cast(array.as_ref(), &target_type).unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
 
         // listview
         let array = new_empty_array(&DataType::ListView(inner_field.clone()));
+        assert!(can_cast_types(array.data_type(), &target_type));
         let actual = cast(array.as_ref(), &target_type).unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
 
         // largelistview
         let array = new_empty_array(&DataType::LargeListView(inner_field.clone()));
+        assert!(can_cast_types(array.data_type(), &target_type));
         let actual = cast(array.as_ref(), &target_type).unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
     }
