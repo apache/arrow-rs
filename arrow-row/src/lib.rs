@@ -417,6 +417,54 @@ mod variable;
 ///
 ///```
 ///
+/// ## ListView Encoding
+///
+/// ListView arrays differ from List arrays in their representation: instead of using
+/// consecutive offset pairs to define each list, ListView uses explicit offset and size
+/// pairs for each element. This allows ListView elements to reference arbitrary (potentially
+/// overlapping) regions of the child array.
+///
+/// Despite this structural difference, ListView uses the **same row encoding as List**.
+/// Each list value is encoded as the concatenation of its child elements (each separately
+/// variable-length encoded), followed by a variable-length encoded empty byte array terminator.
+///
+/// **Important**: When a ListView is decoded back from row format, it is still a
+/// ListView, but any child element sharing that may have existed in the original
+/// (where multiple list entries could reference overlapping regions of the child
+/// array) is **not preserved** - each list's children are decoded independently
+/// with sequential offsets.
+///
+/// For example, given a ListView with offset/size pairs:
+///
+/// ```text
+/// offsets: [0, 1, 0]
+/// sizes:   [2, 2, 0]
+/// values:  [1_u8, 2_u8, 3_u8]
+///
+/// Resulting lists:
+/// [1_u8, 2_u8]  (offset=0, size=2 -> values[0..2])
+/// [2_u8, 3_u8]  (offset=1, size=2 -> values[1..3])
+/// []            (offset=0, size=0 -> empty)
+/// ```
+///
+/// The elements would be encoded identically to List encoding:
+///
+/// ```text
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [1_u8, 2_u8]           │02│01│01│00│00│02│02│01│02│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 1_u8 ────┘   └──── 2_u8 ────┘
+///
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [2_u8, 3_u8]           │02│01│02│00│00│02│02│01│03│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 2_u8 ────┘   └──── 3_u8 ────┘
+///
+///```
+///
+/// Note that element `2_u8` appears in both encoded rows, even though it was shared
+/// in the original ListView, and `[]` is represented by an empty byte array.
+///
 /// ## Union Encoding
 ///
 /// A union value is encoded as a single type-id byte followed by the row encoding of the selected child value.
