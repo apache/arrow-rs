@@ -510,9 +510,9 @@ impl DecryptionPropertiesBuilder {
         Ok(self)
     }
 
-    pub fn with_algorithm(mut self, algorithm: &'static Algorithm) -> Result<Self> {
+    pub fn with_algorithm(mut self, algorithm: &'static Algorithm) -> Self {
         self.algorithm = algorithm;
-        Ok(self)
+        self
     }
 
     /// Disable verification of footer tags for files that use plaintext footers.
