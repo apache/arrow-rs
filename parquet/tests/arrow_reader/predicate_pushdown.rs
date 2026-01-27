@@ -17,13 +17,16 @@
 
 //! Fuzz Tests for predicate evaluation in the parquet reader
 
+use arrow_array::cast::AsArray;
+use arrow_array::types::Int64Type;
 use arrow_array::{
     Array, ArrayRef, Int8Array, Int64Array, RecordBatch, StringViewArray, UInt8Array,
 };
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowSelection,
+    ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter,
+    RowSelection,
 };
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::basic::Compression;
@@ -202,7 +205,8 @@ fn test_manual_single_selection() {
 /// Test case -- the idea is to read a parquet file with various predicates
 /// and verify that the results are as expected.
 ///
-/// For example
+/// For example, this lets us verify that reading with a selection predicate
+/// that skips certain rows (and thus pages) returns the expected results.
 /// ```text
 ///         0 ┌───────┐    0 ┌───────┐      0 ┌───────┐
 ///           │       │      │       │        │ SKIP  │
@@ -251,16 +255,34 @@ impl Test {
             for batch_size in [100, 217, 8192] {
                 println!("  batch size: {}", batch_size);
 
-                self.run_inner(projection, batch_size, &expected);
+                self.run_inner(projection, batch_size, &expected, |b| {
+                    self.add_predicate_row_selection(b)
+                });
+
+                self.run_inner(projection, batch_size, &expected, |b| {
+                    self.add_predicate_row_filter_int8(b)
+                });
             }
         }
     }
 
-    fn run_inner(&self, projection: &[&str], batch_size: usize, expected: &RecordBatch) {
+    /// Create a reader with the specified projection and batch size,
+    /// and function F to apply the selection predicates.
+    ///
+    /// Reads all rows and verify the results match expected
+    fn run_inner<F>(
+        &self,
+        projection: &[&str],
+        batch_size: usize,
+        expected: &RecordBatch,
+        add_predicate: F,
+    ) where
+        F: Fn(ParquetRecordBatchReaderBuilder<Bytes>) -> ParquetRecordBatchReaderBuilder<Bytes>,
+    {
         let builder = self
             .builder_with_projection(projection)
             .with_batch_size(batch_size);
-        let reader = self.add_selection_predicate(builder).build().unwrap();
+        let reader = add_predicate(builder).build().unwrap();
         let actual = self.collect_to_batch(reader);
 
         assert_eq!(
@@ -329,14 +351,32 @@ impl Test {
         concat_batches(&schema, &batches).unwrap()
     }
 
+    // ------------------
+    // Below are different predicates are added to the reader. Note these
+    // methods all select the same selections, just in different ways.
+    // ------------------
+
     /// Add a predicate to the reader that selects only the specified rows
-    fn add_selection_predicate<T: ChunkReader>(
+    fn add_predicate_row_selection<T: ChunkReader>(
         &self,
         builder: ParquetRecordBatchReaderBuilder<T>,
     ) -> ParquetRecordBatchReaderBuilder<T> {
-        let num_rows = three_column_batch().num_rows();
+        let num_rows = builder.metadata().file_metadata().num_rows() as usize;
         let selection =
             RowSelection::from_consecutive_ranges(self.selections.clone().into_iter(), num_rows);
         builder.with_row_selection(selection)
+    }
+
+    /// Add a predicate to the reader via a predicate on the "int64" column
+    fn add_predicate_row_filter_int8<T: ChunkReader>(
+        &self,
+        builder: ParquetRecordBatchReaderBuilder<T>,
+    ) -> ParquetRecordBatchReaderBuilder<T> {
+        let mask = ProjectionMask::columns(
+            builder.metadata().file_metadata().schema_descr(),
+            vec!["int8"],
+        );
+        let filter = RowFilter::new(vec![Box::new(ArrowPredicateFn::new(mask, |array| todo!()))]);
+        builder.with_row_filter(filter)
     }
 }
