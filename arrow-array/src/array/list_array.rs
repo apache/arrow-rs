@@ -432,7 +432,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// # use arrow_array::ListArray;
     /// # use arrow_array::types::Int32Type;
     /// # use arrow_array::builder::StringDictionaryBuilder;
-    ///
     /// let data = vec![
     ///    Some(vec![Some("foo"), Some("bar"), Some("baz")]),
     ///    None,
