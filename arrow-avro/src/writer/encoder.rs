@@ -42,9 +42,29 @@ use arrow_array::{
 use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit, UnionMode};
+use bytes::{BufMut, BytesMut};
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
+
+macro_rules! for_rows_with_prefix {
+    ($n:expr, $prefix:expr, $out:ident, |$row:ident| $body:block) => {{
+        match $prefix {
+            Some(prefix) => {
+                for $row in 0..$n {
+                    $out.write_all(prefix)
+                        .map_err(|e| AvroError::IoError(format!("write prefix: {e}"), e))?;
+                    $body
+                }
+            }
+            None => {
+                for $row in 0..$n {
+                    $body
+                }
+            }
+        }
+    }};
+}
 
 /// Encode a single Avro-`long` using ZigZag + variable length, buffered.
 ///
@@ -608,17 +628,13 @@ impl<'a> FieldEncoder<'a> {
         // Compute the effective null state from writer-declared nullability and data nulls.
         let null_state = match nullability {
             None => NullState::NonNullable,
-            Some(null_order) => {
-                match array.nulls() {
-                    Some(nulls) if array.null_count() > 0 => {
-                        NullState::Nullable { nulls, null_order }
-                    }
-                    _ => NullState::NullableNoNulls {
-                        // Nullable site with no null buffer for this view
-                        union_value_byte: union_value_branch_byte(null_order, false),
-                    },
-                }
-            }
+            Some(null_order) => match array.nulls() {
+                Some(nulls) if array.null_count() > 0 => NullState::Nullable { nulls, null_order },
+                _ => NullState::NullableNoNulls {
+                    // Nullable site with no null buffer for this view
+                    union_value_byte: union_value_branch_byte(null_order, false),
+                },
+            },
         };
         Ok(Self {
             encoder,
@@ -797,24 +813,86 @@ impl RecordEncoder {
     ) -> Result<(), AvroError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         let n = batch.num_rows();
-        match self.prefix {
-            Some(prefix) => {
-                for row in 0..n {
-                    out.write_all(prefix.as_slice())?;
-                    for enc in column_encoders.iter_mut() {
-                        enc.encode(out, row)?;
-                    }
-                }
+        let prefix = self.prefix.as_ref().map(|p| p.as_slice());
+        for_rows_with_prefix!(n, prefix, out, |row| {
+            for enc in column_encoders.iter_mut() {
+                enc.encode(out, row)?;
             }
-            None => {
-                for row in 0..n {
-                    for enc in column_encoders.iter_mut() {
-                        enc.encode(out, row)?;
-                    }
-                }
-            }
-        }
+        });
         Ok(())
+    }
+
+    /// Encode rows into a single contiguous `BytesMut` and append row-end offsets.
+    ///
+    /// # Invariants
+    ///
+    /// * `offsets` must be non-empty and seeded with `0` at index 0.
+    /// * `offsets.last()` must equal `out.len()` on entry.
+    /// * On success, exactly `batch.num_rows()` additional offsets are pushed, and
+    ///   `offsets.last()` equals the new `out.len()`.
+    pub(crate) fn encode_rows(
+        &self,
+        batch: &RecordBatch,
+        row_capacity: usize,
+        out: &mut BytesMut,
+        offsets: &mut Vec<usize>,
+    ) -> Result<(), AvroError> {
+        let out_len = out.len();
+        if offsets.first() != Some(&0) || offsets.last() != Some(&out_len) {
+            return Err(AvroError::General(
+                "encode_rows requires offsets to start with 0 and end at out.len()".to_string(),
+            ));
+        }
+        let n = batch.num_rows();
+        if n == 0 {
+            return Ok(());
+        }
+        if offsets.len().checked_add(n).is_none() {
+            return Err(AvroError::General(
+                "encode_rows cannot append offsets: too many rows".to_string(),
+            ));
+        }
+        let mut column_encoders = self.prepare_for_batch(batch)?;
+        offsets.reserve(n);
+        let prefix_bytes = self.prefix.as_ref().map(|p| p.as_slice());
+        let prefix_len = prefix_bytes.map_or(0, |p| p.len());
+        let per_row_hint = row_capacity.max(prefix_len);
+        if let Some(additional) = n
+            .checked_mul(per_row_hint)
+            .filter(|&a| out_len.checked_add(a).is_some())
+        {
+            out.reserve(additional);
+        }
+        let start_out_len = out.len();
+        let start_offsets_len = offsets.len();
+        let res = (|| -> Result<(), AvroError> {
+            let mut w = out.writer();
+            if let [enc0] = column_encoders.as_mut_slice() {
+                for_rows_with_prefix!(n, prefix_bytes, w, |row| {
+                    enc0.encode(&mut w, row)?;
+                    offsets.push(w.get_ref().len());
+                });
+            } else {
+                for_rows_with_prefix!(n, prefix_bytes, w, |row| {
+                    for enc in column_encoders.iter_mut() {
+                        enc.encode(&mut w, row)?;
+                    }
+                    offsets.push(w.get_ref().len());
+                });
+            }
+            Ok(())
+        })();
+        if res.is_err() {
+            out.truncate(start_out_len);
+            offsets.truncate(start_offsets_len);
+        } else {
+            debug_assert_eq!(
+                *offsets.last().unwrap(),
+                out.len(),
+                "encode_rows: offsets/out length mismatch after successful encode"
+            );
+        }
+        res
     }
 }
 
@@ -1958,6 +2036,12 @@ mod tests {
         }
     }
 
+    fn row_slice<'a>(buf: &'a [u8], offsets: &[usize], row: usize) -> &'a [u8] {
+        let start = offsets[row];
+        let end = offsets[row + 1];
+        &buf[start..end]
+    }
+
     #[test]
     fn binary_encoder() {
         let values: Vec<&[u8]> = vec![b"", b"ab", b"\x00\xFF"];
@@ -3025,5 +3109,269 @@ mod tests {
             }
             other => panic!("expected NullableNoNulls, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn encode_rows_single_column_int32() {
+        let schema = ArrowSchema::new(vec![Field::new("x", DataType::Int32, false)]);
+        let arr = Int32Array::from(vec![1, 2, 3]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(arr)]).unwrap();
+        let encoder = RecordEncoder {
+            columns: vec![FieldBinding {
+                arrow_index: 0,
+                nullability: None,
+                plan: FieldPlan::Scalar,
+            }],
+            prefix: None,
+        };
+        let mut out = BytesMut::new();
+        let mut offsets: Vec<usize> = vec![0];
+        encoder
+            .encode_rows(&batch, 16, &mut out, &mut offsets)
+            .unwrap();
+        assert_eq!(offsets.len(), 4);
+        assert_eq!(*offsets.last().unwrap(), out.len());
+        assert_bytes_eq(row_slice(&out, &offsets, 0), &avro_long_bytes(1));
+        assert_bytes_eq(row_slice(&out, &offsets, 1), &avro_long_bytes(2));
+        assert_bytes_eq(row_slice(&out, &offsets, 2), &avro_long_bytes(3));
+    }
+
+    #[test]
+    fn encode_rows_multiple_columns() {
+        let schema = ArrowSchema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let int_arr = Int32Array::from(vec![10, 20]);
+        let str_arr = StringArray::from(vec!["hello", "world"]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(int_arr), Arc::new(str_arr)],
+        )
+        .unwrap();
+        let encoder = RecordEncoder {
+            columns: vec![
+                FieldBinding {
+                    arrow_index: 0,
+                    nullability: None,
+                    plan: FieldPlan::Scalar,
+                },
+                FieldBinding {
+                    arrow_index: 1,
+                    nullability: None,
+                    plan: FieldPlan::Scalar,
+                },
+            ],
+            prefix: None,
+        };
+        let mut out = BytesMut::new();
+        let mut offsets: Vec<usize> = vec![0];
+        encoder
+            .encode_rows(&batch, 32, &mut out, &mut offsets)
+            .unwrap();
+        assert_eq!(offsets.len(), 3);
+        assert_eq!(*offsets.last().unwrap(), out.len());
+        let mut expected_row0 = Vec::new();
+        expected_row0.extend(avro_long_bytes(10));
+        expected_row0.extend(avro_len_prefixed_bytes(b"hello"));
+        assert_bytes_eq(row_slice(&out, &offsets, 0), &expected_row0);
+        let mut expected_row1 = Vec::new();
+        expected_row1.extend(avro_long_bytes(20));
+        expected_row1.extend(avro_len_prefixed_bytes(b"world"));
+        assert_bytes_eq(row_slice(&out, &offsets, 1), &expected_row1);
+    }
+
+    #[test]
+    fn encode_rows_with_prefix() {
+        use crate::codec::AvroFieldBuilder;
+        use crate::schema::AvroSchema;
+        let schema = ArrowSchema::new(vec![Field::new("x", DataType::Int32, false)]);
+        let arr = Int32Array::from(vec![42]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(arr)]).unwrap();
+        let avro_schema = AvroSchema::try_from(&schema).unwrap();
+        let fingerprint = avro_schema
+            .fingerprint(crate::schema::FingerprintAlgorithm::Rabin)
+            .unwrap();
+        let avro_root = AvroFieldBuilder::new(&avro_schema.schema().unwrap())
+            .build()
+            .unwrap();
+        let encoder = RecordEncoderBuilder::new(&avro_root, &schema)
+            .with_fingerprint(Some(fingerprint))
+            .build()
+            .unwrap();
+        let mut out = BytesMut::new();
+        let mut offsets: Vec<usize> = vec![0];
+        encoder
+            .encode_rows(&batch, 32, &mut out, &mut offsets)
+            .unwrap();
+        assert_eq!(offsets.len(), 2);
+        let row0 = row_slice(&out, &offsets, 0);
+        assert!(row0.len() > 10, "Row should contain prefix + encoded value");
+        assert_eq!(row0[0], 0xC3);
+        assert_eq!(row0[1], 0x01);
+    }
+
+    #[test]
+    fn encode_rows_empty_batch() {
+        let schema = ArrowSchema::new(vec![Field::new("x", DataType::Int32, false)]);
+        let arr = Int32Array::from(Vec::<i32>::new());
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(arr)]).unwrap();
+        let encoder = RecordEncoder {
+            columns: vec![FieldBinding {
+                arrow_index: 0,
+                nullability: None,
+                plan: FieldPlan::Scalar,
+            }],
+            prefix: None,
+        };
+        let mut out = BytesMut::new();
+        let mut offsets: Vec<usize> = vec![0];
+        encoder
+            .encode_rows(&batch, 16, &mut out, &mut offsets)
+            .unwrap();
+        assert_eq!(offsets, vec![0]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn encode_rows_matches_encode_output() {
+        let schema = ArrowSchema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Float64, false),
+        ]);
+        let int_arr = Int64Array::from(vec![100i64, 200, 300]);
+        let float_arr = Float64Array::from(vec![1.5, 2.5, 3.5]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(int_arr), Arc::new(float_arr)],
+        )
+        .unwrap();
+        let encoder = RecordEncoder {
+            columns: vec![
+                FieldBinding {
+                    arrow_index: 0,
+                    nullability: None,
+                    plan: FieldPlan::Scalar,
+                },
+                FieldBinding {
+                    arrow_index: 1,
+                    nullability: None,
+                    plan: FieldPlan::Scalar,
+                },
+            ],
+            prefix: None,
+        };
+        let mut stream_buf = Vec::new();
+        encoder.encode(&mut stream_buf, &batch).unwrap();
+        let mut out = BytesMut::new();
+        let mut offsets: Vec<usize> = vec![0];
+        encoder
+            .encode_rows(&batch, 32, &mut out, &mut offsets)
+            .unwrap();
+        assert_eq!(offsets.len(), 1 + batch.num_rows());
+        assert_bytes_eq(&out[..], &stream_buf);
+    }
+
+    #[test]
+    fn encode_rows_appends_to_existing_buffer() {
+        let schema = ArrowSchema::new(vec![Field::new("x", DataType::Int32, false)]);
+        let arr = Int32Array::from(vec![5, 6]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(arr)]).unwrap();
+        let encoder = RecordEncoder {
+            columns: vec![FieldBinding {
+                arrow_index: 0,
+                nullability: None,
+                plan: FieldPlan::Scalar,
+            }],
+            prefix: None,
+        };
+        let mut out = BytesMut::new();
+        out.extend_from_slice(&[0xAA, 0xBB]);
+        let mut offsets: Vec<usize> = vec![0, out.len()];
+        encoder
+            .encode_rows(&batch, 16, &mut out, &mut offsets)
+            .unwrap();
+        assert_eq!(offsets.len(), 4);
+        assert_eq!(*offsets.last().unwrap(), out.len());
+        assert_bytes_eq(row_slice(&out, &offsets, 0), &[0xAA, 0xBB]);
+        assert_bytes_eq(row_slice(&out, &offsets, 1), &avro_long_bytes(5));
+        assert_bytes_eq(row_slice(&out, &offsets, 2), &avro_long_bytes(6));
+    }
+
+    #[test]
+    fn encode_rows_nullable_column() {
+        let schema = ArrowSchema::new(vec![Field::new("x", DataType::Int32, true)]);
+        let arr = Int32Array::from(vec![Some(1), None, Some(3)]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(arr)]).unwrap();
+        let encoder = RecordEncoder {
+            columns: vec![FieldBinding {
+                arrow_index: 0,
+                nullability: Some(Nullability::NullFirst),
+                plan: FieldPlan::Scalar,
+            }],
+            prefix: None,
+        };
+        let mut out = BytesMut::new();
+        let mut offsets: Vec<usize> = vec![0];
+        encoder
+            .encode_rows(&batch, 16, &mut out, &mut offsets)
+            .unwrap();
+        assert_eq!(offsets.len(), 4);
+        let mut expected_row0 = Vec::new();
+        expected_row0.extend(avro_long_bytes(1)); // union branch for value
+        expected_row0.extend(avro_long_bytes(1)); // value
+        assert_bytes_eq(row_slice(&out, &offsets, 0), &expected_row0);
+        let expected_row1 = avro_long_bytes(0); // union branch for null
+        assert_bytes_eq(row_slice(&out, &offsets, 1), &expected_row1);
+        let mut expected_row2 = Vec::new();
+        expected_row2.extend(avro_long_bytes(1)); // union branch for value
+        expected_row2.extend(avro_long_bytes(3)); // value
+        assert_bytes_eq(row_slice(&out, &offsets, 2), &expected_row2);
+    }
+
+    #[test]
+    fn encode_prefix_write_error() {
+        use crate::codec::AvroFieldBuilder;
+        use crate::schema::{AvroSchema, FingerprintAlgorithm};
+        use std::io;
+
+        struct FailWriter {
+            failed: bool,
+        }
+
+        impl io::Write for FailWriter {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                if !self.failed {
+                    self.failed = true;
+                    Err(io::Error::other("fail write"))
+                } else {
+                    Ok(0)
+                }
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let schema = ArrowSchema::new(vec![Field::new("x", DataType::Int32, false)]);
+        let arr = Int32Array::from(vec![42]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(arr)]).unwrap();
+        let avro_schema = AvroSchema::try_from(&schema).unwrap();
+        let fingerprint = avro_schema
+            .fingerprint(FingerprintAlgorithm::Rabin)
+            .unwrap();
+        let avro_root = AvroFieldBuilder::new(&avro_schema.schema().unwrap())
+            .build()
+            .unwrap();
+        let encoder = RecordEncoderBuilder::new(&avro_root, &schema)
+            .with_fingerprint(Some(fingerprint))
+            .build()
+            .unwrap();
+
+        let mut writer = FailWriter { failed: false };
+        let err = encoder.encode(&mut writer, &batch).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("write prefix"), "unexpected error: {msg}");
     }
 }
