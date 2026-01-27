@@ -399,6 +399,10 @@ impl AvroDataType {
                 AvroLiteral::Bytes(parse_bytes_default(default_json, Some(4))?)
             }
             #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalMonthDayNano => {
+                AvroLiteral::Bytes(parse_bytes_default(default_json, Some(16))?)
+            }
+            #[cfg(feature = "avro_custom_types")]
             Codec::IntervalDayTime => {
                 AvroLiteral::Bytes(parse_bytes_default(default_json, Some(8))?)
             }
@@ -781,6 +785,9 @@ pub(crate) enum Codec {
     /// Arrow Interval(YearMonth) custom logical type (arrow.interval-year-month)
     #[cfg(feature = "avro_custom_types")]
     IntervalYearMonth,
+    /// Arrow Interval(MonthDayNano) custom logical type (arrow.interval-month-day-nano)
+    #[cfg(feature = "avro_custom_types")]
+    IntervalMonthDayNano,
     /// Arrow Interval(DayTime) custom logical type (arrow.interval-day-time)
     #[cfg(feature = "avro_custom_types")]
     IntervalDayTime,
@@ -906,6 +913,8 @@ impl Codec {
             }
             #[cfg(feature = "avro_custom_types")]
             Self::IntervalYearMonth => DataType::Interval(IntervalUnit::YearMonth),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano => DataType::Interval(IntervalUnit::MonthDayNano),
             #[cfg(feature = "avro_custom_types")]
             Self::IntervalDayTime => DataType::Interval(IntervalUnit::DayTime),
         }
@@ -1098,9 +1107,11 @@ impl From<&Codec> for UnionFieldKind {
             #[cfg(feature = "avro_custom_types")]
             Codec::Time32Secs => Self::TimeMillis, // Closest standard type
             #[cfg(feature = "avro_custom_types")]
-            Codec::UInt64 | Codec::Float16 | Codec::IntervalYearMonth | Codec::IntervalDayTime => {
-                Self::Fixed
-            }
+            Codec::UInt64
+            | Codec::Float16
+            | Codec::IntervalYearMonth
+            | Codec::IntervalMonthDayNano
+            | Codec::IntervalDayTime => Self::Fixed,
         }
     }
 }
@@ -1492,6 +1503,13 @@ impl<'a> Maker<'a> {
                             resolution: None,
                         },
                         #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.interval-month-day-nano") if size == 16 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::IntervalMonthDayNano,
+                            resolution: None,
+                        },
+                        #[cfg(feature = "avro_custom_types")]
                         Some("arrow.interval-day-time") if size == 8 => AvroDataType {
                             nullability: None,
                             metadata,
@@ -1644,6 +1662,10 @@ impl<'a> Maker<'a> {
                     #[cfg(feature = "avro_custom_types")]
                     (Some("arrow.interval-year-month"), c @ Codec::Fixed(4)) => {
                         *c = Codec::IntervalYearMonth
+                    }
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.interval-month-day-nano"), c @ Codec::Fixed(16)) => {
+                        *c = Codec::IntervalMonthDayNano
                     }
                     #[cfg(feature = "avro_custom_types")]
                     (Some("arrow.interval-day-time"), c @ Codec::Fixed(8)) => {
@@ -3226,6 +3248,28 @@ mod tests {
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
         assert!(matches!(dt.codec(), Codec::Fixed(16)));
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_interval_month_day_nano_custom_logical_type_fixed16() {
+        let schema = Schema::Complex(ComplexType::Fixed(Fixed {
+            name: "ArrowIntervalMDN",
+            namespace: None,
+            aliases: vec![],
+            size: 16,
+            attributes: Attributes {
+                logical_type: Some("arrow.interval-month-day-nano"),
+                additional: Default::default(),
+            },
+        }));
+        let mut maker = Maker::new(false, false);
+        let dt = maker.make_data_type(&schema, None, None).unwrap();
+        assert!(matches!(dt.codec(), Codec::IntervalMonthDayNano));
+        assert_eq!(
+            dt.codec.data_type(),
+            DataType::Interval(IntervalUnit::MonthDayNano)
+        );
     }
 
     #[test]

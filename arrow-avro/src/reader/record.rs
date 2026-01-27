@@ -224,6 +224,8 @@ enum Decoder {
     #[cfg(feature = "avro_custom_types")]
     IntervalYearMonth(Vec<i32>),
     #[cfg(feature = "avro_custom_types")]
+    IntervalMonthDayNano(Vec<IntervalMonthDayNano>),
+    #[cfg(feature = "avro_custom_types")]
     IntervalDayTime(Vec<IntervalDayTime>),
     Float32(Vec<f32>),
     Float64(Vec<f64>),
@@ -397,6 +399,10 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             (Codec::IntervalYearMonth, _) => {
                 Self::IntervalYearMonth(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::IntervalMonthDayNano, _) => {
+                Self::IntervalMonthDayNano(Vec::with_capacity(DEFAULT_CAPACITY))
             }
             #[cfg(feature = "avro_custom_types")]
             (Codec::IntervalDayTime, _) => {
@@ -618,6 +624,8 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::IntervalDayTime(v) => v.push(IntervalDayTime::new(0, 0)),
             #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano(v) => v.push(IntervalMonthDayNano::new(0, 0, 0)),
+            #[cfg(feature = "avro_custom_types")]
             Self::Time32Secs(v) | Self::IntervalYearMonth(v) => v.push(0),
             Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
             Self::Float64(v)
@@ -781,7 +789,9 @@ impl Decoder {
                             b.len()
                         )));
                     }
-                    v.push(u64::from_le_bytes(b.as_slice().try_into().unwrap()));
+                    v.push(u64::from_le_bytes([
+                        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                    ]));
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -797,7 +807,7 @@ impl Decoder {
                             b.len()
                         )));
                     }
-                    v.push(u16::from_le_bytes(b.as_slice().try_into().unwrap()));
+                    v.push(u16::from_le_bytes([b[0], b[1]]));
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -833,11 +843,31 @@ impl Decoder {
                             b.len()
                         )));
                     }
-                    v.push(i32::from_le_bytes(b.as_slice().try_into().unwrap()));
+                    v.push(i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
                     "Default for interval-year-month must be bytes (4-byte LE)".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 16 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "interval-month-day-nano default must be exactly 16 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    let months = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                    let days = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                    let nanos =
+                        i64::from_le_bytes([b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
+                    v.push(IntervalMonthDayNano::new(months, days, nanos));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for interval-month-day-nano must be bytes (16-byte LE)".to_string(),
                 )),
             },
             #[cfg(feature = "avro_custom_types")]
@@ -849,8 +879,8 @@ impl Decoder {
                             b.len()
                         )));
                     }
-                    let days = i32::from_le_bytes(b[0..4].try_into().unwrap());
-                    let milliseconds = i32::from_le_bytes(b[4..8].try_into().unwrap());
+                    let days = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                    let milliseconds = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
                     v.push(IntervalDayTime::new(days, milliseconds));
                     Ok(())
                 }
@@ -1094,12 +1124,14 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::UInt64(values) => {
                 let b = buf.get_fixed(8)?;
-                values.push(u64::from_le_bytes(b.try_into().unwrap()));
+                values.push(u64::from_le_bytes([
+                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                ]));
             }
             #[cfg(feature = "avro_custom_types")]
             Self::Float16(values) => {
                 let b = buf.get_fixed(2)?;
-                values.push(u16::from_le_bytes(b.try_into().unwrap()));
+                values.push(u16::from_le_bytes([b[0], b[1]]));
             }
             #[cfg(feature = "avro_custom_types")]
             Self::Date64(values) | Self::TimeNanos(values) | Self::TimestampSecs(_, values) => {
@@ -1110,14 +1142,23 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::IntervalYearMonth(values) => {
                 let b = buf.get_fixed(4)?;
-                values.push(i32::from_le_bytes(b.try_into().unwrap()));
+                values.push(i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano(values) => {
+                let b = buf.get_fixed(16)?;
+                let months = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                let days = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                let nanos =
+                    i64::from_le_bytes([b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
+                values.push(IntervalMonthDayNano::new(months, days, nanos));
             }
             #[cfg(feature = "avro_custom_types")]
             Self::IntervalDayTime(values) => {
                 let b = buf.get_fixed(8)?;
                 // Read as two i32s: days (4 bytes) and milliseconds (4 bytes)
-                let days = i32::from_le_bytes(b[0..4].try_into().unwrap());
-                let milliseconds = i32::from_le_bytes(b[4..8].try_into().unwrap());
+                let days = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                let milliseconds = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
                 values.push(IntervalDayTime::new(days, milliseconds));
             }
             Self::Float32(values) => values.push(buf.get_float()?),
@@ -1205,9 +1246,9 @@ impl Decoder {
             }
             Self::Duration(builder) => {
                 let b = buf.get_fixed(12)?;
-                let months = u32::from_le_bytes(b[0..4].try_into().unwrap());
-                let days = u32::from_le_bytes(b[4..8].try_into().unwrap());
-                let millis = u32::from_le_bytes(b[8..12].try_into().unwrap());
+                let months = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                let days = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                let millis = u32::from_le_bytes([b[8], b[9], b[10], b[11]]);
                 let nanos = (millis as i64) * 1_000_000;
                 builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
             }
@@ -1366,10 +1407,9 @@ impl Decoder {
             Self::Float16(values) => {
                 // Convert Vec<u16> to Float16Array by reinterpreting the raw bytes.
                 // This is safe because f16 and u16 have the same size and alignment.
+                let len = values.len();
                 let buf: Buffer = std::mem::take(values).into();
-                // SAFETY: u16 and f16 have the same size (2 bytes) and alignment.
-                let scalar_buf: ScalarBuffer<<Float16Type as ArrowPrimitiveType>::Native> =
-                    unsafe { ScalarBuffer::new_unchecked(buf) };
+                let scalar_buf = ScalarBuffer::new(buf, 0, len);
                 Arc::new(Float16Array::new(scalar_buf, nulls))
             }
             #[cfg(feature = "avro_custom_types")]
@@ -1390,6 +1430,10 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::IntervalYearMonth(values) => {
                 Arc::new(flush_primitive::<IntervalYearMonthType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano(values) => {
+                Arc::new(flush_primitive::<IntervalMonthDayNanoType>(values, nulls))
             }
             #[cfg(feature = "avro_custom_types")]
             Self::IntervalDayTime(values) => {
@@ -2313,6 +2357,8 @@ impl Skipper {
             Codec::Float16 => Self::Fixed(2),
             #[cfg(feature = "avro_custom_types")]
             Codec::IntervalYearMonth => Self::Fixed(4),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalMonthDayNano => Self::Fixed(16),
             #[cfg(feature = "avro_custom_types")]
             Codec::IntervalDayTime => Self::Fixed(8),
             Codec::Float32 => Self::Float32,
@@ -3595,6 +3641,46 @@ mod tests {
                 days: 5,
                 nanoseconds: 6_000_000,
             }),
+        ]);
+        assert_eq!(interval_array, &expected);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_interval_month_day_nano_custom_decoding_with_nulls() {
+        let avro_type = AvroDataType::new(
+            Codec::IntervalMonthDayNano,
+            Default::default(),
+            Some(Nullability::NullFirst),
+        );
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        // First value: months=1, days=-2, nanos=3
+        data.extend_from_slice(&encode_avro_long(1));
+        data.extend_from_slice(&1i32.to_le_bytes());
+        data.extend_from_slice(&(-2i32).to_le_bytes());
+        data.extend_from_slice(&3i64.to_le_bytes());
+        // Second value: null
+        data.extend_from_slice(&encode_avro_long(0));
+        // Third value: months=-4, days=5, nanos=-6
+        data.extend_from_slice(&encode_avro_long(1));
+        data.extend_from_slice(&(-4i32).to_le_bytes());
+        data.extend_from_slice(&5i32.to_le_bytes());
+        data.extend_from_slice(&(-6i64).to_le_bytes());
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let interval_array = array
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
+        assert_eq!(interval_array.len(), 3);
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(1, -2, 3)),
+            None,
+            Some(IntervalMonthDayNano::new(-4, 5, -6)),
         ]);
         assert_eq!(interval_array, &expected);
     }

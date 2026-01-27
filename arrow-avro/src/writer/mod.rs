@@ -779,10 +779,13 @@ mod tests {
     use super::*;
     use crate::compression::CompressionCodec;
     use crate::reader::ReaderBuilder;
+    use crate::schema::AVRO_NAME_METADATA_KEY;
     use crate::schema::{AvroSchema, SchemaStore};
     use crate::test_util::arrow_test_data;
     use arrow::datatypes::TimeUnit;
     use arrow::util::pretty::pretty_format_batches;
+    #[cfg(feature = "avro_custom_types")]
+    use arrow_array::RunArray;
     use arrow_array::builder::{Int32Builder, ListBuilder};
     #[cfg(feature = "avro_custom_types")]
     use arrow_array::types::{Int16Type, Int32Type, Int64Type};
@@ -791,19 +794,22 @@ mod tests {
         TimestampMillisecondType, TimestampNanosecondType,
     };
     use arrow_array::{
-        Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Int32Array, Int64Array,
-        PrimitiveArray, RecordBatch, StringArray, StructArray, UnionArray,
+        Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float16Array,
+        Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
+        IntervalMonthDayNanoArray, IntervalYearMonthArray, PrimitiveArray, RecordBatch,
+        StringArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
     };
-    #[cfg(feature = "avro_custom_types")]
-    use arrow_array::{Int16Array, RunArray};
-    #[cfg(not(feature = "avro_custom_types"))]
-    use arrow_buffer::IntervalMonthDayNano;
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     #[cfg(not(feature = "avro_custom_types"))]
     use arrow_schema::{DataType, Field, Schema};
     #[cfg(feature = "avro_custom_types")]
     use arrow_schema::{DataType, Field, Schema};
     use arrow_schema::{IntervalUnit, UnionMode};
     use bytes::BytesMut;
+    use half::f16;
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs::File;
@@ -1101,6 +1107,7 @@ mod tests {
             writer.write(&batch).is_ok(),
             "Expected no error from writing"
         );
+        writer.finish()?;
         assert!(
             writer.finish().is_ok(),
             "Expected no error from finishing writer"
@@ -3265,8 +3272,24 @@ mod tests {
         let reader = ReaderBuilder::new()
             .build(Cursor::new(buffer))
             .expect("build reader for roundtrip OCF");
+        // Get the Avro schema JSON from the OCF header
+        let avro_schema_json = reader
+            .avro_header()
+            .get(SCHEMA_METADATA_KEY)
+            .map(|raw| std::str::from_utf8(raw).expect("valid UTF-8").to_string());
+        // Get the Arrow schema and add the Avro schema metadata
+        let arrow_schema = reader.schema();
+        let rt_schema = if let Some(json) = avro_schema_json {
+            let mut metadata = arrow_schema.metadata().clone();
+            metadata.insert(SCHEMA_METADATA_KEY.to_string(), json);
+            Arc::new(Schema::new_with_metadata(
+                arrow_schema.fields().clone(),
+                metadata,
+            ))
+        } else {
+            arrow_schema
+        };
         let rt_batches: Vec<RecordBatch> = reader.collect::<Result<Vec<_>, _>>()?;
-        let rt_schema = rt_batches.first().map(|b| b.schema()).unwrap_or(schema);
         Ok(arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip"))
     }
 
@@ -4088,6 +4111,780 @@ mod tests {
             })
             .collect();
         assert_eq!(got, &IntervalMonthDayNanoArray::from(expected));
+        Ok(())
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_roundtrip_interval_month_day_nano_custom_types() -> Result<(), AvroError> {
+        use arrow_array::IntervalMonthDayNanoArray;
+        use arrow_buffer::IntervalMonthDayNano;
+        let schema = Schema::new(vec![Field::new(
+            "val",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            true,
+        )]);
+        let values: Vec<Option<IntervalMonthDayNano>> = vec![
+            Some(IntervalMonthDayNano::new(0, 0, 0)),
+            Some(IntervalMonthDayNano::new(1, 2, 3)), // sub-millisecond nanos ok
+            None,
+            Some(IntervalMonthDayNano::new(-4, -5, -6)),
+        ];
+        let array = IntervalMonthDayNanoArray::from(values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
+        let roundtrip = roundtrip_ocf(&batch)?;
+        assert_eq!(
+            roundtrip.schema().field(0).data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano),
+            "Expected Interval(MonthDayNano) with avro_custom_types enabled"
+        );
+        let got = roundtrip
+            .column(0)
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .expect("IntervalMonthDayNanoArray");
+        assert_eq!(got, &IntervalMonthDayNanoArray::from(values));
+        Ok(())
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn test_roundtrip_interval_month_day_nano_no_custom() -> Result<(), AvroError> {
+        use arrow_array::IntervalMonthDayNanoArray;
+        use arrow_buffer::IntervalMonthDayNano;
+        let schema = Schema::new(vec![Field::new(
+            "val",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            true,
+        )]);
+        // Only representable values for Avro duration: non-negative and whole milliseconds
+        let values: Vec<Option<IntervalMonthDayNano>> = vec![
+            Some(IntervalMonthDayNano::new(0, 0, 0)),
+            Some(IntervalMonthDayNano::new(1, 2, 3_000_000)),
+            None,
+            Some(IntervalMonthDayNano::new(4, 5, 6_000_000)),
+        ];
+        let array = IntervalMonthDayNanoArray::from(values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
+        let roundtrip = roundtrip_ocf(&batch)?;
+        assert_eq!(
+            roundtrip.schema().field(0).data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano),
+            "Expected Interval(MonthDayNano) without avro_custom_types"
+        );
+        let got = roundtrip
+            .column(0)
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .expect("IntervalMonthDayNanoArray");
+        assert_eq!(got, &IntervalMonthDayNanoArray::from(values));
+        Ok(())
+    }
+
+    fn schemas_equal_ignoring_metadata(left: &Schema, right: &Schema) -> bool {
+        if left.fields().len() != right.fields().len() {
+            return false;
+        }
+        for (l, r) in left.fields().iter().zip(right.fields().iter()) {
+            if l.name() != r.name()
+                || l.data_type() != r.data_type()
+                || l.is_nullable() != r.is_nullable()
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn avro_field_type<'a>(avro_schema: &'a Value, name: &str) -> &'a Value {
+        let fields = avro_schema
+            .get("fields")
+            .and_then(|v| v.as_array())
+            .expect("avro schema has 'fields' array");
+        fields
+            .iter()
+            .find(|f| f.get("name").and_then(|n| n.as_str()) == Some(name))
+            .unwrap_or_else(|| panic!("avro schema missing field '{name}'"))
+            .get("type")
+            .expect("field has 'type'")
+    }
+
+    #[test]
+    fn e2e_types_and_schema_alignment() -> Result<(), AvroError> {
+        // Values are chosen to:
+        // - exercise full UInt64 range when `avro_custom_types` is enabled
+        // - exercise negative / sub-millisecond intervals when `avro_custom_types` is enabled
+        // - remain representable under standard Avro logical types when `avro_custom_types` is disabled
+        let i8_values: Vec<Option<i8>> = vec![Some(i8::MIN), Some(-1), Some(i8::MAX)];
+        let i16_values: Vec<Option<i16>> = vec![Some(i16::MIN), Some(-1), Some(i16::MAX)];
+        let u8_values: Vec<Option<u8>> = vec![Some(0), Some(1), Some(u8::MAX)];
+        let u16_values: Vec<Option<u16>> = vec![Some(0), Some(1), Some(u16::MAX)];
+        let u32_values: Vec<Option<u32>> = vec![Some(0), Some(1), Some(u32::MAX)];
+        let u64_values: Vec<Option<u64>> = if cfg!(feature = "avro_custom_types") {
+            vec![Some(0), Some(i64::MAX as u64), Some((i64::MAX as u64) + 1)]
+        } else {
+            // Must remain <= i64::MAX when `avro_custom_types` is disabled
+            vec![Some(0), Some((i64::MAX as u64) - 1), Some(i64::MAX as u64)]
+        };
+        let f16_values: Vec<Option<f16>> = vec![
+            Some(f16::from_f32(1.5)),
+            Some(f16::from_f32(-2.0)),
+            Some(f16::from_f32(0.0)),
+        ];
+        let date64_values: Vec<Option<i64>> = vec![Some(-86_400_000), Some(0), Some(86_400_000)];
+        let time32s_values: Vec<Option<i32>> = vec![Some(0), Some(1), Some(86_399)];
+        let time64ns_values: Vec<Option<i64>> = vec![
+            Some(0),
+            Some(1_234_567_890), // truncation case for no-custom (nanos -> micros)
+            Some(86_399_000_000_123_i64), // near end-of-day, also truncation
+        ];
+        let ts_s_local_values: Vec<Option<i64>> = vec![Some(-1), Some(0), Some(1)];
+        let ts_s_utc_values: Vec<Option<i64>> = vec![Some(1), Some(2), Some(3)];
+        let iv_ym_values: Vec<Option<i32>> = if cfg!(feature = "avro_custom_types") {
+            vec![Some(0), Some(-6), Some(25)]
+        } else {
+            // Avro duration cannot represent negative months without custom types
+            vec![Some(0), Some(12), Some(25)]
+        };
+        let iv_dt_values: Vec<Option<IntervalDayTime>> = if cfg!(feature = "avro_custom_types") {
+            vec![
+                Some(IntervalDayTime::new(0, 0)),
+                Some(IntervalDayTime::new(1, 1000)),
+                Some(IntervalDayTime::new(-1, -1000)),
+            ]
+        } else {
+            // Avro duration cannot represent negative day-time without custom types
+            vec![
+                Some(IntervalDayTime::new(0, 0)),
+                Some(IntervalDayTime::new(1, 1000)),
+                Some(IntervalDayTime::new(30, 3_600_000)),
+            ]
+        };
+        let iv_mdn_values: Vec<Option<IntervalMonthDayNano>> =
+            if cfg!(feature = "avro_custom_types") {
+                vec![
+                    Some(IntervalMonthDayNano::new(0, 0, 0)),
+                    Some(IntervalMonthDayNano::new(1, 2, 3)), // sub-millisecond
+                    Some(IntervalMonthDayNano::new(-1, -2, -3)), // negative
+                ]
+            } else {
+                // Avro duration requires non-negative and whole milliseconds
+                vec![
+                    Some(IntervalMonthDayNano::new(0, 0, 0)),
+                    Some(IntervalMonthDayNano::new(1, 2, 3_000_000)), // 3ms
+                    Some(IntervalMonthDayNano::new(10, 20, 30_000_000_000)), // 30s
+                ]
+            };
+        // Build a batch containing all impacted types from issue #9290
+        let schema = Schema::new(vec![
+            Field::new("i8", DataType::Int8, false),
+            Field::new("i16", DataType::Int16, false),
+            Field::new("u8", DataType::UInt8, false),
+            Field::new("u16", DataType::UInt16, false),
+            Field::new("u32", DataType::UInt32, false),
+            Field::new("u64", DataType::UInt64, false),
+            Field::new("f16", DataType::Float16, false),
+            Field::new("date64", DataType::Date64, false),
+            Field::new("time32s", DataType::Time32(TimeUnit::Second), false),
+            Field::new("time64ns", DataType::Time64(TimeUnit::Nanosecond), false),
+            Field::new(
+                "ts_s_local",
+                DataType::Timestamp(TimeUnit::Second, None),
+                false,
+            ),
+            Field::new(
+                "ts_s_utc",
+                DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
+                false,
+            ),
+            Field::new("iv_ym", DataType::Interval(IntervalUnit::YearMonth), false),
+            Field::new("iv_dt", DataType::Interval(IntervalUnit::DayTime), false),
+            Field::new(
+                "iv_mdn",
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                false,
+            ),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(Int8Array::from(i8_values.clone())) as ArrayRef,
+                Arc::new(Int16Array::from(i16_values.clone())) as ArrayRef,
+                Arc::new(UInt8Array::from(u8_values.clone())) as ArrayRef,
+                Arc::new(UInt16Array::from(u16_values.clone())) as ArrayRef,
+                Arc::new(UInt32Array::from(u32_values.clone())) as ArrayRef,
+                Arc::new(UInt64Array::from(u64_values.clone())) as ArrayRef,
+                Arc::new(Float16Array::from(f16_values.clone())) as ArrayRef,
+                Arc::new(Date64Array::from(date64_values.clone())) as ArrayRef,
+                Arc::new(Time32SecondArray::from(time32s_values.clone())) as ArrayRef,
+                Arc::new(Time64NanosecondArray::from(time64ns_values.clone())) as ArrayRef,
+                Arc::new(TimestampSecondArray::from(ts_s_local_values.clone())) as ArrayRef,
+                Arc::new(
+                    TimestampSecondArray::from(ts_s_utc_values.clone()).with_timezone("+00:00"),
+                ) as ArrayRef,
+                Arc::new(IntervalYearMonthArray::from(iv_ym_values.clone())) as ArrayRef,
+                Arc::new(IntervalDayTimeArray::from(iv_dt_values.clone())) as ArrayRef,
+                Arc::new(IntervalMonthDayNanoArray::from(iv_mdn_values.clone())) as ArrayRef,
+            ],
+        )?;
+        let rt = roundtrip_ocf(&batch)?;
+        let rt_schema = rt.schema();
+        let avro_schema_json = rt_schema
+            .metadata()
+            .get(SCHEMA_METADATA_KEY)
+            .expect("avro.schema missing in round-tripped batch metadata");
+        let avro_schema: Value =
+            serde_json::from_str(avro_schema_json).expect("valid avro schema json");
+        let rt_arrow_schema = rt.schema();
+        if cfg!(feature = "avro_custom_types") {
+            assert!(
+                schemas_equal_ignoring_metadata(rt_arrow_schema.as_ref(), &schema),
+                "Schema fields mismatch.\nExpected: {:?}\nGot: {:?}",
+                schema,
+                rt_arrow_schema
+            );
+            for field_name in ["u64", "f16", "iv_ym", "iv_dt", "iv_mdn"] {
+                let field = rt_arrow_schema
+                    .field_with_name(field_name)
+                    .expect("field exists");
+                assert!(
+                    field.metadata().get(AVRO_NAME_METADATA_KEY).is_some(),
+                    "Field '{}' should have avro.name metadata",
+                    field_name
+                );
+            }
+        } else {
+            let exp_schema = Schema::new(vec![
+                Field::new("i8", DataType::Int32, false),
+                Field::new("i16", DataType::Int32, false),
+                Field::new("u8", DataType::Int32, false),
+                Field::new("u16", DataType::Int32, false),
+                Field::new("u32", DataType::Int64, false),
+                Field::new("u64", DataType::Int64, false),
+                Field::new("f16", DataType::Float32, false),
+                Field::new(
+                    "date64",
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    false,
+                ),
+                Field::new("time32s", DataType::Time32(TimeUnit::Millisecond), false),
+                Field::new("time64ns", DataType::Time64(TimeUnit::Microsecond), false),
+                Field::new(
+                    "ts_s_local",
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    false,
+                ),
+                Field::new(
+                    "ts_s_utc",
+                    DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
+                    false,
+                ),
+                Field::new(
+                    "iv_ym",
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    false,
+                ),
+                Field::new(
+                    "iv_dt",
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    false,
+                ),
+                Field::new(
+                    "iv_mdn",
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    false,
+                ),
+            ]);
+            assert!(
+                schemas_equal_ignoring_metadata(rt_arrow_schema.as_ref(), &exp_schema),
+                "Schema fields mismatch.\nExpected: {:?}\nGot: {:?}",
+                exp_schema,
+                rt_arrow_schema
+            );
+            for field_name in ["iv_ym", "iv_dt", "iv_mdn"] {
+                let field = rt_arrow_schema
+                    .field_with_name(field_name)
+                    .expect("field exists");
+                assert!(
+                    field.metadata().get(AVRO_NAME_METADATA_KEY).is_some(),
+                    "Field '{}' should have avro.name metadata",
+                    field_name
+                );
+            }
+        }
+        if cfg!(feature = "avro_custom_types") {
+            assert_eq!(
+                avro_field_type(&avro_schema, "i8"),
+                &json!({"type":"int","logicalType":"arrow.int8"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "i16"),
+                &json!({"type":"int","logicalType":"arrow.int16"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "u8"),
+                &json!({"type":"int","logicalType":"arrow.uint8"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "u16"),
+                &json!({"type":"int","logicalType":"arrow.uint16"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "u32"),
+                &json!({"type":"long","logicalType":"arrow.uint32"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "u64"),
+                &json!({"type":"fixed","name":"u64","size":8,"logicalType":"arrow.uint64"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "f16"),
+                &json!({"type":"fixed","name":"f16","size":2,"logicalType":"arrow.float16"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "date64"),
+                &json!({"type":"long","logicalType":"arrow.date64"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "time32s"),
+                &json!({"type":"int","logicalType":"arrow.time32-second"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "time64ns"),
+                &json!({"type":"long","logicalType":"arrow.time64-nanosecond"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "ts_s_local"),
+                &json!({"type":"long","logicalType":"arrow.local-timestamp-second"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "ts_s_utc"),
+                &json!({"type":"long","logicalType":"arrow.timestamp-second"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "iv_ym"),
+                &json!({"type":"fixed","name":"iv_ym","size":4,"logicalType":"arrow.interval-year-month"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "iv_dt"),
+                &json!({"type":"fixed","name":"iv_dt","size":8,"logicalType":"arrow.interval-day-time"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "iv_mdn"),
+                &json!({"type":"fixed","name":"iv_mdn","size":16,"logicalType":"arrow.interval-month-day-nano"})
+            );
+        } else {
+            // Without custom types:
+            // - small ints widen to int
+            // - UInt32/UInt64 widen to long
+            // - Float16 widens to float
+            // - Date64 coerces to local-timestamp-millis
+            // - Time32(Second) coerces to time-millis and scales seconds->millis
+            // - Time64(Nanosecond) coerces to time-micros and truncates nanos->micros
+            // - Timestamp(Second) coerces to timestamp-millis / local-timestamp-millis and scales seconds->millis
+            // - Intervals YearMonth/DayTime encode as Avro duration (fixed 12) with arrowIntervalUnit annotation
+            assert_eq!(avro_field_type(&avro_schema, "i8"), &json!("int"));
+            assert_eq!(avro_field_type(&avro_schema, "i16"), &json!("int"));
+            assert_eq!(avro_field_type(&avro_schema, "u8"), &json!("int"));
+            assert_eq!(avro_field_type(&avro_schema, "u16"), &json!("int"));
+            assert_eq!(avro_field_type(&avro_schema, "u32"), &json!("long"));
+            assert_eq!(avro_field_type(&avro_schema, "u64"), &json!("long"));
+            assert_eq!(avro_field_type(&avro_schema, "f16"), &json!("float"));
+            assert_eq!(
+                avro_field_type(&avro_schema, "date64"),
+                &json!({"type":"long","logicalType":"local-timestamp-millis"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "time32s"),
+                &json!({"type":"int","logicalType":"time-millis"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "time64ns"),
+                &json!({"type":"long","logicalType":"time-micros"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "ts_s_local"),
+                &json!({"type":"long","logicalType":"local-timestamp-millis"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "ts_s_utc"),
+                &json!({"type":"long","logicalType":"timestamp-millis"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "iv_ym"),
+                &json!({"type":"fixed","name":"iv_ym","size":12,"logicalType":"duration"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "iv_dt"),
+                &json!({"type":"fixed","name":"iv_dt","size":12,"logicalType":"duration"})
+            );
+            assert_eq!(
+                avro_field_type(&avro_schema, "iv_mdn"),
+                &json!({"type":"fixed","name":"iv_mdn","size":12,"logicalType":"duration"})
+            );
+        }
+        if cfg!(feature = "avro_custom_types") {
+            assert_eq!(
+                rt.column(0).as_ref(),
+                &Int8Array::from(i8_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(1).as_ref(),
+                &Int16Array::from(i16_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(2).as_ref(),
+                &UInt8Array::from(u8_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(3).as_ref(),
+                &UInt16Array::from(u16_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(4).as_ref(),
+                &UInt32Array::from(u32_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(5).as_ref(),
+                &UInt64Array::from(u64_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(6).as_ref(),
+                &Float16Array::from(f16_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(7).as_ref(),
+                &Date64Array::from(date64_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(8).as_ref(),
+                &Time32SecondArray::from(time32s_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(9).as_ref(),
+                &Time64NanosecondArray::from(time64ns_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(10).as_ref(),
+                &TimestampSecondArray::from(ts_s_local_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(11).as_ref(),
+                &TimestampSecondArray::from(ts_s_utc_values).with_timezone("+00:00") as &dyn Array
+            );
+            assert_eq!(
+                rt.column(12).as_ref(),
+                &IntervalYearMonthArray::from(iv_ym_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(13).as_ref(),
+                &IntervalDayTimeArray::from(iv_dt_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(14).as_ref(),
+                &IntervalMonthDayNanoArray::from(iv_mdn_values) as &dyn Array
+            );
+        } else {
+            let exp_i8: Vec<Option<i32>> = i8_values.iter().map(|v| v.map(|x| x as i32)).collect();
+            let exp_i16: Vec<Option<i32>> =
+                i16_values.iter().map(|v| v.map(|x| x as i32)).collect();
+            let exp_u8: Vec<Option<i32>> = u8_values.iter().map(|v| v.map(|x| x as i32)).collect();
+            let exp_u16: Vec<Option<i32>> =
+                u16_values.iter().map(|v| v.map(|x| x as i32)).collect();
+            let exp_u32: Vec<Option<i64>> =
+                u32_values.iter().map(|v| v.map(|x| x as i64)).collect();
+            let exp_u64: Vec<Option<i64>> =
+                u64_values.iter().map(|v| v.map(|x| x as i64)).collect();
+            let exp_f16: Vec<Option<f32>> =
+                f16_values.iter().map(|v| v.map(|x| x.to_f32())).collect();
+            let exp_time32_ms: Vec<Option<i32>> = time32s_values
+                .iter()
+                .map(|v| v.map(|x| x.saturating_mul(1000)))
+                .collect();
+            let exp_time64_us: Vec<Option<i64>> = time64ns_values
+                .iter()
+                .map(|v| v.map(|x| x / 1000))
+                .collect();
+            let exp_ts_local_ms: Vec<Option<i64>> = ts_s_local_values
+                .iter()
+                .map(|v| v.map(|x| x * 1000))
+                .collect();
+            let exp_ts_utc_ms: Vec<Option<i64>> = ts_s_utc_values
+                .iter()
+                .map(|v| v.map(|x| x * 1000))
+                .collect();
+            // Interval conversions to MonthDayNano via Avro duration
+            let exp_iv_ym: Vec<Option<IntervalMonthDayNano>> = iv_ym_values
+                .iter()
+                .map(|v| v.map(|months| IntervalMonthDayNano::new(months, 0, 0)))
+                .collect();
+            let exp_iv_dt: Vec<Option<IntervalMonthDayNano>> = iv_dt_values
+                .iter()
+                .map(|v| {
+                    v.map(|dt| {
+                        IntervalMonthDayNano::new(0, dt.days, (dt.milliseconds as i64) * 1_000_000)
+                    })
+                })
+                .collect();
+            assert_eq!(
+                rt.column(0).as_ref(),
+                &Int32Array::from(exp_i8) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(1).as_ref(),
+                &Int32Array::from(exp_i16) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(2).as_ref(),
+                &Int32Array::from(exp_u8) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(3).as_ref(),
+                &Int32Array::from(exp_u16) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(4).as_ref(),
+                &arrow_array::Int64Array::from(exp_u32) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(5).as_ref(),
+                &arrow_array::Int64Array::from(exp_u64) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(6).as_ref(),
+                &arrow_array::Float32Array::from(exp_f16) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(7).as_ref(),
+                &TimestampMillisecondArray::from(date64_values) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(8).as_ref(),
+                &Time32MillisecondArray::from(exp_time32_ms) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(9).as_ref(),
+                &Time64MicrosecondArray::from(exp_time64_us) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(10).as_ref(),
+                &TimestampMillisecondArray::from(exp_ts_local_ms) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(11).as_ref(),
+                &TimestampMillisecondArray::from(exp_ts_utc_ms).with_timezone("+00:00")
+                    as &dyn Array
+            );
+            assert_eq!(
+                rt.column(12).as_ref(),
+                &IntervalMonthDayNanoArray::from(exp_iv_ym) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(13).as_ref(),
+                &IntervalMonthDayNanoArray::from(exp_iv_dt) as &dyn Array
+            );
+            assert_eq!(
+                rt.column(14).as_ref(),
+                &IntervalMonthDayNanoArray::from(iv_mdn_values) as &dyn Array
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn non_custom_uint64_overflow_errors() -> Result<(), AvroError> {
+        let schema = Schema::new(vec![Field::new("u64", DataType::UInt64, false)]);
+        let values: Vec<Option<u64>> = vec![Some((i64::MAX as u64) + 1)];
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(UInt64Array::from(values)) as ArrayRef],
+        )?;
+        let mut w = AvroWriter::new(Vec::<u8>::new(), schema)?;
+        let err = w
+            .write(&batch)
+            .expect_err("expected UInt64 overflow error when avro_custom_types is disabled");
+        match err {
+            AvroError::InvalidArgument(msg) => {
+                assert_eq!(
+                    msg,
+                    "UInt64 value 9223372036854775808 exceeds i64::MAX; enable avro_custom_types feature for full UInt64 support"
+                );
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn non_custom_interval_year_month_negative_errors() -> Result<(), AvroError> {
+        let schema = Schema::new(vec![Field::new(
+            "iv_ym",
+            DataType::Interval(IntervalUnit::YearMonth),
+            false,
+        )]);
+        let values: Vec<Option<i32>> = vec![Some(-1)];
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(IntervalYearMonthArray::from(values)) as ArrayRef],
+        )?;
+
+        let mut w = AvroWriter::new(Vec::<u8>::new(), schema)?;
+        let err = w
+            .write(&batch)
+            .expect_err("expected negative Interval(YearMonth) error");
+        match err {
+            AvroError::InvalidArgument(msg) => {
+                assert_eq!(
+                    msg,
+                    "Avro 'duration' cannot encode negative months; enable `avro_custom_types` to round-trip signed Arrow Interval(YearMonth)"
+                );
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn non_custom_interval_day_time_negative_errors() -> Result<(), AvroError> {
+        let schema = Schema::new(vec![Field::new(
+            "iv_dt",
+            DataType::Interval(IntervalUnit::DayTime),
+            false,
+        )]);
+        let values: Vec<Option<IntervalDayTime>> = vec![Some(IntervalDayTime::new(-1, 0))];
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(IntervalDayTimeArray::from(values)) as ArrayRef],
+        )?;
+        let mut w = AvroWriter::new(Vec::<u8>::new(), schema)?;
+        let err = w
+            .write(&batch)
+            .expect_err("expected negative Interval(DayTime) error");
+        match err {
+            AvroError::InvalidArgument(msg) => {
+                assert_eq!(
+                    msg,
+                    "Avro 'duration' cannot encode negative days or milliseconds; enable `avro_custom_types` to round-trip signed Arrow Interval(DayTime)"
+                );
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn non_custom_interval_month_day_nano_negative_errors() -> Result<(), AvroError> {
+        let schema = Schema::new(vec![Field::new(
+            "iv_mdn",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            false,
+        )]);
+        let values: Vec<Option<IntervalMonthDayNano>> =
+            vec![Some(IntervalMonthDayNano::new(-1, 0, 0))];
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(IntervalMonthDayNanoArray::from(values)) as ArrayRef],
+        )?;
+        let mut w = AvroWriter::new(Vec::<u8>::new(), schema)?;
+        let err = w
+            .write(&batch)
+            .expect_err("expected negative Interval(MonthDayNano) error");
+        match err {
+            AvroError::InvalidArgument(msg) => {
+                assert_eq!(
+                    msg,
+                    "Avro 'duration' cannot encode negative months/days/nanoseconds; enable `avro_custom_types` to round-trip signed Arrow intervals"
+                );
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn non_custom_interval_month_day_nano_sub_millis_errors() -> Result<(), AvroError> {
+        let schema = Schema::new(vec![Field::new(
+            "iv_mdn",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            false,
+        )]);
+        let values: Vec<Option<IntervalMonthDayNano>> =
+            vec![Some(IntervalMonthDayNano::new(0, 0, 1))];
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(IntervalMonthDayNanoArray::from(values)) as ArrayRef],
+        )?;
+        let mut w = AvroWriter::new(Vec::<u8>::new(), schema)?;
+        let err = w
+            .write(&batch)
+            .expect_err("expected sub-millisecond Interval(MonthDayNano) error");
+        match err {
+            AvroError::InvalidArgument(msg) => {
+                assert_eq!(
+                    msg,
+                    "Avro 'duration' requires whole milliseconds; nanoseconds must be divisible by 1_000_000 (enable `avro_custom_types` to preserve nanosecond intervals)"
+                );
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn non_custom_time32_second_scaling_overflow_errors() -> Result<(), AvroError> {
+        let schema = Schema::new(vec![Field::new(
+            "time32s",
+            DataType::Time32(TimeUnit::Second),
+            false,
+        )]);
+        let values: Vec<Option<i32>> = vec![Some((i32::MAX / 1000) + 1)];
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Time32SecondArray::from(values)) as ArrayRef],
+        )?;
+        let mut w = AvroWriter::new(Vec::<u8>::new(), schema)?;
+        let err = w
+            .write(&batch)
+            .expect_err("expected time32 seconds->millis overflow error");
+        match err {
+            AvroError::InvalidArgument(msg) => {
+                assert_eq!(msg, "time32(secs) * 1000 overflowed");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn non_custom_timestamp_second_scaling_overflow_errors() -> Result<(), AvroError> {
+        let schema = Schema::new(vec![Field::new(
+            "ts_s_local",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )]);
+        // i64::MAX / 1000 + 1 will overflow when multiplied by 1000
+        let values: Vec<Option<i64>> = vec![Some((i64::MAX / 1000) + 1)];
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(TimestampSecondArray::from(values)) as ArrayRef],
+        )?;
+        let mut w = AvroWriter::new(Vec::<u8>::new(), schema)?;
+        let err = w
+            .write(&batch)
+            .expect_err("expected timestamp seconds->millis overflow error");
+        match err {
+            AvroError::InvalidArgument(msg) => {
+                assert_eq!(msg, "timestamp(secs) * 1000 overflowed");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
         Ok(())
     }
 }

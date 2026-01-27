@@ -1547,6 +1547,7 @@ fn datatype_to_avro(
             };
             json!({ "type": "long", "logicalType": logical_type })
         }
+        #[cfg(not(feature = "avro_custom_types"))]
         DataType::Interval(IntervalUnit::MonthDayNano) => {
             // Avro duration logical type: fixed(12) with months/days/millis per spec.
             let chosen_name = metadata
@@ -1558,6 +1559,25 @@ fn datatype_to_avro(
                 ("name".into(), json!(chosen_name)),
                 ("size".into(), json!(12)),
                 ("logicalType".into(), json!("duration")),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
+        }
+        #[cfg(feature = "avro_custom_types")]
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            // Arrow MonthDayNano interval: i32 months + i32 days + i64 nanos (16 bytes).
+            // We preserve the Arrow native representation via a custom logical type.
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(16)),
+                ("logicalType".into(), json!("arrow.interval-month-day-nano")),
             ]);
             if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
                 obj.insert("namespace".into(), json!(ns));
@@ -2751,9 +2771,9 @@ mod tests {
         assert_json_contains(&avro_uuid.json_string, "\"logicalType\":\"uuid\"");
     }
 
-    #[cfg(feature = "avro_custom_types")]
+    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_interval_duration() {
+    fn test_interval_month_day_nano_duration_schema() {
         let interval_field = ArrowField::new(
             "span",
             DataType::Interval(IntervalUnit::MonthDayNano),
@@ -2763,6 +2783,28 @@ mod tests {
         let avro = AvroSchema::try_from(&s).unwrap();
         assert_json_contains(&avro.json_string, "\"logicalType\":\"duration\"");
         assert_json_contains(&avro.json_string, "\"size\":12");
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_interval_month_day_nano_custom_schema() {
+        let interval_field = ArrowField::new(
+            "span",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            false,
+        );
+        let s = single_field_schema(interval_field);
+        let avro = AvroSchema::try_from(&s).unwrap();
+        assert_json_contains(
+            &avro.json_string,
+            "\"logicalType\":\"arrow.interval-month-day-nano\"",
+        );
+        assert_json_contains(&avro.json_string, "\"size\":16");
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_duration_custom_logical_type() {
         let dur_field = ArrowField::new("latency", DataType::Duration(TimeUnit::Nanosecond), false);
         let s2 = single_field_schema(dur_field);
         let avro2 = AvroSchema::try_from(&s2).unwrap();
