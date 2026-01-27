@@ -1222,94 +1222,6 @@ mod tests {
         assert_eq!(actual_rows, expected_rows);
     }
 
-    /// Test that when using Auto policy with page-aware bitmask, the reader
-    /// correctly handles pages that are skipped entirely due to row filtering.
-    ///
-    /// This creates a file with 12 rows across 6 pages (2 rows per page).
-    /// After filtering, only the first and last rows remain, skipping 4 pages
-    /// in the middle. The page-aware mask should handle this correctly by
-    /// respecting page boundaries during chunk iteration.
-    #[tokio::test]
-    async fn test_page_aware_mask_handles_page_skip_async() {
-        let first_value: i64 = 1111;
-        let last_value: i64 = 9999;
-        let num_rows: usize = 12;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int64, false),
-            Field::new("value", DataType::Int64, false),
-        ]));
-
-        let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
-        int_values[0] = first_value;
-        int_values[num_rows - 1] = last_value;
-        let keys = Int64Array::from(int_values.clone());
-        let values = Int64Array::from(int_values.clone());
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
-        )
-        .unwrap();
-
-        let props = WriterProperties::builder()
-            .set_write_batch_size(2)
-            .set_data_page_row_count_limit(2)
-            .build();
-
-        let mut buffer = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        let data = Bytes::from(buffer);
-
-        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
-        )
-        .await
-        .unwrap();
-        let schema = builder.parquet_schema().clone();
-        let filter_mask = ProjectionMask::leaves(&schema, [0]);
-
-        let make_predicate = |mask: ProjectionMask| {
-            ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
-                let column = batch.column(0);
-                let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
-                let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
-                or(&match_first, &match_second)
-            })
-        };
-
-        let predicate = make_predicate(filter_mask.clone());
-
-        // Using Auto policy with page index enabled - page-aware mask should handle
-        // the skipped pages correctly without panicking.
-        let stream = ParquetRecordBatchStreamBuilder::new_with_options(
-            TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
-        )
-        .await
-        .unwrap()
-        .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
-        .with_batch_size(12)
-        .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
-        .build()
-        .unwrap();
-
-        let schema = stream.schema().clone();
-        let batches: Vec<_> = stream.try_collect().await.unwrap();
-        let result = concat_batches(&schema, &batches).unwrap();
-        assert_eq!(result.num_rows(), 2);
-        assert_eq!(
-            result.column(0).as_ref(),
-            &Int64Array::from(vec![first_value, last_value])
-        );
-        assert_eq!(
-            result.column(1).as_ref(),
-            &Int64Array::from(vec![first_value, last_value])
-        );
-    }
-
     #[tokio::test]
     async fn test_row_filter() {
         let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
@@ -2332,6 +2244,7 @@ mod tests {
     /// Regression test for adaptive predicate pushdown attempting to read skipped pages.
     /// Related issue: https://github.com/apache/arrow-rs/issues/9239
     #[tokio::test]
+
     async fn test_predicate_pushdown_with_skipped_pages() {
         use arrow_array::TimestampNanosecondArray;
         use arrow_schema::TimeUnit;
