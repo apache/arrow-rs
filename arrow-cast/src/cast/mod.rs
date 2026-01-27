@@ -844,7 +844,6 @@ pub fn cast_with_options(
         // List
         (List(_), LargeList(list_to)) => cast_list::<i32, i64>(array, list_to, cast_options),
         (List(_), FixedSizeList(field, size)) => {
-            let array = array.as_list::<i32>();
             cast_list_to_fixed_size_list::<i32>(array, field, *size, cast_options)
         }
         (List(_), ListView(list_to)) => {
@@ -856,7 +855,6 @@ pub fn cast_with_options(
         // LargeList
         (LargeList(_), List(list_to)) => cast_list::<i64, i32>(array, list_to, cast_options),
         (LargeList(_), FixedSizeList(field, size)) => {
-            let array = array.as_list::<i64>();
             cast_list_to_fixed_size_list::<i64>(array, field, *size, cast_options)
         }
         (LargeList(_), ListView(list_to)) => {

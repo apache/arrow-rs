@@ -130,7 +130,7 @@ pub(crate) fn cast_fixed_size_list_to_list_view<OffsetSize: OffsetSizeTrait>(
 }
 
 pub(crate) fn cast_list_to_fixed_size_list<OffsetSize>(
-    array: &GenericListArray<OffsetSize>,
+    array: &dyn Array,
     field: &FieldRef,
     size: i32,
     cast_options: &CastOptions,
@@ -138,6 +138,8 @@ pub(crate) fn cast_list_to_fixed_size_list<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
+    let array = array.as_list::<OffsetSize>();
+
     let cap = array.len() * size as usize;
 
     // Whether the resulting array may contain null lists
