@@ -17,7 +17,11 @@
 
 use crate::cast::*;
 
-/// Helper function that takes a primitive array and casts to a (generic) list array.
+/// Converts a non-list array to a list array where every element is a single element
+/// list. `NULL`s in the original array become `[NULL]` (i.e. output list array
+/// contains no nulls since it wraps all input nulls in a single element list).
+///
+/// For example: `Int32([1, NULL, 2]) -> List<Int32>([[1], [NULL], [2]])`
 pub(crate) fn cast_values_to_list<O: OffsetSizeTrait>(
     array: &dyn Array,
     to: &FieldRef,
@@ -36,7 +40,7 @@ pub(crate) fn cast_values_to_list<O: OffsetSizeTrait>(
     Ok(Arc::new(list))
 }
 
-/// Helper function that takes a primitive array and casts to a (generic) list view array.
+/// Same as [`cast_values_to_list`] but output list view array.
 pub(crate) fn cast_values_to_list_view<O: OffsetSizeTrait>(
     array: &dyn Array,
     to: &FieldRef,
@@ -63,7 +67,8 @@ pub(crate) fn cast_values_to_list_view<O: OffsetSizeTrait>(
     Ok(Arc::new(list))
 }
 
-/// Helper function that takes a primitive array and casts to a fixed size list array.
+/// Same as [`cast_values_to_list`] but output fixed size list array with element
+/// size 1.
 pub(crate) fn cast_values_to_fixed_size_list(
     array: &dyn Array,
     to: &FieldRef,
@@ -75,6 +80,10 @@ pub(crate) fn cast_values_to_fixed_size_list(
     Ok(Arc::new(list))
 }
 
+/// Cast fixed size list array to inner values type, essentially flattening the
+/// lists.
+///
+/// For example: `FixedSizeList<Int32, 2>([[1, 2], [3, 4]]) -> Int32([1, 2, 3, 4])`
 pub(crate) fn cast_single_element_fixed_size_list_to_values(
     array: &dyn Array,
     to: &DataType,
@@ -113,6 +122,10 @@ fn cast_fixed_size_list_to_list_inner<OffsetSize: OffsetSizeTrait, const IS_LIST
     }
 }
 
+/// Cast fixed size list arrays to list arrays, maintaining the lengths of the inner
+/// lists.
+///
+/// For example: `FixedSizeList<Int32, 2>([[1, 2], [3, 4]]) -> List<Int32>([[1, 2], [3, 4]])`
 pub(crate) fn cast_fixed_size_list_to_list<OffsetSize: OffsetSizeTrait>(
     array: &dyn Array,
     to: &FieldRef,
@@ -121,6 +134,7 @@ pub(crate) fn cast_fixed_size_list_to_list<OffsetSize: OffsetSizeTrait>(
     cast_fixed_size_list_to_list_inner::<OffsetSize, false>(array, to, cast_options)
 }
 
+/// Same as [`cast_fixed_size_list_to_list`] but output list view array.
 pub(crate) fn cast_fixed_size_list_to_list_view<OffsetSize: OffsetSizeTrait>(
     array: &dyn Array,
     to: &FieldRef,
@@ -129,6 +143,9 @@ pub(crate) fn cast_fixed_size_list_to_list_view<OffsetSize: OffsetSizeTrait>(
     cast_fixed_size_list_to_list_inner::<OffsetSize, true>(array, to, cast_options)
 }
 
+/// Cast list to fixed size list array. If any inner list size does not match the
+/// size of the output fixed size list array, depending on `cast_options` we either
+/// output `NULL` for that element (safe) or raise an error.
 pub(crate) fn cast_list_to_fixed_size_list<OffsetSize>(
     array: &dyn Array,
     field: &FieldRef,
@@ -214,6 +231,7 @@ where
     Ok(Arc::new(array))
 }
 
+/// Same as [`cast_list_to_fixed_size_list`] but for list view arrays.
 pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
     array: &dyn Array,
     field: &FieldRef,
@@ -263,7 +281,7 @@ pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
     Ok(Arc::new(array))
 }
 
-/// Helper function that takes an Generic list container and casts the inner datatype.
+/// Casting between list arrays of same offset size; we cast only the inner type.
 pub(crate) fn cast_list_values<O: OffsetSizeTrait>(
     array: &dyn Array,
     to: &FieldRef,
@@ -279,7 +297,7 @@ pub(crate) fn cast_list_values<O: OffsetSizeTrait>(
     )?))
 }
 
-/// Helper function that takes an Generic list view container and casts the inner datatype.
+/// Casting between list view arrays of same offset size; we cast only the inner type.
 pub(crate) fn cast_list_view_values<O: OffsetSizeTrait>(
     array: &dyn Array,
     to: &FieldRef,
@@ -296,7 +314,7 @@ pub(crate) fn cast_list_view_values<O: OffsetSizeTrait>(
     )?))
 }
 
-/// Cast the container type of List/Largelist array along with the inner datatype
+/// Casting between list arrays of different offset size (e.g. List -> LargeList)
 pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     array: &dyn Array,
     field: &FieldRef,
@@ -330,6 +348,7 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     )?))
 }
 
+/// Casting list view arrays to list.
 pub(crate) fn cast_list_view_to_list<I, O>(
     array: &dyn Array,
     to: &FieldRef,
@@ -389,6 +408,7 @@ where
     )?))
 }
 
+/// Casting between list view arrays of different offset size (e.g. ListView -> LargeListView)
 pub(crate) fn cast_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     array: &dyn Array,
     to_field: &FieldRef,
@@ -438,6 +458,7 @@ pub(crate) fn cast_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     )?))
 }
 
+/// Casting list arrays to list view.
 pub(crate) fn cast_list_to_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     array: &dyn Array,
     to_field: &FieldRef,
