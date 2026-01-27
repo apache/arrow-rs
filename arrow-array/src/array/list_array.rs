@@ -422,7 +422,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         Self::from_nested_iter::<PrimitiveBuilder<T>, T::Native, P, I>(iter)
     }
 
-    /// Creates a [`GenericListArray`] from a nested iterator of primitive values.
+    /// Creates a [`GenericListArray`] from a nested iterator of values.
     /// This method works for any values type that has a corresponding builder that implements the
     /// `Extend` trait. That includes all numeric types, booleans, binary and string types and also
     /// dictionary encoded binary and strings.
