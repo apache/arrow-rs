@@ -320,7 +320,11 @@ impl Test {
         &[
             &["int8"],
             //["int64"],
-            //["utf8view"], ["int8", "int64"], ["int64", "utf8view"], ["int8", "utf8view"],
+            //["utf8view"],
+            // ["int8", "int64"],
+            &["int64", "utf8view"],
+            &["utf8view", "int8"], // reverse
+            // ["int8", "utf8view"],
             &["int8", "int64", "utf8view"],
         ]
     }
@@ -354,10 +358,13 @@ impl Test {
     /// Apply the selections to the three_column_batch to get the expected result
     fn expected(&self, columns: &[&str]) -> RecordBatch {
         let batch = three_column_batch();
-        let indices = columns
+        let mut indices = columns
             .iter()
             .map(|col_name| batch.schema().index_of(col_name).unwrap())
             .collect::<Vec<_>>();
+
+        // reader always returns columns in file order
+        indices.sort_unstable();
 
         let batch = batch.project(&indices).unwrap();
         let batches: Vec<_> = self
