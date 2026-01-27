@@ -16,12 +16,12 @@
 // under the License.
 
 use crate::codec::AvroFieldBuilder;
+use crate::errors::AvroError;
 use crate::reader::async_reader::ReaderState;
 use crate::reader::header::{Header, HeaderDecoder};
 use crate::reader::record::RecordDecoder;
 use crate::reader::{AsyncAvroFileReader, AsyncFileReader, Decoder};
 use crate::schema::{AvroSchema, FingerprintAlgorithm, SCHEMA_METADATA_KEY};
-use arrow_schema::ArrowError;
 use indexmap::IndexMap;
 use std::ops::Range;
 
@@ -110,7 +110,7 @@ impl<R> AsyncAvroFileReaderBuilder<R> {
 }
 
 impl<R: AsyncFileReader> AsyncAvroFileReaderBuilder<R> {
-    async fn read_header(&mut self) -> Result<(Header, u64), ArrowError> {
+    async fn read_header(&mut self) -> Result<(Header, u64), AvroError> {
         let mut decoder = HeaderDecoder::default();
         let mut position = 0;
         loop {
@@ -118,7 +118,7 @@ impl<R: AsyncFileReader> AsyncAvroFileReaderBuilder<R> {
                 ..(position + self.header_size_hint.unwrap_or(DEFAULT_HEADER_SIZE_HINT))
                     .min(self.file_size);
             let current_data = self.reader.get_bytes(range_to_fetch).await.map_err(|err| {
-                ArrowError::AvroError(format!(
+                AvroError::General(format!(
                     "Error fetching Avro header from object store: {err}"
                 ))
             })?;
@@ -137,14 +137,14 @@ impl<R: AsyncFileReader> AsyncAvroFileReaderBuilder<R> {
         decoder
             .flush()
             .map(|header| (header, position))
-            .ok_or_else(|| ArrowError::AvroError("Unexpected EOF while reading Avro header".into()))
+            .ok_or_else(|| AvroError::EOF("Unexpected EOF while reading Avro header".into()))
     }
 
     /// Build the asynchronous Avro reader with the provided parameters.
     /// This reads the header first to initialize the reader state.
-    pub async fn try_build(mut self) -> Result<AsyncAvroFileReader<R>, ArrowError> {
+    pub async fn try_build(mut self) -> Result<AsyncAvroFileReader<R>, AvroError> {
         if self.file_size == 0 {
-            return Err(ArrowError::AvroError("File size cannot be 0".into()));
+            return Err(AvroError::InvalidArgument("File size cannot be 0".into()));
         }
 
         // Start by reading the header from the beginning of the avro file
@@ -152,11 +152,11 @@ impl<R: AsyncFileReader> AsyncAvroFileReaderBuilder<R> {
         let (header, header_len) = self.read_header().await?;
         let writer_schema = {
             let raw = header.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
-                ArrowError::ParseError("No Avro schema present in file header".to_string())
+                AvroError::ParseError("No Avro schema present in file header".to_string())
             })?;
             let json_string = std::str::from_utf8(raw)
                 .map_err(|e| {
-                    ArrowError::ParseError(format!("Invalid UTF-8 in Avro schema header: {e}"))
+                    AvroError::ParseError(format!("Invalid UTF-8 in Avro schema header: {e}"))
                 })?
                 .to_string();
             AvroSchema::new(json_string)
@@ -212,7 +212,7 @@ impl<R: AsyncFileReader> AsyncAvroFileReaderBuilder<R> {
                 // But then we need to seek back 16 bytes to include the sync marker for the first block,
                 // as the logic in this reader searches the data for the first sync marker(after which a block starts),
                 // then reads blocks from the count, size etc.
-                let start = r.start.max(header_len.checked_sub(16).ok_or(ArrowError::ParseError("Avro header length overflow, header was not long enough to contain avro bytes".to_string()))?);
+                let start = r.start.max(header_len.checked_sub(16).ok_or(AvroError::ParseError("Avro header length overflow, header was not long enough to contain avro bytes".to_string()))?);
                 let end = r.end.max(start).min(self.file_size); // Ensure end is not less than start, worst case range is empty
                 start..end
             }

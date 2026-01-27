@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::ArrowError;
+use crate::errors::AvroError;
 use bytes::Bytes;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -38,13 +38,13 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 /// [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
 pub trait AsyncFileReader: Send {
     /// Retrieve the bytes in `range`
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ArrowError>>;
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>>;
 
     /// Retrieve multiple byte ranges. The default implementation will call `get_bytes` sequentially
     fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
-    ) -> BoxFuture<'_, Result<Vec<Bytes>, ArrowError>> {
+    ) -> BoxFuture<'_, Result<Vec<Bytes>, AvroError>> {
         async move {
             let mut result = Vec::with_capacity(ranges.len());
 
@@ -61,20 +61,20 @@ pub trait AsyncFileReader: Send {
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
 impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ArrowError>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
         self.as_mut().get_bytes(range)
     }
 
     fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
-    ) -> BoxFuture<'_, Result<Vec<Bytes>, ArrowError>> {
+    ) -> BoxFuture<'_, Result<Vec<Bytes>, AvroError>> {
         self.as_mut().get_byte_ranges(ranges)
     }
 }
 
 impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ArrowError>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
         async move {
             self.seek(SeekFrom::Start(range.start)).await?;
 
@@ -82,7 +82,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buffer = Vec::with_capacity(to_read as usize);
             let read = self.take(to_read).read_to_end(&mut buffer).await?;
             if read as u64 != to_read {
-                return Err(ArrowError::AvroError(format!(
+                return Err(AvroError::EOF(format!(
                     "expected to read {} bytes, got {}",
                     to_read, read
                 )));

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::errors::AvroError;
 use crate::reader::async_reader::AsyncFileReader;
-use arrow_schema::ArrowError;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
@@ -59,7 +59,7 @@ impl AvroObjectReader {
         }
     }
 
-    fn spawn<F, O, E>(&self, f: F) -> BoxFuture<'_, Result<O, ArrowError>>
+    fn spawn<F, O, E>(&self, f: F) -> BoxFuture<'_, Result<O, AvroError>>
     where
         F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxFuture<'a, Result<O, E>>
             + Send
@@ -75,29 +75,29 @@ impl AvroObjectReader {
                     .spawn(async move { f(&store, &path).await })
                     .map_ok_or_else(
                         |e| match e.try_into_panic() {
-                            Err(e) => Err(ArrowError::AvroError(e.to_string())),
+                            Err(e) => Err(AvroError::External(Box::new(e))),
                             Ok(p) => std::panic::resume_unwind(p),
                         },
-                        |res| res.map_err(|e| ArrowError::AvroError(e.to_string())),
+                        |res| res.map_err(|e| AvroError::General(e.to_string())),
                     )
                     .boxed()
             }
             None => f(&self.store, &self.path)
-                .map_err(|e| ArrowError::AvroError(e.to_string()))
+                .map_err(|e| AvroError::General(e.to_string()))
                 .boxed(),
         }
     }
 }
 
 impl AsyncFileReader for AvroObjectReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ArrowError>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
         self.spawn(|store, path| store.get_range(path, range))
     }
 
     fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
-    ) -> BoxFuture<'_, Result<Vec<Bytes>, ArrowError>>
+    ) -> BoxFuture<'_, Result<Vec<Bytes>, AvroError>>
     where
         Self: Send,
     {
