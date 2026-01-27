@@ -419,25 +419,30 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         P: IntoIterator<Item = Option<<T as ArrowPrimitiveType>::Native>>,
         I: IntoIterator<Item = Option<P>>,
     {
-        Self::from_nested_iter::<T::Native, PrimitiveBuilder<T>, P, I>(iter)
+        Self::from_nested_iter::<PrimitiveBuilder<T>, T::Native, P, I>(iter)
     }
 
-    /// Creates a [`GenericListArray`] from an iterator of primitive values
+    /// Creates a [`GenericListArray`] from a nested iterator of primitive values.
+    /// This method works for any values type that has a corresponding builder that implements the
+    /// `Extend` trait. That includes all numeric types, booleans, binary and string types and also
+    /// dictionary encoded binary and strings.
+    ///
     /// # Example
     /// ```
     /// # use arrow_array::ListArray;
-    /// # use arrow_array::builder::Int32Builder;
+    /// # use arrow_array::types::Int32Type;
+    /// # use arrow_array::builder::StringDictionaryBuilder;
     ///
     /// let data = vec![
-    ///    Some(vec![Some(0), Some(1), Some(2)]),
+    ///    Some(vec![Some("foo"), Some("bar"), Some("baz")]),
     ///    None,
-    ///    Some(vec![Some(3), None, Some(5)]),
-    ///    Some(vec![Some(6), Some(7)]),
+    ///    Some(vec![Some("bar"), None, Some("foo")]),
+    ///    Some(vec![]),
     /// ];
-    /// let list_array = ListArray::from_nested_iter::<i32, Int32Builder, _, _>(data);
+    /// let list_array = ListArray::from_nested_iter::<StringDictionaryBuilder<Int32Type>, _, _, _>(data);
     /// println!("{:?}", list_array);
     /// ```
-    pub fn from_nested_iter<T, B, P, I>(iter: I) -> Self
+    pub fn from_nested_iter<B, T, P, I>(iter: I) -> Self
     where
         B: ArrayBuilder + Default + Extend<Option<T>>,
         P: IntoIterator<Item = Option<T>>,
@@ -1324,7 +1329,7 @@ mod tests {
 
     #[test]
     fn test_list_from_iter_i32() {
-        let array = ListArray::from_nested_iter::<i32, Int32Builder, _, _>(vec![
+        let array = ListArray::from_nested_iter::<Int32Builder, _, _, _>(vec![
             None,
             Some(vec![Some(1), None, Some(2)]),
         ]);
@@ -1336,7 +1341,7 @@ mod tests {
 
     #[test]
     fn test_list_from_iter_bool() {
-        let array = ListArray::from_nested_iter::<bool, BooleanBuilder, _, _>(vec![
+        let array = ListArray::from_nested_iter::<BooleanBuilder, _, _, _>(vec![
             Some(vec![None, Some(false), Some(true)]),
             None,
         ]);
@@ -1349,7 +1354,7 @@ mod tests {
 
     #[test]
     fn test_list_from_iter_str() {
-        let array = ListArray::from_nested_iter::<&str, StringBuilder, _, _>(vec![
+        let array = ListArray::from_nested_iter::<StringBuilder, _, _, _>(vec![
             Some(vec![Some("foo"), None, Some("bar")]),
             None,
         ]);
@@ -1363,7 +1368,7 @@ mod tests {
     #[test]
     fn test_list_from_iter_dict_str() {
         let array =
-            ListArray::from_nested_iter::<&str, StringDictionaryBuilder<Int8Type>, _, _>(vec![
+            ListArray::from_nested_iter::<StringDictionaryBuilder<Int8Type>, _, _, _>(vec![
                 Some(vec![Some("foo"), None, Some("bar"), Some("foo")]),
                 None,
             ]);
