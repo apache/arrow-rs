@@ -329,13 +329,13 @@ impl<T> ArrowReaderBuilderExt for ArrowReaderBuilder<T> {
 /// Copy paste version of the `AsyncFileReader` trait for testing purposes 🤮
 /// TODO put this in a common place
 #[derive(Clone)]
-struct TestReader {
+pub(crate) struct TestReader {
     data: Bytes,
     metadata: Option<Arc<ParquetMetaData>>,
 }
 
 impl TestReader {
-    fn new(data: Bytes) -> Self {
+    pub(crate) fn new(data: Bytes) -> Self {
         Self {
             data,
             metadata: Default::default(),
