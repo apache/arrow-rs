@@ -496,12 +496,12 @@ impl IntoShreddingField for (DataType, bool) {
 /// // Define the shredding schema using the builder
 /// let shredding_type = ShreddedSchemaBuilder::default()
 ///     // store the "time" field as a separate UTC timestamp
-///     .with_path("time", (&DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())), true))
+///     .with_path(VariantPath::from_str_unchecked("time"), (&DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())), true))
 ///     // store hostname as non-nullable Utf8
-///     .with_path("hostname", (&DataType::Utf8, false))
+///     .with_path(VariantPath::from_str_unchecked("hostname"), (&DataType::Utf8, false))
 ///     // pass a FieldRef directly
 ///     .with_path(
-///         "metadata.trace_id",
+///         VariantPath::from_str_unchecked("metadata.trace_id"),
 ///         Arc::new(Field::new("trace_id", DataType::FixedSizeBinary(16), false)),
 ///     )
 ///     // field name with a dot: use VariantPath to avoid splitting
