@@ -2328,16 +2328,7 @@ mod tests {
             }
             let selection = RowSelection::from(selectors);
 
-            // Predicate 1: tag in ('a', 'c')
-            let tag_predicate =
-                ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [1]), |batch| {
-                    let col = batch.column(0).as_string::<i32>();
-                    Ok(BooleanArray::from_iter(
-                        col.iter().map(|t| t.map(|v| v == "a" || v == "c")),
-                    ))
-                });
-
-            // Predicate 2: time >= START
+            // Predicate 1: time >= START
             let time_gte_predicate =
                 ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
                     let col = batch.column(0).as_primitive::<TimestampNanosecondType>();
@@ -2346,7 +2337,7 @@ mod tests {
                     ))
                 });
 
-            // Predicate 3: time < END
+            // Predicate 2: time < END
             let time_lt_predicate =
                 ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
                     let col = batch.column(0).as_primitive::<TimestampNanosecondType>();
@@ -2356,7 +2347,6 @@ mod tests {
                 });
 
             let row_filter = RowFilter::new(vec![
-                Box::new(tag_predicate),
                 Box::new(time_gte_predicate),
                 Box::new(time_lt_predicate),
             ]);

@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::StructMode;
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{ArrayDecoder, make_decoder};
+use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::buffer::NullBuffer;
@@ -33,13 +32,11 @@ pub struct MapArrayDecoder {
 
 impl MapArrayDecoder {
     pub fn new(
-        data_type: DataType,
-        coerce_primitive: bool,
-        strict_mode: bool,
+        ctx: &DecoderContext,
+        data_type: &DataType,
         is_nullable: bool,
-        struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
-        let fields = match &data_type {
+        let fields = match data_type {
             DataType::Map(_, true) => {
                 return Err(ArrowError::NotYetImplemented(
                     "Decoding MapArray with sorted fields".to_string(),
@@ -56,23 +53,11 @@ impl MapArrayDecoder {
             _ => unreachable!(),
         };
 
-        let keys = make_decoder(
-            fields[0].data_type().clone(),
-            coerce_primitive,
-            strict_mode,
-            fields[0].is_nullable(),
-            struct_mode,
-        )?;
-        let values = make_decoder(
-            fields[1].data_type().clone(),
-            coerce_primitive,
-            strict_mode,
-            fields[1].is_nullable(),
-            struct_mode,
-        )?;
+        let keys = ctx.make_decoder(fields[0].data_type(), fields[0].is_nullable())?;
+        let values = ctx.make_decoder(fields[1].data_type(), fields[1].is_nullable())?;
 
         Ok(Self {
-            data_type,
+            data_type: data_type.clone(),
             keys,
             values,
             is_nullable,
