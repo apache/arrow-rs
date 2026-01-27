@@ -154,6 +154,30 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         })
     }
 
+    /// It returns a new array with the same data and a new null buffer.
+    ///
+    /// The resulting null buffer is the union of the existing nulls and the provided nulls.
+    /// In other words, a slot is valid in the result only if it is valid in BOTH
+    /// the existing array AND the provided `nulls`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nulls` has a different length than the array.
+    pub fn with_nulls(self, nulls: Option<NullBuffer>) -> Self {
+        if let Some(n) = &nulls {
+            assert_eq!(n.len(), self.len(), "Null buffer length mismatch");
+        }
+
+        let new_nulls = NullBuffer::union(self.nulls.as_ref(), nulls.as_ref());
+
+        Self {
+            data_type: T::DATA_TYPE,
+            value_offsets: self.value_offsets,
+            value_data: self.value_data,
+            nulls: new_nulls,
+        }
+    }
+
     /// Create a new [`GenericByteArray`] from the provided parts, without validation
     ///
     /// # Safety
