@@ -212,6 +212,55 @@ where
     Ok(Arc::new(array))
 }
 
+pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    field: &FieldRef,
+    size: i32,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_list_view::<O>();
+
+    let nullable = cast_options.safe || array.null_count() != 0;
+    let mut nulls = nullable.then(|| {
+        let mut buffer = BooleanBufferBuilder::new(array.len());
+        match array.nulls() {
+            Some(n) => buffer.append_buffer(n.inner()),
+            None => buffer.append_n(array.len(), true),
+        }
+        buffer
+    });
+
+    let values = array.values().to_data();
+    let cap = array.len() * size as usize;
+    let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
+
+    for idx in 0..array.len() {
+        let offset = array.value_offset(idx).as_usize();
+        let len = array.value_size(idx).as_usize();
+
+        if len != size as usize {
+            // Nulls in FixedSizeListArray take up space and so we must pad the values
+            if cast_options.safe || array.is_null(idx) {
+                mutable.extend_nulls(size as _);
+                nulls.as_mut().unwrap().set_bit(idx, false);
+            } else {
+                return Err(ArrowError::CastError(format!(
+                    "Cannot cast to FixedSizeList({size}): value at index {idx} has length {len}",
+                )));
+            }
+        } else {
+            mutable.extend(0, offset, offset + len);
+        }
+    }
+
+    let values = make_array(mutable.freeze());
+    let values = cast_with_options(values.as_ref(), field.data_type(), cast_options)?;
+
+    let nulls = nulls.map(|mut x| x.finish().into());
+    let array = FixedSizeListArray::try_new(field.clone(), size, values, nulls)?;
+    Ok(Arc::new(array))
+}
+
 /// Helper function that takes an Generic list container and casts the inner datatype.
 pub(crate) fn cast_list_values<O: OffsetSizeTrait>(
     array: &dyn Array,

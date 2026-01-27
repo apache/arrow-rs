@@ -884,6 +884,9 @@ pub fn cast_with_options(
         (ListView(_), LargeListView(list_to)) => {
             cast_list_view::<i32, i64>(array, list_to, cast_options)
         }
+        (ListView(_), FixedSizeList(field, size)) => {
+            cast_list_view_to_fixed_size_list::<i32>(array, field, *size, cast_options)
+        }
         // LargeListView
         (LargeListView(_), LargeList(list_to)) => {
             cast_list_view_to_list::<i64, Int64Type>(array, list_to, cast_options)
@@ -893,6 +896,9 @@ pub fn cast_with_options(
         }
         (LargeListView(_), ListView(list_to)) => {
             cast_list_view::<i64, i32>(array, list_to, cast_options)
+        }
+        (LargeListView(_), FixedSizeList(field, size)) => {
+            cast_list_view_to_fixed_size_list::<i64>(array, field, *size, cast_options)
         }
         // FixedSizeList
         (FixedSizeList(_, _), List(list_to)) => {
@@ -8768,6 +8774,82 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_list_view_to_fsl() {
+        // There four noteworthy cases we should handle:
+        // 1. No nulls
+        // 2. Nulls that are always empty
+        // 3. Nulls that have varying lengths
+        // 4. Nulls that are correctly sized (same as target list size)
+
+        // Non-null case
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+        ];
+        let array = Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
+        )) as ArrayRef;
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            values, 3,
+        )) as ArrayRef;
+        let actual = cast(array.as_ref(), &DataType::FixedSizeList(field.clone(), 3)).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        // Null cases
+        // Array is [[1, 2, 3], null, [4, 5, 6], null]
+        let cases = [
+            (
+                // Zero-length nulls
+                vec![1, 2, 3, 4, 5, 6],
+                vec![0, 0, 3, 0],
+                vec![3, 0, 3, 0],
+            ),
+            (
+                // Varying-length nulls
+                vec![1, 2, 3, 0, 0, 4, 5, 6, 0],
+                vec![0, 1, 5, 0],
+                vec![3, 2, 3, 1],
+            ),
+            (
+                // Correctly-sized nulls
+                vec![1, 2, 3, 0, 0, 0, 4, 5, 6, 0, 0, 0],
+                vec![0, 3, 6, 9],
+                vec![3, 3, 3, 3],
+            ),
+            (
+                // Mixed nulls
+                vec![1, 2, 3, 4, 5, 6, 0, 0, 0],
+                vec![0, 0, 3, 6],
+                vec![3, 0, 3, 3],
+            ),
+        ];
+        let null_buffer = NullBuffer::from(vec![true, false, true, false]);
+
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                None,
+                Some(vec![Some(4), Some(5), Some(6)]),
+                None,
+            ],
+            3,
+        )) as ArrayRef;
+
+        for (values, offsets, lengths) in cases.iter() {
+            let array = Arc::new(ListViewArray::new(
+                field.clone(),
+                offsets.clone().into(),
+                lengths.clone().into(),
+                Arc::new(Int32Array::from(values.clone())),
+                Some(null_buffer.clone()),
+            )) as ArrayRef;
+            let actual = cast(array.as_ref(), &DataType::FixedSizeList(field.clone(), 3)).unwrap();
+            assert_eq!(expected.as_ref(), actual.as_ref());
+        }
+    }
+
+    #[test]
     fn test_cast_list_to_fsl_safety() {
         let values = vec![
             Some(vec![Some(1), Some(2), Some(3)]),
@@ -8834,19 +8916,91 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_list_view_to_fsl_safety() {
+        let values = vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5)]),
+            Some(vec![Some(6), Some(7), Some(8), Some(9)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ];
+        let array = Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
+        )) as ArrayRef;
+
+        let res = cast_with_options(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        );
+        assert!(res.is_err());
+        assert!(
+            format!("{res:?}")
+                .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2")
+        );
+
+        // When safe=true (default), the cast will fill nulls for lists that are
+        // too short and truncate lists that are too long.
+        let res = cast(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
+        )
+        .unwrap();
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                None, // Too short -> replaced with null
+                None, // Too long -> replaced with null
+                Some(vec![Some(3), Some(4), Some(5)]),
+            ],
+            3,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), res.as_ref());
+
+        // The safe option is false and the source array contains a null list.
+        // issue: https://github.com/apache/arrow-rs/issues/5642
+        let array = Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+        ])) as ArrayRef;
+        let res = cast_with_options(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(1), Some(2), Some(3)]), None],
+            3,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), res.as_ref());
+    }
+
+    #[test]
     fn test_cast_large_list_to_fsl() {
         let values = vec![Some(vec![Some(1), Some(2)]), Some(vec![Some(3), Some(4)])];
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
+            2,
+        )) as ArrayRef;
+        let target_type =
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 2);
+
         let array = Arc::new(LargeListArray::from_iter_primitive::<Int32Type, _, _>(
             values.clone(),
         )) as ArrayRef;
-        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
-            values, 2,
+        let actual = cast(array.as_ref(), &target_type).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        let array = Arc::new(LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
         )) as ArrayRef;
-        let actual = cast(
-            array.as_ref(),
-            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 2),
-        )
-        .unwrap();
+        let actual = cast(array.as_ref(), &target_type).unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
     }
 
@@ -8886,12 +9040,27 @@ mod tests {
 
     #[test]
     fn test_cast_list_to_fsl_empty() {
-        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
-        let array = new_empty_array(&DataType::List(field.clone()));
-
-        let target_type = DataType::FixedSizeList(field.clone(), 3);
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let target_type = DataType::FixedSizeList(inner_field.clone(), 3);
         let expected = new_empty_array(&target_type);
 
+        // list
+        let array = new_empty_array(&DataType::List(inner_field.clone()));
+        let actual = cast(array.as_ref(), &target_type).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        // largelist
+        let array = new_empty_array(&DataType::LargeList(inner_field.clone()));
+        let actual = cast(array.as_ref(), &target_type).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        // listview
+        let array = new_empty_array(&DataType::ListView(inner_field.clone()));
+        let actual = cast(array.as_ref(), &target_type).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        // largelistview
+        let array = new_empty_array(&DataType::LargeListView(inner_field.clone()));
         let actual = cast(array.as_ref(), &target_type).unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
     }
