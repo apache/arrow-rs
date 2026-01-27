@@ -120,17 +120,35 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     let mut offsets = Vec::with_capacity(rows.len() + 1);
     offsets.push(O::usize_as(0));
 
+    // Check if child is Null type - if so, we need special handling
+    // to count elements correctly even when they decode to 0 bytes
+    let is_null_child = matches!(&field.data_type, DataType::List(f) if f.data_type() == &DataType::Null)
+        || matches!(&field.data_type, DataType::LargeList(f) if f.data_type() == &DataType::Null);
+
     for row in rows.iter_mut() {
         let mut row_offset = 0;
         loop {
             let decoded = super::variable::decode_blocks(&row[row_offset..], opts, |x| {
                 values_bytes += x.len();
             });
+            row_offset += decoded;
             if decoded <= 1 {
+                // For NULL child arrays, EMPTY_SENTINEL (1) indicates a non-null list element
+                // that contains zero bytes of actual data. We still need to count this element.
+                // The final EMPTY_SENTINEL marks the end of the list and should not be counted.
+                // If there's more data after this marker, it's an element and we continue.
+                if is_null_child
+                    && (row_offset > row.len() || row[row_offset - 1] != null_sentinel(opts))
+                    && row_offset < row.len()
+                {
+                    // There's more data, this marker represents an element
+                    offset += 1;
+                    continue;
+                }
+                // row_offset == row.len(): this is the final end marker, don't count
                 offsets.push(O::usize_as(offset));
                 break;
             }
-            row_offset += decoded;
             offset += 1;
         }
     }
@@ -153,11 +171,31 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
             });
             row_offset += decoded;
             if decoded <= 1 {
+                // For NULL child arrays, EMPTY_SENTINEL indicates a non-null list element
+                // that contains zero bytes of actual data. We need to count these elements.
+                // The final EMPTY_SENTINEL marks the end of the list and should not be counted.
+                // If there's more data after this marker, it's an element and we continue.
+                if is_null_child
+                    && (row_offset > row.len() || row[row_offset - 1] != null_sentinel(opts))
+                    && row_offset < row.len()
+                {
+                    // There's more data, this marker represents an element
+                    values_offsets.push(values_bytes.len());
+                    continue;
+                }
+                // row_offset == row.len(): this is the final end marker, don't count
                 break;
             }
             values_offsets.push(values_bytes.len());
         }
         *row = &row[row_offset..];
+    }
+
+    // For NULL child arrays, if offset is non-zero but values_offsets is empty,
+    // it means we have list elements that decode to zero bytes of actual data.
+    // We need to preserve the element count by filling values_offsets.
+    if is_null_child && offset > 0 && values_offsets.is_empty() {
+        values_offsets = (0..offset).collect();
     }
 
     if opts.descending {
