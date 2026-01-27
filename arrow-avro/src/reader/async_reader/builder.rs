@@ -117,14 +117,23 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
             let range_to_fetch = position
                 ..(position + self.header_size_hint.unwrap_or(DEFAULT_HEADER_SIZE_HINT))
                     .min(self.file_size);
-            let current_data = self.reader.get_bytes(range_to_fetch).await.map_err(|err| {
+
+            // Maybe EOF after the header, no actual data
+            if range_to_fetch.is_empty() {
+                break;
+            }
+
+            let current_data = self.reader.get_bytes(range_to_fetch.clone()).await.map_err(|err| {
                 AvroError::General(format!(
-                    "Error fetching Avro header from object store: {err}"
+                    "Error fetching Avro header from object store(range: {range_to_fetch:?}): {err}"
                 ))
             })?;
             if current_data.is_empty() {
-                break;
+                return Err(AvroError::EOF(
+                    "Unexpected EOF while fetching header data".into(),
+                ));
             }
+
             let read = current_data.len();
             let decoded = decoder.decode(&current_data)?;
             if decoded != read {
@@ -219,7 +228,9 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
             None => 0..self.file_size,
         };
 
-        let reader_state = if range.start == range.end {
+        // Determine if there is actually data to fetch, note that we subtract the header len from range.start,
+        // so we need to check if range.end == header_len to see if there's no data after the header
+        let reader_state = if range.start == range.end || header_len == range.end {
             ReaderState::Finished
         } else {
             ReaderState::Idle {
