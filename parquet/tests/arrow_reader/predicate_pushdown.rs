@@ -18,15 +18,18 @@
 //! Fuzz Tests for predicate evaluation in the parquet reader
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::Int64Type;
+use arrow_array::types::{Int8Type, Int64Type};
 use arrow_array::{
-    Array, ArrayRef, Int8Array, Int64Array, RecordBatch, StringViewArray, UInt8Array,
+    Array, ArrayRef, BooleanArray, Int8Array, Int64Array, RecordBatch, StringViewArray, UInt8Array,
 };
+use arrow_buffer::BooleanBufferBuilder;
+use arrow_schema::ArrowError;
+use arrow_schema::DataType::Int8;
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::{
-    ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter,
-    RowSelection,
+    ArrowPredicate, ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+    RowFilter, RowSelection,
 };
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::basic::Compression;
@@ -68,7 +71,7 @@ use std::sync::{Arc, OnceLock};
 ///           │       │      │       │        │       │
 ///           └───────┘      └───────┘        └───────┘
 ///
-///             uint8          int64              utf8view
+///             int8          int64              utf8view
 ///```
 #[test]
 fn test_verify_parquet_layout() {
@@ -157,10 +160,10 @@ fn three_column_batch() -> RecordBatch {
                 if x % 17 == 0 {
                     None
                 } else {
-                    Some((x % 256) as u8)
+                    Some((x % 256) as i8)
                 }
             });
-            let int8: ArrayRef = Arc::new(int8_values.collect::<UInt8Array>());
+            let int8: ArrayRef = Arc::new(int8_values.collect::<Int8Array>());
 
             let int64_values = (0..1000).map(|x| {
                 if x % 19 == 0 {
@@ -351,6 +354,26 @@ impl Test {
         concat_batches(&schema, &batches).unwrap()
     }
 
+    /// Return a BooleanArray that is true for rows in the selections
+    fn selection_mask(&self, num_rows: usize) -> BooleanArray {
+        let mut boolean_buffer_builder = BooleanBufferBuilder::new(num_rows);
+        let mut current_row = 0;
+        for range in self.selections.iter() {
+            assert!(range.start >= current_row);
+            // fill in false for rows before the selection
+            boolean_buffer_builder.append_n(range.start - current_row, false);
+            // fill in true for rows in the selection
+            boolean_buffer_builder.append_n(range.end - range.start, true);
+            current_row = range.end;
+        }
+        // fill in false for any remaining rows
+        if current_row < num_rows {
+            boolean_buffer_builder.append_n(num_rows - current_row, false);
+        }
+        let nulls = None;
+        BooleanArray::new(boolean_buffer_builder.build(), nulls)
+    }
+
     // ------------------
     // Below are different predicates are added to the reader. Note these
     // methods all select the same selections, just in different ways.
@@ -372,11 +395,47 @@ impl Test {
         &self,
         builder: ParquetRecordBatchReaderBuilder<T>,
     ) -> ParquetRecordBatchReaderBuilder<T> {
+        let num_rows = builder.metadata().file_metadata().num_rows() as usize;
         let mask = ProjectionMask::columns(
             builder.metadata().file_metadata().schema_descr(),
             vec!["int8"],
         );
-        let filter = RowFilter::new(vec![Box::new(ArrowPredicateFn::new(mask, |array| todo!()))]);
+        let predicate = PrecomputedArrowPredicate::new(mask, self.selection_mask(num_rows));
+
+        let filter = RowFilter::new(vec![Box::new(predicate)]);
         builder.with_row_filter(filter)
+    }
+}
+
+/// Represents the result of evaluating a predicate on a RecordBatch
+/// using a precomputed BooleanArray.
+struct PrecomputedArrowPredicate {
+    mask: ProjectionMask,
+    filter_results: BooleanArray,
+}
+
+impl PrecomputedArrowPredicate {
+    /// Create a new PrecomputedArrowPredicate
+    fn new(mask: ProjectionMask, filter_results: BooleanArray) -> Self {
+        Self {
+            mask,
+            filter_results,
+        }
+    }
+}
+
+impl ArrowPredicate for PrecomputedArrowPredicate {
+    fn projection(&self) -> &ProjectionMask {
+        &self.mask
+    }
+
+    /// Return the next `batch.num_rows()` values from filter_results
+    fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError> {
+        let num_rows = batch.num_rows();
+        let result = self.filter_results.slice(0, num_rows);
+        self.filter_results = self
+            .filter_results
+            .slice(num_rows, self.filter_results.len() - num_rows);
+        Ok(result)
     }
 }
