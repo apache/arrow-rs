@@ -262,9 +262,12 @@ impl Test {
                     self.add_predicate_row_selection(b)
                 });
 
-                self.run_inner(projection, batch_size, &expected, |b| {
-                    self.add_predicate_row_filter_int8(b)
-                });
+                for filter_projection in self.all_projections() {
+                    println!("    filter projection: {:?}", filter_projection);
+                    self.run_inner(projection, batch_size, &expected, |b| {
+                        self.add_predicate_row_filter(b, filter_projection)
+                    });
+                }
             }
         }
     }
@@ -335,10 +338,7 @@ impl Test {
         let batches: Vec<_> = self
             .selections
             .iter()
-            .map(|range| {
-                // collect expected rows from the three_column_batch
-                batch.slice(range.start, range.end - range.start)
-            })
+            .map(|range| batch.slice(range.start, range.end - range.start))
             .collect();
 
         concat_batches(&batch.schema(), &batches).unwrap()
@@ -391,14 +391,15 @@ impl Test {
     }
 
     /// Add a predicate to the reader via a predicate on the "int64" column
-    fn add_predicate_row_filter_int8<T: ChunkReader>(
+    fn add_predicate_row_filter<T: ChunkReader>(
         &self,
         builder: ParquetRecordBatchReaderBuilder<T>,
+        filter_projection: &[&str],
     ) -> ParquetRecordBatchReaderBuilder<T> {
         let num_rows = builder.metadata().file_metadata().num_rows() as usize;
         let mask = ProjectionMask::columns(
             builder.metadata().file_metadata().schema_descr(),
-            vec!["int8"],
+            filter_projection.iter().cloned(),
         );
         let predicate = PrecomputedArrowPredicate::new(mask, self.selection_mask(num_rows));
 
