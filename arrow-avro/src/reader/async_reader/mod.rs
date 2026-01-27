@@ -86,6 +86,49 @@ enum ReaderState<R> {
 /// 4. If a block is incomplete (due to range ending mid-block), fetching the remaining bytes from the [`AsyncFileReader`].
 /// 5. If no range was originally provided, reads the full file.
 /// 6. If the range is 0, file_size is 0, or `range.end` is less than the header length, finish immediately.
+///
+/// # Example
+///
+/// ```
+/// #[tokio::main(flavor = "current_thread")]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use std::io::Cursor;
+/// use std::sync::Arc;
+/// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+/// use arrow_schema::{DataType, Field, Schema};
+/// use arrow_avro::reader::AsyncAvroFileReader;
+/// use arrow_avro::writer::AvroWriter;
+/// use futures::TryStreamExt;
+///
+/// // Build a minimal Arrow schema and batch
+/// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+/// let batch = RecordBatch::try_new(
+///     Arc::new(schema.clone()),
+///     vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+/// )?;
+///
+/// // Write an Avro OCF to memory
+/// let buffer: Vec<u8> = Vec::new();
+/// let mut writer = AvroWriter::new(buffer, schema)?;
+/// writer.write(&batch)?;
+/// writer.finish()?;
+/// let bytes = writer.into_inner();
+///
+/// // Create an async reader from the in-memory bytes
+/// // `tokio::fs::File` also implements `AsyncFileReader` for reading from disk
+/// let file_size = bytes.len();
+/// let cursor = Cursor::new(bytes);
+/// let reader = AsyncAvroFileReader::builder(cursor, file_size as u64, 1024)
+///     .try_build()
+///     .await?;
+///
+/// // Consume the stream of RecordBatches
+/// let batches: Vec<RecordBatch> = reader.try_collect().await?;
+/// assert_eq!(batches.len(), 1);
+/// assert_eq!(batches[0].num_rows(), 3);
+/// Ok(())
+/// }
+/// ```
 pub struct AsyncAvroFileReader<R> {
     // Members required to fetch data
     range: Range<u64>,
