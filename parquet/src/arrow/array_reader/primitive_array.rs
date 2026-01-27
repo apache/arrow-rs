@@ -104,10 +104,13 @@ where
     Vec<T::T>: IntoBuffer,
 {
     /// Construct primitive array reader.
+    ///
+    /// `batch_size` is used to pre-allocate internal buffers.
     pub fn new(
         pages: Box<dyn PageIterator>,
         column_desc: ColumnDescPtr,
         arrow_type: Option<ArrowType>,
+        batch_size: usize,
     ) -> Result<Self> {
         // Check if Arrow type is specified, else create it from Parquet type
         let data_type = match arrow_type {
@@ -117,7 +120,7 @@ where
                 .clone(),
         };
 
-        let record_reader = RecordReader::<T>::new(column_desc);
+        let record_reader = RecordReader::<T>::new(column_desc, batch_size);
 
         Ok(Self {
             data_type,
@@ -510,6 +513,7 @@ mod tests {
             Box::<EmptyPageIterator>::default(),
             schema.column(0),
             None,
+            1024,
         )
         .unwrap();
 
@@ -552,9 +556,13 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                1024,
+            )
+            .unwrap();
 
             // Read first 50 values, which are all from the first column chunk
             let array = array_reader.next_batch(50).unwrap();
@@ -623,6 +631,7 @@ mod tests {
                     Box::new(page_iterator),
                     column_desc.clone(),
                     None,
+                    1024,
                 )
                 .expect("Unable to get array reader");
 
@@ -758,9 +767,13 @@ mod tests {
 
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                1024,
+            )
+            .unwrap();
 
             let mut accu_len: usize = 0;
 
@@ -834,9 +847,13 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                1024,
+            )
+            .unwrap();
 
             // read data from the reader
             // the data type is decimal(8,2)
@@ -893,9 +910,13 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int64Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int64Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                1024,
+            )
+            .unwrap();
 
             // read data from the reader
             // the data type is decimal(18,4)
@@ -955,9 +976,13 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                1024,
+            )
+            .unwrap();
 
             // read data from the reader
             // the data type is date

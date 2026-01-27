@@ -36,10 +36,14 @@ use bytes::Bytes;
 use std::any::Any;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
+///
+/// `batch_size` is used to pre-allocate internal buffers,
+/// avoiding reallocations when reading the first batch of data.
 pub fn make_byte_view_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    batch_size: usize,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -52,7 +56,7 @@ pub fn make_byte_view_array_reader(
 
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
-            let reader = GenericRecordReader::new(column_desc);
+            let reader = GenericRecordReader::new(column_desc, batch_size);
             Ok(Box::new(ByteViewArrayReader::new(pages, data_type, reader)))
         }
 
@@ -162,13 +166,10 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             ));
         }
 
-        let mut buffer = ViewBuffer::default();
-        let mut decoder = ByteViewArrayDecoderPlain::new(
-            buf,
-            num_values as usize,
-            Some(num_values as usize),
-            self.validate_utf8,
-        );
+        let num_values = num_values as usize;
+        let mut buffer = ViewBuffer::with_capacity(num_values);
+        let mut decoder =
+            ByteViewArrayDecoderPlain::new(buf, num_values, Some(num_values), self.validate_utf8);
         decoder.read(&mut buffer, usize::MAX)?;
         self.dict = Some(buffer);
         Ok(())
@@ -766,7 +767,7 @@ mod tests {
             .unwrap();
 
         for (encoding, page) in pages {
-            let mut output = ViewBuffer::default();
+            let mut output = ViewBuffer::with_capacity(0);
             decoder.set_data(encoding, page, 4, Some(4)).unwrap();
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
@@ -809,7 +810,7 @@ mod tests {
         let column_desc = utf8_column();
         let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
 
-        let mut view_buffer = ViewBuffer::default();
+        let mut view_buffer = ViewBuffer::with_capacity(0);
         decoder.set_data(Encoding::PLAIN, pages, 4, None).unwrap();
         decoder.read(&mut view_buffer, 1).unwrap();
         decoder.read(&mut view_buffer, 1).unwrap();
