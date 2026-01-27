@@ -17,23 +17,20 @@
 
 //! Fuzz Tests for predicate evaluation in the parquet reader
 
-use arrow_array::cast::AsArray;
-use arrow_array::types::{Int8Type, Int64Type};
-use arrow_array::{
-    Array, ArrayRef, BooleanArray, Int8Array, Int64Array, RecordBatch, StringViewArray, UInt8Array,
-};
+use crate::predicate_cache::TestReader;
+use arrow_array::{ArrayRef, BooleanArray, Int8Array, Int64Array, RecordBatch, StringViewArray};
 use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::ArrowError;
-use arrow_schema::DataType::Int8;
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
-use parquet::arrow::arrow_reader::{ArrowPredicate, ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy};
-use parquet::arrow::{ArrowWriter, ProjectionMask};
+use futures::StreamExt;
+use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter, RowSelection, RowSelectionPolicy};
+use parquet::arrow::async_reader::ParquetRecordBatchStream;
+use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::Compression;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
-use parquet::file::reader::ChunkReader;
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
@@ -193,13 +190,14 @@ fn three_column_batch() -> RecordBatch {
         .clone()
 }
 
-#[test]
-fn test_manual_single_selection() {
+#[tokio::test]
+async fn test_manual_single_selection() {
     Test {
         parquet: three_column_parquet(),
         selections: vec![190..400],
     }
     .run()
+    .await
 }
 
 /// Test case -- the idea is to read a parquet file with various predicates
@@ -247,7 +245,7 @@ struct Test {
 
 impl Test {
     /// Basic idea is to evaluate the selections in several different ways and compare the results
-    fn run(&self) {
+    async fn run(&self) {
         for projection in self.all_projections() {
             println!("projection: {:?}", projection);
             let expected = self.expected(&projection);
@@ -257,15 +255,25 @@ impl Test {
                 for row_selection_policy in self.all_row_selection_policies() {
                     println!("    row selection policy: {row_selection_policy:?}");
 
-                    self.run_inner(projection, batch_size, row_selection_policy, &expected, |b| {
-                        self.add_predicate_row_selection(b)
-                    });
+                    self.run_inner(
+                        projection,
+                        batch_size,
+                        row_selection_policy,
+                        &expected,
+                        |b| self.add_predicate_row_selection(b),
+                    )
+                    .await;
 
                     for filter_projection in self.all_projections() {
                         println!("    filter projection: {:?}", filter_projection);
-                        self.run_inner(projection, batch_size, row_selection_policy, &expected, |b| {
-                            self.add_predicate_row_filter(b, filter_projection)
-                        });
+                        self.run_inner(
+                            projection,
+                            batch_size,
+                            row_selection_policy,
+                            &expected,
+                            |b| self.add_predicate_row_filter(b, filter_projection),
+                        )
+                        .await;
                     }
                 }
             }
@@ -276,7 +284,7 @@ impl Test {
     /// and function F to apply the selection predicates.
     ///
     /// Reads all rows and verify the results match expected
-    fn run_inner<F>(
+    async fn run_inner<F>(
         &self,
         projection: &[&str],
         batch_size: usize,
@@ -284,14 +292,17 @@ impl Test {
         expected: &RecordBatch,
         add_predicate: F,
     ) where
-        F: Fn(ParquetRecordBatchReaderBuilder<Bytes>) -> ParquetRecordBatchReaderBuilder<Bytes>,
+        F: Fn(
+            ParquetRecordBatchStreamBuilder<TestReader>,
+        ) -> ParquetRecordBatchStreamBuilder<TestReader>,
     {
         let builder = self
             .builder_with_projection(projection)
+            .await
             .with_batch_size(batch_size)
             .with_row_selection_policy(row_selection_policy);
         let reader = add_predicate(builder).build().unwrap();
-        let actual = self.collect_to_batch(reader);
+        let actual = self.collect_to_batch(reader).await;
 
         assert_eq!(
             expected, &actual,
@@ -324,11 +335,14 @@ impl Test {
     }
 
     /// Return a ParquetRecordBatchReaderBuilder ready to read the parquet file
-    fn builder_with_projection(
+    async fn builder_with_projection(
         &self,
         projection: &[&str],
-    ) -> ParquetRecordBatchReaderBuilder<Bytes> {
-        let builder = ParquetRecordBatchReaderBuilder::try_new(self.parquet.clone()).unwrap();
+    ) -> ParquetRecordBatchStreamBuilder<TestReader> {
+        let test_reader = TestReader::new(self.parquet.clone());
+        let builder = ParquetRecordBatchStreamBuilder::new(test_reader)
+            .await
+            .unwrap();
 
         let projection = ProjectionMask::columns(
             builder.metadata().file_metadata().schema_descr(),
@@ -355,9 +369,12 @@ impl Test {
         concat_batches(&batch.schema(), &batches).unwrap()
     }
 
-    fn collect_to_batch(&self, mut reader: ParquetRecordBatchReader) -> RecordBatch {
+    async fn collect_to_batch(
+        &self,
+        mut reader: ParquetRecordBatchStream<TestReader>,
+    ) -> RecordBatch {
         let mut batches = vec![];
-        while let Some(batch) = reader.next() {
+        while let Some(batch) = reader.next().await {
             let batch = batch.unwrap();
             batches.push(batch);
         }
@@ -391,10 +408,10 @@ impl Test {
     // ------------------
 
     /// Add a predicate to the reader that selects only the specified rows
-    fn add_predicate_row_selection<T: ChunkReader>(
+    fn add_predicate_row_selection<T>(
         &self,
-        builder: ParquetRecordBatchReaderBuilder<T>,
-    ) -> ParquetRecordBatchReaderBuilder<T> {
+        builder: ParquetRecordBatchStreamBuilder<T>,
+    ) -> ParquetRecordBatchStreamBuilder<T> {
         let num_rows = builder.metadata().file_metadata().num_rows() as usize;
         let selection =
             RowSelection::from_consecutive_ranges(self.selections.clone().into_iter(), num_rows);
@@ -405,11 +422,11 @@ impl Test {
     ///
     /// Specifies it should run on the columns in `filter_projection`
     ///
-    fn add_predicate_row_filter<T: ChunkReader>(
+    fn add_predicate_row_filter<T>(
         &self,
-        builder: ParquetRecordBatchReaderBuilder<T>,
+        builder: ParquetRecordBatchStreamBuilder<T>,
         filter_projection: &[&str],
-    ) -> ParquetRecordBatchReaderBuilder<T> {
+    ) -> ParquetRecordBatchStreamBuilder<T> {
         let num_rows = builder.metadata().file_metadata().num_rows() as usize;
         let mask = ProjectionMask::columns(
             builder.metadata().file_metadata().schema_descr(),

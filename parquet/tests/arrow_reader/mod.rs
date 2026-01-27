@@ -45,6 +45,7 @@ mod int96_stats_roundtrip;
 mod io;
 #[cfg(feature = "async")]
 mod predicate_cache;
+#[cfg(feature = "async")]
 mod predicate_pushdown;
 mod statistics;
 
