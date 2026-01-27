@@ -27,10 +27,7 @@ use arrow_schema::ArrowError;
 use arrow_schema::DataType::Int8;
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
-use parquet::arrow::arrow_reader::{
-    ArrowPredicate, ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
-    RowFilter, RowSelection,
-};
+use parquet::arrow::arrow_reader::{ArrowPredicate, ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy};
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::basic::Compression;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
@@ -257,16 +254,19 @@ impl Test {
 
             for batch_size in [100, 217, 8192] {
                 println!("  batch size: {}", batch_size);
+                for row_selection_policy in self.all_row_selection_policies() {
+                    println!("    row selection policy: {row_selection_policy:?}");
 
-                self.run_inner(projection, batch_size, &expected, |b| {
-                    self.add_predicate_row_selection(b)
-                });
-
-                for filter_projection in self.all_projections() {
-                    println!("    filter projection: {:?}", filter_projection);
-                    self.run_inner(projection, batch_size, &expected, |b| {
-                        self.add_predicate_row_filter(b, filter_projection)
+                    self.run_inner(projection, batch_size, row_selection_policy, &expected, |b| {
+                        self.add_predicate_row_selection(b)
                     });
+
+                    for filter_projection in self.all_projections() {
+                        println!("    filter projection: {:?}", filter_projection);
+                        self.run_inner(projection, batch_size, row_selection_policy, &expected, |b| {
+                            self.add_predicate_row_filter(b, filter_projection)
+                        });
+                    }
                 }
             }
         }
@@ -280,6 +280,7 @@ impl Test {
         &self,
         projection: &[&str],
         batch_size: usize,
+        row_selection_policy: RowSelectionPolicy,
         expected: &RecordBatch,
         add_predicate: F,
     ) where
@@ -287,7 +288,8 @@ impl Test {
     {
         let builder = self
             .builder_with_projection(projection)
-            .with_batch_size(batch_size);
+            .with_batch_size(batch_size)
+            .with_row_selection_policy(row_selection_policy);
         let reader = add_predicate(builder).build().unwrap();
         let actual = self.collect_to_batch(reader);
 
@@ -309,6 +311,15 @@ impl Test {
             //["int64"],
             //["utf8view"], ["int8", "int64"], ["int64", "utf8view"], ["int8", "utf8view"],
             &["int8", "int64", "utf8view"],
+        ]
+    }
+
+    /// A list of all RowSelectionPolicy options to test
+    fn all_row_selection_policies(&self) -> [RowSelectionPolicy; 3] {
+        [
+            RowSelectionPolicy::default(),
+            RowSelectionPolicy::Mask,
+            RowSelectionPolicy::Selectors,
         ]
     }
 
@@ -354,7 +365,7 @@ impl Test {
         concat_batches(&schema, &batches).unwrap()
     }
 
-    /// Return a BooleanArray that is true for rows in the selections
+    /// Return a `BooleanArray` that is true for rows in the selections
     fn selection_mask(&self, num_rows: usize) -> BooleanArray {
         let mut boolean_buffer_builder = BooleanBufferBuilder::new(num_rows);
         let mut current_row = 0;
@@ -390,7 +401,10 @@ impl Test {
         builder.with_row_selection(selection)
     }
 
-    /// Add a predicate to the reader via a predicate on the "int64" column
+    /// Add an arrow predicate (aka row filter, pushed down predicate) to the builder
+    ///
+    /// Specifies it should run on the columns in `filter_projection`
+    ///
     fn add_predicate_row_filter<T: ChunkReader>(
         &self,
         builder: ParquetRecordBatchReaderBuilder<T>,
@@ -408,7 +422,7 @@ impl Test {
     }
 }
 
-/// Represents the result of evaluating a predicate on a RecordBatch
+/// A  predicate (row filter) that returns the results of a precomputed filter
 /// using a precomputed BooleanArray.
 struct PrecomputedArrowPredicate {
     mask: ProjectionMask,
