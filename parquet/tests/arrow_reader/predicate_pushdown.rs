@@ -192,6 +192,7 @@ fn three_column_batch() -> RecordBatch {
 
 #[tokio::test]
 async fn test_manual_single_selection() {
+    // single selection from 190..400
     Test {
         parquet: three_column_parquet(),
         selections: vec![190..400],
@@ -247,15 +248,12 @@ impl Test {
     /// Basic idea is to evaluate the selections in several different ways and compare the results
     async fn run(&self) {
         for projection in self.all_projections() {
-            println!("projection: {:?}", projection);
             let expected = self.expected(&projection);
 
             for batch_size in [100, 217, 8192] {
-                println!("  batch size: {}", batch_size);
                 for row_selection_policy in self.all_row_selection_policies() {
-                    println!("    row selection policy: {row_selection_policy:?}");
-
                     self.run_inner(
+                        "row_selection",
                         projection,
                         batch_size,
                         row_selection_policy,
@@ -265,8 +263,8 @@ impl Test {
                     .await;
 
                     for filter_projection in self.all_projections() {
-                        println!("    filter projection: {:?}", filter_projection);
                         self.run_inner(
+                            &format!("row_filter with filter projection: {filter_projection:?}"),
                             projection,
                             batch_size,
                             row_selection_policy,
@@ -286,6 +284,7 @@ impl Test {
     /// Reads all rows and verify the results match expected
     async fn run_inner<F>(
         &self,
+        test_description: &str,
         projection: &[&str],
         batch_size: usize,
         row_selection_policy: RowSelectionPolicy,
@@ -306,12 +305,13 @@ impl Test {
 
         assert_eq!(
             expected, &actual,
-            "selections: {projection:?}, batch size: {batch_size}\n\
-                            expected:\n\
-                            \n\
-                            {expected:#?}\n\
-                            \n\
-                            {actual:#?}",
+            "description: {test_description}\n\
+             selections: {projection:?}, batch size: {batch_size}, row_selection_policy:{row_selection_policy:?}\n\
+             expected:\n\
+             \n\
+             {expected:#?}\n\
+             \n\
+             {actual:#?}",
         );
     }
 
