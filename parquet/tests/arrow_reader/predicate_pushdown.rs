@@ -245,38 +245,55 @@ struct Test {
 impl Test {
     /// Basic idea is to evaluate the selections in several different ways and compare the results
     async fn run(&self) {
-        for selection in self.selections() {
-            println!("selection: {:?}", selection);
-            let expected = self.expected(&selection);
+        for projection in self.all_projections() {
+            println!("projection: {:?}", projection);
+            let expected = self.expected(&projection);
 
-            let builder = ParquetRecordBatchReaderBuilder::try_new(self.parquet.clone()).unwrap();
+            for batch in [100, 217, 8192] {
+                println!("  batch size: {}", batch);
 
-            let mask = ProjectionMask::columns(
-                builder.metadata().file_metadata().schema_descr(),
-                selection.iter().cloned(),
-            );
+                let builder = self
+                    .builder_with_projection(projection)
+                    .with_batch_size(batch);
+                let reader = self.add_selection_predicate(builder).build().unwrap();
+                let actual = self.collect_to_batch(reader).await;
 
-            let builder = builder
-                // TODO test with different batch sizes
-                .with_batch_size(8192)
-                .with_projection(mask);
-
-            let reader = self.add_selection_predicate(builder).build().unwrap();
-            let actual = self.collect_to_batch(reader).await;
-
-            assert_eq!(expected, actual, "selections: {:?}", selection);
-            println!("expected: {:?}", expected);
+                assert_eq!(
+                    expected, actual,
+                    "selections: {:?}, batch size: {}\n\
+                            expected:\n\
+                            \n\
+                            {expected:#?}\n\
+                            \n\
+                            {actual:#?}",
+                    projection, batch
+                );
+            }
         }
     }
 
     /// A list of columns to project
-    fn selections(&self) -> &[&[&str]] {
+    fn all_projections(&self) -> &[&[&str]] {
         &[
             &["int8"],
             //["int64"],
             //["utf8view"], ["int8", "int64"], ["int64", "utf8view"], ["int8", "utf8view"],
             &["int8", "int64", "utf8view"],
         ]
+    }
+
+    /// Return a ParquetRecordBatchReaderBuilder ready to read the parquet file
+    fn builder_with_projection(
+        &self,
+        projection: &[&str],
+    ) -> ParquetRecordBatchReaderBuilder<Bytes> {
+        let builder = ParquetRecordBatchReaderBuilder::try_new(self.parquet.clone()).unwrap();
+
+        let projection = ProjectionMask::columns(
+            builder.metadata().file_metadata().schema_descr(),
+            projection.iter().cloned(),
+        );
+        builder.with_projection(projection)
     }
 
     /// Apply the selections to the three_column_batch to get the expected result
