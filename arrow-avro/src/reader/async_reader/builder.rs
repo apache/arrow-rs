@@ -28,7 +28,7 @@ use std::ops::Range;
 const DEFAULT_HEADER_SIZE_HINT: u64 = 16 * 1024; // 16 KB
 
 /// Builder for an asynchronous Avro file reader.
-pub struct AsyncAvroFileReaderBuilder<R> {
+pub struct ReaderBuilder<R> {
     reader: R,
     file_size: u64,
     batch_size: usize,
@@ -40,7 +40,7 @@ pub struct AsyncAvroFileReaderBuilder<R> {
     strict_mode: bool,
 }
 
-impl<R> AsyncAvroFileReaderBuilder<R> {
+impl<R> ReaderBuilder<R> {
     pub(super) fn new(reader: R, file_size: u64, batch_size: usize) -> Self {
         Self {
             reader,
@@ -109,7 +109,7 @@ impl<R> AsyncAvroFileReaderBuilder<R> {
     }
 }
 
-impl<R: AsyncFileReader> AsyncAvroFileReaderBuilder<R> {
+impl<R: AsyncFileReader> ReaderBuilder<R> {
     async fn read_header(&mut self) -> Result<(Header, u64), AvroError> {
         let mut decoder = HeaderDecoder::default();
         let mut position = 0;

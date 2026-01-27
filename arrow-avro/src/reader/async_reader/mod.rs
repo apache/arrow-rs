@@ -32,7 +32,7 @@ mod async_file_reader;
 mod builder;
 
 pub use async_file_reader::AsyncFileReader;
-pub use builder::AsyncAvroFileReaderBuilder;
+pub use builder::ReaderBuilder;
 
 #[cfg(feature = "object_store")]
 mod store;
@@ -147,8 +147,8 @@ pub struct AsyncAvroFileReader<R> {
 
 impl<R> AsyncAvroFileReader<R> {
     /// Returns a builder for a new [`Self`], allowing some optional parameters.
-    pub fn builder(reader: R, file_size: u64, batch_size: usize) -> AsyncAvroFileReaderBuilder<R> {
-        AsyncAvroFileReaderBuilder::new(reader, file_size, batch_size)
+    pub fn builder(reader: R, file_size: u64, batch_size: usize) -> ReaderBuilder<R> {
+        ReaderBuilder::new(reader, file_size, batch_size)
     }
 
     fn new(
