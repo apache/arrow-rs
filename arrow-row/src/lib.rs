@@ -1561,7 +1561,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
             Encoder::Stateless => {
                 downcast_primitive_array! {
                     array => tracker.push_fixed(fixed::encoded_len(array)),
-                    DataType::Null => {},
+                    DataType::Null => tracker.push_fixed(2)
                     DataType::Boolean => tracker.push_fixed(bool::ENCODED_LEN),
                     DataType::Binary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i32>(array)),
                     DataType::LargeBinary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i64>(array)),
@@ -1737,7 +1737,12 @@ fn encode_column(
                         fixed::encode_not_null(data, offsets, column.values(), opts)
                     }
                 }
-                DataType::Null => {}
+                DataType::Null => {
+                    for offset in offsets.iter_mut().skip(1) {
+                        variable::encode_null_value(&mut data[*offset..], opts);
+                        *offset += 2;
+                    }
+                }
                 DataType::Boolean => {
                     if let Some(nulls) = column.nulls().filter(|n| n.null_count() > 0){
                         fixed::encode_boolean(data, offsets, column.as_boolean().values(), nulls, opts)
@@ -1929,7 +1934,10 @@ unsafe fn decode_column(
             let data_type = field.data_type.clone();
             downcast_primitive! {
                 data_type => (decode_primitive_helper, rows, data_type, options),
-                DataType::Null => Arc::new(NullArray::new(rows.len())),
+                DataType::Null => {
+                    variable::decode_null_value(rows, options);
+                    Arc::new(NullArray::new(rows.len()))
+                }
                 DataType::Boolean => Arc::new(decode_bool(rows, options)),
                 DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
                 DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
@@ -2396,7 +2404,8 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(DataType::Null)]).unwrap();
         let rows = converter.convert_columns(&[col]).unwrap();
         assert_eq!(rows.num_rows(), 10);
-        assert_eq!(rows.row(1).data.len(), 0);
+        // NULL element encoded as 2 bytes data
+        assert_eq!(rows.row(1).data.len(), 2);
     }
 
     #[test]
@@ -4468,5 +4477,256 @@ mod tests {
             .empty_rows(0, 0);
         let mut lengths_iter = rows.lengths();
         assert_eq!(lengths_iter.next(), None);
+    }
+
+    #[test]
+    fn test_nested_null_list() {
+        let null_array = Arc::new(NullArray::new(3));
+        // [[NULL], [], [NULL, NULL]]
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Null, true).into(),
+            OffsetBuffer::from_lengths(vec![1, 0, 2]),
+            null_array,
+            None,
+        ));
+
+        let converter = RowConverter::new(vec![SortField::new(list.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+
+        assert_eq!(&list, &back[0]);
+    }
+
+    // Test case from original issue #9227: [[NULL]] - double nested List with Null
+    #[test]
+    fn test_double_nested_null_list() {
+        let null_array = Arc::new(NullArray::new(1));
+        // [NULL]
+        let nested_field = Arc::new(Field::new_list_field(DataType::Null, true));
+        let nested_list = Arc::new(ListArray::new(
+            nested_field.clone(),
+            OffsetBuffer::from_lengths(vec![1]),
+            null_array,
+            None,
+        ));
+        // [[NULL]]
+        let list = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::List(nested_field), true).into(),
+            OffsetBuffer::from_lengths(vec![1]),
+            nested_list,
+            None,
+        )) as ArrayRef;
+
+        let converter = RowConverter::new(vec![SortField::new(list.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+
+        assert_eq!(&list, &back[0]);
+    }
+
+    // Test LargeList<Null>
+    #[test]
+    fn test_large_list_null() {
+        let null_array = Arc::new(NullArray::new(3));
+        // [[NULL], [], [NULL, NULL]] as LargeList
+        let list: ArrayRef = Arc::new(LargeListArray::new(
+            Field::new_list_field(DataType::Null, true).into(),
+            OffsetBuffer::from_lengths(vec![1, 0, 2]),
+            null_array,
+            None,
+        ));
+
+        let converter = RowConverter::new(vec![SortField::new(list.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+
+        assert_eq!(&list, &back[0]);
+    }
+
+    // Test FixedSizeList<Null>
+    #[test]
+    fn test_fixed_size_list_null() {
+        let null_array = Arc::new(NullArray::new(6));
+        // [[NULL, NULL], [NULL, NULL], [NULL, NULL]] as FixedSizeList
+        let list: ArrayRef = Arc::new(FixedSizeListArray::new(
+            Arc::new(Field::new_list_field(DataType::Null, true)),
+            2,
+            null_array,
+            None,
+        ));
+
+        let converter = RowConverter::new(vec![SortField::new(list.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+
+        assert_eq!(&list, &back[0]);
+    }
+
+    // Test List<Null> with various combinations of nulls and empty lists
+    #[test]
+    fn test_list_null_variations() {
+        // Test case: [[NULL], [], [NULL, NULL]]
+        let null_array = Arc::new(NullArray::new(3));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Null, true).into(),
+            OffsetBuffer::from_lengths(vec![1, 0, 2]),
+            null_array,
+            None,
+        ));
+
+        let converter = RowConverter::new(vec![SortField::new(list.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(&list, &back[0]);
+
+        // Test case: [[NULL], null, [NULL, NULL]] - middle element is null
+        let null_array = Arc::new(NullArray::new(3));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Null, true).into(),
+            OffsetBuffer::from_lengths(vec![1, 0, 2]),
+            null_array,
+            Some(vec![true, false, true].into()),
+        ));
+
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(&list, &back[0]);
+
+        // Test case: [] - empty list
+        let null_array = Arc::new(NullArray::new(0));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Null, true).into(),
+            OffsetBuffer::from_lengths(vec![]),
+            null_array,
+            None,
+        ));
+
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(&list, &back[0]);
+
+        // Test case: [[], [], []] - all empty sublists
+        let null_array = Arc::new(NullArray::new(0));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Null, true).into(),
+            OffsetBuffer::from_lengths(vec![0, 0, 0]),
+            null_array,
+            None,
+        ));
+
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(&list, &back[0]);
+    }
+
+    // Test List<Null> with descending order
+    #[test]
+    fn test_list_null_descending() {
+        let null_array = Arc::new(NullArray::new(3));
+        // [[NULL], [], [NULL, NULL]]
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Null, true).into(),
+            OffsetBuffer::from_lengths(vec![1, 0, 2]),
+            null_array,
+            None,
+        ));
+
+        let options = SortOptions::default().with_descending(true);
+        let field = SortField::new_with_options(list.data_type().clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+
+        assert_eq!(&list, &back[0]);
+    }
+
+    // Test Struct with Null field
+    #[test]
+    fn test_struct_with_null_field() {
+        // Struct { a: Null, b: Int32 }
+        let null_array = Arc::new(NullArray::new(3));
+        let int_array = Arc::new(Int32Array::from(vec![1, 2, 3]));
+
+        let struct_array: ArrayRef = Arc::new(StructArray::new(
+            vec![
+                Arc::new(Field::new("a", DataType::Null, true)),
+                Arc::new(Field::new("b", DataType::Int32, true)),
+            ]
+            .into(),
+            vec![null_array, int_array],
+            Some(vec![true, true, false].into()), // validity bitmap
+        ));
+
+        let converter =
+            RowConverter::new(vec![SortField::new(struct_array.data_type().clone())]).unwrap();
+        let rows = converter
+            .convert_columns(&[Arc::clone(&struct_array)])
+            .unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+
+        assert_eq!(&struct_array, &back[0]);
+    }
+
+    // Test nested Struct with Null
+    #[test]
+    fn test_nested_struct_with_null() {
+        // Inner struct: { x: Null }
+        let inner_null = Arc::new(NullArray::new(2));
+        let inner_struct = Arc::new(StructArray::new(
+            vec![Arc::new(Field::new("x", DataType::Null, true))].into(),
+            vec![inner_null],
+            None,
+        ));
+
+        // Outer struct: { inner: Struct { x: Null }, y: Int32 }
+        let y_array = Arc::new(Int32Array::from(vec![10, 20]));
+        let outer_struct: ArrayRef = Arc::new(StructArray::new(
+            vec![
+                Arc::new(Field::new("inner", inner_struct.data_type().clone(), true)),
+                Arc::new(Field::new("y", DataType::Int32, true)),
+            ]
+            .into(),
+            vec![inner_struct, y_array],
+            None,
+        ));
+
+        let converter =
+            RowConverter::new(vec![SortField::new(outer_struct.data_type().clone())]).unwrap();
+        let rows = converter
+            .convert_columns(&[Arc::clone(&outer_struct)])
+            .unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+
+        assert_eq!(&outer_struct, &back[0]);
+    }
+
+    // Test Map<Null> - verify it's not supported (as per current implementation)
+    // https://github.com/apache/arrow-rs/issues/7879
+    #[test]
+    fn test_map_null_not_supported() {
+        // Map with Null values
+        let map_data_type = Field::new_map(
+            "map",
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Null, true),
+            false,
+            true,
+        )
+        .data_type()
+        .clone();
+
+        // Currently Map is not supported by RowConverter
+        let result = RowConverter::new(vec![SortField::new(map_data_type)]);
+        assert!(
+            result.is_err(),
+            "Map should not be supported by RowConverter"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not yet implemented")
+        );
     }
 }
