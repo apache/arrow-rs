@@ -190,14 +190,13 @@ fn three_column_batch() -> RecordBatch {
         .clone()
 }
 
-#[tokio::test]
-async fn test_manual_single_selection() {
+#[test]
+fn test_manual_single_selection() {
     Test {
         parquet: three_column_parquet(),
         selections: vec![190..400],
     }
     .run()
-    .await;
 }
 
 /// Test case -- the idea is to read a parquet file with various predicates
@@ -244,32 +243,35 @@ struct Test {
 
 impl Test {
     /// Basic idea is to evaluate the selections in several different ways and compare the results
-    async fn run(&self) {
+    fn run(&self) {
         for projection in self.all_projections() {
             println!("projection: {:?}", projection);
             let expected = self.expected(&projection);
 
-            for batch in [100, 217, 8192] {
-                println!("  batch size: {}", batch);
+            for batch_size in [100, 217, 8192] {
+                println!("  batch size: {}", batch_size);
 
-                let builder = self
-                    .builder_with_projection(projection)
-                    .with_batch_size(batch);
-                let reader = self.add_selection_predicate(builder).build().unwrap();
-                let actual = self.collect_to_batch(reader).await;
+                self.run_inner(projection, batch_size, &expected);
+            }
+        }
+    }
 
-                assert_eq!(
-                    expected, actual,
-                    "selections: {:?}, batch size: {}\n\
+    fn run_inner(&self, projection: &[&str], batch_size: usize, expected: &RecordBatch) {
+        let builder = self
+            .builder_with_projection(projection)
+            .with_batch_size(batch_size);
+        let reader = self.add_selection_predicate(builder).build().unwrap();
+        let actual = self.collect_to_batch(reader);
+
+        assert_eq!(
+            expected, &actual,
+            "selections: {projection:?}, batch size: {batch_size}\n\
                             expected:\n\
                             \n\
                             {expected:#?}\n\
                             \n\
                             {actual:#?}",
-                    projection, batch
-                );
-            }
-        }
+        );
     }
 
     /// A list of columns to project
@@ -317,7 +319,7 @@ impl Test {
         concat_batches(&batch.schema(), &batches).unwrap()
     }
 
-    async fn collect_to_batch(&self, mut reader: ParquetRecordBatchReader) -> RecordBatch {
+    fn collect_to_batch(&self, mut reader: ParquetRecordBatchReader) -> RecordBatch {
         let mut batches = vec![];
         while let Some(batch) = reader.next() {
             let batch = batch.unwrap();
