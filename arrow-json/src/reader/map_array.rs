@@ -33,10 +33,10 @@ pub struct MapArrayDecoder {
 impl MapArrayDecoder {
     pub fn new(
         ctx: &DecoderContext,
-        data_type: DataType,
+        data_type: &DataType,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
-        let fields = match &data_type {
+        let fields = match data_type {
             DataType::Map(_, true) => {
                 return Err(ArrowError::NotYetImplemented(
                     "Decoding MapArray with sorted fields".to_string(),
@@ -53,11 +53,11 @@ impl MapArrayDecoder {
             _ => unreachable!(),
         };
 
-        let keys = ctx.make_decoder(fields[0].data_type().clone(), fields[0].is_nullable())?;
-        let values = ctx.make_decoder(fields[1].data_type().clone(), fields[1].is_nullable())?;
+        let keys = ctx.make_decoder(fields[0].data_type(), fields[0].is_nullable())?;
+        let values = ctx.make_decoder(fields[1].data_type(), fields[1].is_nullable())?;
 
         Ok(Self {
-            data_type,
+            data_type: data_type.clone(),
             keys,
             values,
             is_nullable,

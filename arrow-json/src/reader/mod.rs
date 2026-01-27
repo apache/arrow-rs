@@ -137,6 +137,7 @@ use crate::StructMode;
 use crate::reader::binary_array::{
     BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
 };
+use std::borrow::Cow;
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -295,12 +296,13 @@ impl ReaderBuilder {
 
     /// Create a [`Decoder`]
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
-        let (data_type, nullable) = match self.is_field {
-            false => (DataType::Struct(self.schema.fields.clone()), false),
-            true => {
-                let field = &self.schema.fields[0];
-                (field.data_type().clone(), field.is_nullable())
-            }
+        let (data_type, nullable) = if self.is_field {
+            let field = &self.schema.fields[0];
+            let data_type = Cow::Borrowed(field.data_type());
+            (data_type, field.is_nullable())
+        } else {
+            let data_type = Cow::Owned(DataType::Struct(self.schema.fields.clone()));
+            (data_type, false)
         };
 
         let ctx = DecoderContext {
@@ -308,7 +310,7 @@ impl ReaderBuilder {
             strict_mode: self.strict_mode,
             struct_mode: self.struct_mode,
         };
-        let decoder = ctx.make_decoder(data_type, nullable)?;
+        let decoder = ctx.make_decoder(data_type.as_ref(), nullable)?;
 
         let num_fields = self.schema.flattened_fields().len();
 
@@ -713,7 +715,7 @@ impl DecoderContext {
     /// implementation.
     fn make_decoder(
         &self,
-        data_type: DataType,
+        data_type: &DataType,
         is_nullable: bool,
     ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
         make_decoder(self, data_type, is_nullable)
@@ -728,12 +730,12 @@ macro_rules! primitive_decoder {
 
 fn make_decoder(
     ctx: &DecoderContext,
-    data_type: DataType,
+    data_type: &DataType,
     is_nullable: bool,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     let coerce_primitive = ctx.coerce_primitive();
     downcast_integer! {
-        data_type => (primitive_decoder, data_type),
+        *data_type => (primitive_decoder, data_type),
         DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
         DataType::Float16 => primitive_decoder!(Float16Type, data_type),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
@@ -792,7 +794,7 @@ fn make_decoder(
         DataType::FixedSizeBinary(len) => Ok(Box::new(FixedSizeBinaryArrayDecoder::new(len))),
         DataType::BinaryView => Ok(Box::new(BinaryViewDecoder::default())),
         DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(ctx, data_type, is_nullable)?)),
-        d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
+        _ => Err(ArrowError::NotYetImplemented(format!("Support for {data_type} in JSON reader")))
     }
 }
 

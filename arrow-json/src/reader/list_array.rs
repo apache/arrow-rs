@@ -34,18 +34,18 @@ pub struct ListArrayDecoder<O> {
 impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
     pub fn new(
         ctx: &DecoderContext,
-        data_type: DataType,
+        data_type: &DataType,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
-        let field = match &data_type {
+        let field = match data_type {
             DataType::List(f) if !O::IS_LARGE => f,
             DataType::LargeList(f) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
-        let decoder = ctx.make_decoder(field.data_type().clone(), field.is_nullable())?;
+        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
 
         Ok(Self {
-            data_type,
+            data_type: data_type.clone(),
             decoder,
             phantom: Default::default(),
             is_nullable,

@@ -81,20 +81,22 @@ pub struct StructArrayDecoder {
 impl StructArrayDecoder {
     pub fn new(
         ctx: &DecoderContext,
-        data_type: DataType,
+        data_type: &DataType,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
-        let struct_mode = ctx.struct_mode();
-        let fields = struct_fields(&data_type);
-
-        // If this struct nullable, need to permit nullability in child array
-        // StructArrayDecoder::decode verifies that if the child is not nullable
-        // it doesn't contain any nulls not masked by its parent
+        let fields = struct_fields(data_type);
         let decoders = fields
             .iter()
-            .map(|f| ctx.make_decoder(f.data_type().clone(), f.is_nullable() || is_nullable))
+            .map(|f| {
+                // If this struct nullable, need to permit nullability in child array
+                // StructArrayDecoder::decode verifies that if the child is not nullable
+                // it doesn't contain any nulls not masked by its parent
+                let nullable = f.is_nullable() || is_nullable;
+                ctx.make_decoder(f.data_type(), nullable)
+            })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
+        let struct_mode = ctx.struct_mode();
         let field_name_to_index = if struct_mode == StructMode::ObjectOnly {
             build_field_index(fields)
         } else {
@@ -102,7 +104,7 @@ impl StructArrayDecoder {
         };
 
         Ok(Self {
-            data_type,
+            data_type: data_type.clone(),
             decoders,
             strict_mode: ctx.strict_mode(),
             is_nullable,
