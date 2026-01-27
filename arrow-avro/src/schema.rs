@@ -1357,11 +1357,57 @@ fn datatype_to_avro(
     let val = match dt {
         DataType::Null => Value::String("null".into()),
         DataType::Boolean => Value::String("boolean".into()),
-        DataType::Int8 | DataType::Int16 | DataType::UInt8 | DataType::UInt16 | DataType::Int32 => {
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::Int8 | DataType::Int16 | DataType::UInt8 | DataType::UInt16 => {
             Value::String("int".into())
         }
-        DataType::UInt32 | DataType::Int64 | DataType::UInt64 => Value::String("long".into()),
-        DataType::Float16 | DataType::Float32 => Value::String("float".into()),
+        DataType::Int32 => Value::String("int".into()),
+        #[cfg(feature = "avro_custom_types")]
+        DataType::Int8 => json!({ "type": "int", "logicalType": "arrow.int8" }),
+        #[cfg(feature = "avro_custom_types")]
+        DataType::Int16 => json!({ "type": "int", "logicalType": "arrow.int16" }),
+        #[cfg(feature = "avro_custom_types")]
+        DataType::UInt8 => json!({ "type": "int", "logicalType": "arrow.uint8" }),
+        #[cfg(feature = "avro_custom_types")]
+        DataType::UInt16 => json!({ "type": "int", "logicalType": "arrow.uint16" }),
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::UInt32 => Value::String("long".into()),
+        #[cfg(feature = "avro_custom_types")]
+        DataType::UInt32 => json!({ "type": "long", "logicalType": "arrow.uint32" }),
+        DataType::Int64 => Value::String("long".into()),
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::UInt64 => Value::String("long".into()),
+        #[cfg(feature = "avro_custom_types")]
+        DataType::UInt64 => {
+            // UInt64 must use fixed(8) to avoid overflow
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            json!({
+                "type": "fixed",
+                "name": chosen_name,
+                "size": 8,
+                "logicalType": "arrow.uint64"
+            })
+        }
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::Float16 => Value::String("float".into()),
+        #[cfg(feature = "avro_custom_types")]
+        DataType::Float16 => {
+            // Float16 uses fixed(2) for IEEE-754 bits
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            json!({
+                "type": "fixed",
+                "name": chosen_name,
+                "size": 2,
+                "logicalType": "arrow.float16"
+            })
+        }
+        DataType::Float32 => Value::String("float".into()),
         DataType::Float64 => Value::String("double".into()),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Value::String("string".into()),
         DataType::Binary | DataType::LargeBinary => Value::String("bytes".into()),
@@ -1410,28 +1456,55 @@ fn datatype_to_avro(
             handle_decimal(precision, scale)?
         }
         DataType::Date32 => json!({ "type": "int", "logicalType": "date" }),
+        #[cfg(not(feature = "avro_custom_types"))]
         DataType::Date64 => json!({ "type": "long", "logicalType": "local-timestamp-millis" }),
+        #[cfg(feature = "avro_custom_types")]
+        DataType::Date64 => json!({ "type": "long", "logicalType": "arrow.date64" }),
         DataType::Time32(unit) => match unit {
             TimeUnit::Millisecond => json!({ "type": "int", "logicalType": "time-millis" }),
+            #[cfg(not(feature = "avro_custom_types"))]
             TimeUnit::Second => {
+                // Encoder converts seconds to milliseconds, so use time-millis
                 if !strip {
                     extras.insert("arrowTimeUnit".into(), Value::String("second".into()));
                 }
-                Value::String("int".into())
+                json!({ "type": "int", "logicalType": "time-millis" })
+            }
+            #[cfg(feature = "avro_custom_types")]
+            TimeUnit::Second => {
+                json!({ "type": "int", "logicalType": "arrow.time32-second" })
             }
             _ => Value::String("int".into()),
         },
         DataType::Time64(unit) => match unit {
             TimeUnit::Microsecond => json!({ "type": "long", "logicalType": "time-micros" }),
+            #[cfg(not(feature = "avro_custom_types"))]
             TimeUnit::Nanosecond => {
+                // Encoder truncates nanoseconds to microseconds, so use time-micros
                 if !strip {
                     extras.insert("arrowTimeUnit".into(), Value::String("nanosecond".into()));
                 }
-                Value::String("long".into())
+                json!({ "type": "long", "logicalType": "time-micros" })
+            }
+            #[cfg(feature = "avro_custom_types")]
+            TimeUnit::Nanosecond => {
+                json!({ "type": "long", "logicalType": "arrow.time64-nanosecond" })
             }
             _ => Value::String("long".into()),
         },
         DataType::Timestamp(unit, tz) => {
+            #[cfg(feature = "avro_custom_types")]
+            if matches!(unit, TimeUnit::Second) {
+                let logical_type = if tz.is_some() {
+                    "arrow.timestamp-second"
+                } else {
+                    "arrow.local-timestamp-second"
+                };
+                return Ok((
+                    json!({ "type": "long", "logicalType": logical_type }),
+                    extras,
+                ));
+            }
             let logical_type = match (unit, tz.is_some()) {
                 (TimeUnit::Millisecond, true) => "timestamp-millis",
                 (TimeUnit::Millisecond, false) => "local-timestamp-millis",
@@ -1439,11 +1512,20 @@ fn datatype_to_avro(
                 (TimeUnit::Microsecond, false) => "local-timestamp-micros",
                 (TimeUnit::Nanosecond, true) => "timestamp-nanos",
                 (TimeUnit::Nanosecond, false) => "local-timestamp-nanos",
-                (TimeUnit::Second, _) => {
+                (TimeUnit::Second, has_tz) => {
+                    // Encoder converts seconds to milliseconds, so use timestamp-millis
                     if !strip {
                         extras.insert("arrowTimeUnit".into(), Value::String("second".into()));
                     }
-                    return Ok((Value::String("long".into()), extras));
+                    let ts_logical_type = if has_tz {
+                        "timestamp-millis"
+                    } else {
+                        "local-timestamp-millis"
+                    };
+                    return Ok((
+                        json!({ "type": "long", "logicalType": ts_logical_type }),
+                        extras,
+                    ));
                 }
             };
             if !strip && matches!(unit, TimeUnit::Nanosecond) {
@@ -1482,20 +1564,76 @@ fn datatype_to_avro(
             }
             json!(obj)
         }
+        #[cfg(not(feature = "avro_custom_types"))]
         DataType::Interval(IntervalUnit::YearMonth) => {
+            // Encode as Avro `duration` (fixed(12)) like MonthDayNano
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut extras = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(12)),
+                ("logicalType".into(), json!("duration")),
+            ]);
             if !strip {
                 extras.insert(
                     "arrowIntervalUnit".into(),
                     Value::String("yearmonth".into()),
                 );
             }
-            Value::String("long".into())
-        }
-        DataType::Interval(IntervalUnit::DayTime) => {
-            if !strip {
-                extras.insert("arrowIntervalUnit".into(), Value::String("daytime".into()));
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                extras.insert("namespace".into(), json!(ns));
             }
-            Value::String("long".into())
+            json!(extras)
+        }
+        #[cfg(feature = "avro_custom_types")]
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            json!({
+                "type": "fixed",
+                "name": chosen_name,
+                "size": 4,
+                "logicalType": "arrow.interval-year-month"
+            })
+        }
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::Interval(IntervalUnit::DayTime) => {
+            // Encode as Avro `duration` (fixed(12)) like MonthDayNano
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(12)),
+                ("logicalType".into(), json!("duration")),
+            ]);
+            if !strip {
+                obj.insert("arrowIntervalUnit".into(), Value::String("daytime".into()));
+            }
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
+        }
+        #[cfg(feature = "avro_custom_types")]
+        DataType::Interval(IntervalUnit::DayTime) => {
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            json!({
+                "type": "fixed",
+                "name": chosen_name,
+                "size": 8,
+                "logicalType": "arrow.interval-day-time"
+            })
         }
         DataType::List(child) | DataType::LargeList(child) => {
             if matches!(dt, DataType::LargeList(_)) && !strip {
@@ -2513,6 +2651,7 @@ mod tests {
         assert_eq!(canonical_form, expected_canonical_form);
     }
 
+    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn test_primitive_mappings() {
         let cases = vec![
@@ -2526,6 +2665,33 @@ mod tests {
             (DataType::UInt32, "\"long\""),
             (DataType::UInt64, "\"long\""),
             (DataType::Float16, "\"float\""),
+            (DataType::Float32, "\"float\""),
+            (DataType::Float64, "\"double\""),
+            (DataType::Utf8, "\"string\""),
+            (DataType::Binary, "\"bytes\""),
+        ];
+        for (dt, avro_token) in cases {
+            let field = ArrowField::new("col", dt.clone(), false);
+            let arrow_schema = single_field_schema(field);
+            let avro = AvroSchema::try_from(&arrow_schema).unwrap();
+            assert_json_contains(&avro.json_string, avro_token);
+        }
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_primitive_mappings() {
+        let cases = vec![
+            (DataType::Boolean, "\"boolean\""),
+            (DataType::Int8, "\"logicalType\":\"arrow.int8\""),
+            (DataType::Int16, "\"logicalType\":\"arrow.int16\""),
+            (DataType::Int32, "\"int\""),
+            (DataType::Int64, "\"long\""),
+            (DataType::UInt8, "\"logicalType\":\"arrow.uint8\""),
+            (DataType::UInt16, "\"logicalType\":\"arrow.uint16\""),
+            (DataType::UInt32, "\"logicalType\":\"arrow.uint32\""),
+            (DataType::UInt64, "\"logicalType\":\"arrow.uint64\""),
+            (DataType::Float16, "\"logicalType\":\"arrow.float16\""),
             (DataType::Float32, "\"float\""),
             (DataType::Float64, "\"double\""),
             (DataType::Utf8, "\"string\""),
@@ -2727,6 +2893,7 @@ mod tests {
         assert_json_contains(&avro.json_string, "\"name\":\"_123bad\"");
     }
 
+    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn test_date64_logical_type_mapping() {
         let field = ArrowField::new("d", DataType::Date64, true);
@@ -2736,6 +2903,15 @@ mod tests {
             &avro.json_string,
             "\"logicalType\":\"local-timestamp-millis\"",
         );
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_date64_logical_type_mapping_custom() {
+        let field = ArrowField::new("d", DataType::Date64, true);
+        let schema = single_field_schema(field);
+        let avro = AvroSchema::try_from(&schema).unwrap();
+        assert_json_contains(&avro.json_string, "\"logicalType\":\"arrow.date64\"");
     }
 
     #[cfg(feature = "avro_custom_types")]
@@ -2751,6 +2927,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn test_interval_yearmonth_extra() {
         let field = ArrowField::new("iv", DataType::Interval(IntervalUnit::YearMonth), false);
@@ -2759,12 +2936,37 @@ mod tests {
         assert_json_contains(&avro.json_string, "\"arrowIntervalUnit\":\"yearmonth\"");
     }
 
+    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn test_interval_daytime_extra() {
         let field = ArrowField::new("iv_dt", DataType::Interval(IntervalUnit::DayTime), false);
         let schema = single_field_schema(field);
         let avro = AvroSchema::try_from(&schema).unwrap();
         assert_json_contains(&avro.json_string, "\"arrowIntervalUnit\":\"daytime\"");
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_interval_yearmonth_custom() {
+        let field = ArrowField::new("iv", DataType::Interval(IntervalUnit::YearMonth), false);
+        let schema = single_field_schema(field);
+        let avro = AvroSchema::try_from(&schema).unwrap();
+        assert_json_contains(
+            &avro.json_string,
+            "\"logicalType\":\"arrow.interval-year-month\"",
+        );
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_interval_daytime_custom() {
+        let field = ArrowField::new("iv_dt", DataType::Interval(IntervalUnit::DayTime), false);
+        let schema = single_field_schema(field);
+        let avro = AvroSchema::try_from(&schema).unwrap();
+        assert_json_contains(
+            &avro.json_string,
+            "\"logicalType\":\"arrow.interval-day-time\"",
+        );
     }
 
     #[test]

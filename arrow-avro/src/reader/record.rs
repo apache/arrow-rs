@@ -199,6 +199,32 @@ enum Decoder {
     DurationMicrosecond(Vec<i64>),
     #[cfg(feature = "avro_custom_types")]
     DurationNanosecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    Int8(Vec<i8>),
+    #[cfg(feature = "avro_custom_types")]
+    Int16(Vec<i16>),
+    #[cfg(feature = "avro_custom_types")]
+    UInt8(Vec<u8>),
+    #[cfg(feature = "avro_custom_types")]
+    UInt16(Vec<u16>),
+    #[cfg(feature = "avro_custom_types")]
+    UInt32(Vec<u32>),
+    #[cfg(feature = "avro_custom_types")]
+    UInt64(Vec<u64>),
+    #[cfg(feature = "avro_custom_types")]
+    Float16(Vec<u16>), // Stored as raw IEEE-754 f16 bits
+    #[cfg(feature = "avro_custom_types")]
+    Date64(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    TimeNanos(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    Time32Secs(Vec<i32>),
+    #[cfg(feature = "avro_custom_types")]
+    TimestampSecs(bool, Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    IntervalYearMonth(Vec<i32>),
+    #[cfg(feature = "avro_custom_types")]
+    IntervalDayTime(Vec<IntervalDayTime>),
     Float32(Vec<f32>),
     Float64(Vec<f64>),
     Date32(Vec<i32>),
@@ -343,6 +369,38 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             (Codec::DurationSeconds, _) => {
                 Self::DurationSecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Int8, _) => Self::Int8(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Int16, _) => Self::Int16(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::UInt8, _) => Self::UInt8(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::UInt16, _) => Self::UInt16(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::UInt32, _) => Self::UInt32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::UInt64, _) => Self::UInt64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Float16, _) => Self::Float16(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Date64, _) => Self::Date64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::TimeNanos, _) => Self::TimeNanos(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Time32Secs, _) => Self::Time32Secs(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::TimestampSecs(is_utc), _) => {
+                Self::TimestampSecs(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::IntervalYearMonth, _) => {
+                Self::IntervalYearMonth(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::IntervalDayTime, _) => {
+                Self::IntervalDayTime(Vec::with_capacity(DEFAULT_CAPACITY))
             }
             (Codec::Fixed(sz), _) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Decimal(precision, scale, size), _) => {
@@ -541,6 +599,26 @@ impl Decoder {
             | Self::DurationMillisecond(v)
             | Self::DurationMicrosecond(v)
             | Self::DurationNanosecond(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64(v) | Self::TimeNanos(v) | Self::TimestampSecs(_, v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime(v) => v.push(IntervalDayTime::new(0, 0)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs(v) | Self::IntervalYearMonth(v) => v.push(0),
             Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
             Self::Float64(v)
             | Self::Int32ToFloat64(v)
@@ -642,6 +720,142 @@ impl Decoder {
                 }
                 _ => Err(AvroError::InvalidArgument(
                     "Default for duration long must be long".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    v.push(*i as i8);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for int8 must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    v.push(*i as i16);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for int16 must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    v.push(*i as u8);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for uint8 must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    v.push(*i as u16);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for uint16 must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32(v) => match lit {
+                AvroLiteral::Long(i) => {
+                    v.push(*i as u32);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for uint32 must be long".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 8 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "uint64 default must be exactly 8 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    v.push(u64::from_le_bytes(b.as_slice().try_into().unwrap()));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for uint64 must be bytes (8-byte LE)".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 2 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "float16 default must be exactly 2 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    v.push(u16::from_le_bytes(b.as_slice().try_into().unwrap()));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for float16 must be bytes (2-byte LE IEEE-754)".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64(v) | Self::TimeNanos(v) | Self::TimestampSecs(_, v) => match lit {
+                AvroLiteral::Long(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for date64/time-nanos/timestamp-secs must be long".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for time32-secs must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalYearMonth(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 4 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "interval-year-month default must be exactly 4 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    v.push(i32::from_le_bytes(b.as_slice().try_into().unwrap()));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for interval-year-month must be bytes (4-byte LE)".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 8 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "interval-day-time default must be exactly 8 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    let days = i32::from_le_bytes(b[0..4].try_into().unwrap());
+                    let milliseconds = i32::from_le_bytes(b[4..8].try_into().unwrap());
+                    v.push(IntervalDayTime::new(days, milliseconds));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for interval-day-time must be bytes (8-byte LE)".to_string(),
                 )),
             },
             Self::Int64(v)
@@ -867,6 +1081,45 @@ impl Decoder {
             | Self::DurationMillisecond(values)
             | Self::DurationMicrosecond(values)
             | Self::DurationNanosecond(values) => values.push(buf.get_long()?),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8(values) => values.push(buf.get_int()? as i8),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16(values) => values.push(buf.get_int()? as i16),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8(values) => values.push(buf.get_int()? as u8),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16(values) => values.push(buf.get_int()? as u16),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32(values) => values.push(buf.get_long()? as u32),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64(values) => {
+                let b = buf.get_fixed(8)?;
+                values.push(u64::from_le_bytes(b.try_into().unwrap()));
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16(values) => {
+                let b = buf.get_fixed(2)?;
+                values.push(u16::from_le_bytes(b.try_into().unwrap()));
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64(values) | Self::TimeNanos(values) | Self::TimestampSecs(_, values) => {
+                values.push(buf.get_long()?)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs(values) => values.push(buf.get_int()?),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalYearMonth(values) => {
+                let b = buf.get_fixed(4)?;
+                values.push(i32::from_le_bytes(b.try_into().unwrap()));
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime(values) => {
+                let b = buf.get_fixed(8)?;
+                // Read as two i32s: days (4 bytes) and milliseconds (4 bytes)
+                let days = i32::from_le_bytes(b[0..4].try_into().unwrap());
+                let milliseconds = i32::from_le_bytes(b[4..8].try_into().unwrap());
+                values.push(IntervalDayTime::new(days, milliseconds));
+            }
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
             Self::Int32ToInt64(values) => values.push(buf.get_int()? as i64),
@@ -1096,6 +1349,51 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::DurationNanosecond(values) => {
                 Arc::new(flush_primitive::<DurationNanosecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8(values) => Arc::new(flush_primitive::<Int8Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16(values) => Arc::new(flush_primitive::<Int16Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8(values) => Arc::new(flush_primitive::<UInt8Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16(values) => Arc::new(flush_primitive::<UInt16Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32(values) => Arc::new(flush_primitive::<UInt32Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64(values) => Arc::new(flush_primitive::<UInt64Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16(values) => {
+                // Convert Vec<u16> to Float16Array by reinterpreting the raw bytes.
+                // This is safe because f16 and u16 have the same size and alignment.
+                let buf: Buffer = std::mem::take(values).into();
+                // SAFETY: u16 and f16 have the same size (2 bytes) and alignment.
+                let scalar_buf: ScalarBuffer<<Float16Type as ArrowPrimitiveType>::Native> =
+                    unsafe { ScalarBuffer::new_unchecked(buf) };
+                Arc::new(Float16Array::new(scalar_buf, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64(values) => Arc::new(flush_primitive::<Date64Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::TimeNanos(values) => {
+                Arc::new(flush_primitive::<Time64NanosecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs(values) => {
+                Arc::new(flush_primitive::<Time32SecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::TimestampSecs(is_utc, values) => Arc::new(
+                flush_primitive::<TimestampSecondType>(values, nulls)
+                    .with_timezone_opt(is_utc.then(|| "+00:00")),
+            ),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalYearMonth(values) => {
+                Arc::new(flush_primitive::<IntervalYearMonthType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime(values) => {
+                Arc::new(flush_primitive::<IntervalDayTimeType>(values, nulls))
             }
             Self::Float32(values) => Arc::new(flush_primitive::<Float32Type>(values, nulls)),
             Self::Float64(values) => Arc::new(flush_primitive::<Float64Type>(values, nulls)),
@@ -2001,6 +2299,22 @@ impl Skipper {
             | Codec::DurationMicros
             | Codec::DurationMillis
             | Codec::DurationSeconds => Self::Int64,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Int8 | Codec::Int16 | Codec::UInt8 | Codec::UInt16 | Codec::Time32Secs => {
+                Self::Int32
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt32 | Codec::Date64 | Codec::TimeNanos | Codec::TimestampSecs(_) => {
+                Self::Int64
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt64 => Self::Fixed(8),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Float16 => Self::Fixed(2),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalYearMonth => Self::Fixed(4),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalDayTime => Self::Fixed(8),
             Codec::Float32 => Self::Float32,
             Codec::Float64 => Self::Float64,
             Codec::Binary => Self::Bytes,

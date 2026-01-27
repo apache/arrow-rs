@@ -356,6 +356,52 @@ impl AvroDataType {
             | Codec::DurationMicros
             | Codec::DurationMillis
             | Codec::DurationSeconds => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Int8 | Codec::Int16 => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < i32::MIN as i64 || i > i32::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default int {i} out of i32 range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt8 | Codec::UInt16 => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < 0 || i > i32::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default unsigned int {i} out of range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt32 | Codec::Date64 | Codec::TimeNanos | Codec::TimestampSecs(_) => {
+                AvroLiteral::Long(parse_json_i64(default_json, "long")?)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt64 => AvroLiteral::Bytes(parse_bytes_default(default_json, Some(8))?),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Float16 => AvroLiteral::Bytes(parse_bytes_default(default_json, Some(2))?),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Time32Secs => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < i32::MIN as i64 || i > i32::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default time32-secs {i} out of i32 range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalYearMonth => {
+                AvroLiteral::Bytes(parse_bytes_default(default_json, Some(4))?)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalDayTime => {
+                AvroLiteral::Bytes(parse_bytes_default(default_json, Some(8))?)
+            }
             Codec::Float32 => {
                 let f = parse_json_f64(default_json, "float")?;
                 if !f.is_finite() || f < f32::MIN as f64 || f > f32::MAX as f64 {
@@ -698,6 +744,46 @@ pub(crate) enum Codec {
     DurationSeconds,
     #[cfg(feature = "avro_custom_types")]
     RunEndEncoded(Arc<AvroDataType>, u8),
+    /// Arrow Int8 custom logical type (arrow.int8)
+    #[cfg(feature = "avro_custom_types")]
+    Int8,
+    /// Arrow Int16 custom logical type (arrow.int16)
+    #[cfg(feature = "avro_custom_types")]
+    Int16,
+    /// Arrow UInt8 custom logical type (arrow.uint8)
+    #[cfg(feature = "avro_custom_types")]
+    UInt8,
+    /// Arrow UInt16 custom logical type (arrow.uint16)
+    #[cfg(feature = "avro_custom_types")]
+    UInt16,
+    /// Arrow UInt32 custom logical type (arrow.uint32)
+    #[cfg(feature = "avro_custom_types")]
+    UInt32,
+    /// Arrow UInt64 custom logical type (arrow.uint64) - stored as fixed(8)
+    #[cfg(feature = "avro_custom_types")]
+    UInt64,
+    /// Arrow Float16 custom logical type (arrow.float16) - stored as fixed(2)
+    #[cfg(feature = "avro_custom_types")]
+    Float16,
+    /// Arrow Date64 custom logical type (arrow.date64)
+    #[cfg(feature = "avro_custom_types")]
+    Date64,
+    /// Arrow Time64(Nanosecond) custom logical type (arrow.time64-nanosecond)
+    #[cfg(feature = "avro_custom_types")]
+    TimeNanos,
+    /// Arrow Time32(Second) custom logical type (arrow.time32-second)
+    #[cfg(feature = "avro_custom_types")]
+    Time32Secs,
+    /// Arrow Timestamp(Second) custom logical type (arrow.timestamp-second)
+    /// The bool indicates UTC (true) or local (false)
+    #[cfg(feature = "avro_custom_types")]
+    TimestampSecs(bool),
+    /// Arrow Interval(YearMonth) custom logical type (arrow.interval-year-month)
+    #[cfg(feature = "avro_custom_types")]
+    IntervalYearMonth,
+    /// Arrow Interval(DayTime) custom logical type (arrow.interval-day-time)
+    #[cfg(feature = "avro_custom_types")]
+    IntervalDayTime,
 }
 
 impl Codec {
@@ -794,6 +880,34 @@ impl Codec {
                     Arc::new(Field::new("values", values.codec().data_type(), true)),
                 )
             }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8 => DataType::Int8,
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16 => DataType::Int16,
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8 => DataType::UInt8,
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16 => DataType::UInt16,
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32 => DataType::UInt32,
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64 => DataType::UInt64,
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16 => DataType::Float16,
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64 => DataType::Date64,
+            #[cfg(feature = "avro_custom_types")]
+            Self::TimeNanos => DataType::Time64(TimeUnit::Nanosecond),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs => DataType::Time32(TimeUnit::Second),
+            #[cfg(feature = "avro_custom_types")]
+            Self::TimestampSecs(is_utc) => {
+                DataType::Timestamp(TimeUnit::Second, is_utc.then(|| "+00:00".into()))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalYearMonth => DataType::Interval(IntervalUnit::YearMonth),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime => DataType::Interval(IntervalUnit::DayTime),
         }
     }
 
@@ -975,6 +1089,18 @@ impl From<&Codec> for UnionFieldKind {
             | Codec::DurationMicros
             | Codec::DurationMillis
             | Codec::DurationSeconds => Self::Duration,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Int8 | Codec::Int16 | Codec::UInt8 | Codec::UInt16 => Self::Int,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt32 | Codec::Date64 | Codec::TimeNanos | Codec::TimestampSecs(_) => {
+                Self::Long
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Time32Secs => Self::TimeMillis, // Closest standard type
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt64 | Codec::Float16 | Codec::IntervalYearMonth | Codec::IntervalDayTime => {
+                Self::Fixed
+            }
         }
     }
 }
@@ -1344,6 +1470,34 @@ impl<'a> Maker<'a> {
                                 resolution: None,
                             }
                         }
+                        #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.uint64") if size == 8 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::UInt64,
+                            resolution: None,
+                        },
+                        #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.float16") if size == 2 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::Float16,
+                            resolution: None,
+                        },
+                        #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.interval-year-month") if size == 4 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::IntervalYearMonth,
+                            resolution: None,
+                        },
+                        #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.interval-day-time") if size == 8 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::IntervalDayTime,
+                            resolution: None,
+                        },
                         _ => AvroDataType {
                             nullability: None,
                             metadata,
@@ -1453,6 +1607,47 @@ impl<'a> Maker<'a> {
                         // Wrap the parsed underlying site as REE
                         let values_site = field.clone();
                         field.codec = Codec::RunEndEncoded(Arc::new(values_site), bits_u8);
+                    }
+                    // Arrow-specific integer width types
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.int8"), c @ Codec::Int32) => *c = Codec::Int8,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.int16"), c @ Codec::Int32) => *c = Codec::Int16,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.uint8"), c @ Codec::Int32) => *c = Codec::UInt8,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.uint16"), c @ Codec::Int32) => *c = Codec::UInt16,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.uint32"), c @ Codec::Int64) => *c = Codec::UInt32,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.uint64"), c @ Codec::Fixed(8)) => *c = Codec::UInt64,
+                    // Arrow Float16 stored as fixed(2)
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.float16"), c @ Codec::Fixed(2)) => *c = Codec::Float16,
+                    // Arrow Date64 custom type
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.date64"), c @ Codec::Int64) => *c = Codec::Date64,
+                    // Arrow time/timestamp types with second precision
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.time64-nanosecond"), c @ Codec::Int64) => *c = Codec::TimeNanos,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.time32-second"), c @ Codec::Int32) => *c = Codec::Time32Secs,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.timestamp-second"), c @ Codec::Int64) => {
+                        *c = Codec::TimestampSecs(true)
+                    }
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.local-timestamp-second"), c @ Codec::Int64) => {
+                        *c = Codec::TimestampSecs(false)
+                    }
+                    // Arrow interval types
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.interval-year-month"), c @ Codec::Fixed(4)) => {
+                        *c = Codec::IntervalYearMonth
+                    }
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.interval-day-time"), c @ Codec::Fixed(8)) => {
+                        *c = Codec::IntervalDayTime
                     }
                     (Some(logical), _) => {
                         // Insert unrecognized logical type into metadata map
