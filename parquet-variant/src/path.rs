@@ -33,7 +33,7 @@ use std::{borrow::Cow, ops::Deref};
 /// ```rust
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// // access the field "foo" in a variant object value
-/// let path = VariantPath::from("foo");
+/// let path = VariantPath::try_from("foo").unwrap();
 /// // access the first element in a variant list vale
 /// let path = VariantPath::from(0);
 /// ```
@@ -43,7 +43,7 @@ use std::{borrow::Cow, ops::Deref};
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// /// You can also create a path by joining elements together:
 /// // access the field "foo" and then the first element in a variant list value
-/// let path = VariantPath::from("foo").join(0);
+/// let path = VariantPath::try_from("foo").unwrap().join(0);
 /// // this is the same as the previous one
 /// let path2 = VariantPath::from_iter(["foo".into(), 0.into()]);
 /// assert_eq!(path, path2);
@@ -59,8 +59,8 @@ use std::{borrow::Cow, ops::Deref};
 /// ```
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// /// You can also convert strings directly into paths using dot notation
-/// let path = VariantPath::from("foo.bar.baz");
-/// let expected = VariantPath::from("foo").join("bar").join("baz");
+/// let path = VariantPath::try_from("foo.bar.baz").unwrap();
+/// let expected = VariantPath::try_from("foo").unwrap().join("bar").join("baz");
 /// assert_eq!(path, expected);
 /// ```
 ///
@@ -69,11 +69,21 @@ use std::{borrow::Cow, ops::Deref};
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// /// You can access the paths using slices
 /// // access the field "foo" and then the first element in a variant list value
-/// let path = VariantPath::from("foo")
+/// let path = VariantPath::try_from("foo").unwrap()
 ///   .join("bar")
 ///   .join("baz");
 /// assert_eq!(path[1], VariantPathElement::field("bar"));
 /// ```
+///
+/// # Example: Accessing filed with bracket
+/// ```
+/// # use parquet_variant::{VariantPath, VariantPathElement};
+/// let path = VariantPath::try_from("a[b.c].d[2]").unwrap();
+/// let expected = VariantPath::from_iter([VariantPathElement::field("a"),
+///     VariantPathElement::field("b.c"),
+///     VariantPathElement::field("d"),
+///     VariantPathElement::index(2)]);
+/// assert_eq!(path, expected)
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct VariantPath<'a>(Vec<VariantPathElement<'a>>);
 
@@ -102,6 +112,12 @@ impl<'a> VariantPath<'a> {
     /// Returns whether [`VariantPath`] has no path elements
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Parses a path string, panics on invalid input.
+    /// Only use for tests for known-valid input.
+    pub fn from_str_unchecked(s: &'a str) -> Self {
+        VariantPath::try_from(s).unwrap()
     }
 }
 
@@ -198,13 +214,6 @@ impl<'a> From<&'a String> for VariantPathElement<'a> {
 impl<'a> From<usize> for VariantPathElement<'a> {
     fn from(index: usize) -> Self {
         VariantPathElement::index(index)
-    }
-}
-
-/// This is mainly used for tests, it will panic if the input is invalid.
-impl<'a> VariantPath<'a> {
-    pub fn from_str_unchecked(s: &'a str) -> Self {
-        VariantPath::try_from(s).unwrap()
     }
 }
 
