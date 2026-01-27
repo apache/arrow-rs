@@ -201,6 +201,13 @@ impl<'a> From<usize> for VariantPathElement<'a> {
     }
 }
 
+/// This is mainly used for tests, it will panic if the input is invalid.
+impl<'a> VariantPath<'a> {
+    pub fn from_str_unchecked(s: &'a str) -> Self {
+        VariantPath::try_from(s).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_variant_path_empty_str() {
-        let path = VariantPath::try_from("").unwrap();
+        let path = VariantPath::from_str_unchecked("");
         assert!(path.is_empty());
     }
 
@@ -226,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_variant_path_dot_notation_with_array_index() {
-        let path = VariantPath::try_from("city.store.books[3].title").unwrap();
+        let path = VariantPath::from_str_unchecked("city.store.books[3].title");
 
         let expected = VariantPath::try_from("city")
             .unwrap()
