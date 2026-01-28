@@ -456,17 +456,21 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
                 },
             })
             .collect(),
-        None => indices
-            .values()
-            .iter()
-            .map(|index| {
-                let index = index.as_usize();
-                // Safety: we either checked already bounds (passed check_bounds = true) or the user
-                //         guarantees the value to be in range.
-                //         Avoiding bound checks allows the compiler to vectorize it and do better loop unrolling
-                unsafe { *values.get_unchecked(index) }
-            })
-            .collect(),
+        None => {
+            let out = indices
+              .values()
+              .iter()
+              .map(|index| {
+                  let index = index.as_usize();
+                  // Safety: we either checked already bounds (passed check_bounds = true) or the user
+                  //         guarantees the value to be in range.
+                  //         Avoiding bound checks allows the compiler to vectorize it and do better loop unrolling
+                  unsafe { *values.get_unchecked(index) }
+              })
+              .collect::<Vec<T>>();
+
+            ScalarBuffer::from(out)
+        },
     }
 }
 
