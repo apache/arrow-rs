@@ -70,7 +70,7 @@ use std::ops::{BitAnd, BitOr, BitXor, Not};
 /// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug, Clone, Eq)]
 pub struct BooleanBuffer {
-    /// Underlying buffer (byte aligned)
+    /// Underlying buffer
     buffer: Buffer,
     /// Offset in bits (not bytes)
     bit_offset: usize,
@@ -150,8 +150,7 @@ impl BooleanBuffer {
     pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
         let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
         let iter = chunks.iter_padded();
-        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
-        buffer.truncate(bit_util::ceil(len_in_bits, 8));
+        let buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
         BooleanBuffer::new(buffer.into(), 0, len_in_bits)
     }
 
@@ -202,7 +201,6 @@ impl BooleanBuffer {
         let chunks = UnalignedBitChunk::new(src, offset_in_bits, len_in_bits);
         let iter = chunks.iter().map(|chunk| op(chunk));
         let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
-        buffer.truncate(bit_util::ceil(len_in_bits, 8));
 
         BooleanBuffer::new(buffer.into(), chunks.lead_padding(), len_in_bits)
     }
@@ -226,10 +224,7 @@ impl BooleanBuffer {
             result.push(op(chunks.remainder_bits()));
         }
 
-        let mut mutable: MutableBuffer = result.into();
-        mutable.truncate(bit_util::ceil(len_in_bits, 8));
-
-        return BooleanBuffer::new(Buffer::from(mutable), 0, len_in_bits);
+        return BooleanBuffer::new(Buffer::from(result), 0, len_in_bits);
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
@@ -363,7 +358,6 @@ impl BooleanBuffer {
             // Soundness: `UnalignedBitChunk` is a `BitChunks` trusted length iterator which
             // correctly reports its upper bound
             let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
-            buffer.truncate(bit_util::ceil(left_chunks.lead_padding() + len_in_bits, 8));
 
             return BooleanBuffer::new(buffer.into(), left_chunks.lead_padding(), len_in_bits);
         }
@@ -377,7 +371,6 @@ impl BooleanBuffer {
         // Soundness: `BitChunks` is a `BitChunks` trusted length iterator which
         // correctly reports its upper bound
         let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
-        buffer.truncate(bit_util::ceil(len_in_bits, 8));
 
         BooleanBuffer::new(buffer.into(), 0, len_in_bits)
     }
