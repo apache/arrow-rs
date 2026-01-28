@@ -41,7 +41,11 @@ arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
+orasort = { workspace = true }
 
 [dev-dependencies]
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.9", default-features = false, features = [
+    "std",
+    "std_rng",
+] }

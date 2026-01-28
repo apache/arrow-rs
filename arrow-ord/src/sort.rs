@@ -24,7 +24,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
 use std::cmp::Ordering;
@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use crate::rank::{can_rank, rank};
 pub use arrow_schema::SortOptions;
+use orasort::{KeyAccessor, orasort};
 
 /// Sort the `ArrayRef` using `SortOptions`.
 ///
@@ -338,6 +339,66 @@ fn sort_primitive<T: ArrowPrimitiveType>(
     sort_impl(options, &mut valids, &nulls, limit, T::Native::compare).into()
 }
 
+struct ByteArrayAccessor<'a, T: ByteArrayType> {
+    values: &'a GenericByteArray<T>,
+    indices: &'a [u32],
+}
+
+impl<'a, T: ByteArrayType> KeyAccessor for ByteArrayAccessor<'a, T> {
+    #[inline(always)]
+    fn get_key(&self, index: usize) -> &[u8] {
+        unsafe {
+            let idx = *self.indices.get_unchecked(index);
+            self.values.value_unchecked(idx as usize).as_ref()
+        }
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.indices.len()
+    }
+}
+
+struct FixedSizeBinaryAccessor<'a> {
+    values: &'a FixedSizeBinaryArray,
+    indices: &'a [u32],
+}
+
+impl<'a> KeyAccessor for FixedSizeBinaryAccessor<'a> {
+    #[inline(always)]
+    fn get_key(&self, index: usize) -> &[u8] {
+        unsafe {
+            let idx = *self.indices.get_unchecked(index);
+            self.values.value_unchecked(idx as usize)
+        }
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.indices.len()
+    }
+}
+
+struct ByteViewAccessor<'a, T: ByteViewType> {
+    values: &'a GenericByteViewArray<T>,
+    indices: &'a [u32],
+}
+
+impl<'a, T: ByteViewType> KeyAccessor for ByteViewAccessor<'a, T> {
+    #[inline(always)]
+    fn get_key(&self, index: usize) -> &[u8] {
+        unsafe {
+            let idx = *self.indices.get_unchecked(index);
+            self.values.value_unchecked(idx as usize).as_ref()
+        }
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.indices.len()
+    }
+}
+
 fn sort_bytes<T: ByteArrayType>(
     values: &GenericByteArray<T>,
     value_indices: Vec<u32>,
@@ -345,83 +406,53 @@ fn sort_bytes<T: ByteArrayType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    // Note: Why do we use 4‑byte prefix?
-    // Compute the 4‑byte prefix in BE order, or left‑pad if shorter.
-    // Most byte‐sequences differ in their first few bytes, so by
-    // comparing up to 4 bytes as a single u32 we avoid the overhead
-    // of a full lexicographical compare for the vast majority of cases.
-
-    // 1. Build a vector of (index, prefix, length) tuples
-    let mut valids: Vec<(u32, u32, u64)> = value_indices
-        .into_iter()
-        .map(|idx| unsafe {
-            let slice: &[u8] = values.value_unchecked(idx as usize).as_ref();
-            let len = slice.len() as u64;
-            // Compute the 4‑byte prefix in BE order, or left‑pad if shorter
-            let prefix = if slice.len() >= 4 {
-                let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u32);
-                u32::from_be(raw)
-            } else if slice.is_empty() {
-                // Handle empty slice case to avoid shift overflow
-                0u32
-            } else {
-                let mut v = 0u32;
-                for &b in slice {
-                    v = (v << 8) | (b as u32);
-                }
-                // Safe shift: slice.len() is in range [1, 3], so shift is in range [8, 24]
-                v << (8 * (4 - slice.len()))
-            };
-            (idx, prefix, len)
-        })
-        .collect();
-
-    // 2. compute the number of non-null entries to partially sort
-    let vlimit = match (limit, options.nulls_first) {
-        (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
-        _ => valids.len(),
+    let accessor = ByteArrayAccessor {
+        values,
+        indices: &value_indices,
     };
+    let sorted_indices = orasort(&accessor);
 
-    // 3. Comparator: compare prefix, then (when both slices shorter than 4) length, otherwise full slice
-    let cmp_bytes = |a: &(u32, u32, u64), b: &(u32, u32, u64)| unsafe {
-        let (ia, pa, la) = *a;
-        let (ib, pb, lb) = *b;
-        // 3.1 prefix (first 4 bytes)
-        let ord = pa.cmp(&pb);
-        if ord != Ordering::Equal {
-            return ord;
-        }
-        // 3.2 only if both slices had length < 4 (so prefix was padded)
-        if la < 4 || lb < 4 {
-            let ord = la.cmp(&lb);
-            if ord != Ordering::Equal {
-                return ord;
-            }
-        }
-        // 3.3 full lexicographical compare
-        let a_bytes: &[u8] = values.value_unchecked(ia as usize).as_ref();
-        let b_bytes: &[u8] = values.value_unchecked(ib as usize).as_ref();
-        a_bytes.cmp(b_bytes)
-    };
-
-    // 4. Partially sort according to ascending/descending
-    if !options.descending {
-        sort_unstable_by(&mut valids, vlimit, cmp_bytes);
-    } else {
-        sort_unstable_by(&mut valids, vlimit, |x, y| cmp_bytes(x, y).reverse());
-    }
-
-    // 5. Assemble nulls and sorted indices into final output
-    let total = valids.len() + nulls.len();
+    let total = value_indices.len() + nulls.len();
     let out_limit = limit.unwrap_or(total).min(total);
     let mut out = Vec::with_capacity(out_limit);
 
     if options.nulls_first {
         out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
         let rem = out_limit - out.len();
-        out.extend(valids.iter().map(|&(i, _, _)| i).take(rem));
+        if options.descending {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .rev()
+                    .take(rem)
+                    .map(|i| value_indices[i]),
+            );
+        } else {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .take(rem)
+                    .map(|i| value_indices[i]),
+            );
+        }
     } else {
-        out.extend(valids.iter().map(|&(i, _, _)| i).take(out_limit));
+        let val_take = out_limit.min(value_indices.len());
+        if options.descending {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .rev()
+                    .take(val_take)
+                    .map(|i| value_indices[i]),
+            );
+        } else {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .take(val_take)
+                    .map(|i| value_indices[i]),
+            );
+        }
         let rem = out_limit - out.len();
         out.extend_from_slice(&nulls[..rem]);
     }
@@ -436,16 +467,9 @@ fn sort_byte_view<T: ByteViewType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    // 1. Build a list of (index, raw_view, length)
-    let mut valids: Vec<_>;
-    // 2. Compute the number of non-null entries to partially sort
-    let vlimit: usize = match (limit, options.nulls_first) {
-        (Some(l), true) => l.saturating_sub(nulls.len()).min(value_indices.len()),
-        _ => value_indices.len(),
-    };
     // 3.a Check if all views are inline (no data buffers)
     if values.data_buffers().is_empty() {
-        valids = value_indices
+        let mut valids = value_indices
             .into_iter()
             .map(|idx| {
                 // SAFETY: we know idx < values.len()
@@ -453,70 +477,84 @@ fn sort_byte_view<T: ByteViewType>(
                 let inline_key = GenericByteViewArray::<T>::inline_key_fast(raw);
                 (idx, inline_key)
             })
-            .collect();
+            .collect::<Vec<_>>();
         let cmp_inline = |a: &(u32, u128), b: &(u32, u128)| a.1.cmp(&b.1);
 
         // Partially sort according to ascending/descending
+        let vlimit = match (limit, options.nulls_first) {
+            (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
+            _ => valids.len(),
+        };
+
         if !options.descending {
             sort_unstable_by(&mut valids, vlimit, cmp_inline);
         } else {
             sort_unstable_by(&mut valids, vlimit, |x, y| cmp_inline(x, y).reverse());
         }
-    } else {
-        valids = value_indices
-            .into_iter()
-            .map(|idx| {
-                // SAFETY: we know idx < values.len()
-                let raw = unsafe { *values.views().get_unchecked(idx as usize) };
-                (idx, raw)
-            })
-            .collect();
-        // 3.b Mixed comparator: first prefix, then inline vs full comparison
-        let cmp_mixed = |a: &(u32, u128), b: &(u32, u128)| {
-            let (_, raw_a) = *a;
-            let (_, raw_b) = *b;
-            let len_a = raw_a as u32;
-            let len_b = raw_b as u32;
-            // 3.b.1 Both inline (≤12 bytes): compare full 128-bit key including length
-            if len_a <= MAX_INLINE_VIEW_LEN && len_b <= MAX_INLINE_VIEW_LEN {
-                return GenericByteViewArray::<T>::inline_key_fast(raw_a)
-                    .cmp(&GenericByteViewArray::<T>::inline_key_fast(raw_b));
-            }
 
-            // 3.b.2 Compare 4-byte prefix in big-endian order
-            let pref_a = ByteView::from(raw_a).prefix.swap_bytes();
-            let pref_b = ByteView::from(raw_b).prefix.swap_bytes();
-            if pref_a != pref_b {
-                return pref_a.cmp(&pref_b);
-            }
+        let total = valids.len() + nulls.len();
+        let out_limit = limit.unwrap_or(total).min(total);
+        let mut out = Vec::with_capacity(out_limit);
 
-            // 3.b.3 Fallback to full byte-slice comparison
-            let full_a: &[u8] = unsafe { values.value_unchecked(a.0 as usize).as_ref() };
-            let full_b: &[u8] = unsafe { values.value_unchecked(b.0 as usize).as_ref() };
-            full_a.cmp(full_b)
-        };
-
-        // 3.b.4 Partially sort according to ascending/descending
-        if !options.descending {
-            sort_unstable_by(&mut valids, vlimit, cmp_mixed);
+        if options.nulls_first {
+            out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
+            let rem = out_limit - out.len();
+            out.extend(valids.iter().map(|&(i, _)| i).take(rem));
         } else {
-            sort_unstable_by(&mut valids, vlimit, |x, y| cmp_mixed(x, y).reverse());
+            out.extend(valids.iter().map(|&(i, _)| i).take(out_limit));
+            let rem = out_limit - out.len();
+            out.extend_from_slice(&nulls[..rem]);
         }
+        return out.into();
     }
 
-    // 5. Assemble nulls and sorted indices into final output
-    let total = valids.len() + nulls.len();
+    let accessor = ByteViewAccessor {
+        values,
+        indices: &value_indices,
+    };
+    let sorted_indices = orasort(&accessor);
+
+    let total = value_indices.len() + nulls.len();
     let out_limit = limit.unwrap_or(total).min(total);
-    let mut out = Vec::with_capacity(total);
+    let mut out = Vec::with_capacity(out_limit);
 
     if options.nulls_first {
-        // Place null indices first
         out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
         let rem = out_limit - out.len();
-        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
+        if options.descending {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .rev()
+                    .take(rem)
+                    .map(|i| value_indices[i]),
+            );
+        } else {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .take(rem)
+                    .map(|i| value_indices[i]),
+            );
+        }
     } else {
-        // Place non-null indices first
-        out.extend(valids.iter().map(|&(i, _)| i).take(out_limit));
+        let val_take = out_limit.min(value_indices.len());
+        if options.descending {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .rev()
+                    .take(val_take)
+                    .map(|i| value_indices[i]),
+            );
+        } else {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .take(val_take)
+                    .map(|i| value_indices[i]),
+            );
+        }
         let rem = out_limit - out.len();
         out.extend_from_slice(&nulls[..rem]);
     }
@@ -531,12 +569,58 @@ fn sort_fixed_size_binary(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    let mut valids = value_indices
-        .iter()
-        .copied()
-        .map(|index| (index, values.value(index as usize)))
-        .collect::<Vec<(u32, &[u8])>>();
-    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+    let accessor = FixedSizeBinaryAccessor {
+        values,
+        indices: &value_indices,
+    };
+    let sorted_indices = orasort(&accessor);
+
+    let total = value_indices.len() + nulls.len();
+    let out_limit = limit.unwrap_or(total).min(total);
+    let mut out = Vec::with_capacity(out_limit);
+
+    if options.nulls_first {
+        out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
+        let rem = out_limit - out.len();
+        if options.descending {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .rev()
+                    .take(rem)
+                    .map(|i| value_indices[i]),
+            );
+        } else {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .take(rem)
+                    .map(|i| value_indices[i]),
+            );
+        }
+    } else {
+        let val_take = out_limit.min(value_indices.len());
+        if options.descending {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .rev()
+                    .take(val_take)
+                    .map(|i| value_indices[i]),
+            );
+        } else {
+            out.extend(
+                sorted_indices
+                    .into_iter()
+                    .take(val_take)
+                    .map(|i| value_indices[i]),
+            );
+        }
+        let rem = out_limit - out.len();
+        out.extend_from_slice(&nulls[..rem]);
+    }
+
+    out.into()
 }
 
 fn sort_dictionary<K: ArrowDictionaryKeyType>(

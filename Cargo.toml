@@ -108,6 +108,8 @@ parquet-variant-compute = { version = "57.2.0", path = "./parquet-variant-comput
 
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 
+orasort = { version = "0.1.0" }
+
 simdutf8 = { version = "0.1.5", default-features = false }
 
 criterion = { version = "0.8.0", default-features = false }
