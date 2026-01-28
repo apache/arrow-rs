@@ -32,6 +32,8 @@ members = [
     "arrow-integration-testing",
     "arrow-ipc",
     "arrow-json",
+    "arrow-memory-size",
+    "arrow-memory-size-derive",
     "arrow-ord",
     "arrow-pyarrow",
     "arrow-row",
@@ -94,6 +96,8 @@ arrow-csv = { version = "57.2.0", path = "./arrow-csv" }
 arrow-data = { version = "57.2.0", path = "./arrow-data" }
 arrow-ipc = { version = "57.2.0", path = "./arrow-ipc" }
 arrow-json = { version = "57.2.0", path = "./arrow-json" }
+arrow-memory-size = { version = "57.2.0", path = "./arrow-memory-size" }
+arrow-memory-size-derive = { version = "57.2.0", path = "./arrow-memory-size-derive" }
 arrow-ord = { version = "57.2.0", path = "./arrow-ord" }
 arrow-pyarrow = { version = "57.2.0", path = "./arrow-pyarrow" }
 arrow-row = { version = "57.2.0", path = "./arrow-row" }

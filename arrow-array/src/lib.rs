@@ -260,6 +260,8 @@ pub mod timezone;
 mod trusted_len;
 pub mod types;
 
+mod heap_size;
+
 #[cfg(test)]
 mod tests {
     use crate::builder::*;
