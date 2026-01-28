@@ -624,18 +624,13 @@ impl<'a> AvroFieldBuilder<'a> {
 /// Avro only distinguishes between UTC and local time (no timezone), but Arrow supports
 /// any of the two identifiers of the UTC timezone: "+00:00" and "UTC".
 /// The data types using these time zone IDs behave identically, but are not logically equal.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
 pub enum Tz {
     /// Represent Avro `timestamp-*` logical types with "+00:00" timezone ID
+    #[default]
     OffsetZero,
     /// Represent Avro `timestamp-*` logical types with "UTC" timezone ID
     Utc,
-}
-
-impl Default for Tz {
-    fn default() -> Self {
-        Tz::OffsetZero
-    }
 }
 
 impl Display for Tz {
@@ -1445,10 +1440,10 @@ impl<'a> Maker<'a> {
                     (Some("time-millis"), c @ Codec::Int32) => *c = Codec::TimeMillis,
                     (Some("time-micros"), c @ Codec::Int64) => *c = Codec::TimeMicros,
                     (Some("timestamp-millis"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMillis(Some(self.use_tz.clone()))
+                        *c = Codec::TimestampMillis(Some(self.use_tz))
                     }
                     (Some("timestamp-micros"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMicros(Some(self.use_tz.clone()))
+                        *c = Codec::TimestampMicros(Some(self.use_tz))
                     }
                     (Some("local-timestamp-millis"), c @ Codec::Int64) => {
                         *c = Codec::TimestampMillis(None)
@@ -1457,7 +1452,7 @@ impl<'a> Maker<'a> {
                         *c = Codec::TimestampMicros(None)
                     }
                     (Some("timestamp-nanos"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampNanos(Some(self.use_tz.clone()))
+                        *c = Codec::TimestampNanos(Some(self.use_tz))
                     }
                     (Some("local-timestamp-nanos"), c @ Codec::Int64) => {
                         *c = Codec::TimestampNanos(None)
@@ -1514,7 +1509,7 @@ impl<'a> Maker<'a> {
                         .and_then(|v| v.as_str())
                     {
                         if unit == "nanosecond" {
-                            field.codec = Codec::TimestampNanos(Some(self.use_tz.clone()));
+                            field.codec = Codec::TimestampNanos(Some(self.use_tz));
                         }
                     }
                 }
@@ -2154,7 +2149,7 @@ mod tests {
         for tz in [Tz::OffsetZero, Tz::Utc] {
             let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-millis");
 
-            let mut maker = Maker::new(false, false, tz.clone());
+            let mut maker = Maker::new(false, false, tz);
             let result = maker.make_data_type(&schema, None, None).unwrap();
 
             let Codec::TimestampMillis(Some(actual_tz)) = result.codec else {
@@ -2169,7 +2164,7 @@ mod tests {
         for tz in [Tz::OffsetZero, Tz::Utc] {
             let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-micros");
 
-            let mut maker = Maker::new(false, false, tz.clone());
+            let mut maker = Maker::new(false, false, tz);
             let result = maker.make_data_type(&schema, None, None).unwrap();
 
             let Codec::TimestampMicros(Some(actual_tz)) = result.codec else {
@@ -2184,7 +2179,7 @@ mod tests {
         for tz in [Tz::OffsetZero, Tz::Utc] {
             let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-nanos");
 
-            let mut maker = Maker::new(false, false, tz.clone());
+            let mut maker = Maker::new(false, false, tz);
             let result = maker.make_data_type(&schema, None, None).unwrap();
 
             let Codec::TimestampNanos(Some(actual_tz)) = result.codec else {
