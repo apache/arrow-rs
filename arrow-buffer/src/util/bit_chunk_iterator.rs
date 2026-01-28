@@ -355,7 +355,7 @@ impl<'a> BitChunks<'a> {
         assert_eq!(self.remainder_len, other.remainder_len);
         let remainder =
             (self.remainder_len > 0).then(|| (self.remainder_bits(), other.remainder_bits()));
-        self.iter().zip(other.iter()).chain(remainder)
+        self.zip(other).chain(remainder)
     }
     /// Returns a zipped iterator over two [`BitChunks`]
     #[inline]

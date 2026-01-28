@@ -77,24 +77,20 @@ pub fn bitwise_bin_op_helper<F>(
     right: &Buffer,
     right_offset_in_bits: usize,
     len_in_bits: usize,
-    mut op: F,
+    op: F,
 ) -> Buffer
 where
     F: FnMut(u64, u64) -> u64,
 {
-    let left_chunks = left.bit_chunks(left_offset_in_bits, len_in_bits);
-    let right_chunks = right.bit_chunks(right_offset_in_bits, len_in_bits);
-
-    let chunks = left_chunks
-        .iter()
-        .zip(right_chunks.iter())
-        .map(|(left, right)| op(left, right));
-    // Soundness: `BitChunks` is a `BitChunks` iterator which
-    // correctly reports its upper bound
-    let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
-    buffer.truncate(ceil(len_in_bits, 8));
-
-    buffer.into()
+    BooleanBuffer::from_bitwise_binary_op(
+        left,
+        left_offset_in_bits,
+        right,
+        right_offset_in_bits,
+        len_in_bits,
+        op,
+    )
+    .into_inner()
 }
 
 /// Apply a bitwise operation `op` to one input and return the result as a Buffer.
