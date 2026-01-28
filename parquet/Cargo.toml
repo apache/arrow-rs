@@ -261,6 +261,11 @@ harness = false
 required-features = ["arrow"]
 
 [[bench]]
+name = "row_group_index_reader"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "row_selection_cursor"
 harness = false
 required-features = ["arrow"]
