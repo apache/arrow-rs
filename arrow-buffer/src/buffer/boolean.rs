@@ -281,11 +281,11 @@ impl BooleanBuffer {
         let left = left.as_ref();
         let right = right.as_ref();
 
-        if left.len() < len_in_bits % 8 {
+        if left.len() < len_in_bits / 8 {
             panic!("The left buffer is too small for the specified length");
         }
 
-        if right.len() < len_in_bits % 8 {
+        if right.len() < len_in_bits / 8 {
             panic!("The right buffer is too small for the specified length");
         }
 
