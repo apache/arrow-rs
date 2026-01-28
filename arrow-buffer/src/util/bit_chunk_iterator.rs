@@ -353,8 +353,8 @@ impl<'a> BitChunks<'a> {
     #[inline]
     pub fn zip_padded(&self, other: &BitChunks<'a>) -> impl Iterator<Item = (u64, u64)> + 'a {
         assert_eq!(self.remainder_len, other.remainder_len);
-        let remainder = (self.remainder_len > 0)
-            .then(|| (self.remainder_bits(), other.remainder_bits()));
+        let remainder =
+            (self.remainder_len > 0).then(|| (self.remainder_bits(), other.remainder_bits()));
         self.iter().zip(other.iter()).chain(remainder)
     }
     /// Returns a zipped iterator over two [`BitChunks`]
@@ -365,7 +365,8 @@ impl<'a> BitChunks<'a> {
             left: self.iter(),
             right: other.iter(),
         }
-    }}
+    }
+}
 
 /// An iterator over zipped chunks of 64 bits
 #[derive(Debug)]
@@ -415,6 +416,60 @@ impl Iterator for BitChunksZipIterator<'_> {
                     }
                 }
             }
+            (0, r_off) => {
+                let r_shift_high = 64 - r_off;
+                if self.right.buffer.len() >= (chunk_len + 1) * 8 {
+                    let mut r_curr =
+                        unsafe { std::ptr::read_unaligned(right_data.add(index)).to_le() };
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l = std::ptr::read_unaligned(left_data.add(i)).to_le();
+                            let r_next = std::ptr::read_unaligned(right_data.add(i + 1)).to_le();
+                            let r = (r_curr >> r_off) | (r_next << r_shift_high);
+                            acc = f(acc, (l, r));
+                            r_curr = r_next;
+                        }
+                    }
+                } else {
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l = std::ptr::read_unaligned(left_data.add(i)).to_le();
+                            let r_low = std::ptr::read_unaligned(right_data.add(i)).to_le();
+                            let r_high =
+                                std::ptr::read_unaligned(right_data.add(i + 1) as *const u8) as u64;
+                            let r = (r_low >> r_off) | (r_high << r_shift_high);
+                            acc = f(acc, (l, r));
+                        }
+                    }
+                }
+            }
+            (l_off, 0) => {
+                let l_shift_high = 64 - l_off;
+                if self.left.buffer.len() >= (chunk_len + 1) * 8 {
+                    let mut l_curr =
+                        unsafe { std::ptr::read_unaligned(left_data.add(index)).to_le() };
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l_next = std::ptr::read_unaligned(left_data.add(i + 1)).to_le();
+                            let l = (l_curr >> l_off) | (l_next << l_shift_high);
+                            let r = std::ptr::read_unaligned(right_data.add(i)).to_le();
+                            acc = f(acc, (l, r));
+                            l_curr = l_next;
+                        }
+                    }
+                } else {
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l_low = std::ptr::read_unaligned(left_data.add(i)).to_le();
+                            let l_high =
+                                std::ptr::read_unaligned(left_data.add(i + 1) as *const u8) as u64;
+                            let l = (l_low >> l_off) | (l_high << l_shift_high);
+                            let r = std::ptr::read_unaligned(right_data.add(i)).to_le();
+                            acc = f(acc, (l, r));
+                        }
+                    }
+                }
+            }
             (l_off, r_off) => {
                 let l_shift_high = 64 - l_off;
                 let r_shift_high = 64 - r_off;
@@ -435,16 +490,8 @@ impl Iterator for BitChunksZipIterator<'_> {
                             let l_next = std::ptr::read_unaligned(left_data.add(i + 1)).to_le();
                             let r_next = std::ptr::read_unaligned(right_data.add(i + 1)).to_le();
 
-                            let l = if l_off == 0 {
-                                l_curr
-                            } else {
-                                (l_curr >> l_off) | (l_next << l_shift_high)
-                            };
-                            let r = if r_off == 0 {
-                                r_curr
-                            } else {
-                                (r_curr >> r_off) | (r_next << r_shift_high)
-                            };
+                            let l = (l_curr >> l_off) | (l_next << l_shift_high);
+                            let r = (r_curr >> r_off) | (r_next << r_shift_high);
 
                             acc = f(acc, (l, r));
                             l_curr = l_next;
@@ -455,22 +502,16 @@ impl Iterator for BitChunksZipIterator<'_> {
                     // Fallback to safe but slower byte reads for high bits
                     for i in index..chunk_len {
                         unsafe {
-                            let l = if l_off == 0 {
-                                std::ptr::read_unaligned(left_data.add(i)).to_le()
-                            } else {
-                                let low = std::ptr::read_unaligned(left_data.add(i)).to_le();
-                                let high = std::ptr::read_unaligned(left_data.add(i + 1) as *const u8)
-                                    as u64;
-                                (low >> l_off) | (high << l_shift_high)
-                            };
-                            let r = if r_off == 0 {
-                                std::ptr::read_unaligned(right_data.add(i)).to_le()
-                            } else {
-                                let low = std::ptr::read_unaligned(right_data.add(i)).to_le();
-                                let high = std::ptr::read_unaligned(right_data.add(i + 1) as *const u8)
-                                    as u64;
-                                (low >> r_off) | (high << r_shift_high)
-                            };
+                            let l_low = std::ptr::read_unaligned(left_data.add(i)).to_le();
+                            let l_high =
+                                std::ptr::read_unaligned(left_data.add(i + 1) as *const u8) as u64;
+                            let l = (l_low >> l_off) | (l_high << l_shift_high);
+
+                            let r_low = std::ptr::read_unaligned(right_data.add(i)).to_le();
+                            let r_high =
+                                std::ptr::read_unaligned(right_data.add(i + 1) as *const u8) as u64;
+                            let r = (r_low >> r_off) | (r_high << r_shift_high);
+
                             acc = f(acc, (l, r));
                         }
                     }
@@ -490,7 +531,6 @@ impl Iterator for BitChunksZipIterator<'_> {
 }
 
 impl ExactSizeIterator for BitChunksZipIterator<'_> {}
-
 
 impl<'a> IntoIterator for BitChunks<'a> {
     type Item = u64;
@@ -920,10 +960,7 @@ mod tests {
             acc.push(x);
             acc
         });
-        assert_eq!(
-            vec![0x0706050403020100, 0x0f0e0d0c0b0a0908],
-            result
-        );
+        assert_eq!(vec![0x0706050403020100, 0x0f0e0d0c0b0a0908], result);
 
         let bitchunks = BitChunks::new(input, 4, 64);
         let result = bitchunks.iter().fold(Vec::new(), |mut acc, x| {
@@ -943,10 +980,14 @@ mod tests {
         let left_chunks = BitChunks::new(left, 0, 64);
         let right_chunks = BitChunks::new(right, 0, 64);
 
-        let result = left_chunks.iter().zip(right_chunks.iter()).fold(Vec::new(), |mut acc, (l, r)| {
-            acc.push(l ^ r);
-            acc
-        });
+        let result =
+            left_chunks
+                .iter()
+                .zip(right_chunks.iter())
+                .fold(Vec::new(), |mut acc, (l, r)| {
+                    acc.push(l ^ r);
+                    acc
+                });
         assert_eq!(vec![0x0706050403020100 ^ 0x0807060504030201], result);
 
         let _left_chunks = BitChunks::new(left, 4, 32);
@@ -958,10 +999,14 @@ mod tests {
         let left_chunks = BitChunks::new(left, 4, 64);
         let right_chunks = BitChunks::new(right, 8, 64);
 
-        let result = left_chunks.iter().zip(right_chunks.iter()).fold(Vec::new(), |mut acc, (l, r)| {
-            acc.push(l & r);
-            acc
-        });
+        let result =
+            left_chunks
+                .iter()
+                .zip(right_chunks.iter())
+                .fold(Vec::new(), |mut acc, (l, r)| {
+                    acc.push(l & r);
+                    acc
+                });
 
         let l_expected = {
             let mut b = [0u8; 16];

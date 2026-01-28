@@ -86,7 +86,8 @@ where
     let right_chunks = right.bit_chunks(right_offset_in_bits, len_in_bits);
 
     let chunks = left_chunks
-        .zip_padded(&right_chunks)
+        .iter()
+        .zip(right_chunks.iter())
         .map(|(left, right)| op(left, right));
     // Soundness: `BitChunks` is a `BitChunks` iterator which
     // correctly reports its upper bound
@@ -107,17 +108,12 @@ pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
     len_in_bits: usize,
-    op: F,
+    mut op: F,
 ) -> Buffer
 where
     F: FnMut(u64) -> u64,
 {
-    let left_chunks = left.bit_chunks(offset_in_bits, len_in_bits);
-    let iter = left_chunks.iter_padded().map(op);
-    let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
-    buffer.truncate(ceil(len_in_bits, 8));
-
-    buffer.into()
+    BooleanBuffer::from_bitwise_unary_op(left, offset_in_bits, len_in_bits, |a| op(a)).into_inner()
 }
 
 /// Apply a bitwise and to two inputs and return the result as a Buffer.

@@ -192,12 +192,48 @@ impl BooleanBuffer {
     where
         F: FnMut(u64) -> u64,
     {
+        // try fast path for aligned input
+        if offset_in_bits & 0x7 == 0 {
+            // align to byte boundary
+            let aligned = &src.as_ref()[offset_in_bits / 8..];
+            if let Some(result) =
+                Self::try_from_aligned_bitwise_unary_op(aligned, len_in_bits, &mut op)
+            {
+                return result;
+            }
+        }
+
         let unaligned = UnalignedBitChunk::new(src.as_ref(), offset_in_bits, len_in_bits);
         let iter = unaligned.iter().map(|chunk| op(chunk));
         let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
         buffer.truncate(bit_util::ceil(unaligned.lead_padding() + len_in_bits, 8));
 
         BooleanBuffer::new(buffer.into(), unaligned.lead_padding(), len_in_bits)
+    }
+
+    /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
+    /// 8-byte (64-bit) boundaries
+    ///
+    /// Returns None if the fast path cannot be taken
+    fn try_from_aligned_bitwise_unary_op<F>(
+        src: &[u8],
+        len_in_bits: usize,
+        op: &mut F,
+    ) -> Option<Self>
+    where
+        F: FnMut(u64) -> u64,
+    {
+        // Safety: all valid bytes are valid u64s
+        let (prefix, aligned_u6us, suffix) = unsafe { src.align_to::<u64>() };
+        if !(prefix.is_empty() && suffix.is_empty()) {
+            // Couldn't make this case any faster than the default path, see
+            // https://github.com/apache/arrow-rs/pull/8996/changes#r2620022082
+            return None;
+        }
+        // the buffer is word (64 bit) aligned, so use optimized Vec code.
+        let result_u64s: Vec<u64> = aligned_u6us.iter().map(|l| op(*l)).collect();
+        let buffer = Buffer::from(result_u64s);
+        Some(BooleanBuffer::new(buffer, 0, len_in_bits))
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
