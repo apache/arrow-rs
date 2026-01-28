@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::bit_chunk_iterator::BitChunks;
+use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::{BooleanBufferBuilder, Buffer, MutableBuffer, bit_util};
 
@@ -201,17 +201,17 @@ impl BooleanBuffer {
                 return result;
             }
         }
-        
-        let src = src.as_ref();
-        let chunks = BitChunks::new(src, offset_in_bits, len_in_bits);
-        let iter = chunks.iter_padded().map(|chunk| op(chunk));
-        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
-        buffer.truncate(bit_util::ceil(len_in_bits, 8));
 
-        BooleanBuffer::new(buffer.into(), 0, len_in_bits)
+        let src = src.as_ref();
+        let chunks = UnalignedBitChunk::new(src, offset_in_bits, len_in_bits);
+        let iter = chunks.iter().map(|chunk| op(chunk));
+        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
+        buffer.truncate(bit_util::ceil(chunks.lead_padding() + len_in_bits, 8));
+
+        BooleanBuffer::new(buffer.into(), chunks.lead_padding(), len_in_bits)
     }
 
-        /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
+    /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
     /// 8-byte (64-bit) boundaries
     ///
     /// Returns None if the fast path cannot be taken
@@ -235,7 +235,6 @@ impl BooleanBuffer {
         let buffer = Buffer::from(result_u64s);
         Some(BooleanBuffer::new(buffer, 0, len_in_bits))
     }
-
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
     /// the relevant bits from two input buffers.
@@ -286,6 +285,57 @@ impl BooleanBuffer {
     {
         let left = left.as_ref();
         let right = right.as_ref();
+
+        // try fast path for aligned input
+        // If the underlying buffers are aligned to u64 we can apply the operation directly on the u64 slices
+        // to improve performance.
+        if left_offset_in_bits & 0x7 == 0 && right_offset_in_bits & 0x7 == 0 {
+            // align to byte boundary
+            let left = &left[left_offset_in_bits / 8..];
+            let right = &right[right_offset_in_bits / 8..];
+
+            unsafe {
+                let (left_prefix, left_u64s, left_suffix) = left.align_to::<u64>();
+                let (right_prefix, right_u64s, right_suffix) = right.align_to::<u64>();
+                // if there is no prefix or suffix, both buffers are aligned and
+                // we can do the operation directly on u64s.
+                // TODO: consider `slice::as_chunks` and `u64::from_le_bytes` when MSRV reaches 1.88.
+                // https://github.com/apache/arrow-rs/pull/9022#discussion_r2639949361
+                if left_prefix.is_empty()
+                    && right_prefix.is_empty()
+                    && left_suffix.is_empty()
+                    && right_suffix.is_empty()
+                {
+                    let result_u64s = left_u64s
+                        .iter()
+                        .zip(right_u64s.iter())
+                        .map(|(l, r)| op(*l, *r))
+                        .collect::<Vec<u64>>();
+                    return BooleanBuffer {
+                        buffer: Buffer::from(result_u64s),
+                        bit_offset: 0,
+                        bit_len: len_in_bits,
+                    };
+                }
+            }
+        }
+
+        if left_offset_in_bits == right_offset_in_bits {
+            // both buffers have the same offset, we can use UnalignedBitChunk for both
+            let left_chunks = UnalignedBitChunk::new(left, left_offset_in_bits, len_in_bits);
+            let right_chunks = UnalignedBitChunk::new(right, right_offset_in_bits, len_in_bits);
+
+            let chunks = left_chunks
+                .zip(&right_chunks)
+                .map(|(left, right)| op(left, right));
+            // Soundness: `UnalignedBitChunk` is a `BitChunks` trusted length iterator which
+            // correctly reports its upper bound
+            let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+            buffer.truncate(bit_util::ceil(left_chunks.lead_padding() + len_in_bits, 8));
+
+            return BooleanBuffer::new(buffer.into(), left_chunks.lead_padding(), len_in_bits);
+        }
+
         let left_chunks = BitChunks::new(left, left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right, right_offset_in_bits, len_in_bits);
 

@@ -27,7 +27,7 @@ use std::fmt::Debug;
 ///
 /// This is unlike [`BitChunkIterator`] which only exposes a trailing u64,
 /// and consequently has to perform more work for each read
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct UnalignedBitChunk<'a> {
     lead_padding: usize,
     trailing_padding: usize,
@@ -158,10 +158,20 @@ impl<'a> UnalignedBitChunk<'a> {
 
     /// Returns an iterator over the chunks
     pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
-        self.prefix
-            .into_iter()
-            .chain(self.chunks.iter().cloned())
-            .chain(self.suffix)
+        UnalignedBitChunkIterator {
+            prefix: self.prefix,
+            chunks: self.chunks,
+            suffix: self.suffix,
+        }
+    }
+
+    /// Returns a zipped iterator over two [`UnalignedBitChunk`]
+    #[inline]
+    pub fn zip(&self, other: &UnalignedBitChunk<'a>) -> UnalignedBitChunkZipIterator<'a> {
+        UnalignedBitChunkZipIterator {
+            left: self.iter(),
+            right: other.iter(),
+        }
     }
 
     /// Counts the number of ones
@@ -173,11 +183,165 @@ impl<'a> UnalignedBitChunk<'a> {
     }
 }
 
-/// Iterator over an [`UnalignedBitChunk`]
-pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
-    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Cloned<std::slice::Iter<'a, u64>>>,
-    std::option::IntoIter<u64>,
->;
+/// An iterator over the chunks of an [`UnalignedBitChunk`]
+#[derive(Debug, Clone)]
+pub struct UnalignedBitChunkIterator<'a> {
+    prefix: Option<u64>,
+    chunks: &'a [u64],
+    suffix: Option<u64>,
+}
+
+impl<'a> Iterator for UnalignedBitChunkIterator<'a> {
+    type Item = u64;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(prefix) = self.prefix.take() {
+            return Some(prefix);
+        }
+        if let Some((&first, rest)) = self.chunks.split_first() {
+            self.chunks = rest;
+            return Some(first);
+        }
+        self.suffix.take()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+
+    #[inline]
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut acc = init;
+        if let Some(prefix) = self.prefix.take() {
+            acc = f(acc, prefix);
+        }
+        for &chunk in self.chunks {
+            acc = f(acc, chunk);
+        }
+        self.chunks = &[];
+        if let Some(suffix) = self.suffix.take() {
+            acc = f(acc, suffix);
+        }
+        acc
+    }
+}
+
+impl<'a> UnalignedBitChunkIterator<'a> {
+    /// Returns a zipped iterator over two [`UnalignedBitChunkIterator`]
+    #[inline]
+    pub fn zip(self, other: UnalignedBitChunkIterator<'a>) -> UnalignedBitChunkZipIterator<'a> {
+        UnalignedBitChunkZipIterator {
+            left: self,
+            right: other,
+        }
+    }
+}
+
+impl ExactSizeIterator for UnalignedBitChunkIterator<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.prefix.is_some() as usize + self.chunks.len() + self.suffix.is_some() as usize
+    }
+}
+
+impl std::iter::FusedIterator for UnalignedBitChunkIterator<'_> {}
+
+impl<'a> DoubleEndedIterator for UnalignedBitChunkIterator<'a> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if let Some(suffix) = self.suffix.take() {
+            return Some(suffix);
+        }
+        if let Some((&last, rest)) = self.chunks.split_last() {
+            self.chunks = rest;
+            return Some(last);
+        }
+        self.prefix.take()
+    }
+}
+
+/// An iterator over zipped [`UnalignedBitChunk`]
+#[derive(Debug)]
+pub struct UnalignedBitChunkZipIterator<'a> {
+    left: UnalignedBitChunkIterator<'a>,
+    right: UnalignedBitChunkIterator<'a>,
+}
+
+impl<'a> Iterator for UnalignedBitChunkZipIterator<'a> {
+    type Item = (u64, u64);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        Some((self.left.next()?, self.right.next()?))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.left.size_hint()
+    }
+
+    #[inline]
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut acc = init;
+
+        // 1. Consume elements until both are at the 'chunks' stage or one is exhausted.
+        while self.left.prefix.is_some() || self.right.prefix.is_some() {
+            if let (Some(l), Some(r)) = (self.left.next(), self.right.next()) {
+                acc = f(acc, (l, r));
+            } else {
+                return acc;
+            }
+        }
+
+        // 2. Now both prefix are None. Zip the chunks.
+        let chunk_count = self.left.chunks.len().min(self.right.chunks.len());
+        if chunk_count > 0 {
+            let (l_chunks, l_rest) = self.left.chunks.split_at(chunk_count);
+            let (r_chunks, r_rest) = self.right.chunks.split_at(chunk_count);
+
+            for (&l, &r) in l_chunks.iter().zip(r_chunks.iter()) {
+                acc = f(acc, (l, r));
+            }
+
+            self.left.chunks = l_rest;
+            self.right.chunks = r_rest;
+        }
+
+        // 3. Consume remaining (suffix)
+        while let (Some(l), Some(r)) = (self.left.next(), self.right.next()) {
+            acc = f(acc, (l, r));
+        }
+        acc
+    }
+
+    #[inline]
+    fn for_each<F>(self, mut f: F)
+    where
+        F: FnMut(Self::Item),
+    {
+        self.fold((), |_, item| f(item));
+    }
+}
+
+impl ExactSizeIterator for UnalignedBitChunkZipIterator<'_> {}
+
+impl std::iter::FusedIterator for UnalignedBitChunkZipIterator<'_> {}
+
+impl DoubleEndedIterator for UnalignedBitChunkZipIterator<'_> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        Some((self.left.next_back()?, self.right.next_back()?))
+    }
+}
 
 #[inline]
 fn read_u64(input: &[u8]) -> u64 {
@@ -1019,6 +1183,60 @@ mod tests {
             u128::from_le_bytes(b) >> 8
         } as u64;
         assert_eq!(vec![l_expected & r_expected], result);
+    }
+
+    #[test]
+    fn test_unaligned_fold_zip() {
+        let left: &[u8] = &[
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ];
+        let right: &[u8] = &[
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+        ];
+
+        let cases = [
+            (0, 0, 128),
+            (4, 4, 64),
+            (4, 8, 64),
+            (0, 8, 128),
+            (1, 2, 128),
+            (7, 0, 128),
+        ];
+
+        for (l_off, r_off, len) in cases {
+            let left_bc = UnalignedBitChunk::new(left, l_off, len);
+            let right_bc = UnalignedBitChunk::new(right, r_off, len);
+
+            let expected: Vec<_> = left_bc.iter().zip(right_bc.iter()).collect();
+
+            // Test fold
+            let actual: Vec<_> = left_bc.zip(&right_bc).fold(Vec::new(), |mut acc, x| {
+                acc.push(x);
+                acc
+            });
+            assert_eq!(
+                expected, actual,
+                "Fold failed for l_off={}, r_off={}, len={}",
+                l_off, r_off, len
+            );
+
+            // Test for_each
+            let mut actual_for_each = Vec::new();
+            left_bc.zip(&right_bc).for_each(|x| actual_for_each.push(x));
+            assert_eq!(
+                expected, actual_for_each,
+                "ForEach failed for l_off={}, r_off={}, len={}",
+                l_off, r_off, len
+            );
+
+            // Test next()
+            let actual_next: Vec<_> = left_bc.zip(&right_bc).collect();
+            assert_eq!(
+                expected, actual_next,
+                "Next failed for l_off={}, r_off={}, len={}",
+                l_off, r_off, len
+            );
+        }
     }
 
     #[test]
