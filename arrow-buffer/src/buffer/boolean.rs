@@ -258,7 +258,8 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///   &left, 0, &right, 0, 12, |a, b| a & b
     /// );
-    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8]);
+    /// // Note: the output is padded to the next u64 boundary
+    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8, 0, 0, 0, 0, 0, 0]);
     /// ```
     ///
     /// # Example: Create new [`BooleanBuffer`] from bitwise `OR` of two byte slices
@@ -270,7 +271,8 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///  &left, 4, &right, 0, 12, |a, b| a | b
     /// );
-    /// assert_eq!(result.inner().as_slice(), &[0b10101110u8, 0b00001111u8]);
+    /// // Note: the output is padded to the next u64 boundary
+    /// assert_eq!(result.inner().as_slice(), &[0b10101110u8, 0b00001111u8, 0, 0, 0, 0, 0, 0]);
     /// ```
     pub fn from_bitwise_binary_op<F>(
         left: impl AsRef<[u8]>,
@@ -336,7 +338,6 @@ impl BooleanBuffer {
 
                 let left_chunks = BitChunks::new(left, 0, len_in_bits);
                 let right_chunks = BitChunks::new(right, 0, len_in_bits);
-                let chunk_len = left_chunks.chunk_len();
                 let mut result = Vec::with_capacity(bit_util::ceil(len_in_bits, 64));
 
                 let l_iter = left
@@ -346,7 +347,7 @@ impl BooleanBuffer {
                     .chunks_exact(8)
                     .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
 
-                result.extend(l_iter.zip(r_iter).take(chunk_len).map(|(l, r)| op(l, r)));
+                result.extend(l_iter.zip(r_iter).map(|(l, r)| op(l, r)));
 
                 if left_chunks.remainder_len() > 0 {
                     result.push(op(
