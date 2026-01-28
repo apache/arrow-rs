@@ -180,8 +180,8 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_unary_op(
     ///  &input, 0, 12, |a| !a
     /// );
-    /// // Values are padded, so the last 4 bits are not relevant
-    /// assert_eq!(result.values(), &[0b00110011u8, 0b01000101u8, 255, 255, 255, 255, 255, 255]);
+    /// // Values are padded
+    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8, 255, 255, 255, 255, 255, 255]);
     /// ```
     pub fn from_bitwise_unary_op<F>(
         src: impl AsRef<[u8]>,
@@ -198,10 +198,9 @@ impl BooleanBuffer {
             return Self::from_aligned_bitwise_unary_op(aligned, len_in_bits, &mut op);
         }
 
-        // unaligned case
         let src = src.as_ref();
         let chunks = UnalignedBitChunk::new(src, offset_in_bits, len_in_bits);
-        let iter = chunks.iter().map(op);
+        let iter = chunks.iter().map(|chunk| op(chunk));
         let buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
 
         BooleanBuffer::new(buffer.into(), chunks.lead_padding(), len_in_bits)
@@ -214,28 +213,25 @@ impl BooleanBuffer {
         F: FnMut(u64) -> u64,
     {
         // Safety: all valid bytes are valid u64s
-        let (prefix, aligned_u64s, suffix) = unsafe { src.align_to::<u64>() };
+        let (prefix, aligned_u6us, suffix) = unsafe { src.align_to::<u64>() };
         if !(prefix.is_empty() && suffix.is_empty()) {
             // unaligned
+            let chunks = BitChunks::new(src, 0, len_in_bits);
             let mut result = Vec::with_capacity(bit_util::ceil(len_in_bits, 64));
 
-            let chunks_exact = src.chunks_exact(8);
             let iter = src
                 .chunks_exact(8)
                 .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
             result.extend(iter.map(&mut *op));
 
-            if !chunks_exact.remainder().is_empty() {
-                let mut remainder = [0u8; 8];
-                remainder[..chunks_exact.remainder().len()]
-                    .copy_from_slice(chunks_exact.remainder());
-                result.push(op(u64::from_le_bytes(remainder)));
+            if chunks.remainder_len() > 0 {
+                result.push(op(chunks.remainder_bits()));
             }
 
             return BooleanBuffer::new(Buffer::from(result), 0, len_in_bits);
         }
         // the buffer is word (64 bit) aligned, so use optimized Vec code.
-        let result_u64s: Vec<u64> = aligned_u64s.iter().map(|l| op(*l)).collect();
+        let result_u64s: Vec<u64> = aligned_u6us.iter().map(|l| op(*l)).collect();
         let buffer = Buffer::from(result_u64s);
         BooleanBuffer::new(buffer, 0, len_in_bits)
     }
@@ -338,29 +334,26 @@ impl BooleanBuffer {
                 let left = &left[left_offset_in_bits / 8..];
                 let right = &right[right_offset_in_bits / 8..];
 
+                let left_chunks = BitChunks::new(left, 0, len_in_bits);
+                let right_chunks = BitChunks::new(right, 0, len_in_bits);
+                let chunk_len = left_chunks.chunk_len();
                 let mut result = Vec::with_capacity(bit_util::ceil(len_in_bits, 64));
 
-                let left_chunks = left.chunks_exact(8);
-                let right_chunks = right.chunks_exact(8);
-                let left_rem = left_chunks.remainder();
-                let right_rem = right_chunks.remainder();
+                let l_iter = left
+                    .chunks_exact(8)
+                    .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+                let r_iter = right
+                    .chunks_exact(8)
+                    .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
 
-                let l_iter = left_chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
-                let r_iter = right_chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+                result.extend(l_iter.zip(r_iter).take(chunk_len).map(|(l, r)| op(l, r)));
 
-                result.extend(l_iter.zip(r_iter).map(|(l, r)| op(l, r)));
-
-                if !left_rem.is_empty() || !right_rem.is_empty() {
-                    let mut left_remainder = [0u8; 8];
-                    left_remainder[..left_rem.len()].copy_from_slice(left_rem);
-                    let mut right_remainder = [0u8; 8];
-                    right_remainder[..right_rem.len()].copy_from_slice(right_rem);
+                if left_chunks.remainder_len() > 0 {
                     result.push(op(
-                        u64::from_le_bytes(left_remainder),
-                        u64::from_le_bytes(right_remainder),
+                        left_chunks.remainder_bits(),
+                        right_chunks.remainder_bits(),
                     ));
                 }
-
                 return BooleanBuffer::new(Buffer::from(result), 0, len_in_bits);
             }
 
