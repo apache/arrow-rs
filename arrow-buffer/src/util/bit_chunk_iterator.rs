@@ -156,14 +156,12 @@ impl<'a> UnalignedBitChunk<'a> {
         self.chunks
     }
 
-    /// Returns an iterator over the chunk
-    #[inline]
+    /// Returns an iterator over the chunks
     pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
-        UnalignedBitChunkIterator {
-            prefix: self.prefix,
-            chunks: self.chunks.iter(),
-            suffix: self.suffix,
-        }
+        self.prefix
+            .into_iter()
+            .chain(self.chunks.iter().cloned())
+            .chain(self.suffix)
     }
 
     /// Counts the number of ones
@@ -176,85 +174,10 @@ impl<'a> UnalignedBitChunk<'a> {
 }
 
 /// Iterator over an [`UnalignedBitChunk`]
-#[derive(Debug)]
-pub struct UnalignedBitChunkIterator<'a> {
-    prefix: Option<u64>,
-    chunks: std::slice::Iter<'a, u64>,
-    suffix: Option<u64>,
-}
-
-impl Iterator for UnalignedBitChunkIterator<'_> {
-    type Item = u64;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(prefix) = self.prefix.take() {
-            return Some(prefix);
-        }
-        if let Some(chunk) = self.chunks.next() {
-            return Some(*chunk);
-        }
-        self.suffix.take()
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
-    }
-
-    #[inline]
-    fn fold<B, F>(mut self, mut init: B, mut f: F) -> B
-    where
-        Self: Sized,
-        F: FnMut(B, Self::Item) -> B,
-    {
-        if let Some(prefix) = self.prefix.take() {
-            init = f(init, prefix);
-        }
-        init = self.chunks.fold(init, |acc, &x| f(acc, x));
-        if let Some(suffix) = self.suffix.take() {
-            init = f(init, suffix);
-        }
-        init
-    }
-}
-
-impl DoubleEndedIterator for UnalignedBitChunkIterator<'_> {
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if let Some(suffix) = self.suffix.take() {
-            return Some(suffix);
-        }
-        if let Some(chunk) = self.chunks.next_back() {
-            return Some(*chunk);
-        }
-        self.prefix.take()
-    }
-
-    #[inline]
-    fn rfold<B, F>(mut self, mut init: B, mut f: F) -> B
-    where
-        Self: Sized,
-        F: FnMut(B, Self::Item) -> B,
-    {
-        if let Some(suffix) = self.suffix.take() {
-            init = f(init, suffix);
-        }
-        init = self.chunks.rfold(init, |acc, &x| f(acc, x));
-        if let Some(prefix) = self.prefix.take() {
-            init = f(init, prefix);
-        }
-        init
-    }
-}
-
-impl ExactSizeIterator for UnalignedBitChunkIterator<'_> {
-    #[inline]
-    fn len(&self) -> usize {
-        (self.prefix.is_some() as usize) + self.chunks.len() + (self.suffix.is_some() as usize)
-    }
-}
+pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
+    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Cloned<std::slice::Iter<'a, u64>>>,
+    std::option::IntoIter<u64>,
+>;
 
 #[inline]
 fn read_u64(input: &[u8]) -> u64 {

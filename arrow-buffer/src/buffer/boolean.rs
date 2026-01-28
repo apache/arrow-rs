@@ -17,10 +17,7 @@
 
 use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
-use crate::{
-    BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
-    buffer_bin_xor, buffer_unary_not,
-};
+use crate::{BooleanBufferBuilder, Buffer, MutableBuffer, bit_util};
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
@@ -151,7 +148,10 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bits(&input, 4, 12);
     /// assert_eq!(result.values(), &[0b10101100u8, 0b00001011u8]);
     pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
-        Self::from_bitwise_unary_op(src, offset_in_bits, len_in_bits, |a| a)
+        let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
+        let iter = chunks.iter_padded();
+        let buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
+        BooleanBuffer::new(buffer.into(), 0, len_in_bits)
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation to `op`
@@ -451,11 +451,7 @@ impl Not for &BooleanBuffer {
     type Output = BooleanBuffer;
 
     fn not(self) -> Self::Output {
-        BooleanBuffer {
-            buffer: buffer_unary_not(&self.buffer, self.bit_offset, self.bit_len),
-            bit_offset: 0,
-            bit_len: self.bit_len,
-        }
+        BooleanBuffer::from_bitwise_unary_op(&self.buffer, self.bit_offset, self.bit_len, |a| !a)
     }
 }
 
@@ -464,17 +460,14 @@ impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
 
     fn bitand(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.bit_len, rhs.bit_len);
-        BooleanBuffer {
-            buffer: buffer_bin_and(
-                &self.buffer,
-                self.bit_offset,
-                &rhs.buffer,
-                rhs.bit_offset,
-                self.bit_len,
-            ),
-            bit_offset: 0,
-            bit_len: self.bit_len,
-        }
+        BooleanBuffer::from_bitwise_binary_op(
+            &self.buffer,
+            self.bit_offset,
+            &rhs.buffer,
+            rhs.bit_offset,
+            self.bit_len,
+            |a, b| a & b,
+        )
     }
 }
 
@@ -483,17 +476,14 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
 
     fn bitor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.bit_len, rhs.bit_len);
-        BooleanBuffer {
-            buffer: buffer_bin_or(
-                &self.buffer,
-                self.bit_offset,
-                &rhs.buffer,
-                rhs.bit_offset,
-                self.bit_len,
-            ),
-            bit_offset: 0,
-            bit_len: self.bit_len,
-        }
+        BooleanBuffer::from_bitwise_binary_op(
+            &self.buffer,
+            self.bit_offset,
+            &rhs.buffer,
+            rhs.bit_offset,
+            self.bit_len,
+            |a, b| a | b,
+        )
     }
 }
 
@@ -502,17 +492,14 @@ impl BitXor<&BooleanBuffer> for &BooleanBuffer {
 
     fn bitxor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.bit_len, rhs.bit_len);
-        BooleanBuffer {
-            buffer: buffer_bin_xor(
-                &self.buffer,
-                self.bit_offset,
-                &rhs.buffer,
-                rhs.bit_offset,
-                self.bit_len,
-            ),
-            bit_offset: 0,
-            bit_len: self.bit_len,
-        }
+        BooleanBuffer::from_bitwise_binary_op(
+            &self.buffer,
+            self.bit_offset,
+            &rhs.buffer,
+            rhs.bit_offset,
+            self.bit_len,
+            |a, b| a ^ b,
+        )
     }
 }
 
