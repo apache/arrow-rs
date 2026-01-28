@@ -418,7 +418,7 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
 
                     // Avro splitting case: block is incomplete, we need to:
                     // 1. Parse the length so we know how much to read
-                    // 2. Fetch more data from the object store
+                    // 2. Fetch more data from the reader
                     // 3. Create a new block data from the remaining slice and the newly fetched data
                     // 4. Continue decoding until end of block
                     self.finishing_partial_block = true;
