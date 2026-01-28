@@ -150,7 +150,8 @@ impl BooleanBuffer {
     pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
         let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
         let iter = chunks.iter_padded();
-        let buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
+        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
+        buffer.truncate(bit_util::ceil(len_in_bits, 8));
         BooleanBuffer::new(buffer.into(), 0, len_in_bits)
     }
 

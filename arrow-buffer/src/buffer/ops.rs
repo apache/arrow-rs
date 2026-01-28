@@ -86,18 +86,12 @@ where
     let right_chunks = right.bit_chunks(right_offset_in_bits, len_in_bits);
 
     let chunks = left_chunks
-        .iter()
-        .zip(right_chunks.iter())
+        .zip_padded(&right_chunks)
         .map(|(left, right)| op(left, right));
     // Soundness: `BitChunks` is a `BitChunks` iterator which
     // correctly reports its upper bound
     let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
-
-    let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
-    let rem = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
-    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-    let rem = &rem.to_le_bytes()[0..remainder_bytes];
-    buffer.extend_from_slice(rem);
+    buffer.truncate(ceil(len_in_bits, 8));
 
     buffer.into()
 }
@@ -113,32 +107,17 @@ pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
     len_in_bits: usize,
-    mut op: F,
+    op: F,
 ) -> Buffer
 where
     F: FnMut(u64) -> u64,
 {
-    // reserve capacity and set length so we can get a typed view of u64 chunks
-    let mut result =
-        MutableBuffer::new(ceil(len_in_bits, 8)).with_bitset(len_in_bits / 64 * 8, false);
-
     let left_chunks = left.bit_chunks(offset_in_bits, len_in_bits);
+    let iter = left_chunks.iter_padded().map(op);
+    let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
+    buffer.truncate(ceil(len_in_bits, 8));
 
-    let result_chunks = result.typed_data_mut::<u64>().iter_mut();
-
-    result_chunks
-        .zip(left_chunks.iter())
-        .for_each(|(res, left)| {
-            *res = op(left);
-        });
-
-    let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
-    let rem = op(left_chunks.remainder_bits());
-    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-    let rem = &rem.to_le_bytes()[0..remainder_bytes];
-    result.extend_from_slice(rem);
-
-    result.into()
+    buffer.into()
 }
 
 /// Apply a bitwise and to two inputs and return the result as a Buffer.
