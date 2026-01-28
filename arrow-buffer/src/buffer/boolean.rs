@@ -180,7 +180,8 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_unary_op(
     ///  &input, 0, 12, |a| !a
     /// );
-    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8]);
+    /// // Values are padded
+    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8, 255, 255, 255, 255, 255, 255]);
     /// ```
     pub fn from_bitwise_unary_op<F>(
         src: impl AsRef<[u8]>,
@@ -200,7 +201,7 @@ impl BooleanBuffer {
         let src = src.as_ref();
         let chunks = UnalignedBitChunk::new(src, offset_in_bits, len_in_bits);
         let iter = chunks.iter().map(|chunk| op(chunk));
-        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
+        let buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
 
         BooleanBuffer::new(buffer.into(), chunks.lead_padding(), len_in_bits)
     }
@@ -357,7 +358,7 @@ impl BooleanBuffer {
                 .map(|(left, right)| op(left, right));
             // Soundness: `UnalignedBitChunk` is a `BitChunks` trusted length iterator which
             // correctly reports its upper bound
-            let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+            let buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
 
             return BooleanBuffer::new(buffer.into(), left_chunks.lead_padding(), len_in_bits);
         }
@@ -370,7 +371,7 @@ impl BooleanBuffer {
             .map(|(left, right)| op(left, right));
         // Soundness: `BitChunks` is a `BitChunks` trusted length iterator which
         // correctly reports its upper bound
-        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+        let buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
 
         BooleanBuffer::new(buffer.into(), 0, len_in_bits)
     }
