@@ -195,25 +195,21 @@ impl BooleanBuffer {
         if offset_in_bits & 0x7 == 0 {
             // align to byte boundary
             let aligned = &src.as_ref()[offset_in_bits / 8..];
-            return Self::from_aligned_bitwise_unary_op(aligned, len_in_bits, &mut op)
+            return Self::from_aligned_bitwise_unary_op(aligned, len_in_bits, &mut op);
         }
 
         let src = src.as_ref();
         let chunks = UnalignedBitChunk::new(src, offset_in_bits, len_in_bits);
         let iter = chunks.iter().map(|chunk| op(chunk));
         let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
-        buffer.truncate(bit_util::ceil(chunks.lead_padding() + len_in_bits, 8));
+        buffer.truncate(bit_util::ceil(len_in_bits, 8));
 
         BooleanBuffer::new(buffer.into(), chunks.lead_padding(), len_in_bits)
     }
 
     /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
     /// 8-byte (64-bit) boundaries
-    fn from_aligned_bitwise_unary_op<F>(
-        src: &[u8],
-        len_in_bits: usize,
-        op: &mut F,
-    ) -> Self
+    fn from_aligned_bitwise_unary_op<F>(src: &[u8], len_in_bits: usize, op: &mut F) -> Self
     where
         F: FnMut(u64) -> u64,
     {
@@ -221,14 +217,19 @@ impl BooleanBuffer {
         let chunk_len = chunks.chunk_len();
         let mut result = Vec::with_capacity(bit_util::ceil(len_in_bits, 64));
 
-        let iter = src.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+        let iter = src
+            .chunks_exact(8)
+            .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
         result.extend(iter.take(chunk_len).map(|l| op(l)));
 
         if chunks.remainder_len() > 0 {
             result.push(op(chunks.remainder_bits()));
         }
 
-        return BooleanBuffer::new(Buffer::from(result), 0, len_in_bits)
+        let mut mutable: MutableBuffer = result.into();
+        mutable.truncate(bit_util::ceil(len_in_bits, 8));
+
+        return BooleanBuffer::new(Buffer::from(mutable), 0, len_in_bits);
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
@@ -334,13 +335,20 @@ impl BooleanBuffer {
                 let chunk_len = left_chunks.chunk_len();
                 let mut result = Vec::with_capacity(bit_util::ceil(len_in_bits, 64));
 
-                let l_iter = left.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap()));
-                let r_iter = right.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+                let l_iter = left
+                    .chunks_exact(8)
+                    .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+                let r_iter = right
+                    .chunks_exact(8)
+                    .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
 
                 result.extend(l_iter.zip(r_iter).take(chunk_len).map(|(l, r)| op(l, r)));
 
                 if left_chunks.remainder_len() > 0 {
-                    result.push(op(left_chunks.remainder_bits(), right_chunks.remainder_bits()));
+                    result.push(op(
+                        left_chunks.remainder_bits(),
+                        right_chunks.remainder_bits(),
+                    ));
                 }
                 return BooleanBuffer::new(Buffer::from(result), 0, len_in_bits);
             }
