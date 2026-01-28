@@ -21,6 +21,7 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 use object_store::ObjectStore;
+use object_store::ObjectStoreExt;
 use object_store::path::Path;
 use std::error::Error;
 use std::ops::Range;
@@ -91,7 +92,7 @@ impl AvroObjectReader {
 
 impl AsyncFileReader for AvroObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
-        self.spawn(|store, path| store.get_range(path, range))
+        self.spawn(|store, path| async move { store.get_range(path, range).await }.boxed())
     }
 
     fn get_byte_ranges(

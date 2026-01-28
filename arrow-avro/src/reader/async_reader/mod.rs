@@ -540,9 +540,9 @@ mod tests {
     use arrow_array::*;
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use futures::{StreamExt, TryStreamExt};
-    use object_store::ObjectStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt};
     use std::collections::HashMap;
     use std::sync::Arc;
 
