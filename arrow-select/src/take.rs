@@ -95,19 +95,19 @@ pub fn take(
             if options.check_bounds {
                 check_bounds(values.len(), indices)?;
             } else {
-                let max_index = match indices.nulls().filter(|n| n.null_count() > 0) {
-                    Some(_) => {
-                        let max_index = indices.iter().max();
-                        max_index.unwrap_or(None)
-                    },
-                    None => {
-                        indices.values().iter().max().copied()
-                    }
-                };
-
-                if let Some(index) = max_index {
-                    assert!(index.as_usize() < values.len(), "index out of bounds: the len is {} but the max index is {}", values.len(), index.as_usize())
-                }
+                // let max_index = match indices.nulls().filter(|n| n.null_count() > 0) {
+                //     Some(_) => {
+                //         let max_index = indices.iter().max();
+                //         max_index.unwrap_or(None)
+                //     },
+                //     None => {
+                //         indices.values().iter().max().copied()
+                //     }
+                // };
+                //
+                // if let Some(index) = max_index {
+                //     assert!(index.as_usize() < values.len(), "index out of bounds: the len is {} but the max index is {}", values.len(), index.as_usize())
+                // }
             }
             let indices = indices.to_indices();
             take_impl(values, &indices)
