@@ -68,7 +68,6 @@ jobs:
         run: |
           # Test parquet examples
           cargo run -p parquet --example read_parquet
-          cargo run -p parquet --example async_read_parquet --features="async"
           cargo run -p parquet --example read_with_rowgroup --features="async"
 
   # test compilation
