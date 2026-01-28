@@ -193,23 +193,13 @@ impl BooleanBuffer {
         F: FnMut(u64) -> u64,
     {
         // align to byte boundary
-        let end = offset_in_bits + len_in_bits;
-        let aligned = &src.as_ref()[offset_in_bits / 8..end / 8 + (end % 8 != 0) as usize];
-        let start_bit = offset_in_bits % 64;
+        let aligned = &src.as_ref()[offset_in_bits / 8..];
+        let start_bit = offset_in_bits % 8;
         let (prefix, aligned_u64s, suffix) = unsafe { aligned.align_to::<u64>() };
-        let read_prefix = |bytes: &[u8]| {
-            let mut res = 0u64;
-            for (i, byte) in bytes.iter().enumerate() {
-                res |= (*byte as u64) << (i * 8);
-            }
-            res <<= 64 - bytes.len() * 8;
-            res
-        };
-
-        let read_suffix = |bytes: &[u8]| {
+        let read_u64 = |bytes: &[u8]| {
             let mut res = 0u64;
             for (i, byte) in bytes.iter().take(8).enumerate() {
-                res |= (*byte as u64) << (i * 8)
+                res |= (*byte as u64) << (i * 8);
             }
             res
         };
@@ -221,16 +211,16 @@ impl BooleanBuffer {
                 aligned_u64s.iter().map(|l| op(*l)).collect()
             },
             (false, true) => {
-                let prefix = read_prefix(prefix);
+                let prefix = read_u64(prefix);
                 Some(prefix).iter().chain(aligned_u64s.iter()).map(|l| op(*l)).collect()
             }
             (true, false) => {
-                let suffix = read_suffix(suffix);
+                let suffix = read_u64(suffix);
                 aligned_u64s.iter().chain(Some(suffix).iter()).map(|l| op(*l)).collect()
             }
             (false, false) => {
-                let prefix = read_suffix(prefix);
-                let suffix = read_suffix(suffix);
+                let prefix = read_u64(prefix);
+                let suffix = read_u64(suffix);
                 Some(prefix)
                     .iter()
                     .chain(aligned_u64s.iter())
