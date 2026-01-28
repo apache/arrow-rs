@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["parse_single_column_index","parse_single_offset_index"],"struct":["MetadataParser"]};

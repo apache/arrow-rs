@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["OFFSET_FIELD_NAME","TIMESTAMP_FIELD_NAME"],"struct":["TimestampWithOffset"]};
