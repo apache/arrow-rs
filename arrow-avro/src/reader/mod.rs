@@ -502,8 +502,10 @@ mod vlq;
 #[cfg(feature = "async")]
 mod async_reader;
 
+#[cfg(feature = "object_store")]
+pub use async_reader::AvroObjectReader;
 #[cfg(feature = "async")]
-pub use async_reader::*;
+pub use async_reader::{AsyncAvroFileReader, AsyncFileReader};
 
 fn is_incomplete_data(err: &AvroError) -> bool {
     matches!(
