@@ -192,48 +192,45 @@ impl BooleanBuffer {
     where
         F: FnMut(u64) -> u64,
     {
-        if offset_in_bits & 0x7 == 0 {
-            // align to byte boundary
-            let aligned = &src.as_ref()[offset_in_bits / 8..];
-            return Self::from_aligned_bitwise_unary_op(aligned, len_in_bits, &mut op);
-        }
-
-        let src = src.as_ref();
-        let chunks = UnalignedBitChunk::new(src, offset_in_bits, len_in_bits);
-        let iter = chunks.iter().map(|chunk| op(chunk));
-        let buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
-
-        BooleanBuffer::new(buffer.into(), chunks.lead_padding(), len_in_bits)
-    }
-
-    /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
-    /// 8-byte (64-bit) boundaries
-    fn from_aligned_bitwise_unary_op<F>(src: &[u8], len_in_bits: usize, op: &mut F) -> Self
-    where
-        F: FnMut(u64) -> u64,
-    {
-        // Safety: all valid bytes are valid u64s
-        let (prefix, aligned_u6us, suffix) = unsafe { src.align_to::<u64>() };
-        if !(prefix.is_empty() && suffix.is_empty()) {
-            // unaligned
-            let chunks = BitChunks::new(src, 0, len_in_bits);
-            let mut result = Vec::with_capacity(bit_util::ceil(len_in_bits, 64));
-
-            let iter = src
-                .chunks_exact(8)
-                .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
-            result.extend(iter.map(&mut *op));
-
-            if chunks.remainder_len() > 0 {
-                result.push(op(chunks.remainder_bits()));
+        // align to byte boundary
+        let aligned = &src.as_ref()[offset_in_bits / 8..];
+        let start_bit = offset_in_bits % 8;
+        let (prefix, aligned_u64s, suffix) = unsafe { aligned.align_to::<u64>() };
+        let read_u64 = |bytes: &[u8]| {
+            let mut res = 0u64;
+            for (i, byte) in bytes.iter().take(8).enumerate() {
+                res |= (*byte as u64) << (i * 8);
             }
+            res
+        };
 
-            return BooleanBuffer::new(Buffer::from(result), 0, len_in_bits);
-        }
-        // the buffer is word (64 bit) aligned, so use optimized Vec code.
-        let result_u64s: Vec<u64> = aligned_u6us.iter().map(|l| op(*l)).collect();
+        // construct result u64s based on presence of prefix and suffix
+        let result_u64s: Vec<u64> = match (prefix.is_empty(), suffix.is_empty()) {
+            (true, true) => {
+                // perfectly aligned
+                aligned_u64s.iter().map(|l| op(*l)).collect()
+            },
+            (false, true) => {
+                let prefix = read_u64(prefix);
+                Some(prefix).iter().chain(aligned_u64s.iter()).map(|l| op(*l)).collect()
+            }
+            (true, false) => {
+                let suffix = read_u64(suffix);
+                aligned_u64s.iter().chain(Some(suffix).iter()).map(|l| op(*l)).collect()
+            }
+            (false, false) => {
+                let prefix = read_u64(prefix);
+                let suffix = read_u64(suffix);
+                Some(prefix)
+                    .iter()
+                    .chain(aligned_u64s.iter())
+                    .chain(Some(suffix).iter())
+                    .map(|l| op(*l))
+                    .collect()
+            }
+        };
         let buffer = Buffer::from(result_u64s);
-        BooleanBuffer::new(buffer, 0, len_in_bits)
+        BooleanBuffer::new(buffer, start_bit, len_in_bits)
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
