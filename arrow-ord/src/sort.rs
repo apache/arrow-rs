@@ -357,6 +357,31 @@ impl<'a, T: ByteArrayType> KeyAccessor for ByteArrayAccessor<'a, T> {
     fn len(&self) -> usize {
         self.indices.len()
     }
+
+    #[inline(always)]
+    fn get_u64_prefix(&self, index: usize, offset: usize) -> u64 {
+        unsafe {
+            let idx = *self.indices.get_unchecked(index);
+            let slice: &[u8] = self.values.value_unchecked(idx as usize).as_ref();
+            if slice.len() >= offset + 8 {
+                let ptr = slice.as_ptr().add(offset);
+                let raw = std::ptr::read_unaligned(ptr as *const u64);
+                u64::from_be(raw)
+            } else {
+                if offset >= slice.len() {
+                    return 0;
+                }
+                let remaining = slice.len() - offset;
+                let mut buf = [0u8; 8];
+                std::ptr::copy_nonoverlapping(
+                    slice.as_ptr().add(offset),
+                    buf.as_mut_ptr(),
+                    remaining,
+                );
+                u64::from_be_bytes(buf)
+            }
+        }
+    }
 }
 
 struct FixedSizeBinaryAccessor<'a> {
@@ -396,6 +421,31 @@ impl<'a, T: ByteViewType> KeyAccessor for ByteViewAccessor<'a, T> {
     #[inline(always)]
     fn len(&self) -> usize {
         self.indices.len()
+    }
+
+    #[inline(always)]
+    fn get_u64_prefix(&self, index: usize, offset: usize) -> u64 {
+        unsafe {
+            let idx = *self.indices.get_unchecked(index);
+            let slice: &[u8] = self.values.value_unchecked(idx as usize).as_ref();
+            if slice.len() >= offset + 8 {
+                let ptr = slice.as_ptr().add(offset);
+                let raw = std::ptr::read_unaligned(ptr as *const u64);
+                u64::from_be(raw)
+            } else {
+                if offset >= slice.len() {
+                    return 0;
+                }
+                let remaining = slice.len() - offset;
+                let mut buf = [0u8; 8];
+                std::ptr::copy_nonoverlapping(
+                    slice.as_ptr().add(offset),
+                    buf.as_mut_ptr(),
+                    remaining,
+                );
+                u64::from_be_bytes(buf)
+            }
+        }
     }
 }
 
