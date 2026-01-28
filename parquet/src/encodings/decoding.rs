@@ -1008,7 +1008,8 @@ pub struct DeltaByteArrayDecoder<T: DataType> {
     suffix_decoder: Option<DeltaLengthByteArrayDecoder<ByteArrayType>>,
 
     // The last byte array, used to derive the current prefix
-    previous_value: Vec<u8>,
+    // Stored as Bytes to avoid clone allocation when creating output
+    previous_value: Bytes,
 
     // Number of values left
     num_values: usize,
@@ -1030,7 +1031,7 @@ impl<T: DataType> DeltaByteArrayDecoder<T> {
             prefix_lengths: vec![],
             current_idx: 0,
             suffix_decoder: None,
-            previous_value: vec![],
+            previous_value: Bytes::new(),
             num_values: 0,
             _phantom: PhantomData,
         }
@@ -1053,7 +1054,7 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                 self.suffix_decoder = Some(suffix_decoder);
                 self.num_values = num_prefixes;
                 self.current_idx = 0;
-                self.previous_value.clear();
+                self.previous_value = Bytes::new();
                 Ok(())
             }
             _ => Err(general_err!(
@@ -1081,14 +1082,14 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                     let prefix_len = self.prefix_lengths[self.current_idx] as usize;
 
                     // Concatenate prefix with suffix
-                    let mut result = Vec::new();
+                    let mut result = Vec::with_capacity(prefix_len + suffix.len());
                     result.extend_from_slice(&self.previous_value[0..prefix_len]);
                     result.extend_from_slice(suffix);
 
-                    let data = Bytes::from(result.clone());
-                    item.set_from_bytes(data);
+                    let data = Bytes::from(result);
+                    item.set_from_bytes(data.clone());
 
-                    self.previous_value = result;
+                    self.previous_value = data;
                     self.current_idx += 1;
                 }
 
