@@ -156,7 +156,8 @@ impl<'a> UnalignedBitChunk<'a> {
         self.chunks
     }
 
-    /// Returns an iterator over the chunks
+    /// Returns an iterator over the chunk
+    #[inline]
     pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
         UnalignedBitChunkIterator {
             prefix: self.prefix,
