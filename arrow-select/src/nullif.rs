@@ -90,13 +90,16 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
             (b, len - valid_count)
         }
         None => {
-            let mut null_count = 0;
-            let buffer = bitwise_unary_op_helper(right.inner(), right.offset(), len, |b| {
-                let t = !b;
-                null_count += t.count_zeros() as usize;
-                t
-            });
-            (buffer, null_count)
+            let buffer: arrow_buffer::Buffer = bitwise_unary_op_helper(
+                right.inner(),
+                right.offset(),
+                len,
+                |r| {
+                    !r
+                },
+            );
+            let true_count = buffer.count_set_bits_offset(0, len);
+            (buffer, len - true_count)
         }
     };
 
