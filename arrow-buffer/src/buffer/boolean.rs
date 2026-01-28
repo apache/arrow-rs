@@ -195,11 +195,7 @@ impl BooleanBuffer {
         if offset_in_bits & 0x7 == 0 {
             // align to byte boundary
             let aligned = &src.as_ref()[offset_in_bits / 8..];
-            if let Some(result) =
-                Self::try_from_aligned_bitwise_unary_op(aligned, len_in_bits, &mut op)
-            {
-                return result;
-            }
+            return Self::from_aligned_bitwise_unary_op(aligned, len_in_bits, &mut op)
         }
 
         let src = src.as_ref();
@@ -213,27 +209,26 @@ impl BooleanBuffer {
 
     /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
     /// 8-byte (64-bit) boundaries
-    ///
-    /// Returns None if the fast path cannot be taken
-    fn try_from_aligned_bitwise_unary_op<F>(
+    fn from_aligned_bitwise_unary_op<F>(
         src: &[u8],
         len_in_bits: usize,
         op: &mut F,
-    ) -> Option<Self>
+    ) -> Self
     where
         F: FnMut(u64) -> u64,
     {
-        // Safety: all valid bytes are valid u64s
-        let (prefix, aligned_u6us, suffix) = unsafe { src.align_to::<u64>() };
-        if !(prefix.is_empty() && suffix.is_empty()) {
-            // Couldn't make this case any faster than the default path, see
-            // https://github.com/apache/arrow-rs/pull/8996/changes#r2620022082
-            return None;
+        let chunks = BitChunks::new(src, 0, len_in_bits);
+        let chunk_len = chunks.chunk_len();
+        let mut result = Vec::with_capacity(bit_util::ceil(len_in_bits, 64));
+
+        let iter = src.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+        result.extend(iter.take(chunk_len).map(|l| op(l)));
+
+        if chunks.remainder_len() > 0 {
+            result.push(op(chunks.remainder_bits()));
         }
-        // the buffer is word (64 bit) aligned, so use optimized Vec code.
-        let result_u64s: Vec<u64> = aligned_u6us.iter().map(|l| op(*l)).collect();
-        let buffer = Buffer::from(result_u64s);
-        Some(BooleanBuffer::new(buffer, 0, len_in_bits))
+
+        return BooleanBuffer::new(Buffer::from(result), 0, len_in_bits)
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
@@ -286,6 +281,14 @@ impl BooleanBuffer {
         let left = left.as_ref();
         let right = right.as_ref();
 
+        if left.len() < len_in_bits % 8 {
+            panic!("The left buffer is too small for the specified length");
+        }
+
+        if right.len() < len_in_bits % 8 {
+            panic!("The right buffer is too small for the specified length");
+        }
+
         // try fast path for aligned input
         // If the underlying buffers are aligned to u64 we can apply the operation directly on the u64 slices
         // to improve performance.
@@ -321,6 +324,27 @@ impl BooleanBuffer {
         }
 
         if left_offset_in_bits == right_offset_in_bits {
+            // is aligned to byte boundary
+            if left_offset_in_bits & 0x7 == 0 {
+                let left = &left[left_offset_in_bits / 8..];
+                let right = &right[right_offset_in_bits / 8..];
+
+                let left_chunks = BitChunks::new(left, 0, len_in_bits);
+                let right_chunks = BitChunks::new(right, 0, len_in_bits);
+                let chunk_len = left_chunks.chunk_len();
+                let mut result = Vec::with_capacity(bit_util::ceil(len_in_bits, 64));
+
+                let l_iter = left.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+                let r_iter = right.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+
+                result.extend(l_iter.zip(r_iter).take(chunk_len).map(|(l, r)| op(l, r)));
+
+                if left_chunks.remainder_len() > 0 {
+                    result.push(op(left_chunks.remainder_bits(), right_chunks.remainder_bits()));
+                }
+                return BooleanBuffer::new(Buffer::from(result), 0, len_in_bits);
+            }
+
             // both buffers have the same offset, we can use UnalignedBitChunk for both
             let left_chunks = UnalignedBitChunk::new(left, left_offset_in_bits, len_in_bits);
             let right_chunks = UnalignedBitChunk::new(right, right_offset_in_bits, len_in_bits);
