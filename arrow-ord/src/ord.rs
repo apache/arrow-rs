@@ -233,6 +233,42 @@ fn compare_fixed_list(
     Ok(f)
 }
 
+fn compare_list_view<O: OffsetSizeTrait>(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let left = left.as_list_view::<O>();
+    let right = right.as_list_view::<O>();
+
+    let c_opts = child_opts(opts);
+    let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
+
+    let l_offsets = left.offsets().clone();
+    let l_sizes = left.sizes().clone();
+    let r_offsets = right.offsets().clone();
+    let r_sizes = right.sizes().clone();
+
+    let f = compare(left, right, opts, move |i, j| {
+        let l_start = l_offsets[i].as_usize();
+        let l_len = l_sizes[i].as_usize();
+        let l_end = l_start + l_len;
+
+        let r_start = r_offsets[j].as_usize();
+        let r_len = r_sizes[j].as_usize();
+        let r_end = r_start + r_len;
+
+        for (i, j) in (l_start..l_end).zip(r_start..r_end) {
+            match cmp(i, j) {
+                Ordering::Equal => continue,
+                r => return r,
+            }
+        }
+        l_len.cmp(&r_len)
+    });
+    Ok(f)
+}
+
 fn compare_map(
     left: &dyn Array,
     right: &dyn Array,
@@ -470,6 +506,8 @@ pub fn make_comparator(
         },
         (List(_), List(_)) => compare_list::<i32>(left, right, opts),
         (LargeList(_), LargeList(_)) => compare_list::<i64>(left, right, opts),
+        (ListView(_), ListView(_)) => compare_list_view::<i32>(left, right, opts),
+        (LargeListView(_), LargeListView(_)) => compare_list_view::<i64>(left, right, opts),
         (FixedSizeList(_, _), FixedSizeList(_, _)) => compare_fixed_list(left, right, opts),
         (Struct(_), Struct(_)) => compare_struct(left, right, opts),
         (Dictionary(l_key, _), Dictionary(r_key, _)) => {
