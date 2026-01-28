@@ -3658,7 +3658,7 @@ mod tests {
         ))
     }
 
-    fn change_underline_null_values_for_primitive<T: ArrowPrimitiveType>(
+    fn change_underlying_null_values_for_primitive<T: ArrowPrimitiveType>(
         array: &PrimitiveArray<T>,
     ) -> PrimitiveArray<T> {
         let (dt, values, nulls) = array.clone().into_parts();
@@ -3757,7 +3757,7 @@ mod tests {
 
         downcast_primitive_array!(
             array => {
-                let output = change_underline_null_values_for_primitive(array);
+                let output = change_underlying_null_values_for_primitive(array);
 
                 Arc::new(output)
             }
