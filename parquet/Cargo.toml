@@ -94,7 +94,7 @@ arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { version = "0.13.1", default-features = false, features = ["azure", "fs"] }
-sysinfo = { version = "0.37.1", default-features = false, features = ["system"] }
+sysinfo = { version = "0.38.0", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
 all-features = true
