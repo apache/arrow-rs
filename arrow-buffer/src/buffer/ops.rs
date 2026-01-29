@@ -104,12 +104,12 @@ pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
     len_in_bits: usize,
-    mut op: F,
+    op: F,
 ) -> Buffer
 where
     F: FnMut(u64) -> u64,
 {
-    BooleanBuffer::from_bitwise_unary_op(left, offset_in_bits, len_in_bits, |a| op(a)).into_inner()
+    BooleanBuffer::from_bitwise_unary_op(left, offset_in_bits, len_in_bits, op).into_inner()
 }
 /// Apply a bitwise and to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
