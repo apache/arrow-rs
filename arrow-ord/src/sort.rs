@@ -460,8 +460,46 @@ fn sort_bytes<T: ByteArrayType>(
         values,
         indices: &value_indices,
     };
-    let sorted_indices = orasort(&accessor);
 
+    // Hybrid Sort Implementation
+    let len = value_indices.len();
+    let sorted_indices = if len == 0 {
+        vec![]
+    } else {
+        let mut prefixes: Vec<(u32, u32)> = (0..len)
+            .map(|i| {
+                let p8 = accessor.get_u64_prefix(i, 0);
+                let p4 = (p8 >> 32) as u32;
+                (p4, i as u32)
+            })
+            .collect();
+
+        prefixes.sort_unstable();
+
+        let mut scratch = Vec::with_capacity(len); // Reused scratch buffer
+        let mut sorted = Vec::with_capacity(len);
+        let mut i = 0;
+        while i < len {
+            let (p, idx) = prefixes[i];
+            let mut j = i + 1;
+            while j < len && prefixes[j].0 == p {
+                j += 1;
+            }
+
+            if j == i + 1 {
+                sorted.push(idx as usize);
+            } else {
+                scratch.clear();
+                scratch.extend(prefixes[i..j].iter().map(|pair| pair.1 as usize));
+                orasort::orasort_slice(&accessor, &mut scratch, 4);
+                sorted.extend_from_slice(&scratch);
+            }
+            i = j;
+        }
+        sorted
+    };
+
+    // Original Tail Logic
     let total = value_indices.len() + nulls.len();
     let out_limit = limit.unwrap_or(total).min(total);
     let mut out = Vec::with_capacity(out_limit);
@@ -490,17 +528,17 @@ fn sort_bytes<T: ByteArrayType>(
         if options.descending {
             out.extend(
                 sorted_indices
-                    .into_iter()
+                    .iter()
                     .rev()
                     .take(val_take)
-                    .map(|i| value_indices[i]),
+                    .map(|&i| value_indices[i]),
             );
         } else {
             out.extend(
                 sorted_indices
-                    .into_iter()
+                    .iter()
                     .take(val_take)
-                    .map(|i| value_indices[i]),
+                    .map(|&i| value_indices[i]),
             );
         }
         let rem = out_limit - out.len();
@@ -562,7 +600,44 @@ fn sort_byte_view<T: ByteViewType>(
         values,
         indices: &value_indices,
     };
-    let sorted_indices = orasort(&accessor);
+
+    // Hybrid Sort Implementation
+    let len = value_indices.len();
+    let sorted_indices = if len == 0 {
+        vec![]
+    } else {
+        let mut prefixes: Vec<(u32, u32)> = (0..len)
+            .map(|i| {
+                let p8 = accessor.get_u64_prefix(i, 0);
+                let p4 = (p8 >> 32) as u32;
+                (p4, i as u32)
+            })
+            .collect();
+
+        prefixes.sort_unstable();
+
+        let mut scratch = Vec::with_capacity(len); // Reused scratch buffer
+        let mut sorted = Vec::with_capacity(len);
+        let mut i = 0;
+        while i < len {
+            let (p, idx) = prefixes[i];
+            let mut j = i + 1;
+            while j < len && prefixes[j].0 == p {
+                j += 1;
+            }
+
+            if j == i + 1 {
+                sorted.push(idx as usize);
+            } else {
+                scratch.clear();
+                scratch.extend(prefixes[i..j].iter().map(|pair| pair.1 as usize));
+                orasort::orasort_slice(&accessor, &mut scratch, 4);
+                sorted.extend_from_slice(&scratch);
+            }
+            i = j;
+        }
+        sorted
+    };
 
     let total = value_indices.len() + nulls.len();
     let out_limit = limit.unwrap_or(total).min(total);
