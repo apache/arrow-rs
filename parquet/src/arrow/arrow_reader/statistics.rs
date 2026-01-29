@@ -1359,35 +1359,17 @@ impl<'a> StatisticsConverter<'a> {
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
     {
-        let Some(_) = self.parquet_column_index else {
-            return Ok(None);
-        };
-
-        let mut e = None;
-        let row_counts: Vec<u64> = metadatas
-            .into_iter()
-            .map(|metadata| {
-                let row_count: i64 = metadata.num_rows();
-                let row_count: std::result::Result<u64, _> = row_count.try_into();
-
-                match row_count {
-                    Ok(v) => v,
-                    Err(_) => {
-                        e = Some(ParquetError::General(format!(
-                            "Row count {} too large to convert to u64",
-                            metadata.num_rows()
-                        )));
-                        0u64 // placeholder, error will be returned later
-                    }
-                }
-            })
-            .collect();
-        if let Some(e) = e {
-            return Err(arrow_err!(format!(
-                "Parquet row count too large to convert to u64: {e}"
-            )));
+        let mut builder = UInt64Array::builder(10);
+        for metadata in metadatas.into_iter() {
+            let row_count = metadata.num_rows();
+            let row_count: u64 = row_count.try_into().map_err(|e| {
+                arrow_err!(format!(
+                    "Parquet row count {row_count} too large to convert to u64: {e}"
+                ))
+            })?;
+            builder.append_value(row_count);
         }
-        Ok(Some(UInt64Array::from(row_counts)))
+        Ok(Some(builder.finish()))
     }
 
     /// Create a new `StatisticsConverter` to extract statistics for a column
