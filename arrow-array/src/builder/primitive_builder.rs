@@ -19,7 +19,6 @@ use crate::builder::ArrayBuilder;
 use crate::types::*;
 use crate::{Array, ArrayRef, PrimitiveArray};
 use arrow_buffer::{Buffer, MutableBuffer, NullBufferBuilder, ScalarBuffer};
-use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
@@ -300,30 +299,56 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     }
 
     /// Builds the [`PrimitiveArray`] and reset this builder.
+    ///
+    /// See [`Self::build`] to consume the builder, instead of resetting it.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
-        let len = self.len();
+        let values_buffer = Buffer::from(std::mem::take(&mut self.values_builder));
         let nulls = self.null_buffer_builder.finish();
-        let builder = ArrayData::builder(self.data_type.clone())
-            .len(len)
-            .add_buffer(std::mem::take(&mut self.values_builder).into())
-            .nulls(nulls);
-
-        let array_data = unsafe { builder.build_unchecked() };
-        PrimitiveArray::<T>::from(array_data)
+        PrimitiveArray::<T>::new_with_datatype(
+            self.data_type.clone(),
+            ScalarBuffer::from(values_buffer),
+            nulls,
+        )
     }
 
     /// Builds the [`PrimitiveArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> PrimitiveArray<T> {
-        let len = self.len();
         let nulls = self.null_buffer_builder.finish_cloned();
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
-        let builder = ArrayData::builder(self.data_type.clone())
-            .len(len)
-            .add_buffer(values_buffer)
-            .nulls(nulls);
+        PrimitiveArray::<T>::new_with_datatype(
+            self.data_type.clone(),
+            ScalarBuffer::from(values_buffer),
+            nulls,
+        )
+    }
 
-        let array_data = unsafe { builder.build_unchecked() };
-        PrimitiveArray::<T>::from(array_data)
+    /// Builds the [`PrimitiveArray`] , consuming this builder.
+    ///
+    /// Use [`Self::finish`] to reuse the builder
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// # use arrow_array::builder::UInt8Builder;
+    /// use arrow_array::UInt8Array;
+    /// let mut builder = UInt8Builder::with_capacity(5);
+    /// builder.append_slice(&[42, 44, 46]);
+    /// builder.append_nulls(2);
+    /// let array = builder.build();
+    /// assert_eq!(UInt8Array::from(vec![Some(42), Some(44), Some(46), None, None]), array);
+    /// ```
+    #[inline]
+    pub fn build(self) -> PrimitiveArray<T> {
+        let Self {
+            values_builder,
+            null_buffer_builder,
+            data_type,
+        } = self;
+        PrimitiveArray::new_with_datatype(
+            data_type, // reuse data_type to save a DataType::drop()
+            ScalarBuffer::from(values_builder),
+            null_buffer_builder.build(),
+        )
     }
 
     /// Returns the current values buffer as a slice

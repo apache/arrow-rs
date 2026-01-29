@@ -638,6 +638,22 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Self::try_new(values, nulls).unwrap()
     }
 
+    /// Create a [`PrimitiveArray`] from the provided data type, values and nulls
+    ///
+    /// panic's if the type is not compatible
+    pub(crate) fn new_with_datatype(
+        data_type: DataType,
+        values: ScalarBuffer<T::Native>,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        Self::assert_compatible(&data_type);
+        Self {
+            data_type,
+            values,
+            nulls,
+        }
+    }
+
     /// Create a new [`PrimitiveArray`] of the given length where all values are null
     pub fn new_null(length: usize) -> Self {
         Self {
