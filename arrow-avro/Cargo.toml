@@ -83,6 +83,7 @@ async-stream = "0.3.6"
 apache-avro = "0.21.0"
 num-bigint = "0.4"
 once_cell = "1.21.3"
+half = { version = "2.1", default-features = false }
 
 [[bench]]
 name = "avro_reader"
