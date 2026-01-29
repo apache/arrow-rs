@@ -24,6 +24,7 @@ use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ScalarBuff
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 pub use binary_array::*;
@@ -87,9 +88,13 @@ use crate::iterator::ArrayIter;
 /// translate into panics or undefined behavior. For example, a value computed based on `len`
 /// may be used as a direct index into memory regions without checks.
 ///
+/// Additionally, implementations must ensure that implementations details of `Array::as_any()`,
+/// `Array::data_type()`, `Array::into_data()` and [`downcast_array_ref`] are consistent with each
+/// other -- and those details could change at any time.
+///
 /// Use it at your own risk knowing that this trait might be sealed in the future.
 pub unsafe trait Array: std::fmt::Debug + Send + Sync {
-    /// Returns the array as [`Any`] so that it can be
+    /// Returns the underlying concrete array instance as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
     /// # Example:
@@ -112,6 +117,64 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     ///     .expect("Failed to downcast");
     /// ```
     fn as_any(&self) -> &dyn Any;
+
+    /// Attempts to recover an [`ArrayRef`] from `&dyn Array`, returning `None` if not Arc-backed.
+    ///
+    /// This is useful when you have a `&dyn Array` that came from an [`ArrayRef`] and need to
+    /// recover the Arc. Automatically unwraps nested `Arc<dyn Array>` to the innermost Arc.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{Array, ArrayRef, Int32Array};
+    /// let arc: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    ///
+    /// // When called on ArrayRef directly, returns innermost Arc
+    /// let recovered = arc.as_array_ref_opt().unwrap();
+    /// assert!(Arc::ptr_eq(&arc, &recovered));
+    ///
+    /// // Works when trait object references the Arc
+    /// let array_ref: &dyn Array = &arc;
+    /// assert!(array_ref.as_array_ref_opt().is_some());
+    ///
+    /// // Returns None when trait object doesn't reference an Arc
+    /// let array_ref: &dyn Array = &*arc;
+    /// assert!(array_ref.as_array_ref_opt().is_none());
+    ///
+    /// // Automatically unwraps nested Arcs
+    /// let nested: ArrayRef = Arc::new(arc.clone());
+    /// let innermost = nested.as_array_ref_opt().unwrap();
+    /// assert!(Arc::ptr_eq(&innermost, &arc));
+    /// ```
+    fn as_array_ref_opt(&self) -> Option<ArrayRef> {
+        None
+    }
+
+    /// Returns an [`ArrayRef`] for this array, cloning the array data if necessary.
+    ///
+    /// If self is already an Arc (i.e., [`as_array_ref_opt`] returns `Some`), this is a cheap
+    /// Arc clone. Otherwise, it clones the underlying array data to create a new Arc-backed array.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{Array, ArrayRef, Int32Array};
+    /// // Arc-backed array: cheap Arc clone
+    /// let arc: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    /// let same_arc = arc.to_array_ref();
+    /// assert!(Arc::ptr_eq(&arc, &same_arc));
+    ///
+    /// // Stack-allocated array: creates a new Arc-backed array
+    /// let array = Int32Array::from(vec![1, 2, 3]);
+    /// let new_arc = array.to_array_ref();
+    /// assert_eq!(new_arc.len(), 3);
+    /// ```
+    ///
+    /// [`as_array_ref_opt`]: Array::as_array_ref_opt
+    fn to_array_ref(&self) -> ArrayRef {
+        self.as_array_ref_opt()
+            .unwrap_or_else(|| make_array(self.to_data()))
+    }
 
     /// Returns the underlying data of this array
     fn to_data(&self) -> ArrayData;
@@ -350,10 +413,17 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
 /// A reference-counted reference to a generic `Array`
 pub type ArrayRef = Arc<dyn Array>;
 
-/// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
+/// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`.
+/// Use [`Array::as_array_ref_opt()`] to recover the original [`ArrayRef`] and
+/// [`downcast_array_ref()`] to downcast to an Arc of some concrete array type.
 unsafe impl Array for ArrayRef {
     fn as_any(&self) -> &dyn Any {
         self.as_ref().as_any()
+    }
+
+    fn as_array_ref_opt(&self) -> Option<ArrayRef> {
+        // Recursively unwrap nested Arcs to find the deepest one
+        Some(innermost_array_ref(Cow::Borrowed(self)))
     }
 
     fn to_data(&self) -> ArrayData {
@@ -435,6 +505,10 @@ unsafe impl<T: Array> Array for &T {
         T::as_any(self)
     }
 
+    fn as_array_ref_opt(&self) -> Option<ArrayRef> {
+        T::as_array_ref_opt(self)
+    }
+
     fn to_data(&self) -> ArrayData {
         T::to_data(self)
     }
@@ -498,6 +572,76 @@ unsafe impl<T: Array> Array for &T {
     fn get_array_memory_size(&self) -> usize {
         T::get_array_memory_size(self)
     }
+}
+
+/// Returns the innermost `ArrayRef` from potentially nested `Arc<dyn Array>` wrappers.
+fn innermost_array_ref(array: Cow<'_, ArrayRef>) -> ArrayRef {
+    // Peel away the Cow and the Arc, then recurse on the referent.
+    (**array)
+        .as_array_ref_opt()
+        .unwrap_or_else(|| array.into_owned())
+}
+
+/// Downcasts an [`ArrayRef`] to `Arc<T>`, or returns the original on type mismatch.
+///
+/// This provides zero-cost downcasting when the dynamic type matches, avoiding cloning
+/// through [`ArrayData`]. Automatically handles nested `Arc<dyn Array>` wrappers.
+///
+/// If the Arc contains nested Arc<dyn Array>, this method unwraps the innermost Arc.
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
+/// # use arrow_array::downcast_array_ref;
+/// let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+///
+/// let typed: Arc<Int32Array> = downcast_array_ref(array.clone()).unwrap();
+/// assert_eq!(typed.len(), 3);
+///
+/// assert!(downcast_array_ref::<StringArray>(array).is_err());
+/// ```
+pub fn downcast_array_ref<T: Array + 'static>(array: ArrayRef) -> Result<Arc<T>, ArrayRef> {
+    // SAFETY STRATEGY:
+    //
+    // This function performs two checks to ensure it's safe to reinterpret
+    // Arc<dyn Array> as Arc<T>:
+    //
+    // 1. Type verification via Any::downcast_ref ensures the dynamic type is T
+    // 2. Pointer provenance check ensures the Arc was formed by unsized coercion
+    //    from Arc<T>, not through a wrapper like Arc<&dyn Array> or Arc<Box<dyn Array>>
+    //
+    // NOTE: The second check is unsound if `Array::as_any()` returns a reference to any field of
+    // (any sub-object of) `self`. All canonical array types either return &self or dereference an
+    // internal ArrayRef, both of which satisfy the safety requirements of `Arc::from_raw`.
+    //
+    // Only if both checks pass do we reconstruct Arc<T> from the same pointer
+    // that Arc::into_raw gave us, which is safe because:
+    // - Type correctness is guaranteed by check #1
+    // - Same allocation/pointer is guaranteed by check #2
+    // - Arc::from_raw is only called once on this pointer
+
+    // Unwrap nested Arc<dyn Array> if present (zero clones if not nested)
+    let array = innermost_array_ref(Cow::Owned(array));
+
+    // Check 1: The underlying concrete type matches the requested type
+    let Some(concrete_ref) = array.as_any().downcast_ref::<T>() else {
+        return Err(array);
+    };
+
+    // Check #2: Detect wrapper types like Arc<&dyn Array>
+    // Note: This cannot detect all wrapper violations (e.g., fields at offset 0).
+    // Soundness relies on Array's safety contract forbidding as_any() field projection.
+    if !std::ptr::addr_eq(concrete_ref, array.as_ref()) {
+        // Pointer mismatch indicates a wrapper (e.g., Arc<&dyn Array>)
+        return Err(array);
+    }
+
+    // Both checks passed - safe to reconstruct Arc<T>
+    let concrete_ptr = Arc::into_raw(array) as *const () as *const T;
+
+    // SAFETY: The Arc owns a T at the same address as the trait object's data pointer, so we can
+    // reinterpret the Arc's dyn Array pointer to point to T instead. See above.
+    Ok(unsafe { Arc::from_raw(concrete_ptr) })
 }
 
 /// A generic trait for accessing the values of an [`Array`]
