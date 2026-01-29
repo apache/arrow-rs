@@ -437,7 +437,7 @@ impl RowGroupReaderBuilder {
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
-                // Prepare to evaluate the filter. 
+                // Prepare to evaluate the filter.
                 // Note: first update the selection strategy to properly handle any pages
                 // pruned during fetch
                 plan_builder = override_selector_strategy_if_needed(
