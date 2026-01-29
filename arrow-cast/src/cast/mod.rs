@@ -3887,6 +3887,145 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_decimal_to_numeric_negative_scale() {
+        let value_array: Vec<Option<i256>> = vec![
+            Some(i256::from_i128(125)),
+            Some(i256::from_i128(225)),
+            Some(i256::from_i128(325)),
+            None,
+            Some(i256::from_i128(525)),
+        ];
+        let array = create_decimal256_array(value_array, 38, -1).unwrap();
+
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(1_250), Some(2_250), Some(3_250), None, Some(5_250)]
+        );
+
+        let value_array: Vec<Option<i32>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let array = create_decimal32_array(value_array, 8, -2).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(12_500), Some(22_500), Some(32_500), None, Some(52_500)]
+        );
+
+        let value_array: Vec<Option<i32>> = vec![Some(2), Some(1), None];
+        let array = create_decimal32_array(value_array, 9, -9).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(2_000_000_000), Some(1_000_000_000), None]
+        );
+
+        let value_array: Vec<Option<i64>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let array = create_decimal64_array(value_array, 18, -3).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![
+                Some(125_000),
+                Some(225_000),
+                Some(325_000),
+                None,
+                Some(525_000)
+            ]
+        );
+
+        let value_array: Vec<Option<i64>> = vec![Some(12), Some(34), None];
+        let array = create_decimal64_array(value_array, 18, -10).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(120_000_000_000), Some(340_000_000_000), None]
+        );
+
+        let value_array: Vec<Option<i128>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let array = create_decimal128_array(value_array, 38, -4).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![
+                Some(1_250_000),
+                Some(2_250_000),
+                Some(3_250_000),
+                None,
+                Some(5_250_000)
+            ]
+        );
+
+        let value_array: Vec<Option<i128>> = vec![Some(9), Some(1), None];
+        let array = create_decimal128_array(value_array, 38, -18).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![
+                Some(9_000_000_000_000_000_000),
+                Some(1_000_000_000_000_000_000),
+                None
+            ]
+        );
+
+        let array = create_decimal32_array(vec![Some(999_999_999)], 9, -1).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!(
+            "Arithmetic overflow: Overflow happened on: 999999999 * 10".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let array = create_decimal64_array(vec![Some(13)], 18, -1).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!(
+            "Cast error: value of 130 is out of range Int8".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+    }
+
+    #[test]
     fn test_cast_numeric_to_decimal128() {
         let decimal_type = DataType::Decimal128(38, 6);
         // u8, u16, u32, u64
@@ -12450,5 +12589,33 @@ mod tests {
             let casted = cast(&string_dict_array, &DataType::Utf8View).unwrap();
             assert_eq!(casted.as_ref(), &expected);
         }
+    }
+
+    #[test]
+    fn test_cast_between_sliced_run_end_encoded() {
+        let run_ends = Int16Array::from(vec![2, 5, 8]);
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int16Type>::try_new(&run_ends, &values).unwrap();
+        let ree_array = ree_array.slice(1, 2);
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        let result = cast_with_options(&array_ref, &target_type, &cast_options).unwrap();
+        let run_array = result.as_run::<Int64Type>();
+        let run_array = run_array.downcast::<StringArray>().unwrap();
+
+        let expected = vec!["a", "b"];
+        let actual = run_array.into_iter().flatten().collect::<Vec<_>>();
+
+        assert_eq!(expected, actual);
     }
 }

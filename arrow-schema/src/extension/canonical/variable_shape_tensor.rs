@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
+    #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
         let field = Field::new_struct(
             "",
