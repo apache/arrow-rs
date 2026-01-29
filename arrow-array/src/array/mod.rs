@@ -587,7 +587,7 @@ fn innermost_array_ref(array: Cow<'_, ArrayRef>) -> ArrayRef {
 /// This provides zero-cost downcasting when the dynamic type matches, avoiding cloning
 /// through [`ArrayData`]. Automatically handles nested `Arc<dyn Array>` wrappers.
 ///
-/// If the Arc contains nested Arc<dyn Array>, this method unwraps the innermost Arc.
+/// If the Arc contains nested `Arc<dyn Array>`, this method unwraps the innermost Arc.
 ///
 /// ```
 /// # use std::sync::Arc;
