@@ -637,11 +637,11 @@ pub fn downcast_array_ref<T: Array + 'static>(array: ArrayRef) -> Result<Arc<T>,
     }
 
     // Both checks passed - safe to reconstruct Arc<T>
-    let concrete_ptr = Arc::into_raw(array) as *const () as *const T;
+    let ptr = Arc::into_raw(array).cast();
 
     // SAFETY: The Arc owns a T at the same address as the trait object's data pointer, so we can
     // reinterpret the Arc's dyn Array pointer to point to T instead. See above.
-    Ok(unsafe { Arc::from_raw(concrete_ptr) })
+    Ok(unsafe { Arc::from_raw(ptr) })
 }
 
 /// A generic trait for accessing the values of an [`Array`]
