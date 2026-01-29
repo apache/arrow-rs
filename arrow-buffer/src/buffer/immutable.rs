@@ -343,7 +343,10 @@ impl Buffer {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
-        BooleanBuffer::from_bits(self.as_slice(), offset, len).into_inner()
+        let mut buffer = BooleanBuffer::from_bits(self.as_slice(), offset, len).into_inner();
+        // Update length to be byte-aligned
+        buffer.length = bit_util::ceil(len, 8);
+        buffer
     }
 
     /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits

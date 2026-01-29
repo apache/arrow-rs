@@ -17,6 +17,7 @@
 
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
+use crate::bit_util::read_u64;
 use crate::{
     BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
     buffer_bin_xor, buffer_unary_not,
@@ -180,7 +181,8 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_unary_op(
     ///  &input, 0, 12, |a| !a
     /// );
-    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8]);
+    /// // Note, values are padded
+    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8, 0, 0, 0, 0, 0, 0]);
     /// ```
     pub fn from_bitwise_unary_op<F>(
         src: impl AsRef<[u8]>,
@@ -191,67 +193,24 @@ impl BooleanBuffer {
     where
         F: FnMut(u64) -> u64,
     {
-        // try fast path for aligned input
-        if offset_in_bits & 0x7 == 0 {
-            // align to byte boundary
-            let aligned = &src.as_ref()[offset_in_bits / 8..];
-            if let Some(result) =
-                Self::try_from_aligned_bitwise_unary_op(aligned, len_in_bits, &mut op)
-            {
-                return result;
-            }
+        if len_in_bits == 0 {
+            return Self::new_unset(0);
         }
+        let end = offset_in_bits + len_in_bits;
+        let start_bit = offset_in_bits % 8;
+        // align to byte boundaries
+        let aligned = &src.as_ref()[offset_in_bits / 8..bit_util::ceil(end, 8)];
+        // Use unaligned code path, handle remainder bytes
+        let chunks = aligned.chunks_exact(8);
+        let remainder = chunks.remainder();
+        let iter = chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+        let vec_u64s: Vec<u64> = if remainder.is_empty() {
+            iter.map(&mut op).collect()
+        } else {
+            iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
+        };
 
-        let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
-        let mut result = MutableBuffer::with_capacity(chunks.num_u64s() * 8);
-        for chunk in chunks.iter() {
-            // SAFETY: reserved enough capacity above, (exactly num_u64s()
-            // items) and we assume `BitChunks` correctly reports upper bound
-            unsafe {
-                result.push_unchecked(op(chunk));
-            }
-        }
-        if chunks.remainder_len() > 0 {
-            debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
-            // SAFETY: reserved enough capacity above, (exactly num_u64s()
-            // items) and we assume `BitChunks` correctly reports upper bound
-            unsafe {
-                result.push_unchecked(op(chunks.remainder_bits()));
-            }
-            // Just pushed one u64, which may have trailing zeros
-            result.truncate(chunks.num_bytes());
-        }
-
-        BooleanBuffer {
-            buffer: Buffer::from(result),
-            bit_offset: 0,
-            bit_len: len_in_bits,
-        }
-    }
-
-    /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
-    /// 8-byte (64-bit) boundaries
-    ///
-    /// Returns None if the fast path cannot be taken
-    fn try_from_aligned_bitwise_unary_op<F>(
-        src: &[u8],
-        len_in_bits: usize,
-        op: &mut F,
-    ) -> Option<Self>
-    where
-        F: FnMut(u64) -> u64,
-    {
-        // Safety: all valid bytes are valid u64s
-        let (prefix, aligned_u6us, suffix) = unsafe { src.align_to::<u64>() };
-        if !(prefix.is_empty() && suffix.is_empty()) {
-            // Couldn't make this case any faster than the default path, see
-            // https://github.com/apache/arrow-rs/pull/8996/changes#r2620022082
-            return None;
-        }
-        // the buffer is word (64 bit) aligned, so use optimized Vec code.
-        let result_u64s: Vec<u64> = aligned_u6us.iter().map(|l| op(*l)).collect();
-        let buffer = Buffer::from(result_u64s);
-        Some(BooleanBuffer::new(buffer, 0, len_in_bits))
+        return BooleanBuffer::new(Buffer::from(vec_u64s), start_bit, len_in_bits);
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
