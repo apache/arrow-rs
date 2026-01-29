@@ -197,26 +197,17 @@ impl BooleanBuffer {
         let start_bit = offset_in_bits % 8;
         // align to byte boundaries
         let aligned = &src.as_ref()[offset_in_bits / 8..bit_util::ceil(end, 8)];
-        let (prefix, aligned_u64s, suffix) = unsafe { aligned.align_to::<u64>() };
-        if !(prefix.is_empty() && suffix.is_empty()) {
-            // Use unaligned code path, handle remainder bytes
-            let chunks = aligned.chunks_exact(8);
-            let remainder = chunks.remainder();
-            let iter = chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
-            let vec_u64s: Vec<u64> = if remainder.is_empty() {
-                iter.map(&mut op).collect()
-            } else {
-                iter.chain(Some(read_u64(remainder)))
-                    .map(&mut op)
-                    .collect()
-            };
+        // Use unaligned code path, handle remainder bytes
+        let chunks = aligned.chunks_exact(8);
+        let remainder = chunks.remainder();
+        let iter = chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+        let vec_u64s: Vec<u64> = if remainder.is_empty() {
+            iter.map(&mut op).collect()
+        } else {
+            iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
+        };
 
-            return BooleanBuffer::new(Buffer::from(vec_u64s), start_bit, len_in_bits);
-        }
-        // the buffer is word (64 bit) aligned, so use optimized Vec code.
-        let result_u64s: Vec<u64> = aligned_u64s.iter().map(|l| op(*l)).collect();
-        let buffer = Buffer::from(result_u64s);
-        BooleanBuffer::new(buffer, start_bit, len_in_bits)
+        return BooleanBuffer::new(Buffer::from(vec_u64s), start_bit, len_in_bits);
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
