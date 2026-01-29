@@ -372,7 +372,7 @@ fn sort_bytes<T: ByteArrayType>(
         .iter()
         .map(|&idx| unsafe {
             let slice: &[u8] = values.value_unchecked(idx as usize).as_ref();
-            let prefix = if slice.len() >= 8 {
+            let prefix = if slice.len() >= SPLICE_PREFIX_SIZE {
                 let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u64);
                 u64::from_be(raw)
             } else if slice.is_empty() {
@@ -490,7 +490,7 @@ fn sort_byte_view<T: ByteViewType>(
         .iter()
         .map(|&idx| unsafe {
             let slice: &[u8] = values.value_unchecked(idx as usize).as_ref();
-            let prefix = if slice.len() >= 8 {
+            let prefix = if slice.len() >= SPLICE_PREFIX_SIZE {
                 let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u64);
                 u64::from_be(raw)
             } else if slice.is_empty() {
