@@ -42,7 +42,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
             DataType::LargeList(f) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
-        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
+        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable(), field.metadata())?;
 
         Ok(Self {
             data_type: data_type.clone(),
