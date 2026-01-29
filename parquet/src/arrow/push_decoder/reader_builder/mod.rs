@@ -437,17 +437,15 @@ impl RowGroupReaderBuilder {
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
-                // Here is the spot where we could have previous mask selection and start applying it to a col
-                // with a different pages layout
-                //
-                // Note that the selection could have come without filters and applied manually
-                // We should keep another override_selector_strategy_if_needed in waiting_on_data state
-
+                // Prepare to evaluate the filter. 
+                // Note: first update the selection strategy to properly handle any pages
+                // pruned during fetch
                 plan_builder = override_selector_strategy_if_needed(
                     plan_builder,
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
                 );
+                // `with_predicate` actually evaluates the filter
 
                 plan_builder =
                     plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
