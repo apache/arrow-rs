@@ -339,51 +339,6 @@ fn sort_primitive<T: ArrowPrimitiveType>(
     sort_impl(options, &mut valids, &nulls, limit, T::Native::compare).into()
 }
 
-struct ByteArrayAccessor<'a, T: ByteArrayType> {
-    values: &'a GenericByteArray<T>,
-    indices: &'a [u32],
-}
-
-impl<'a, T: ByteArrayType> KeyAccessor for ByteArrayAccessor<'a, T> {
-    #[inline(always)]
-    fn get_key(&self, index: usize) -> &[u8] {
-        unsafe {
-            let idx = *self.indices.get_unchecked(index);
-            self.values.value_unchecked(idx as usize).as_ref()
-        }
-    }
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        self.indices.len()
-    }
-
-    #[inline(always)]
-    fn get_u64_prefix(&self, index: usize, offset: usize) -> u64 {
-        unsafe {
-            let idx = *self.indices.get_unchecked(index);
-            let slice: &[u8] = self.values.value_unchecked(idx as usize).as_ref();
-            if slice.len() >= offset + 8 {
-                let ptr = slice.as_ptr().add(offset);
-                let raw = std::ptr::read_unaligned(ptr as *const u64);
-                u64::from_be(raw)
-            } else {
-                if offset >= slice.len() {
-                    return 0;
-                }
-                let remaining = slice.len() - offset;
-                let mut buf = [0u8; 8];
-                std::ptr::copy_nonoverlapping(
-                    slice.as_ptr().add(offset),
-                    buf.as_mut_ptr(),
-                    remaining,
-                );
-                u64::from_be_bytes(buf)
-            }
-        }
-    }
-}
-
 struct FixedSizeBinaryAccessor<'a> {
     values: &'a FixedSizeBinaryArray,
     indices: &'a [u32],
@@ -404,51 +359,6 @@ impl<'a> KeyAccessor for FixedSizeBinaryAccessor<'a> {
     }
 }
 
-struct ByteViewAccessor<'a, T: ByteViewType> {
-    values: &'a GenericByteViewArray<T>,
-    indices: &'a [u32],
-}
-
-impl<'a, T: ByteViewType> KeyAccessor for ByteViewAccessor<'a, T> {
-    #[inline(always)]
-    fn get_key(&self, index: usize) -> &[u8] {
-        unsafe {
-            let idx = *self.indices.get_unchecked(index);
-            self.values.value_unchecked(idx as usize).as_ref()
-        }
-    }
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        self.indices.len()
-    }
-
-    #[inline(always)]
-    fn get_u64_prefix(&self, index: usize, offset: usize) -> u64 {
-        unsafe {
-            let idx = *self.indices.get_unchecked(index);
-            let slice: &[u8] = self.values.value_unchecked(idx as usize).as_ref();
-            if slice.len() >= offset + 8 {
-                let ptr = slice.as_ptr().add(offset);
-                let raw = std::ptr::read_unaligned(ptr as *const u64);
-                u64::from_be(raw)
-            } else {
-                if offset >= slice.len() {
-                    return 0;
-                }
-                let remaining = slice.len() - offset;
-                let mut buf = [0u8; 8];
-                std::ptr::copy_nonoverlapping(
-                    slice.as_ptr().add(offset),
-                    buf.as_mut_ptr(),
-                    remaining,
-                );
-                u64::from_be_bytes(buf)
-            }
-        }
-    }
-}
-
 fn sort_bytes<T: ByteArrayType>(
     values: &GenericByteArray<T>,
     value_indices: Vec<u32>,
@@ -456,91 +366,60 @@ fn sort_bytes<T: ByteArrayType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    let accessor = ByteArrayAccessor {
-        values,
-        indices: &value_indices,
-    };
-
-    // Hybrid Sort Implementation
-    let len = value_indices.len();
-    let sorted_indices = if len == 0 {
-        vec![]
-    } else {
-        let mut prefixes: Vec<(u32, u32)> = (0..len)
-            .map(|i| {
-                let p8 = accessor.get_u64_prefix(i, 0);
-                let p4 = (p8 >> 32) as u32;
-                (p4, i as u32)
-            })
-            .collect();
-
-        prefixes.sort_unstable();
-
-        let mut scratch = Vec::with_capacity(len); // Reused scratch buffer
-        let mut sorted = Vec::with_capacity(len);
-        let mut i = 0;
-        while i < len {
-            let (p, idx) = prefixes[i];
-            let mut j = i + 1;
-            while j < len && prefixes[j].0 == p {
-                j += 1;
-            }
-
-            if j == i + 1 {
-                sorted.push(idx as usize);
+    // Build (index, 8-byte prefix) tuples for prefix-accelerated comparison sort
+    let mut valids: Vec<(u32, u64)> = value_indices
+        .iter()
+        .map(|&idx| unsafe {
+            let slice: &[u8] = values.value_unchecked(idx as usize).as_ref();
+            let prefix = if slice.len() >= 8 {
+                let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u64);
+                u64::from_be(raw)
+            } else if slice.is_empty() {
+                0u64
             } else {
-                scratch.clear();
-                scratch.extend(prefixes[i..j].iter().map(|pair| pair.1 as usize));
-                orasort::orasort_slice(&accessor, &mut scratch, 4);
-                sorted.extend_from_slice(&scratch);
-            }
-            i = j;
-        }
-        sorted
+                let mut buf = [0u8; 8];
+                std::ptr::copy_nonoverlapping(slice.as_ptr(), buf.as_mut_ptr(), slice.len());
+                u64::from_be_bytes(buf)
+            };
+            (idx, prefix)
+        })
+        .collect();
+
+    let vlimit = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
+        _ => valids.len(),
     };
 
-    // Original Tail Logic
-    let total = value_indices.len() + nulls.len();
+    let cmp_bytes = |a: &(u32, u64), b: &(u32, u64)| -> Ordering {
+        let ord = a.1.cmp(&b.1);
+        if ord != Ordering::Equal {
+            return ord;
+        }
+        // Prefixes match — full comparison needed
+        unsafe {
+            let a_bytes: &[u8] = values.value_unchecked(a.0 as usize).as_ref();
+            let b_bytes: &[u8] = values.value_unchecked(b.0 as usize).as_ref();
+            a_bytes.cmp(b_bytes)
+        }
+    };
+
+    if !options.descending {
+        sort_unstable_by(&mut valids, vlimit, cmp_bytes);
+    } else {
+        sort_unstable_by(&mut valids, vlimit, |x, y| cmp_bytes(x, y).reverse());
+    }
+
+    let total = valids.len() + nulls.len();
     let out_limit = limit.unwrap_or(total).min(total);
     let mut out = Vec::with_capacity(out_limit);
 
     if options.nulls_first {
         out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
         let rem = out_limit - out.len();
-        if options.descending {
-            out.extend(
-                sorted_indices
-                    .into_iter()
-                    .rev()
-                    .take(rem)
-                    .map(|i| value_indices[i]),
-            );
-        } else {
-            out.extend(
-                sorted_indices
-                    .into_iter()
-                    .take(rem)
-                    .map(|i| value_indices[i]),
-            );
-        }
+        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
     } else {
-        let val_take = out_limit.min(value_indices.len());
-        if options.descending {
-            out.extend(
-                sorted_indices
-                    .iter()
-                    .rev()
-                    .take(val_take)
-                    .map(|&i| value_indices[i]),
-            );
-        } else {
-            out.extend(
-                sorted_indices
-                    .iter()
-                    .take(val_take)
-                    .map(|&i| value_indices[i]),
-            );
-        }
+        let val_take = out_limit.min(valids.len());
+        out.extend(valids.iter().map(|&(i, _)| i).take(val_take));
         let rem = out_limit - out.len();
         out.extend_from_slice(&nulls[..rem]);
     }
@@ -596,90 +475,59 @@ fn sort_byte_view<T: ByteViewType>(
         return out.into();
     }
 
-    let accessor = ByteViewAccessor {
-        values,
-        indices: &value_indices,
-    };
-
-    // Hybrid Sort Implementation
-    let len = value_indices.len();
-    let sorted_indices = if len == 0 {
-        vec![]
-    } else {
-        let mut prefixes: Vec<(u32, u32)> = (0..len)
-            .map(|i| {
-                let p8 = accessor.get_u64_prefix(i, 0);
-                let p4 = (p8 >> 32) as u32;
-                (p4, i as u32)
-            })
-            .collect();
-
-        prefixes.sort_unstable();
-
-        let mut scratch = Vec::with_capacity(len); // Reused scratch buffer
-        let mut sorted = Vec::with_capacity(len);
-        let mut i = 0;
-        while i < len {
-            let (p, idx) = prefixes[i];
-            let mut j = i + 1;
-            while j < len && prefixes[j].0 == p {
-                j += 1;
-            }
-
-            if j == i + 1 {
-                sorted.push(idx as usize);
+    // Build (index, 8-byte prefix) tuples for prefix-accelerated comparison sort
+    let mut valids: Vec<(u32, u64)> = value_indices
+        .iter()
+        .map(|&idx| unsafe {
+            let slice: &[u8] = values.value_unchecked(idx as usize).as_ref();
+            let prefix = if slice.len() >= 8 {
+                let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u64);
+                u64::from_be(raw)
+            } else if slice.is_empty() {
+                0u64
             } else {
-                scratch.clear();
-                scratch.extend(prefixes[i..j].iter().map(|pair| pair.1 as usize));
-                orasort::orasort_slice(&accessor, &mut scratch, 4);
-                sorted.extend_from_slice(&scratch);
-            }
-            i = j;
-        }
-        sorted
+                let mut buf = [0u8; 8];
+                std::ptr::copy_nonoverlapping(slice.as_ptr(), buf.as_mut_ptr(), slice.len());
+                u64::from_be_bytes(buf)
+            };
+            (idx, prefix)
+        })
+        .collect();
+
+    let vlimit = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
+        _ => valids.len(),
     };
 
-    let total = value_indices.len() + nulls.len();
+    let cmp_bytes = |a: &(u32, u64), b: &(u32, u64)| -> Ordering {
+        let ord = a.1.cmp(&b.1);
+        if ord != Ordering::Equal {
+            return ord;
+        }
+        unsafe {
+            let a_bytes: &[u8] = values.value_unchecked(a.0 as usize).as_ref();
+            let b_bytes: &[u8] = values.value_unchecked(b.0 as usize).as_ref();
+            a_bytes.cmp(b_bytes)
+        }
+    };
+
+    if !options.descending {
+        sort_unstable_by(&mut valids, vlimit, cmp_bytes);
+    } else {
+        sort_unstable_by(&mut valids, vlimit, |x, y| cmp_bytes(x, y).reverse());
+    }
+
+    let total = valids.len() + nulls.len();
     let out_limit = limit.unwrap_or(total).min(total);
     let mut out = Vec::with_capacity(out_limit);
 
     if options.nulls_first {
         out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
         let rem = out_limit - out.len();
-        if options.descending {
-            out.extend(
-                sorted_indices
-                    .into_iter()
-                    .rev()
-                    .take(rem)
-                    .map(|i| value_indices[i]),
-            );
-        } else {
-            out.extend(
-                sorted_indices
-                    .into_iter()
-                    .take(rem)
-                    .map(|i| value_indices[i]),
-            );
-        }
+        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
     } else {
-        let val_take = out_limit.min(value_indices.len());
-        if options.descending {
-            out.extend(
-                sorted_indices
-                    .into_iter()
-                    .rev()
-                    .take(val_take)
-                    .map(|i| value_indices[i]),
-            );
-        } else {
-            out.extend(
-                sorted_indices
-                    .into_iter()
-                    .take(val_take)
-                    .map(|i| value_indices[i]),
-            );
-        }
+        let val_take = out_limit.min(valids.len());
+        out.extend(valids.iter().map(|&(i, _)| i).take(val_take));
         let rem = out_limit - out.len();
         out.extend_from_slice(&nulls[..rem]);
     }
