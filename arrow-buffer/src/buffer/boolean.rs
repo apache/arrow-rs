@@ -182,7 +182,7 @@ impl BooleanBuffer {
     ///  &input, 0, 12, |a| !a
     /// );
     /// // Note, values are padded
-    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8, 0, 0, 0, 0, 0, 0]);
+    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8, 255, 255, 255, 255, 255, 255]);
     /// ```
     pub fn from_bitwise_unary_op<F>(
         src: impl AsRef<[u8]>,
