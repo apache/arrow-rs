@@ -1359,9 +1359,10 @@ impl<'a> StatisticsConverter<'a> {
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
     {
-        if self.parquet_column_index.is_none() {
+        let Some(_) = self.parquet_column_index else {
             return Ok(None);
-        }
+        };
+
         let mut builder = UInt64Array::builder(10);
         for metadata in metadatas.into_iter() {
             let row_count = metadata.num_rows();
