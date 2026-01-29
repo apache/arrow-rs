@@ -1468,7 +1468,7 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr> for P
             .collect();
 
         let len = null_builder.len();
-        let maybe_nulls = null_builder.finish().map(|x|x.into_inner().into_inner());
+        let maybe_nulls = null_builder.finish().map(|x| x.into_inner().into_inner());
 
         let data = unsafe {
             ArrayData::new_unchecked(
