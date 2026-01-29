@@ -27,6 +27,7 @@ use arrow_buffer::BooleanBufferBuilder;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
+use orasort::SPLICE_PREFIX_SIZE;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -395,11 +396,20 @@ fn sort_bytes<T: ByteArrayType>(
         if ord != Ordering::Equal {
             return ord;
         }
-        // Prefixes match — full comparison needed
+        // 8-byte prefixes match — compare suffix beyond the cached prefix
         unsafe {
             let a_bytes: &[u8] = values.value_unchecked(a.0 as usize).as_ref();
             let b_bytes: &[u8] = values.value_unchecked(b.0 as usize).as_ref();
-            a_bytes.cmp(b_bytes)
+            // If both strings are >= 8 bytes, first 8 bytes are equal (same prefix),
+            // so skip them. Otherwise compare full slices (short strings may differ
+            // in length despite matching zero-padded prefixes).
+            if a_bytes.len() >= SPLICE_PREFIX_SIZE && b_bytes.len() >= SPLICE_PREFIX_SIZE {
+                a_bytes
+                    .get_unchecked(SPLICE_PREFIX_SIZE..)
+                    .cmp(b_bytes.get_unchecked(SPLICE_PREFIX_SIZE..))
+            } else {
+                a_bytes.cmp(b_bytes)
+            }
         }
     };
 
@@ -507,7 +517,13 @@ fn sort_byte_view<T: ByteViewType>(
         unsafe {
             let a_bytes: &[u8] = values.value_unchecked(a.0 as usize).as_ref();
             let b_bytes: &[u8] = values.value_unchecked(b.0 as usize).as_ref();
-            a_bytes.cmp(b_bytes)
+            if a_bytes.len() >= SPLICE_PREFIX_SIZE && b_bytes.len() >= SPLICE_PREFIX_SIZE {
+                a_bytes
+                    .get_unchecked(SPLICE_PREFIX_SIZE..)
+                    .cmp(b_bytes.get_unchecked(SPLICE_PREFIX_SIZE..))
+            } else {
+                a_bytes.cmp(b_bytes)
+            }
         }
     };
 
