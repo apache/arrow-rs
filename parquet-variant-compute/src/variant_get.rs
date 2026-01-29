@@ -4163,8 +4163,8 @@ mod test {
     #[test]
     fn test_variant_get_list_like_safe_cast() {
         let string_array: ArrayRef = Arc::new(StringArray::from(vec![
-            r#"[1, "two", 3]"#,
-            "\"not a list\"",
+            r#"{"outer":{"list":[1, "two", 3]}}"#,
+            r#"{"outer":{"list":"not a list"}}"#,
         ]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
 
@@ -4237,15 +4237,33 @@ mod test {
         ];
 
         for (request_type, expected) in expectations {
-            let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
-                "result",
-                request_type.clone(),
-                true,
-            ))));
+            let options = GetOptions::new_with_path(VariantPath::from("outer").join("list"))
+                .with_as_type(Some(FieldRef::from(Field::new(
+                    "result",
+                    request_type.clone(),
+                    true,
+                ))));
 
             let result = variant_get(&variant_array, options).unwrap();
             assert_eq!(result.data_type(), expected.data_type());
             assert_eq!(&result, &expected);
+        }
+
+        for (idx, expected) in [
+            (0, vec![Some(1), None]),
+            (1, vec![None, None]),
+            (2, vec![Some(3), None]),
+        ] {
+            let index_options =
+                GetOptions::new_with_path(VariantPath::from("outer").join("list").join(idx))
+                    .with_as_type(Some(FieldRef::from(Field::new(
+                        "result",
+                        DataType::Int64,
+                        true,
+                    ))));
+            let index_result = variant_get(&variant_array, index_options).unwrap();
+            let index_expected: ArrayRef = Arc::new(Int64Array::from(expected));
+            assert_eq!(&index_result, &index_expected);
         }
     }
 

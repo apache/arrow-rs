@@ -44,7 +44,7 @@ md5 = ["dep:md5"]
 sha256 = ["dep:sha2"]
 small_decimals = []
 avro_custom_types = ["dep:arrow-select"]
-async = ["dep:tokio", "dep:futures", "dep:bytes"]
+async = ["dep:tokio", "dep:futures"]
 
 [dependencies]
 arrow-schema = { workspace = true }
@@ -69,7 +69,7 @@ md5 = { version = "0.8", optional = true }
 sha2 = { version = "0.10", optional = true }
 tokio = { version = "1", features = ["io-util"], optional = true }
 futures = { version = "0.3.31", optional = true }
-bytes = { version = "1.10.1", optional = true }
+bytes = "1.11"
 
 [dev-dependencies]
 arrow-data = { workspace = true }
@@ -80,9 +80,8 @@ rand = { version = "0.9.1", default-features = false, features = [
 ] }
 criterion = { workspace = true, default-features = false }
 tempfile = "3.3"
-arrow = { workspace = true }
+arrow = { workspace = true, features = ["prettyprint"] }
 futures = "0.3.31"
-bytes = "1.10.1"
 async-stream = "0.3.6"
 apache-avro = "0.21.0"
 num-bigint = "0.4"
@@ -100,3 +99,9 @@ harness = false
 [[bench]]
 name = "avro_writer"
 harness = false
+
+[[bench]]
+name = "encoder"
+harness = false
+
+

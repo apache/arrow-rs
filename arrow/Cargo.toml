@@ -62,6 +62,7 @@ all-features = true
 
 [features]
 default = ["csv", "ipc", "json"]
+async = ["arrow-array/async"]
 ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
 csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]

@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
+    #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
         let field = make_valid_field_primitive(TimeUnit::Second)
             .with_metadata([(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())].into());

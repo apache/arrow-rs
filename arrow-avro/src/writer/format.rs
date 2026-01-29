@@ -18,9 +18,10 @@
 //! Avro Writer Formats for Arrow.
 
 use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
+use crate::errors::AvroError;
 use crate::schema::{AvroSchema, AvroSchemaOptions, SCHEMA_METADATA_KEY};
 use crate::writer::encoder::write_long;
-use arrow_schema::{ArrowError, Schema};
+use arrow_schema::Schema;
 use rand::RngCore;
 use std::fmt::Debug;
 use std::io::Write;
@@ -40,7 +41,7 @@ pub trait AvroFormat: Debug + Default {
         writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
-    ) -> Result<(), ArrowError>;
+    ) -> Result<(), AvroError>;
 
     /// Return the 16‑byte sync marker (OCF) or `None` (binary stream).
     fn sync_marker(&self) -> Option<&[u8; 16]>;
@@ -59,7 +60,7 @@ impl AvroFormat for AvroOcfFormat {
         writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
-    ) -> Result<(), ArrowError> {
+    ) -> Result<(), AvroError> {
         let mut rng = rand::rng();
         rng.fill_bytes(&mut self.sync_marker);
         // Choose the Avro schema JSON that the file will advertise.
@@ -71,11 +72,10 @@ impl AvroFormat for AvroOcfFormat {
                 null_order: None,
                 strip_metadata: true,
             }),
-        )?;
+        )
+        .map_err(|e| AvroError::SchemaError(format!("{:?}", e)))?;
         // Magic
-        writer
-            .write_all(b"Obj\x01")
-            .map_err(|e| ArrowError::IoError(format!("write OCF magic: {e}"), e))?;
+        writer.write_all(b"Obj\x01")?;
         // File metadata map: { "avro.schema": <json>, "avro.codec": <codec> }
         let codec_str = match compression {
             Some(CompressionCodec::Deflate) => "deflate",
@@ -93,9 +93,7 @@ impl AvroFormat for AvroOcfFormat {
         write_bytes(writer, codec_str.as_bytes())?;
         write_long(writer, 0)?;
         // Sync marker (16 bytes)
-        writer
-            .write_all(&self.sync_marker)
-            .map_err(|e| ArrowError::IoError(format!("write OCF sync marker: {e}"), e))?;
+        writer.write_all(&self.sync_marker)?;
         Ok(())
     }
 
@@ -121,9 +119,9 @@ impl AvroFormat for AvroSoeFormat {
         _writer: &mut W,
         _schema: &Schema,
         compression: Option<CompressionCodec>,
-    ) -> Result<(), ArrowError> {
+    ) -> Result<(), AvroError> {
         if compression.is_some() {
-            return Err(ArrowError::InvalidArgumentError(
+            return Err(AvroError::InvalidArgument(
                 "Compression not supported for Avro SOE streaming".to_string(),
             ));
         }
@@ -135,15 +133,92 @@ impl AvroFormat for AvroSoeFormat {
     }
 }
 
+/// Unframed Avro binary streaming format ("raw Avro record body bytes (no prefix, no OCF header)").
+///
+/// Each record written by the stream writer contains only the raw Avro
+/// record body bytes (i.e., the Avro binary encoding of the datum) with **no**
+/// per-record prefix and **no** Object Container File (OCF) header.
+///
+/// This format is useful when another transport provides framing (for example,
+/// length-delimited buffers) or when embedding Avro record payloads inside a
+/// larger envelope.
+#[derive(Debug, Default)]
+pub struct AvroBinaryFormat;
+
+impl AvroFormat for AvroBinaryFormat {
+    const NEEDS_PREFIX: bool = false;
+
+    fn start_stream<W: Write>(
+        &mut self,
+        _writer: &mut W,
+        _schema: &Schema,
+        compression: Option<CompressionCodec>,
+    ) -> Result<(), AvroError> {
+        if compression.is_some() {
+            return Err(AvroError::InvalidArgument(
+                "Compression not supported for Avro binary streaming".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn sync_marker(&self) -> Option<&[u8; 16]> {
+        None
+    }
+}
+
 #[inline]
-fn write_string<W: Write>(writer: &mut W, s: &str) -> Result<(), ArrowError> {
+fn write_string<W: Write>(writer: &mut W, s: &str) -> Result<(), AvroError> {
     write_bytes(writer, s.as_bytes())
 }
 
 #[inline]
-fn write_bytes<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<(), ArrowError> {
+fn write_bytes<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<(), AvroError> {
     write_long(writer, bytes.len() as i64)?;
-    writer
-        .write_all(bytes)
-        .map_err(|e| ArrowError::IoError(format!("write bytes: {e}"), e))
+    writer.write_all(bytes)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_schema::{DataType, Field, Schema};
+
+    fn test_schema() -> Schema {
+        Schema::new(vec![Field::new("x", DataType::Int32, false)])
+    }
+
+    #[test]
+    fn avro_binary_format_rejects_compression() {
+        let mut format = AvroBinaryFormat;
+        let schema = test_schema();
+        let err = format
+            .start_stream(
+                &mut Vec::<u8>::new(),
+                &schema,
+                Some(CompressionCodec::Snappy),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Compression not supported for Avro binary streaming")
+        );
+    }
+
+    #[test]
+    fn avro_soe_format_rejects_compression() {
+        let mut format = AvroSoeFormat::default();
+        let schema = test_schema();
+        let err = format
+            .start_stream(
+                &mut Vec::<u8>::new(),
+                &schema,
+                Some(CompressionCodec::Snappy),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Compression not supported for Avro SOE streaming")
+        );
+    }
 }

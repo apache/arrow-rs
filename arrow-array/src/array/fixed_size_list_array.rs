@@ -463,9 +463,8 @@ impl From<FixedSizeListArray> for ArrayData {
     }
 }
 
-impl super::private::Sealed for FixedSizeListArray {}
-
-impl Array for FixedSizeListArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for FixedSizeListArray {
     fn as_any(&self) -> &dyn Any {
         self
     }

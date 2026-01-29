@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
-use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray, builder::make_view};
+use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
 use std::sync::Arc;
@@ -43,28 +43,13 @@ impl ViewBuffer {
         block_id
     }
 
-    /// # Safety
-    /// This method is only safe when:
-    /// - `block` is a valid index, i.e., the return value of `append_block`
-    /// - `offset` and `offset + len` are valid indices into the buffer
-    /// - The `(offset, offset + len)` is valid value for the native type.
-    pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
-        let b = unsafe { self.buffers.get_unchecked(block as usize) };
-        let end = offset.saturating_add(len);
-        let b = unsafe { b.get_unchecked(offset as usize..end as usize) };
-
-        let view = make_view(b, block, offset);
-
-        self.views.push(view);
-    }
-
     /// Directly append a view to the view array.
     /// This is used when we create a StringViewArray from a dictionary whose values are StringViewArray.
     ///
     /// # Safety
     /// The `view` must be a valid view as per the ByteView spec.
-    pub unsafe fn append_raw_view_unchecked(&mut self, view: &u128) {
-        self.views.push(*view);
+    pub unsafe fn append_raw_view_unchecked(&mut self, view: u128) {
+        self.views.push(view);
     }
 
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
@@ -104,6 +89,7 @@ impl ValuesBuffer for ViewBuffer {
 #[cfg(test)]
 mod tests {
 
+    use arrow::array::make_view;
     use arrow_array::Array;
 
     use super::*;
@@ -122,13 +108,14 @@ mod tests {
     #[test]
     fn test_view_buffer_append_view() {
         let mut buffer = ViewBuffer::default();
-        let string_buffer = Buffer::from(b"0123456789long string to test string view");
+        let data = b"0123456789long string to test string view";
+        let string_buffer = Buffer::from(data);
         let block_id = buffer.append_block(string_buffer);
 
         unsafe {
-            buffer.append_view_unchecked(block_id, 0, 1);
-            buffer.append_view_unchecked(block_id, 1, 9);
-            buffer.append_view_unchecked(block_id, 10, 31);
+            buffer.append_raw_view_unchecked(make_view(&data[0..1], block_id, 0));
+            buffer.append_raw_view_unchecked(make_view(&data[1..10], block_id, 1));
+            buffer.append_raw_view_unchecked(make_view(&data[10..41], block_id, 10));
         }
 
         let array = buffer.into_array(None, &ArrowType::Utf8View);
@@ -149,13 +136,14 @@ mod tests {
     #[test]
     fn test_view_buffer_pad_null() {
         let mut buffer = ViewBuffer::default();
-        let string_buffer = Buffer::from(b"0123456789long string to test string view");
+        let data = b"0123456789long string to test string view";
+        let string_buffer = Buffer::from(data);
         let block_id = buffer.append_block(string_buffer);
 
         unsafe {
-            buffer.append_view_unchecked(block_id, 0, 1);
-            buffer.append_view_unchecked(block_id, 1, 9);
-            buffer.append_view_unchecked(block_id, 10, 31);
+            buffer.append_raw_view_unchecked(make_view(&data[0..1], block_id, 0));
+            buffer.append_raw_view_unchecked(make_view(&data[1..10], block_id, 1));
+            buffer.append_raw_view_unchecked(make_view(&data[10..41], block_id, 10));
         }
 
         let valid = [true, false, false, true, false, false, true];

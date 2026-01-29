@@ -78,18 +78,17 @@ pub use list_view_array::*;
 
 use crate::iterator::ArrayIter;
 
-mod private {
-    /// Private marker trait to ensure [`super::Array`] can not be implemented outside this crate
-    pub trait Sealed {}
-
-    impl<T: Sealed> Sealed for &T {}
-}
-
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 ///
-/// This trait is sealed as it is not intended for custom array types, rather only
-/// those defined in this crate.
-pub trait Array: std::fmt::Debug + Send + Sync + private::Sealed {
+/// # Safety
+///
+/// Implementations of this trait must ensure that all methods implementations comply with
+/// the Arrow specification. No safety guards are placed and failing to comply with it can
+/// translate into panics or undefined behavior. For example, a value computed based on `len`
+/// may be used as a direct index into memory regions without checks.
+///
+/// Use it at your own risk knowing that this trait might be sealed in the future.
+pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
@@ -351,10 +350,8 @@ pub trait Array: std::fmt::Debug + Send + Sync + private::Sealed {
 /// A reference-counted reference to a generic `Array`
 pub type ArrayRef = Arc<dyn Array>;
 
-impl private::Sealed for ArrayRef {}
-
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
-impl Array for ArrayRef {
+unsafe impl Array for ArrayRef {
     fn as_any(&self) -> &dyn Any {
         self.as_ref().as_any()
     }
@@ -433,7 +430,7 @@ impl Array for ArrayRef {
     }
 }
 
-impl<T: Array> Array for &T {
+unsafe impl<T: Array> Array for &T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
     }

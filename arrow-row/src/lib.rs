@@ -657,14 +657,14 @@ impl Codec {
             Codec::RunEndEncoded(converter) => {
                 let values = match array.data_type() {
                     DataType::RunEndEncoded(r, _) => match r.data_type() {
-                        DataType::Int16 => array.as_run::<Int16Type>().values(),
-                        DataType::Int32 => array.as_run::<Int32Type>().values(),
-                        DataType::Int64 => array.as_run::<Int64Type>().values(),
+                        DataType::Int16 => array.as_run::<Int16Type>().values_slice(),
+                        DataType::Int32 => array.as_run::<Int32Type>().values_slice(),
+                        DataType::Int64 => array.as_run::<Int64Type>().values_slice(),
                         _ => unreachable!("Unsupported run end index type: {r:?}"),
                     },
                     _ => unreachable!(),
                 };
-                let rows = converter.convert_columns(std::slice::from_ref(values))?;
+                let rows = converter.convert_columns(std::slice::from_ref(&values))?;
                 Ok(Encoder::RunEndEncoded(rows))
             }
             Codec::Union(converters, _) => {
