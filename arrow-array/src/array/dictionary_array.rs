@@ -507,11 +507,11 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
             (Ok(key_builder), Ok(value_builder)) => Ok(unsafe {
                 PrimitiveDictionaryBuilder::new_from_builders(key_builder, value_builder)
             }),
-            (Err(key_array), Ok(mut value_builder)) => {
-                Err(Self::try_new(key_array, Arc::new(value_builder.finish())).unwrap())
+            (Err(key_array), Ok(value_builder)) => {
+                Err(Self::try_new(key_array, Arc::new(value_builder.build())).unwrap())
             }
-            (Ok(mut key_builder), Err(value_array)) => {
-                Err(Self::try_new(key_builder.finish(), Arc::new(value_array)).unwrap())
+            (Ok(key_builder), Err(value_array)) => {
+                Err(Self::try_new(key_builder.build(), Arc::new(value_array)).unwrap())
             }
             (Err(key_array), Err(value_array)) => {
                 Err(Self::try_new(key_array, Arc::new(value_array)).unwrap())

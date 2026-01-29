@@ -601,7 +601,7 @@ mod tests {
         let mut builder = PrimitiveBuilder::<T>::with_capacity(10);
         builder.append_value(value);
         builder.append_null();
-        let array = builder.finish();
+        let array = builder.build();
         let array = array.with_timezone(timezone);
 
         let schema = Arc::new(Schema::new(vec![Field::new(

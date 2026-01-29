@@ -957,7 +957,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             .values_slice_mut()
             .iter_mut()
             .for_each(|v| *v = op(*v));
-        Ok(builder.finish())
+        Ok(builder.build())
     }
 
     /// Applies a unary fallible function to all valid values in a primitive
@@ -1033,7 +1033,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             return Ok(Err(err));
         }
 
-        Ok(Ok(builder.finish()))
+        Ok(Ok(builder.build()))
     }
 
     /// Applies a unary and nullable function to all valid values in a primitive array
@@ -2105,7 +2105,7 @@ mod tests {
         builder.append_slice(&[0, 1]);
         builder.append_null();
         builder.append_slice(&[3, 4]);
-        let arr = builder.finish();
+        let arr = builder.build();
         assert_eq!(
             "PrimitiveArray<Int32>\n[\n  0,\n  1,\n  null,\n  3,\n  4,\n]",
             format!("{arr:?}")
@@ -2451,7 +2451,7 @@ mod tests {
         let mut decimal_builder = Decimal128Builder::with_capacity(10);
         decimal_builder.append_value(123456);
         decimal_builder.append_value(12345);
-        let result = decimal_builder.finish().with_precision_and_scale(5, 3);
+        let result = decimal_builder.build().with_precision_and_scale(5, 3);
         assert!(result.is_ok());
         let arr = result.unwrap();
         assert_eq!("12.345", arr.value_as_string(1));
@@ -2469,7 +2469,7 @@ mod tests {
         decimal_builder.append_value(99);
         decimal_builder.append_value(-100);
         decimal_builder.append_value(-99);
-        let result = decimal_builder.finish().with_precision_and_scale(2, 1);
+        let result = decimal_builder.build().with_precision_and_scale(2, 1);
         assert!(result.is_ok());
         let arr = result.unwrap();
         assert_eq!("9.9", arr.value_as_string(1));
@@ -2626,7 +2626,7 @@ mod tests {
         let decimal2 = i256::from_i128(56789);
         builder.append_value(decimal2);
 
-        let array: Decimal256Array = builder.finish().with_precision_and_scale(76, 6).unwrap();
+        let array: Decimal256Array = builder.build().with_precision_and_scale(76, 6).unwrap();
 
         let collected: Vec<_> = array.iter().collect();
         assert_eq!(vec![Some(decimal1), None, Some(decimal2)], collected);
@@ -2673,7 +2673,7 @@ mod tests {
         let decimal2 = 56789;
         builder.append_value(decimal2);
 
-        let array: Decimal64Array = builder.finish().with_precision_and_scale(18, 4).unwrap();
+        let array: Decimal64Array = builder.build().with_precision_and_scale(18, 4).unwrap();
 
         let collected: Vec<_> = array.iter().collect();
         assert_eq!(vec![Some(decimal1), None, Some(decimal2)], collected);
@@ -2707,7 +2707,7 @@ mod tests {
         let decimal2 = 56789;
         builder.append_value(decimal2);
 
-        let array: Decimal32Array = builder.finish().with_precision_and_scale(9, 2).unwrap();
+        let array: Decimal32Array = builder.build().with_precision_and_scale(9, 2).unwrap();
 
         let collected: Vec<_> = array.iter().collect();
         assert_eq!(vec![Some(decimal1), None, Some(decimal2)], collected);
@@ -2771,7 +2771,7 @@ mod tests {
 
         let expected: Int32Array = vec![Some(4), Some(2), Some(1)].into_iter().collect();
 
-        let new_array = builder.finish();
+        let new_array = builder.build();
         assert_eq!(expected, new_array);
     }
 

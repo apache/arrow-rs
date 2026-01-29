@@ -154,6 +154,6 @@ where
             }
         }
 
-        Ok(builder.finish().into_data())
+        Ok(builder.build().into_data())
     }
 }

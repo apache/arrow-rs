@@ -224,27 +224,27 @@ impl XdbcTypeInfoDataBuilder {
         });
 
         let type_name = Arc::new(type_name_builder.finish());
-        let data_type = Arc::new(data_type_builder.finish());
-        let column_size = Arc::new(column_size_builder.finish());
+        let data_type = Arc::new(data_type_builder.build());
+        let column_size = Arc::new(column_size_builder.build());
         let literal_prefix = Arc::new(literal_prefix_builder.finish());
         let literal_suffix = Arc::new(literal_suffix_builder.finish());
         let (field, offsets, values, nulls) = create_params_builder.finish().into_parts();
         // Re-defined the field to be non-nullable
         let new_field = Arc::new(field.as_ref().clone().with_nullable(false));
         let create_params = Arc::new(ListArray::new(new_field, offsets, values, nulls)) as ArrayRef;
-        let nullable = Arc::new(nullable_builder.finish());
+        let nullable = Arc::new(nullable_builder.build());
         let case_sensitive = Arc::new(case_sensitive_builder.finish());
-        let searchable = Arc::new(searchable_builder.finish());
+        let searchable = Arc::new(searchable_builder.build());
         let unsigned_attribute = Arc::new(unsigned_attribute_builder.finish());
         let fixed_prec_scale = Arc::new(fixed_prec_scale_builder.finish());
         let auto_increment = Arc::new(auto_increment_builder.finish());
         let local_type_name = Arc::new(local_type_name_builder.finish());
-        let minimum_scale = Arc::new(minimum_scale_builder.finish());
-        let maximum_scale = Arc::new(maximum_scale_builder.finish());
-        let sql_data_type = Arc::new(sql_data_type_builder.finish());
-        let datetime_subcode = Arc::new(datetime_subcode_builder.finish());
-        let num_prec_radix = Arc::new(num_prec_radix_builder.finish());
-        let interval_precision = Arc::new(interval_precision_builder.finish());
+        let minimum_scale = Arc::new(minimum_scale_builder.build());
+        let maximum_scale = Arc::new(maximum_scale_builder.build());
+        let sql_data_type = Arc::new(sql_data_type_builder.build());
+        let datetime_subcode = Arc::new(datetime_subcode_builder.build());
+        let num_prec_radix = Arc::new(num_prec_radix_builder.build());
+        let interval_precision = Arc::new(interval_precision_builder.build());
 
         let batch = RecordBatch::try_new(
             Arc::clone(&GET_XDBC_INFO_SCHEMA),

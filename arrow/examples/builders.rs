@@ -49,7 +49,7 @@ fn main() {
     primitive_array_builder.append_slice(&(25..50).collect::<Vec<i32>>());
 
     // Build the `PrimitiveArray`
-    let primitive_array = primitive_array_builder.finish();
+    let primitive_array = primitive_array_builder.build();
     // Long arrays will have an ellipsis printed in the middle
     println!("{primitive_array:?}");
 

@@ -94,10 +94,10 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
             b.append_value(format!("this is string number {i}"));
         }
     }
-    let a = a.finish();
+    let a = a.build();
     let b = b.finish();
-    let c = c.finish();
-    let d = d.finish();
+    let c = c.build();
+    let d = d.build();
     RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(a), Arc::new(b), Arc::new(c), Arc::new(d)],

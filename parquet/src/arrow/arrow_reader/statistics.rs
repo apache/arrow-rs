@@ -1262,7 +1262,7 @@ impl<'a> StatisticsConverter<'a> {
             })?;
             builder.append_value(row_count);
         }
-        Ok(Some(builder.finish()))
+        Ok(Some(builder.build()))
     }
 
     /// Create a new `StatisticsConverter` to extract statistics for a column

@@ -901,7 +901,7 @@ where
             }
         }
     }
-    Ok(Arc::new(value_builder.finish()))
+    Ok(Arc::new(value_builder.build()))
 }
 
 /// Cast a decimal array to a floating point array.

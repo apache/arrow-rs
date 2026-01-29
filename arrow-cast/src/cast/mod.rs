@@ -8157,7 +8157,7 @@ mod tests {
         builder.append_value(1);
         builder.append_null();
         builder.append_value(3);
-        let array: ArrayRef = Arc::new(builder.finish());
+        let array: ArrayRef = Arc::new(builder.build());
 
         let expected = vec!["1", "null", "3"];
 

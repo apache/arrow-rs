@@ -943,7 +943,7 @@ where
         }
     }
 
-    Ok(values.finish())
+    Ok(values.build())
 }
 
 /// To avoid generating take implementations for every index type, instead we
@@ -1924,7 +1924,7 @@ mod tests {
         for idx in take_indices {
             indices.append_option(idx.map(|i| i.to_u64().unwrap()));
         }
-        let indices = indices.finish();
+        let indices = indices.build();
 
         let taken = take(&list_view_array, &indices, None)
             .unwrap()

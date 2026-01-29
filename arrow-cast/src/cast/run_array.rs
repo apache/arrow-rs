@@ -125,7 +125,7 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
 
     // Return early if the array to cast is empty
     if cast_array.is_empty() {
-        let empty_run_ends = run_ends_builder.finish();
+        let empty_run_ends = run_ends_builder.build();
         let empty_values = make_array(ArrayData::new_empty(value_type));
         return Ok(Arc::new(RunArray::<K>::try_new(
             &empty_run_ends,
@@ -158,7 +158,7 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
             ArrowError::CastError(format!("Run end index out of range: {}", run_end))
         })?);
     }
-    let run_ends_array = run_ends_builder.finish();
+    let run_ends_array = run_ends_builder.build();
     // Build the values array by taking elements at the run start positions
     let indices = PrimitiveArray::<UInt32Type>::from_iter_values(
         values_indexes.iter().map(|&idx| idx as u32),

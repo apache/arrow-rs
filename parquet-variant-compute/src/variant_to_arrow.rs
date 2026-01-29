@@ -742,8 +742,8 @@ where
         }
     }
 
-    fn finish(mut self) -> Result<ArrayRef> {
-        Ok(Arc::new(self.builder.finish()))
+    fn finish(self) -> Result<ArrayRef> {
+        Ok(Arc::new(self.builder.build()))
     }
 }
 

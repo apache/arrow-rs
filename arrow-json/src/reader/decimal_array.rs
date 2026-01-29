@@ -95,7 +95,7 @@ where
         }
 
         Ok(builder
-            .finish()
+            .build()
             .with_precision_and_scale(self.precision, self.scale)?
             .into_data())
     }

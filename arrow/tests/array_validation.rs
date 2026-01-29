@@ -1082,7 +1082,7 @@ fn test_decimal_validation() {
     let mut builder = Decimal128Builder::with_capacity(4);
     builder.append_value(10000);
     builder.append_value(20000);
-    let array = builder.finish();
+    let array = builder.build();
 
     array.into_data().validate_full().unwrap();
 }
