@@ -378,7 +378,7 @@ fn sort_bytes<T: ByteArrayType>(
             } else if slice.is_empty() {
                 0u64
             } else {
-                let mut buf = [0u8; 8];
+                let mut buf = [0u8; SPLICE_PREFIX_SIZE];
                 std::ptr::copy_nonoverlapping(slice.as_ptr(), buf.as_mut_ptr(), slice.len());
                 u64::from_be_bytes(buf)
             };
@@ -400,7 +400,7 @@ fn sort_bytes<T: ByteArrayType>(
         unsafe {
             let a_bytes: &[u8] = values.value_unchecked(a.0 as usize).as_ref();
             let b_bytes: &[u8] = values.value_unchecked(b.0 as usize).as_ref();
-            // If both strings are >= 8 bytes, first 8 bytes are equal (same prefix),
+            // If both strings are >= SPLICE_PREFIX_SIZE bytes, first SPLICE_PREFIX_SIZE bytes are equal (same prefix),
             // so skip them. Otherwise compare full slices (short strings may differ
             // in length despite matching zero-padded prefixes).
             if a_bytes.len() >= SPLICE_PREFIX_SIZE && b_bytes.len() >= SPLICE_PREFIX_SIZE {
@@ -496,7 +496,7 @@ fn sort_byte_view<T: ByteViewType>(
             } else if slice.is_empty() {
                 0u64
             } else {
-                let mut buf = [0u8; 8];
+                let mut buf = [0u8; SPLICE_PREFIX_SIZE];
                 std::ptr::copy_nonoverlapping(slice.as_ptr(), buf.as_mut_ptr(), slice.len());
                 u64::from_be_bytes(buf)
             };
