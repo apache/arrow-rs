@@ -17,7 +17,7 @@
 
 //! Types for iterating over bitmasks in 64-bit chunks
 
-use crate::util::bit_util::ceil;
+use crate::{bit_util::read_u64, util::bit_util::ceil};
 use std::fmt::Debug;
 
 /// Iterates over an arbitrarily aligned byte buffer
@@ -341,14 +341,6 @@ impl DoubleEndedIterator for UnalignedBitChunkZipIterator<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         Some((self.left.next_back()?, self.right.next_back()?))
     }
-}
-
-#[inline]
-fn read_u64(input: &[u8]) -> u64 {
-    let len = input.len().min(8);
-    let mut buf = [0_u8; 8];
-    buf[..len].copy_from_slice(input);
-    u64::from_le_bytes(buf)
 }
 
 #[inline]
