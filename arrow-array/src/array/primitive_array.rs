@@ -25,7 +25,9 @@ use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, NullBufferBuilder, NullBuffer, ScalarBuffer, i256};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder, ScalarBuffer, i256,
+};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
