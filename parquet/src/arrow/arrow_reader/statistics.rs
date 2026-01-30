@@ -957,6 +957,21 @@ macro_rules! get_data_page_statistics {
                                     b.append_option(val.copied());
                                 }
                             }
+                            ColumnIndexMetaData::INT64(index) => {
+                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                                    b.append_option(val.and_then(|&x| i32::try_from(x).ok()));
+                                }
+                            }
+                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
+                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                                    b.append_option(val.map(|x| from_bytes_to_i32(x.as_ref())));
+                                }
+                            }
+                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
+                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                                    b.append_option(val.map(|x| from_bytes_to_i32(x.as_ref())));
+                                }
+                            }
                             _ => b.append_nulls(len),
                         }
                     }
@@ -974,6 +989,16 @@ macro_rules! get_data_page_statistics {
                             ColumnIndexMetaData::INT64(index) => {
                                 for val in index.[<$stat_type_prefix:lower _values_iter>]() {
                                     b.append_option(val.copied());
+                                }
+                            }
+                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
+                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                                    b.append_option(val.map(|x| from_bytes_to_i64(x.as_ref())));
+                                }
+                            }
+                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
+                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                                    b.append_option(val.map(|x| from_bytes_to_i64(x.as_ref())));
                                 }
                             }
                             _ => b.append_nulls(len),
