@@ -674,6 +674,42 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         })
     }
 
+    /// Returns a new array with the same data and a new null buffer.
+    ///
+    /// The resulting null buffer is the union of the existing nulls and the provided nulls.
+    /// In other words, a slot is valid in the result only if it is valid in BOTH
+    /// the existing array AND the provided `nulls`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nulls` has a different length than the array.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::{Int32Array, Array};
+    /// # use arrow_buffer::NullBuffer;
+    /// let array = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+    /// // Mask out the second element
+    /// let mask = NullBuffer::from(vec![true, false, true]);
+    /// let masked = array.with_nulls(Some(mask));
+    /// assert_eq!(masked.values(), &[1, 2, 3]); // Values unchanged
+    /// assert!(masked.is_null(1)); // Second element is now null
+    /// ```
+
+    pub fn with_nulls(self, nulls: Option<NullBuffer>) -> Self {
+        if let Some(n) = &nulls {
+            assert_eq!(n.len(), self.len(), "Null buffer length mismatch");
+        }
+
+        let new_nulls = NullBuffer::union(self.nulls.as_ref(), nulls.as_ref());
+
+        Self {
+            data_type: self.data_type,
+            values: self.values,
+            nulls: new_nulls,
+        }
+    }
     /// Create a new [`Scalar`] from `value`
     pub fn new_scalar(value: T::Native) -> Scalar<Self> {
         Scalar::new(Self {
