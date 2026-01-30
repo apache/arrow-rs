@@ -4216,11 +4216,15 @@ mod tests {
         ListArray::new(field, offsets, values, Some(nulls))
     }
 
-    fn generate_list_view<F>(len: usize, valid_percent: f64, values: F) -> ListViewArray
+    fn generate_list_view<F>(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+        values: F,
+    ) -> ListViewArray
     where
         F: FnOnce(usize) -> ArrayRef,
     {
-        let mut rng = rng();
         // Generate sizes first, then create a values array large enough
         let sizes: Vec<i32> = (0..len).map(|_| rng.random_range(0..10)).collect();
         let values_len: usize = sizes.iter().map(|s| *s as usize).sum::<usize>().max(1);
@@ -4383,16 +4387,15 @@ mod tests {
         )
     }
 
-    fn generate_column(len: usize) -> ArrayRef {
-        let mut rng = rng();
-        match rng.random_range(0..22) {
-            0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
-            1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
-            2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
-            3 => Arc::new(generate_primitive_array::<UInt64Type>(len, 0.8)),
-            4 => Arc::new(generate_primitive_array::<Float32Type>(len, 0.8)),
-            5 => Arc::new(generate_primitive_array::<Float64Type>(len, 0.8)),
-            6 => Arc::new(generate_strings::<i32>(len, 0.8)),
+    fn generate_column(rng: &mut (impl RngCore + Clone), len: usize) -> ArrayRef {
+        match rng.random_range(0..19) {
+            0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
+            1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
+            2 => Arc::new(generate_primitive_array::<Int64Type>(rng, len, 0.8)),
+            3 => Arc::new(generate_primitive_array::<UInt64Type>(rng, len, 0.8)),
+            4 => Arc::new(generate_primitive_array::<Float32Type>(rng, len, 0.8)),
+            5 => Arc::new(generate_primitive_array::<Float64Type>(rng, len, 0.8)),
+            6 => Arc::new(generate_strings::<i32>(rng, len, 0.8)),
             7 => {
                 let dict_values_len = rng.random_range(1..len);
                 // Cannot test dictionaries containing null values because of #2687
@@ -4424,24 +4427,33 @@ mod tests {
             15 => Arc::new(generate_byte_view(rng, len, 0.8)),
             16 => Arc::new(generate_fixed_stringview_column(len)),
             17 => Arc::new(
-                generate_list(rng, len + 1000, 0.8, |rng, values_len| {
+                generate_list(&mut rng.clone(), len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
             ),
             18 => Arc::new(generate_boolean_array(rng, len, 0.8)),
-            19 => Arc::new(generate_list_view(len, 0.8, |values_len| {
-                Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
-            })),
-            20 => Arc::new(generate_list_view(len, 0.8, |values_len| {
-                Arc::new(generate_strings::<i32>(values_len, 0.8))
-            })),
-            20 => Arc::new(generate_list_view(len, 0.8, |values_len| {
-                Arc::new(generate_struct(values_len, 0.8))
-            })),
-            21 => Arc::new(
-                generate_list_view(len + 1000, 0.8, |values_len| {
-                    Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
+            19 => Arc::new(generate_list_view(
+                &mut rng.clone(),
+                len,
+                0.8,
+                |values_len| Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8)),
+            )),
+            20 => Arc::new(generate_list_view(
+                &mut rng.clone(),
+                len,
+                0.8,
+                |values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.8)),
+            )),
+            21 => Arc::new(generate_list_view(
+                &mut rng.clone(),
+                len,
+                0.8,
+                |values_len| Arc::new(generate_struct(rng, values_len, 0.8)),
+            )),
+            22 => Arc::new(
+                generate_list_view(&mut rng.clone(), len + 1000, 0.8, |values_len| {
+                    Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
             ),
