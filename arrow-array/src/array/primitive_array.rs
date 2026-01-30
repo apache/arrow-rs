@@ -25,7 +25,9 @@ use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, NullBufferBuilder, ScalarBuffer, i256};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder, ScalarBuffer, i256,
+};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -1488,10 +1490,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         let (null, buffer) = unsafe { trusted_len_unzip(iterator) };
 
-        let data = unsafe {
-            ArrayData::new_unchecked(T::DATA_TYPE, len, None, Some(null), 0, vec![buffer], vec![])
-        };
-        PrimitiveArray::from(data)
+        let nulls =
+            Some(NullBuffer::new(BooleanBuffer::new(null, 0, len))).filter(|n| n.null_count() > 0);
+        PrimitiveArray::new(ScalarBuffer::from(buffer), nulls)
     }
 }
 
@@ -1502,11 +1503,9 @@ macro_rules! def_numeric_from_vec {
     ( $ty:ident ) => {
         impl From<Vec<<$ty as ArrowPrimitiveType>::Native>> for PrimitiveArray<$ty> {
             fn from(data: Vec<<$ty as ArrowPrimitiveType>::Native>) -> Self {
-                let array_data = ArrayData::builder($ty::DATA_TYPE)
-                    .len(data.len())
-                    .add_buffer(Buffer::from_vec(data));
-                let array_data = unsafe { array_data.build_unchecked() };
-                PrimitiveArray::from(array_data)
+                let buffer = ScalarBuffer::from(Buffer::from_vec(data));
+                let nulls = None;
+                PrimitiveArray::new(buffer, nulls)
             }
         }
 
