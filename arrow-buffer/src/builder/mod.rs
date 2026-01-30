@@ -322,7 +322,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         self.buffer.truncate(len * std::mem::size_of::<T>());
-        self.len = len;
+        self.len = self.len.min(len);
     }
 
     /// # Safety
@@ -417,5 +417,17 @@ mod tests {
         assert_eq!(builder.len(), 2);
         builder.extend([3, 4]);
         assert_eq!(builder.len(), 4);
+    }
+
+    #[test]
+    fn truncate_safety() {
+        let mut builder = BufferBuilder::from(vec![40, -63, 90]);
+        assert_eq!(builder.len(), 3);
+        builder.truncate(151);
+        assert_eq!(builder.len(), 3);
+        builder.advance(219);
+        assert_eq!(builder.len(), 222);
+        let slice = builder.as_slice_mut();
+        assert_eq!(slice.len(), 222);
     }
 }
