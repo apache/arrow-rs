@@ -44,7 +44,7 @@ use arrow_array::{
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
     UInt16Array, UInt32Array, UInt64Array, new_null_array,
 };
-use arrow_buffer::i256;
+use arrow_buffer::{NullBufferBuilder, i256};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use half::f16;
 use paste::paste;
@@ -1272,20 +1272,22 @@ where
 {
     let chunks: Vec<_> = iterator.collect();
     let total_capacity: usize = chunks.iter().map(|(len, _)| *len).sum();
-    let mut builder = UInt64Builder::with_capacity(total_capacity);
+    let mut values = Vec::with_capacity(total_capacity);
+    let mut nulls = NullBufferBuilder::new_with_len(total_capacity);
     for (len, index) in chunks {
         match index.null_counts() {
             Some(counts) => {
-                for &count in counts {
-                    builder.append_value(count as u64);
-                }
+                values.extend(counts.iter().map(|&x| x as u64));
+                nulls.append_n_non_nulls(len);
             }
             None => {
-                builder.append_nulls(len);
+                nulls.append_n_nulls(len);
             }
         }
     }
-    Ok(builder.finish())
+    let null_buffer = nulls.build();
+    let array = UInt64Array::new(values.into(), null_buffer);
+    Ok(array)
 }
 
 /// Extracts Parquet statistics as Arrow arrays
@@ -1775,7 +1777,8 @@ impl<'a> StatisticsConverter<'a> {
             return Ok(None);
         };
 
-        let mut row_count_total = Vec::new();
+        let mut row_counts = Vec::new();
+        let mut nulls = NullBufferBuilder::new_with_len(0);
         for rg_idx in row_group_indices {
             let page_locations = &column_offset_index[*rg_idx][parquet_index].page_locations();
 
@@ -1785,17 +1788,22 @@ impl<'a> StatisticsConverter<'a> {
 
             // append the last page row count
             let num_rows_in_row_group = &row_group_metadatas[*rg_idx].num_rows();
-            let row_count_per_page = row_count_per_page
-                .chain(std::iter::once(Some(
-                    *num_rows_in_row_group as u64
-                        - page_locations.last().unwrap().first_row_index as u64,
-                )))
-                .collect::<Vec<_>>();
+            let row_count_per_page = row_count_per_page.chain(std::iter::once(Some(
+                *num_rows_in_row_group as u64
+                    - page_locations.last().unwrap().first_row_index as u64,
+            )));
 
-            row_count_total.extend(row_count_per_page);
+            row_counts.extend(row_count_per_page.clone().map(|x| x.unwrap_or(0)));
+            for val in row_count_per_page {
+                if val.is_some() {
+                    nulls.append_non_null();
+                } else {
+                    nulls.append_null();
+                }
+            }
         }
 
-        Ok(Some(UInt64Array::from_iter(row_count_total)))
+        Ok(Some(UInt64Array::new(row_counts.into(), nulls.build())))
     }
 
     /// Returns a null array of data_type with one element per row group

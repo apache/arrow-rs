@@ -195,6 +195,7 @@ impl<T> PrimitiveColumnIndex<T> {
     /// Returns the min value for the page indexed by `idx`
     ///
     /// It is `None` when all values are null
+    #[inline]
     pub fn min_value(&self, idx: usize) -> Option<&T> {
         if self.null_pages[idx] {
             None
@@ -206,6 +207,7 @@ impl<T> PrimitiveColumnIndex<T> {
     /// Returns the max value for the page indexed by `idx`
     ///
     /// It is `None` when all values are null
+    #[inline]
     pub fn max_value(&self, idx: usize) -> Option<&T> {
         if self.null_pages[idx] {
             None
