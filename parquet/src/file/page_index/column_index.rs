@@ -82,7 +82,7 @@ impl ColumnIndex {
 
     /// Returns whether the page indexed by `idx` consists of all null values
     pub fn is_null_page(&self, idx: usize) -> bool {
-        self.null_pages[idx]
+        !self.null_pages[idx]
     }
 }
 
@@ -391,18 +391,14 @@ impl ByteArrayColumnIndex {
     ///
     /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
     pub fn min_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
-        (0..self.num_pages() as usize).map(|i| {
-            self.min_value(i)
-        })
+        (0..self.num_pages() as usize).map(|i| self.min_value(i))
     }
 
     /// Returns an iterator over the max values.
     ///
     /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
     pub fn max_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
-        (0..self.num_pages() as usize).map(|i| {
-            self.max_value(i)
-        })
+        (0..self.num_pages() as usize).map(|i| self.max_value(i))
     }
 }
 

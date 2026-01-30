@@ -652,34 +652,34 @@ macro_rules! get_data_page_statistics {
                     Ok(Arc::new(b.finish()))
                 },
                 DataType::UInt32 => {
-                    let mut builder = UInt32Builder::with_capacity(capacity);
+                    let mut b = UInt32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                builder.extend_from_iter_option(
+                                b.extend_from_iter_option(
                                     index.[<$stat_type_prefix:lower _values_iter>]()
                                         .map(|val| val.map(|&x| x as u32)),
                                 );
                             }
-                            _ => builder.append_nulls(len),
+                            _ => b.append_nulls(len),
                         }
                     }
-                    Ok(Arc::new(builder.finish()))
+                    Ok(Arc::new(b.finish()))
                 },
                 DataType::UInt64 => {
-                    let mut builder = UInt64Builder::with_capacity(capacity);
+                    let mut b = UInt64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT64(index) => {
-                                builder.extend_from_iter_option(
+                                b.extend_from_iter_option(
                                     index.[<$stat_type_prefix:lower _values_iter>]()
                                         .map(|val| val.map(|&x| x as u64)),
                                 );
                             }
-                            _ => builder.append_nulls(len),
+                            _ => b.append_nulls(len),
                         }
                     }
-                    Ok(Arc::new(builder.finish()))
+                    Ok(Arc::new(b.finish()))
                 },
                 DataType::Int8 => {
                     let mut b = Int8Builder::with_capacity(capacity);
@@ -712,32 +712,34 @@ macro_rules! get_data_page_statistics {
                     Ok(Arc::new(b.finish()))
                 },
                 DataType::Int32 => {
-                    let mut builder = Int32Builder::with_capacity(capacity);
+                    let mut b = Int32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                let values = index.[<$stat_type_prefix:lower _values>]();
-                                let nulls = index.null_pages();
-                                builder.append_values(values, nulls);
+                                b.extend_from_iter_option(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.copied()),
+                                );
                             }
-                            _ => builder.append_nulls(len),
+                            _ => b.append_nulls(len),
                         }
                     }
-                    Ok(Arc::new(builder.finish()))
+                    Ok(Arc::new(b.finish()))
                 },
                 DataType::Int64 => {
-                    let mut builder = Int64Builder::with_capacity(capacity);
+                    let mut b = Int64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT64(index) => {
-                                let values = index.[<$stat_type_prefix:lower _values>]();
-                                let nulls = index.null_pages();
-                                builder.append_values(values, nulls);
+                                b.extend_from_iter_option(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.copied()),
+                                );
                             }
-                            _ => builder.append_nulls(len),
+                            _ => b.append_nulls(len),
                         }
                     }
-                    Ok(Arc::new(builder.finish()))
+                    Ok(Arc::new(b.finish()))
                 },
                 DataType::Float16 => {
                     let mut b = Float16Builder::with_capacity(capacity);
@@ -755,33 +757,34 @@ macro_rules! get_data_page_statistics {
                     Ok(Arc::new(b.finish()))
                 },
                 DataType::Float32 => {
-                    let mut builder = Float32Builder::with_capacity(capacity);
+                    let mut b = Float32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::FLOAT(index) => {
-                                builder.extend_from_iter_option(
+                                b.extend_from_iter_option(
                                     index.[<$stat_type_prefix:lower _values_iter>]()
                                         .map(|val| val.copied()),
                                 );
                             }
-                            _ => builder.append_nulls(len),
+                            _ => b.append_nulls(len),
                         }
                     }
-                    Ok(Arc::new(builder.finish()))
+                    Ok(Arc::new(b.finish()))
                 },
                 DataType::Float64 => {
-                    let mut builder = Float64Builder::with_capacity(capacity);
+                    let mut b = Float64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::DOUBLE(index) => {
-                                let values = index.[<$stat_type_prefix:lower _values>]();
-                                let nulls = index.null_pages();
-                                builder.append_values(values, nulls);
+                                b.extend_from_iter_option(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.copied()),
+                                );
                             }
-                            _ => builder.append_nulls(len),
+                            _ => b.append_nulls(len),
                         }
                     }
-                    Ok(Arc::new(builder.finish()))
+                    Ok(Arc::new(b.finish()))
                 },
                 DataType::Binary => {
                     let mut b = BinaryBuilder::with_capacity(capacity, capacity * 10);
@@ -861,9 +864,10 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        let values = index.[<$stat_type_prefix:lower _values>]();
-                                        let nulls = index.null_pages();
-                                        b.append_values(values, nulls);
+                                        b.extend_from_iter_option(
+                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                                .map(|val| val.copied()),
+                                        );
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -875,9 +879,10 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        let values = index.[<$stat_type_prefix:lower _values>]();
-                                        let nulls = index.null_pages();
-                                        b.append_values(values, nulls);
+                                        b.extend_from_iter_option(
+                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                                .map(|val| val.copied()),
+                                        );
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -889,9 +894,10 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        let values = index.[<$stat_type_prefix:lower _values>]();
-                                        let nulls = index.null_pages();
-                                        b.append_values(values, nulls);
+                                        b.extend_from_iter_option(
+                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                                .map(|val| val.copied()),
+                                        );
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -903,9 +909,10 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        let values = index.[<$stat_type_prefix:lower _values>]();
-                                        let nulls = index.null_pages();
-                                        b.append_values(values, nulls);
+                                        b.extend_from_iter_option(
+                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                                .map(|val| val.copied()),
+                                        );
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -915,18 +922,19 @@ macro_rules! get_data_page_statistics {
                     }
                 },
                 DataType::Date32 => {
-                    let mut builder = Date32Builder::with_capacity(capacity);
+                    let mut b = Date32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                let values = index.[<$stat_type_prefix:lower _values>]();
-                                let nulls = index.null_pages();
-                                builder.append_values(values, nulls);
+                                b.extend_from_iter_option(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.copied()),
+                                );
                             }
-                            _ => builder.append_nulls(len),
+                            _ => b.append_nulls(len),
                         }
                     }
-                    Ok(Arc::new(builder.finish()))
+                    Ok(Arc::new(b.finish()))
                 },
                 DataType::Date64 if $physical_type == Some(PhysicalType::INT32)=> {
                     let mut b = Date64Builder::with_capacity(capacity);
@@ -944,27 +952,29 @@ macro_rules! get_data_page_statistics {
                     Ok(Arc::new(b.finish()))
                 },
                 DataType::Date64 if $physical_type == Some(PhysicalType::INT64) => {
-                    let mut builder = Date64Builder::with_capacity(capacity);
+                    let mut b = Date64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT64(index) => {
-                                let values = index.[<$stat_type_prefix:lower _values>]();
-                                let nulls = index.null_pages();
-                                builder.append_values(values, nulls);
+                                b.extend_from_iter_option(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.copied()),
+                                );
                             }
-                            _ => builder.append_nulls(len),
+                            _ => b.append_nulls(len),
                         }
                     }
-                    Ok(Arc::new(builder.finish()))
+                    Ok(Arc::new(b.finish()))
                 },
                 DataType::Decimal32(precision, scale) => {
                     let mut b = Decimal32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                let values = index.[<$stat_type_prefix:lower _values>]();
-                                let nulls = index.null_pages();
-                                b.append_values(values, nulls);
+                                b.extend_from_iter_option(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.copied()),
+                                );
                             }
                             ColumnIndexMetaData::INT64(index) => {
                                 b.extend_from_iter_option(
@@ -1095,10 +1105,10 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT32(index) => {
-                                        let values = index.[<$stat_type_prefix:lower _values>]();
-                                        let nulls = index.null_pages();
-                                        b.append_values(values, nulls);
-
+                                        b.extend_from_iter_option(
+                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                                .map(|val| val.copied()),
+                                        );
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -1110,9 +1120,10 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT32(index) => {
-                                        let values = index.[<$stat_type_prefix:lower _values>]();
-                                        let nulls = index.null_pages();
-                                        b.append_values(values, nulls);
+                                        b.extend_from_iter_option(
+                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                                .map(|val| val.copied()),
+                                        );
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -1131,9 +1142,10 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        let values = index.[<$stat_type_prefix:lower _values>]();
-                                        let nulls = index.null_pages();
-                                        b.append_values(values, nulls);
+                                        b.extend_from_iter_option(
+                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                                .map(|val| val.copied()),
+                                        );
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -1145,9 +1157,10 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        let values = index.[<$stat_type_prefix:lower _values>]();
-                                        let nulls = index.null_pages();
-                                        b.append_values(values, nulls);
+                                        b.extend_from_iter_option(
+                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                                .map(|val| val.copied()),
+                                        );
                                     }
                                     _ => b.append_nulls(len),
                                 }
