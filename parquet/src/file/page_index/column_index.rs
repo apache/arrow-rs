@@ -82,7 +82,7 @@ impl ColumnIndex {
 
     /// Returns whether the page indexed by `idx` consists of all null values
     pub fn is_null_page(&self, idx: usize) -> bool {
-        !self.null_pages[idx]
+        self.null_pages[idx]
     }
 }
 
