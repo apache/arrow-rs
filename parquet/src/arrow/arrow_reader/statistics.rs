@@ -1281,6 +1281,7 @@ where
                 nulls.append_n_non_nulls(len);
             }
             None => {
+                values.resize(values.len() + len, 0);
                 nulls.append_n_nulls(len);
             }
         }
