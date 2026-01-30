@@ -17,7 +17,7 @@
 
 //! Types for iterating over bitmasks in 64-bit chunks
 
-use crate::util::bit_util::ceil;
+use crate::{bit_util::read_u64, util::bit_util::ceil};
 use std::fmt::Debug;
 
 /// Iterates over an arbitrarily aligned byte buffer
@@ -27,7 +27,7 @@ use std::fmt::Debug;
 ///
 /// This is unlike [`BitChunkIterator`] which only exposes a trailing u64,
 /// and consequently has to perform more work for each read
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct UnalignedBitChunk<'a> {
     lead_padding: usize,
     trailing_padding: usize,
@@ -158,30 +158,189 @@ impl<'a> UnalignedBitChunk<'a> {
 
     /// Returns an iterator over the chunks
     pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
-        self.prefix
-            .into_iter()
-            .chain(self.chunks.iter().cloned())
-            .chain(self.suffix)
+        UnalignedBitChunkIterator {
+            prefix: self.prefix,
+            chunks: self.chunks,
+            suffix: self.suffix,
+        }
+    }
+
+    /// Returns a zipped iterator over two [`UnalignedBitChunk`]
+    #[inline]
+    pub fn zip(&self, other: &UnalignedBitChunk<'a>) -> UnalignedBitChunkZipIterator<'a> {
+        UnalignedBitChunkZipIterator {
+            left: self.iter(),
+            right: other.iter(),
+        }
     }
 
     /// Counts the number of ones
     pub fn count_ones(&self) -> usize {
-        self.iter().map(|x| x.count_ones() as usize).sum()
+        let prefix_count = self.prefix.map(|x| x.count_ones() as usize).unwrap_or(0);
+        let chunks_count: usize = self.chunks.iter().map(|&x| x.count_ones() as usize).sum();
+        let suffix_count = self.suffix.map(|x| x.count_ones() as usize).unwrap_or(0);
+        prefix_count + chunks_count + suffix_count
     }
 }
 
-/// Iterator over an [`UnalignedBitChunk`]
-pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
-    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Cloned<std::slice::Iter<'a, u64>>>,
-    std::option::IntoIter<u64>,
->;
+/// An iterator over the chunks of an [`UnalignedBitChunk`]
+#[derive(Debug, Clone)]
+pub struct UnalignedBitChunkIterator<'a> {
+    prefix: Option<u64>,
+    chunks: &'a [u64],
+    suffix: Option<u64>,
+}
 
-#[inline]
-fn read_u64(input: &[u8]) -> u64 {
-    let len = input.len().min(8);
-    let mut buf = [0_u8; 8];
-    buf[..len].copy_from_slice(input);
-    u64::from_le_bytes(buf)
+impl<'a> Iterator for UnalignedBitChunkIterator<'a> {
+    type Item = u64;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(prefix) = self.prefix.take() {
+            return Some(prefix);
+        }
+        if let Some((&first, rest)) = self.chunks.split_first() {
+            self.chunks = rest;
+            return Some(first);
+        }
+        self.suffix.take()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+
+    #[inline]
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut acc = init;
+        if let Some(prefix) = self.prefix.take() {
+            acc = f(acc, prefix);
+        }
+        for &chunk in self.chunks {
+            acc = f(acc, chunk);
+        }
+        self.chunks = &[];
+        if let Some(suffix) = self.suffix.take() {
+            acc = f(acc, suffix);
+        }
+        acc
+    }
+}
+
+impl<'a> UnalignedBitChunkIterator<'a> {
+    /// Returns a zipped iterator over two [`UnalignedBitChunkIterator`]
+    #[inline]
+    pub fn zip(self, other: UnalignedBitChunkIterator<'a>) -> UnalignedBitChunkZipIterator<'a> {
+        UnalignedBitChunkZipIterator {
+            left: self,
+            right: other,
+        }
+    }
+}
+
+impl ExactSizeIterator for UnalignedBitChunkIterator<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.prefix.is_some() as usize + self.chunks.len() + self.suffix.is_some() as usize
+    }
+}
+
+impl std::iter::FusedIterator for UnalignedBitChunkIterator<'_> {}
+
+impl<'a> DoubleEndedIterator for UnalignedBitChunkIterator<'a> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if let Some(suffix) = self.suffix.take() {
+            return Some(suffix);
+        }
+        if let Some((&last, rest)) = self.chunks.split_last() {
+            self.chunks = rest;
+            return Some(last);
+        }
+        self.prefix.take()
+    }
+}
+
+/// An iterator over zipped [`UnalignedBitChunk`]
+#[derive(Debug)]
+pub struct UnalignedBitChunkZipIterator<'a> {
+    left: UnalignedBitChunkIterator<'a>,
+    right: UnalignedBitChunkIterator<'a>,
+}
+
+impl<'a> Iterator for UnalignedBitChunkZipIterator<'a> {
+    type Item = (u64, u64);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        Some((self.left.next()?, self.right.next()?))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.left.size_hint()
+    }
+
+    #[inline]
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut acc = init;
+
+        // 1. Consume elements until both are at the 'chunks' stage or one is exhausted.
+        while self.left.prefix.is_some() || self.right.prefix.is_some() {
+            if let (Some(l), Some(r)) = (self.left.next(), self.right.next()) {
+                acc = f(acc, (l, r));
+            } else {
+                return acc;
+            }
+        }
+
+        // 2. Now both prefix are None. Zip the chunks.
+        let chunk_count = self.left.chunks.len().min(self.right.chunks.len());
+        if chunk_count > 0 {
+            let (l_chunks, l_rest) = self.left.chunks.split_at(chunk_count);
+            let (r_chunks, r_rest) = self.right.chunks.split_at(chunk_count);
+
+            for (&l, &r) in l_chunks.iter().zip(r_chunks.iter()) {
+                acc = f(acc, (l, r));
+            }
+
+            self.left.chunks = l_rest;
+            self.right.chunks = r_rest;
+        }
+
+        // 3. Consume remaining (suffix)
+        while let (Some(l), Some(r)) = (self.left.next(), self.right.next()) {
+            acc = f(acc, (l, r));
+        }
+        acc
+    }
+
+    #[inline]
+    fn for_each<F>(self, mut f: F)
+    where
+        F: FnMut(Self::Item),
+    {
+        self.fold((), |_, item| f(item));
+    }
+}
+
+impl ExactSizeIterator for UnalignedBitChunkZipIterator<'_> {}
+
+impl std::iter::FusedIterator for UnalignedBitChunkZipIterator<'_> {}
+
+impl DoubleEndedIterator for UnalignedBitChunkZipIterator<'_> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        Some((self.left.next_back()?, self.right.next_back()?))
+    }
 }
 
 #[inline]
@@ -249,6 +408,17 @@ pub struct BitChunkIterator<'a> {
     bit_offset: usize,
     chunk_len: usize,
     index: usize,
+}
+
+impl<'a> BitChunkIterator<'a> {
+    /// Returns a zipped iterator over two [`BitChunkIterator`]
+    #[inline]
+    pub fn zip(self, other: BitChunkIterator<'a>) -> BitChunksZipIterator<'a> {
+        BitChunksZipIterator {
+            left: self,
+            right: other,
+        }
+    }
 }
 
 impl<'a> BitChunks<'a> {
@@ -327,9 +497,196 @@ impl<'a> BitChunks<'a> {
     /// Returns an iterator over chunks of 64 bits, with the remaining bits zero padded to 64-bits
     #[inline]
     pub fn iter_padded(&self) -> impl Iterator<Item = u64> + 'a {
-        self.iter().chain(std::iter::once(self.remainder_bits()))
+        let remainder = (self.remainder_len > 0).then(|| self.remainder_bits());
+        self.iter().chain(remainder)
+    }
+
+    /// Returns a zipped iterator over two [`BitChunks`] with the remaining bits zero padded to 64-bits
+    ///
+    /// # Panics
+    ///
+    /// Panics if the chunk lengths are not equal
+    #[inline]
+    pub fn zip_padded(&self, other: &BitChunks<'a>) -> impl Iterator<Item = (u64, u64)> + 'a {
+        assert_eq!(self.remainder_len, other.remainder_len);
+        let remainder =
+            (self.remainder_len > 0).then(|| (self.remainder_bits(), other.remainder_bits()));
+        self.zip(other).chain(remainder)
+    }
+    /// Returns a zipped iterator over two [`BitChunks`]
+    #[inline]
+    pub fn zip(&self, other: &BitChunks<'a>) -> BitChunksZipIterator<'a> {
+        assert_eq!(self.chunk_len, other.chunk_len);
+        BitChunksZipIterator {
+            left: self.iter(),
+            right: other.iter(),
+        }
     }
 }
+
+/// An iterator over zipped chunks of 64 bits
+#[derive(Debug)]
+pub struct BitChunksZipIterator<'a> {
+    left: BitChunkIterator<'a>,
+    right: BitChunkIterator<'a>,
+}
+
+impl Iterator for BitChunksZipIterator<'_> {
+    type Item = (u64, u64);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        Some((self.left.next()?, self.right.next()?))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.left.size_hint()
+    }
+
+    #[inline]
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut acc = init;
+        let chunk_len = self.left.chunk_len;
+        let index = self.left.index;
+        if index >= chunk_len {
+            return acc;
+        }
+
+        let left_data = self.left.buffer.as_ptr() as *const u64;
+        let right_data = self.right.buffer.as_ptr() as *const u64;
+
+        let l_off = self.left.bit_offset;
+        let r_off = self.right.bit_offset;
+
+        match (l_off, r_off) {
+            (0, 0) => {
+                for i in index..chunk_len {
+                    unsafe {
+                        let l = std::ptr::read_unaligned(left_data.add(i)).to_le();
+                        let r = std::ptr::read_unaligned(right_data.add(i)).to_le();
+                        acc = f(acc, (l, r));
+                    }
+                }
+            }
+            (0, r_off) => {
+                let r_shift_high = 64 - r_off;
+                if self.right.buffer.len() >= (chunk_len + 1) * 8 {
+                    let mut r_curr =
+                        unsafe { std::ptr::read_unaligned(right_data.add(index)).to_le() };
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l = std::ptr::read_unaligned(left_data.add(i)).to_le();
+                            let r_next = std::ptr::read_unaligned(right_data.add(i + 1)).to_le();
+                            let r = (r_curr >> r_off) | (r_next << r_shift_high);
+                            acc = f(acc, (l, r));
+                            r_curr = r_next;
+                        }
+                    }
+                } else {
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l = std::ptr::read_unaligned(left_data.add(i)).to_le();
+                            let r_low = std::ptr::read_unaligned(right_data.add(i)).to_le();
+                            let r_high =
+                                std::ptr::read_unaligned(right_data.add(i + 1) as *const u8) as u64;
+                            let r = (r_low >> r_off) | (r_high << r_shift_high);
+                            acc = f(acc, (l, r));
+                        }
+                    }
+                }
+            }
+            (l_off, 0) => {
+                let l_shift_high = 64 - l_off;
+                if self.left.buffer.len() >= (chunk_len + 1) * 8 {
+                    let mut l_curr =
+                        unsafe { std::ptr::read_unaligned(left_data.add(index)).to_le() };
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l_next = std::ptr::read_unaligned(left_data.add(i + 1)).to_le();
+                            let l = (l_curr >> l_off) | (l_next << l_shift_high);
+                            let r = std::ptr::read_unaligned(right_data.add(i)).to_le();
+                            acc = f(acc, (l, r));
+                            l_curr = l_next;
+                        }
+                    }
+                } else {
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l_low = std::ptr::read_unaligned(left_data.add(i)).to_le();
+                            let l_high =
+                                std::ptr::read_unaligned(left_data.add(i + 1) as *const u8) as u64;
+                            let l = (l_low >> l_off) | (l_high << l_shift_high);
+                            let r = std::ptr::read_unaligned(right_data.add(i)).to_le();
+                            acc = f(acc, (l, r));
+                        }
+                    }
+                }
+            }
+            (l_off, r_off) => {
+                let l_shift_high = 64 - l_off;
+                let r_shift_high = 64 - r_off;
+
+                // We can use a faster sliding window if we have padding
+                // Arrow buffers usually have 64-byte padding
+                let l_padded = self.left.buffer.len() >= (chunk_len + 1) * 8;
+                let r_padded = self.right.buffer.len() >= (chunk_len + 1) * 8;
+
+                if l_padded && r_padded {
+                    let mut l_curr =
+                        unsafe { std::ptr::read_unaligned(left_data.add(index)).to_le() };
+                    let mut r_curr =
+                        unsafe { std::ptr::read_unaligned(right_data.add(index)).to_le() };
+
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l_next = std::ptr::read_unaligned(left_data.add(i + 1)).to_le();
+                            let r_next = std::ptr::read_unaligned(right_data.add(i + 1)).to_le();
+
+                            let l = (l_curr >> l_off) | (l_next << l_shift_high);
+                            let r = (r_curr >> r_off) | (r_next << r_shift_high);
+
+                            acc = f(acc, (l, r));
+                            l_curr = l_next;
+                            r_curr = r_next;
+                        }
+                    }
+                } else {
+                    // Fallback to safe but slower byte reads for high bits
+                    for i in index..chunk_len {
+                        unsafe {
+                            let l_low = std::ptr::read_unaligned(left_data.add(i)).to_le();
+                            let l_high =
+                                std::ptr::read_unaligned(left_data.add(i + 1) as *const u8) as u64;
+                            let l = (l_low >> l_off) | (l_high << l_shift_high);
+
+                            let r_low = std::ptr::read_unaligned(right_data.add(i)).to_le();
+                            let r_high =
+                                std::ptr::read_unaligned(right_data.add(i + 1) as *const u8) as u64;
+                            let r = (r_low >> r_off) | (r_high << r_shift_high);
+
+                            acc = f(acc, (l, r));
+                        }
+                    }
+                }
+            }
+        }
+        acc
+    }
+
+    #[inline]
+    fn for_each<F>(self, mut f: F)
+    where
+        F: FnMut(Self::Item),
+    {
+        self.fold((), |_, item| f(item));
+    }
+}
+
+impl ExactSizeIterator for BitChunksZipIterator<'_> {}
 
 impl<'a> IntoIterator for BitChunks<'a> {
     type Item = u64;
@@ -378,10 +735,63 @@ impl Iterator for BitChunkIterator<'_> {
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (
-            self.chunk_len - self.index,
-            Some(self.chunk_len - self.index),
-        )
+        let len = self.chunk_len - self.index;
+        (len, Some(len))
+    }
+
+    #[inline]
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut acc = init;
+        let chunk_len = self.chunk_len;
+        let index = self.index;
+        if index >= chunk_len {
+            return acc;
+        }
+
+        let data = self.buffer.as_ptr() as *const u64;
+        let bit_offset = self.bit_offset;
+
+        if bit_offset == 0 {
+            for i in index..chunk_len {
+                let v = unsafe { std::ptr::read_unaligned(data.add(i)).to_le() };
+                acc = f(acc, v);
+            }
+        } else {
+            let shift_high = 64 - bit_offset;
+            // Use sliding window if padded
+            if self.buffer.len() >= (chunk_len + 1) * 8 {
+                let mut curr = unsafe { std::ptr::read_unaligned(data.add(index)).to_le() };
+                for i in index..chunk_len {
+                    unsafe {
+                        let next = std::ptr::read_unaligned(data.add(i + 1)).to_le();
+                        let v = (curr >> bit_offset) | (next << shift_high);
+                        acc = f(acc, v);
+                        curr = next;
+                    }
+                }
+            } else {
+                for i in index..chunk_len {
+                    unsafe {
+                        let low = std::ptr::read_unaligned(data.add(i)).to_le();
+                        let high = std::ptr::read_unaligned(data.add(i + 1) as *const u8) as u64;
+                        let v = (low >> bit_offset) | (high << shift_high);
+                        acc = f(acc, v);
+                    }
+                }
+            }
+        }
+        acc
+    }
+
+    #[inline]
+    fn for_each<F>(self, mut f: F)
+    where
+        F: FnMut(Self::Item),
+    {
+        self.fold((), |_, item| f(item));
     }
 }
 
@@ -400,7 +810,7 @@ mod tests {
     use rand::rng;
 
     use crate::buffer::Buffer;
-    use crate::util::bit_chunk_iterator::UnalignedBitChunk;
+    use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 
     #[test]
     fn test_iter_aligned() {
@@ -696,6 +1106,129 @@ mod tests {
         assert!(unaligned.chunks().is_empty());
         assert_eq!(unaligned.lead_padding(), 1);
         assert_eq!(unaligned.trailing_padding(), 62);
+    }
+
+    #[test]
+    fn test_fold() {
+        let input: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        let bitchunks = BitChunks::new(input, 0, 128);
+        let result = bitchunks.iter().fold(Vec::new(), |mut acc, x| {
+            acc.push(x);
+            acc
+        });
+        assert_eq!(vec![0x0706050403020100, 0x0f0e0d0c0b0a0908], result);
+
+        let bitchunks = BitChunks::new(input, 4, 64);
+        let result = bitchunks.iter().fold(Vec::new(), |mut acc, x| {
+            acc.push(x);
+            acc
+        });
+        // 0x080706050403020100
+        // offset 4 bits
+        let expected = (0x080706050403020100_u128 >> 4) as u64;
+        assert_eq!(vec![expected], result);
+    }
+
+    #[test]
+    fn test_fold_zip() {
+        let left: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7];
+        let right: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8];
+        let left_chunks = BitChunks::new(left, 0, 64);
+        let right_chunks = BitChunks::new(right, 0, 64);
+
+        let result =
+            left_chunks
+                .iter()
+                .zip(right_chunks.iter())
+                .fold(Vec::new(), |mut acc, (l, r)| {
+                    acc.push(l ^ r);
+                    acc
+                });
+        assert_eq!(vec![0x0706050403020100 ^ 0x0807060504030201], result);
+
+        let _left_chunks = BitChunks::new(left, 4, 32);
+        let _right_chunks = BitChunks::new(right, 8, 32);
+        // chunk_len is 0 for 32 bits.
+        // let's try 64 bits with offset
+        let left: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let right: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let left_chunks = BitChunks::new(left, 4, 64);
+        let right_chunks = BitChunks::new(right, 8, 64);
+
+        let result =
+            left_chunks
+                .iter()
+                .zip(right_chunks.iter())
+                .fold(Vec::new(), |mut acc, (l, r)| {
+                    acc.push(l & r);
+                    acc
+                });
+
+        let l_expected = {
+            let mut b = [0u8; 16];
+            b[0..9].copy_from_slice(&left[0..9]);
+            u128::from_le_bytes(b) >> 4
+        } as u64;
+        let r_expected = {
+            let mut b = [0u8; 16];
+            b[0..9].copy_from_slice(&right[0..9]);
+            u128::from_le_bytes(b) >> 8
+        } as u64;
+        assert_eq!(vec![l_expected & r_expected], result);
+    }
+
+    #[test]
+    fn test_unaligned_fold_zip() {
+        let left: &[u8] = &[
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ];
+        let right: &[u8] = &[
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+        ];
+
+        let cases = [
+            (0, 0, 128),
+            (4, 4, 64),
+            (4, 8, 64),
+            (0, 8, 128),
+            (1, 2, 128),
+            (7, 0, 128),
+        ];
+
+        for (l_off, r_off, len) in cases {
+            let left_bc = UnalignedBitChunk::new(left, l_off, len);
+            let right_bc = UnalignedBitChunk::new(right, r_off, len);
+
+            let expected: Vec<_> = left_bc.iter().zip(right_bc.iter()).collect();
+
+            // Test fold
+            let actual: Vec<_> = left_bc.zip(&right_bc).fold(Vec::new(), |mut acc, x| {
+                acc.push(x);
+                acc
+            });
+            assert_eq!(
+                expected, actual,
+                "Fold failed for l_off={}, r_off={}, len={}",
+                l_off, r_off, len
+            );
+
+            // Test for_each
+            let mut actual_for_each = Vec::new();
+            left_bc.zip(&right_bc).for_each(|x| actual_for_each.push(x));
+            assert_eq!(
+                expected, actual_for_each,
+                "ForEach failed for l_off={}, r_off={}, len={}",
+                l_off, r_off, len
+            );
+
+            // Test next()
+            let actual_next: Vec<_> = left_bc.zip(&right_bc).collect();
+            assert_eq!(
+                expected, actual_next,
+                "Next failed for l_off={}, r_off={}, len={}",
+                l_off, r_off, len
+            );
+        }
     }
 
     #[test]
