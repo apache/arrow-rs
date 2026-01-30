@@ -793,85 +793,20 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// key("bar\0") = 0x0000000000000000000062617200000004
     /// ⇒ key("bar") < key("bar\0")
     /// ```
+    /// - `raw` is treated as a 128-bit integer with its bits laid out as follows:
+    ///   - bits 0–31: length (little-endian)
+    ///   - bits 32–127: data (little-endian)
+    ///
     /// # Inlining and Endianness
     ///
-    /// - We start by calling `.to_le_bytes()` on the `raw` `u128`, because Rust’s native in‑memory
-    ///   representation is little‑endian on x86/ARM.
-    /// - We extract the low 32 bits numerically (`raw as u32`)—this step is endianness‑free.
-    /// - We copy the 12 bytes of inline data (original order) into `buf[0..12]`.
-    /// - We serialize `length` as big‑endian into `buf[12..16]`.
-    /// - Finally, `u128::from_be_bytes(buf)` treats `buf[0]` as the most significant byte
-    ///   and `buf[15]` as the least significant, producing a `u128` whose integer value
-    ///   directly encodes “inline data then length” in big‑endian form.
-    ///
-    /// This ensures that a simple `u128` comparison is equivalent to the desired
-    /// lexicographical comparison of the inline bytes followed by length.
+    /// This function uses platform-independent bitwise operations to construct a 128-bit key:
+    /// - `raw.swap_bytes() << 32` effectively clears the length bits and shifts the 12-byte inline data
+    ///   into the high 96 bits in Big-Endian order. This ensures the first byte of the string
+    ///   is the most significant byte of the resulting `u128`.
+    /// - `raw as u32` extracts the length as a numeric integer, which is then placed in the low 32 bits.
     #[inline(always)]
     pub fn inline_key_fast(raw: u128) -> u128 {
-        // 1. Decompose `raw` into little‑endian bytes:
-        //    - raw_bytes[0..4]  = length in LE
-        //    - raw_bytes[4..16] = inline string data
-        let raw_bytes = raw.to_le_bytes();
-
-        // 2. Numerically truncate to get the low 32‑bit length (endianness‑free).
-        let length = raw as u32;
-
-        // 3. Build a 16‑byte buffer in big‑endian order:
-        //    - buf[0..12]  = inline string bytes (in original order)
-        //    - buf[12..16] = length.to_be_bytes() (BE)
-        let mut buf = [0u8; 16];
-        buf[0..12].copy_from_slice(&raw_bytes[4..16]); // inline data
-
-        // Why convert length to big-endian for comparison?
-        //
-        // Rust (on most platforms) stores integers in little-endian format,
-        // meaning the least significant byte is at the lowest memory address.
-        // For example, an u32 value like 0x22345677 is stored in memory as:
-        //
-        //   [0x77, 0x56, 0x34, 0x22]  // little-endian layout
-        //    ^     ^     ^     ^
-        //  LSB   ↑↑↑           MSB
-        //
-        // This layout is efficient for arithmetic but *not* suitable for
-        // lexicographic (dictionary-style) comparison of byte arrays.
-        //
-        // To compare values by byte order—e.g., for sorted keys or binary trees—
-        // we must convert them to **big-endian**, where:
-        //
-        //   - The most significant byte (MSB) comes first (index 0)
-        //   - The least significant byte (LSB) comes last (index N-1)
-        //
-        // In big-endian, the same u32 = 0x22345677 would be represented as:
-        //
-        //   [0x22, 0x34, 0x56, 0x77]
-        //
-        // This ordering aligns with natural string/byte sorting, so calling
-        // `.to_be_bytes()` allows us to construct
-        // keys where standard numeric comparison (e.g., `<`, `>`) behaves
-        // like lexicographic byte comparison.
-        buf[12..16].copy_from_slice(&length.to_be_bytes()); // length in BE
-
-        // 4. Deserialize the buffer as a big‑endian u128:
-        //    buf[0] is MSB, buf[15] is LSB.
-        // Details:
-        // Note on endianness and layout:
-        //
-        // Although `buf[0]` is stored at the lowest memory address,
-        // calling `u128::from_be_bytes(buf)` interprets it as the **most significant byte (MSB)**,
-        // and `buf[15]` as the **least significant byte (LSB)**.
-        //
-        // This is the core principle of **big-endian decoding**:
-        //   - Byte at index 0 maps to bits 127..120 (highest)
-        //   - Byte at index 1 maps to bits 119..112
-        //   - ...
-        //   - Byte at index 15 maps to bits 7..0 (lowest)
-        //
-        // So even though memory layout goes from low to high (left to right),
-        // big-endian treats the **first byte** as highest in value.
-        //
-        // This guarantees that comparing two `u128` keys is equivalent to lexicographically
-        // comparing the original inline bytes, followed by length.
-        u128::from_be_bytes(buf)
+        (raw.swap_bytes() << 32) | (raw as u32 as u128)
     }
 }
 
@@ -885,9 +820,8 @@ impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
     }
 }
 
-impl<T: ByteViewType + ?Sized> super::private::Sealed for GenericByteViewArray<T> {}
-
-impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -988,14 +922,18 @@ impl<'a, T: ByteViewType + ?Sized> IntoIterator for &'a GenericByteViewArray<T> 
 
 impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
     fn from(data: ArrayData) -> Self {
-        let (_data_type, len, nulls, offset, buffers, _child_data) = data.into_parts();
-
+        let (data_type, len, nulls, offset, buffers, _child_data) = data.into_parts();
+        assert_eq!(
+            data_type,
+            T::DATA_TYPE,
+            "Mismatched data type, expected {}, got {data_type}",
+            T::DATA_TYPE
+        );
         let mut buffers = buffers.into_iter();
         // first buffer is views, remaining are data buffers
         let views = ScalarBuffer::new(buffers.next().unwrap(), offset, len);
-
         Self {
-            data_type: T::DATA_TYPE,
+            data_type,
             views,
             buffers: Arc::from_iter(buffers),
             nulls,
@@ -1207,9 +1145,11 @@ mod tests {
         Array, BinaryViewArray, GenericBinaryArray, GenericByteViewArray, StringViewArray,
     };
     use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
-    use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
+    use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
+    use arrow_schema::DataType;
     use rand::prelude::StdRng;
     use rand::{Rng, SeedableRng};
+    use std::str::from_utf8;
 
     const BLOCK_SIZE: u32 = 8;
 
@@ -1815,5 +1755,47 @@ mod tests {
         }
 
         assert_eq!(lengths_iter.next(), None, "Should not have more lengths");
+    }
+
+    #[should_panic(expected = "Mismatched data type, expected Utf8View, got BinaryView")]
+    #[test]
+    fn invalid_casting_from_array_data() {
+        // Should not be able to cast to StringViewArray due to invalid UTF-8
+        let array_data = binary_view_array_with_invalid_utf8_data().into_data();
+        let _ = StringViewArray::from(array_data);
+    }
+
+    #[should_panic(expected = "invalid utf-8 sequence")]
+    #[test]
+    fn invalid_array_data() {
+        let (views, buffers, nulls) = binary_view_array_with_invalid_utf8_data().into_parts();
+
+        // manually try and add invalid array data with Utf8View data type
+        let mut builder = ArrayDataBuilder::new(DataType::Utf8View)
+            .add_buffer(views.into_inner())
+            .len(3);
+        for buffer in buffers.iter() {
+            builder = builder.add_buffer(buffer.clone())
+        }
+        builder = builder.nulls(nulls);
+
+        let data = builder.build().unwrap(); // should fail validation
+        let _arr = StringViewArray::from(data);
+    }
+
+    /// Returns a BinaryViewArray with one invalid UTF-8 value
+    fn binary_view_array_with_invalid_utf8_data() -> BinaryViewArray {
+        let array = GenericByteViewArray::<BinaryViewType>::from(vec![
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaa" as &[u8],
+            &[
+                0xf0, 0x80, 0x80, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00,
+            ],
+            b"good",
+        ]);
+        assert!(from_utf8(array.value(0)).is_ok());
+        assert!(from_utf8(array.value(1)).is_err()); // value 1 is invalid utf8
+        assert!(from_utf8(array.value(2)).is_ok());
+        array
     }
 }

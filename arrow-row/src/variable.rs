@@ -45,12 +45,6 @@ pub const EMPTY_SENTINEL: u8 = 1;
 /// Indicates a non-empty string
 pub const NON_EMPTY_SENTINEL: u8 = 2;
 
-/// Returns the length of the encoded representation of a byte array, including the null byte
-#[inline]
-pub fn encoded_len(a: Option<&[u8]>) -> usize {
-    padded_length(a.map(|x| x.len()))
-}
-
 /// Returns the padded length of the encoded length of the given length
 #[inline]
 pub fn padded_length(a: Option<usize>) -> usize {

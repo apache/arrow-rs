@@ -308,9 +308,8 @@ impl BooleanArray {
     }
 }
 
-impl super::private::Sealed for BooleanArray {}
-
-impl Array for BooleanArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for BooleanArray {
     fn as_any(&self) -> &dyn Any {
         self
     }

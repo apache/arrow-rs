@@ -199,9 +199,16 @@ where
     pub fn sliced_values(&self) -> impl Iterator<Item = E> + '_ {
         let offset = self.logical_offset;
         let len = self.logical_length;
-        let start = self.get_start_physical_index();
-        let end = self.get_end_physical_index();
-        self.run_ends[start..=end].iter().map(move |&val| {
+        // Doing this roundabout way since the iterator type we return must be
+        // the same (i.e. cannot use std::iter::empty())
+        let physical_slice = if self.is_empty() {
+            &self.run_ends[0..0]
+        } else {
+            let start = self.get_start_physical_index();
+            let end = self.get_end_physical_index();
+            &self.run_ends[start..=end]
+        };
+        physical_slice.iter().map(move |&val| {
             let val = val.as_usize().saturating_sub(offset).min(len);
             E::from_usize(val).unwrap()
         })
