@@ -30,6 +30,9 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
     let offsets = array.value_offsets().windows(2);
     let mut rows_length_iter = rows.lengths();
 
+    // Check if child is Null type - if so, we need special handling
+    let is_null_child = array.values().data_type() == &DataType::Null;
+
     lengths
         .iter_mut()
         .zip(offsets)
@@ -37,12 +40,20 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
         .for_each(|(idx, (length, offsets))| {
             let len = offsets[1].as_usize() - offsets[0].as_usize();
             if array.is_valid(idx) {
-                *length += 1 + rows_length_iter
-                    .by_ref()
-                    .take(len)
-                    .map(Some)
-                    .map(super::variable::padded_length)
-                    .sum::<usize>()
+                if is_null_child {
+                    // For Null child elements, each element is encoded with
+                    // NON_EMPTY_SENTINEL (1 byte) + mini-block (8 bytes padding + 1 byte length)
+                    // = 10 bytes total per element
+                    const NULL_ELEMENT_ENCODED_LEN: usize = 10;
+                    *length += 1 + len * NULL_ELEMENT_ENCODED_LEN;
+                } else {
+                    *length += 1 + rows_length_iter
+                        .by_ref()
+                        .take(len)
+                        .map(Some)
+                        .map(super::variable::padded_length)
+                        .sum::<usize>()
+                }
             } else {
                 // Advance rows iterator by len
                 if len > 0 {
@@ -65,6 +76,11 @@ pub fn encode<O: OffsetSizeTrait>(
 ) {
     let shift = array.value_offsets()[0].as_usize();
 
+    // Check if child is Null type - if so, we need special handling
+    // because Null elements encode to 0 bytes, causing ambiguity
+    // between list elements and the list end marker.
+    let is_null_child = array.values().data_type() == &DataType::Null;
+
     offsets
         .iter_mut()
         .skip(1)
@@ -75,7 +91,7 @@ pub fn encode<O: OffsetSizeTrait>(
             let end = offsets[1].as_usize() - shift;
             let range = array.is_valid(idx).then_some(start..end);
             let out = &mut data[*offset..];
-            *offset += encode_one(out, rows, range, opts)
+            *offset += encode_one(out, rows, range, opts, is_null_child)
         });
 }
 
@@ -85,6 +101,7 @@ fn encode_one(
     rows: &Rows,
     range: Option<Range<usize>>,
     opts: SortOptions,
+    is_null_child: bool,
 ) -> usize {
     match range {
         None => super::variable::encode_null(out, opts),
@@ -93,12 +110,43 @@ fn encode_one(
             let mut offset = 0;
             for i in range {
                 let row = rows.row(i);
-                offset += super::variable::encode_one(&mut out[offset..], Some(row.data), opts);
+                if is_null_child {
+                    // For Null child elements, we use NON_EMPTY_SENTINEL to indicate
+                    // a non-null element, followed by a zero-length block.
+                    // This allows the decoder to distinguish between list elements
+                    // and the list end marker.
+                    offset += encode_null_element(&mut out[offset..], opts);
+                } else {
+                    offset += super::variable::encode_one(&mut out[offset..], Some(row.data), opts);
+                }
             }
             offset += super::variable::encode_empty(&mut out[offset..], opts);
             offset
         }
     }
+}
+
+/// Encodes a Null element in a list.
+/// Uses NON_EMPTY_SENTINEL to indicate a non-null element with zero bytes of data.
+/// Format: [NON_EMPTY_SENTINEL, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+/// where the first byte is NON_EMPTY_SENTINEL (2), followed by a mini-block
+/// with 8 bytes of padding and a continuation byte of 0 (indicating 0 bytes of data).
+#[inline]
+fn encode_null_element(out: &mut [u8], opts: SortOptions) -> usize {
+    const MINI_BLOCK_SIZE: usize = 8;
+    // NON_EMPTY_SENTINEL
+    out[0] = match opts.descending {
+        true => !super::variable::NON_EMPTY_SENTINEL,
+        false => super::variable::NON_EMPTY_SENTINEL,
+    };
+    // Mini-block: 8 bytes of padding (already 0)
+    out[1..=MINI_BLOCK_SIZE].fill(0);
+    // Continuation byte indicating 0 bytes of data in this block
+    out[MINI_BLOCK_SIZE + 1] = match opts.descending {
+        true => !0,
+        false => 0,
+    };
+    1 + MINI_BLOCK_SIZE + 1
 }
 
 /// Decodes an array from `rows` with the provided `options`
