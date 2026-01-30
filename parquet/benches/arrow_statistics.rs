@@ -24,7 +24,10 @@ use arrow_schema::{
     Field, Schema,
 };
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use parquet::{arrow::arrow_reader::ArrowReaderOptions, file::properties::WriterProperties};
+use parquet::{
+    arrow::arrow_reader::ArrowReaderOptions,
+    file::{metadata::PageIndexPolicy, properties::WriterProperties},
+};
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ArrowReaderBuilder},
     file::properties::EnabledStatistics,
@@ -195,7 +198,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         for data_page_row_count_limit in &data_page_row_count_limits {
             let file = create_parquet_file(dtype.clone(), row_groups, data_page_row_count_limit);
             let file = file.reopen().unwrap();
-            let options = ArrowReaderOptions::new().with_page_index(true);
+            let options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
             let reader = ArrowReaderBuilder::try_new_with_options(file, options).unwrap();
             let metadata = reader.metadata();
             let row_groups = metadata.row_groups();

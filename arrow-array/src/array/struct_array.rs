@@ -402,9 +402,8 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
     }
 }
 
-impl super::private::Sealed for StructArray {}
-
-impl Array for StructArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for StructArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
