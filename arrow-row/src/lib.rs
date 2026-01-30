@@ -4388,7 +4388,7 @@ mod tests {
     }
 
     fn generate_column(rng: &mut (impl RngCore + Clone), len: usize) -> ArrayRef {
-        match rng.random_range(0..19) {
+        match rng.random_range(0..23) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(rng, len, 0.8)),
