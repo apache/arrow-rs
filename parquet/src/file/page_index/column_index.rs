@@ -392,11 +392,7 @@ impl ByteArrayColumnIndex {
     /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
     pub fn min_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
         (0..self.num_pages() as usize).map(|i| {
-            if self.is_null_page(i) {
-                None
-            } else {
-                self.min_value(i)
-            }
+            self.min_value(i)
         })
     }
 
@@ -405,11 +401,7 @@ impl ByteArrayColumnIndex {
     /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
     pub fn max_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
         (0..self.num_pages() as usize).map(|i| {
-            if self.is_null_page(i) {
-                None
-            } else {
-                self.max_value(i)
-            }
+            self.max_value(i)
         })
     }
 }
