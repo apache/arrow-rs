@@ -1273,7 +1273,7 @@ where
     let chunks: Vec<_> = iterator.collect();
     let total_capacity: usize = chunks.iter().map(|(len, _)| *len).sum();
     let mut values = Vec::with_capacity(total_capacity);
-    let mut nulls = NullBufferBuilder::new_with_len(total_capacity);
+    let mut nulls = NullBufferBuilder::new(total_capacity);
     for (len, index) in chunks {
         match index.null_counts() {
             Some(counts) => {
@@ -1726,10 +1726,7 @@ impl<'a> StatisticsConverter<'a> {
     {
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = row_group_indices.into_iter().count();
-            return Ok(UInt64Array::from_iter(std::iter::repeat_n(
-                None,
-                num_row_groups,
-            )));
+            return Ok(UInt64Array::new_null(num_row_groups));
         };
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
@@ -1778,7 +1775,7 @@ impl<'a> StatisticsConverter<'a> {
         };
 
         let mut row_counts = Vec::new();
-        let mut nulls = NullBufferBuilder::new_with_len(0);
+        let mut nulls = NullBufferBuilder::new(0);
         for rg_idx in row_group_indices {
             let page_locations = &column_offset_index[*rg_idx][parquet_index].page_locations();
 
