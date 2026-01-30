@@ -973,7 +973,7 @@ fn build_decimal_array<T: DecimalType>(
     }
     Ok(Arc::new(
         decimal_builder
-            .build()
+            .finish()
             .with_precision_and_scale(precision, scale)?,
     ))
 }

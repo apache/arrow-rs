@@ -184,7 +184,7 @@ where
     /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
     /// ```
     pub fn try_new_from_builder<K2>(
-        source: GenericByteDictionaryBuilder<K2, T>,
+        mut source: GenericByteDictionaryBuilder<K2, T>,
     ) -> Result<Self, ArrowError>
     where
         K::Native: NumCast,
@@ -195,7 +195,7 @@ where
         let dedup = source.dedup;
         let values_builder = source.values_builder;
 
-        let source_keys = source.keys_builder.build();
+        let source_keys = source.keys_builder.finish();
         let new_keys: PrimitiveArray<K> = source_keys.try_unary(|value| {
             num_traits::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
                 ArrowError::CastError(format!(
@@ -741,7 +741,7 @@ mod tests {
         expected_keys_builder.append_null();
         expected_keys_builder
             .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(2u8));
-        let expected_keys = expected_keys_builder.build();
+        let expected_keys = expected_keys_builder.finish();
         assert_eq!(array.keys(), &expected_keys);
 
         let av = array.values();
@@ -975,7 +975,7 @@ mod tests {
             keys_builder.append_value(1);
 
             let values = values_builder.finish();
-            let keys = keys_builder.build();
+            let keys = keys_builder.finish();
 
             let data_type = DataType::Dictionary(
                 Box::new(Int32Type::DATA_TYPE),

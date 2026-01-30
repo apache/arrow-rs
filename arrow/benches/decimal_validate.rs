@@ -53,7 +53,7 @@ fn validate_decimal32_benchmark(c: &mut Criterion) {
         decimal_builder.append_value(rng.random_range::<i32, _>(0..99999999));
     }
     let decimal_array = decimal_builder
-        .build()
+        .finish()
         .with_precision_and_scale(9, 0)
         .unwrap();
     let data = decimal_array.into_data();
@@ -73,7 +73,7 @@ fn validate_decimal64_benchmark(c: &mut Criterion) {
         decimal_builder.append_value(rng.random_range::<i64, _>(0..999999999999));
     }
     let decimal_array = decimal_builder
-        .build()
+        .finish()
         .with_precision_and_scale(18, 0)
         .unwrap();
     let data = decimal_array.into_data();
@@ -93,7 +93,7 @@ fn validate_decimal128_benchmark(c: &mut Criterion) {
         decimal_builder.append_value(rng.random_range::<i128, _>(0..999999999999));
     }
     let decimal_array = decimal_builder
-        .build()
+        .finish()
         .with_precision_and_scale(38, 0)
         .unwrap();
     let data = decimal_array.into_data();
@@ -115,7 +115,7 @@ fn validate_decimal256_benchmark(c: &mut Criterion) {
         decimal_builder.append_value(decimal);
     }
     let decimal_array256_data = decimal_builder
-        .build()
+        .finish()
         .with_precision_and_scale(76, 0)
         .unwrap();
     let data = decimal_array256_data.into_data();

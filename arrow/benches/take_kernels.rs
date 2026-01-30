@@ -40,7 +40,7 @@ fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
             builder.append_value(value);
         }
     }
-    builder.build()
+    builder.finish()
 }
 
 fn bench_take(values: &dyn Array, indices: &UInt32Array) {

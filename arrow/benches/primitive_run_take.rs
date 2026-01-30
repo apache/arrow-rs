@@ -36,7 +36,7 @@ fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt
             builder.append_value(value);
         }
     }
-    builder.build()
+    builder.finish()
 }
 
 fn criterion_benchmark(c: &mut Criterion) {

@@ -92,7 +92,7 @@ fn build_decimal32_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     }
     Arc::new(
         builder
-            .build()
+            .finish()
             .with_precision_and_scale(precision, scale)
             .unwrap(),
     )
@@ -107,7 +107,7 @@ fn build_decimal64_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     }
     Arc::new(
         builder
-            .build()
+            .finish()
             .with_precision_and_scale(precision, scale)
             .unwrap(),
     )
@@ -122,7 +122,7 @@ fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     }
     Arc::new(
         builder
-            .build()
+            .finish()
             .with_precision_and_scale(precision, scale)
             .unwrap(),
     )
@@ -139,7 +139,7 @@ fn build_decimal256_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     }
     Arc::new(
         builder
-            .build()
+            .finish()
             .with_precision_and_scale(precision, scale)
             .unwrap(),
     )

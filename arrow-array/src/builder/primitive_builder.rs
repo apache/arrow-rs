@@ -436,7 +436,7 @@ mod tests {
         for i in 0..5 {
             builder.append_value(i);
         }
-        let arr = builder.build();
+        let arr = builder.finish();
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -451,7 +451,7 @@ mod tests {
     fn test_primitive_array_builder_i32_append_iter() {
         let mut builder = Int32Array::builder(5);
         unsafe { builder.append_trusted_len_iter(0..5) };
-        let arr = builder.build();
+        let arr = builder.finish();
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -466,7 +466,7 @@ mod tests {
     fn test_primitive_array_builder_i32_append_nulls() {
         let mut builder = Int32Array::builder(5);
         builder.append_nulls(5);
-        let arr = builder.build();
+        let arr = builder.finish();
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(5, arr.null_count());
@@ -482,7 +482,7 @@ mod tests {
         for i in 0..5 {
             builder.append_value(i);
         }
-        let arr = builder.build();
+        let arr = builder.finish();
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -499,7 +499,7 @@ mod tests {
         for i in 0..5 {
             builder.append_value(i);
         }
-        let arr = builder.build();
+        let arr = builder.finish();
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
@@ -545,7 +545,7 @@ mod tests {
         builder.append_option(Some(2));
         builder.append_option(None);
         builder.append_option(Some(4));
-        let arr2 = builder.build();
+        let arr2 = builder.finish();
 
         assert_eq!(arr1.len(), arr2.len());
         assert_eq!(arr1.offset(), arr2.offset());
@@ -569,7 +569,7 @@ mod tests {
         builder.append_null();
         builder.append_null();
         builder.append_value(4);
-        let arr2 = builder.build();
+        let arr2 = builder.finish();
 
         assert_eq!(arr1.len(), arr2.len());
         assert_eq!(arr1.offset(), arr2.offset());
@@ -592,7 +592,7 @@ mod tests {
         builder.append_null();
         builder.append_null();
         builder.append_value(4);
-        let arr2 = builder.build();
+        let arr2 = builder.finish();
 
         assert_eq!(arr1.len(), arr2.len());
         assert_eq!(arr1.offset(), arr2.offset());
@@ -646,14 +646,14 @@ mod tests {
     fn test_primitive_array_builder_with_data_type() {
         let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
         builder.append_value(1);
-        let array = builder.build();
+        let array = builder.finish();
         assert_eq!(array.precision(), 1);
         assert_eq!(array.scale(), 2);
 
         let data_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into()));
         let mut builder = TimestampNanosecondBuilder::new().with_data_type(data_type.clone());
         builder.append_value(1);
-        let array = builder.build();
+        let array = builder.finish();
         assert_eq!(array.data_type(), &data_type);
     }
 
@@ -682,7 +682,7 @@ mod tests {
         let mut builder = PrimitiveBuilder::<Int16Type>::new();
         builder.extend([1, 2, 3, 5, 2, 4, 4].into_iter().map(Some));
         builder.extend([2, 4, 6, 2].into_iter().map(Some));
-        let array = builder.build();
+        let array = builder.finish();
         assert_eq!(array.values(), &[1, 2, 3, 5, 2, 4, 4, 2, 4, 6, 2]);
     }
 
@@ -711,7 +711,7 @@ mod tests {
         builder.append_array(&arr1);
         builder.append_array(&arr2);
         builder.append_array(&arr3);
-        let actual = builder.build();
+        let actual = builder.finish();
         let expected = Int32Array::from(input);
 
         assert_eq!(actual, expected);
@@ -726,7 +726,7 @@ mod tests {
 
         let mut builder = Int32Array::builder(5);
         builder.append_array(&array);
-        let actual = builder.build();
+        let actual = builder.finish();
 
         assert_eq!(actual, array);
         assert_eq!(actual.values(), array.values())
@@ -738,7 +738,7 @@ mod tests {
         let array = {
             let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
             builder.append_value(1);
-            builder.build()
+            builder.finish()
         };
 
         let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(2, 3));

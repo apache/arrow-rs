@@ -33,8 +33,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             builder_256.append_value(i256::from_i128(i as i128));
         }
     }
-    let array_128 = builder_128.build();
-    let array_256 = builder_256.build();
+    let array_128 = builder_128.finish();
+    let array_256 = builder_256.finish();
 
     c.bench_function("validate_decimal_precision_128", |b| {
         b.iter(|| hint::black_box(array_128.validate_decimal_precision(8)));

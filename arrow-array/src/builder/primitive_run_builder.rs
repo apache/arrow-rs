@@ -204,8 +204,8 @@ where
             let mut run_end_builder = run_ends_array.into_builder().unwrap();
             let mut values_builder = values_array.into_builder().unwrap();
             self.append_run_end_with_builders(&mut run_end_builder, &mut values_builder);
-            run_ends_array = run_end_builder.build();
-            values_array = values_builder.build();
+            run_ends_array = run_end_builder.finish();
+            values_array = values_builder.finish();
         }
 
         RunArray::try_new(&run_ends_array, &values_array).unwrap()

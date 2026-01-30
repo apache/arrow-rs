@@ -273,7 +273,7 @@ fn concat_primitives<T: ArrowPrimitiveType>(arrays: &[&dyn Array]) -> Result<Arr
         builder.append_array(array.as_primitive());
     }
 
-    Ok(Arc::new(builder.build()))
+    Ok(Arc::new(builder.finish()))
 }
 
 fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {

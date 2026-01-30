@@ -375,7 +375,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::Int16 => {
             let mut b = Int16Builder::with_capacity(json_col.count);
@@ -391,7 +391,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::Int32 | DataType::Date32 | DataType::Time32(_) => {
             let mut b = Int32Builder::with_capacity(json_col.count);
@@ -407,7 +407,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            let array = Arc::new(b.build()) as ArrayRef;
+            let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
         }
         DataType::Interval(IntervalUnit::YearMonth) => {
@@ -424,7 +424,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::Int64
         | DataType::Date64
@@ -448,7 +448,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            let array = Arc::new(b.build()) as ArrayRef;
+            let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
         }
         DataType::Interval(IntervalUnit::DayTime) => {
@@ -489,7 +489,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::UInt8 => {
             let mut b = UInt8Builder::with_capacity(json_col.count);
@@ -505,7 +505,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::UInt16 => {
             let mut b = UInt16Builder::with_capacity(json_col.count);
@@ -521,7 +521,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::UInt32 => {
             let mut b = UInt32Builder::with_capacity(json_col.count);
@@ -537,7 +537,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::UInt64 => {
             let mut b = UInt64Builder::with_capacity(json_col.count);
@@ -567,7 +567,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::Interval(IntervalUnit::MonthDayNano) => {
             let mut b = IntervalMonthDayNanoBuilder::with_capacity(json_col.count);
@@ -605,7 +605,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::Float32 => {
             let mut b = Float32Builder::with_capacity(json_col.count);
@@ -621,7 +621,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::Float64 => {
             let mut b = Float64Builder::with_capacity(json_col.count);
@@ -637,7 +637,7 @@ pub fn array_from_json(
                     _ => b.append_null(),
                 };
             }
-            Ok(Arc::new(b.build()))
+            Ok(Arc::new(b.finish()))
         }
         DataType::Binary => {
             let mut b = BinaryBuilder::with_capacity(json_col.count, 1024);
@@ -841,7 +841,7 @@ pub fn array_from_json(
                 };
             }
             Ok(Arc::new(
-                b.build().with_precision_and_scale(*precision, *scale)?,
+                b.finish().with_precision_and_scale(*precision, *scale)?,
             ))
         }
         DataType::Decimal64(precision, scale) => {
@@ -859,7 +859,7 @@ pub fn array_from_json(
                 };
             }
             Ok(Arc::new(
-                b.build().with_precision_and_scale(*precision, *scale)?,
+                b.finish().with_precision_and_scale(*precision, *scale)?,
             ))
         }
         DataType::Decimal128(precision, scale) => {
@@ -877,7 +877,7 @@ pub fn array_from_json(
                 };
             }
             Ok(Arc::new(
-                b.build().with_precision_and_scale(*precision, *scale)?,
+                b.finish().with_precision_and_scale(*precision, *scale)?,
             ))
         }
         DataType::Decimal256(precision, scale) => {
@@ -906,7 +906,7 @@ pub fn array_from_json(
                 }
             }
             Ok(Arc::new(
-                b.build().with_precision_and_scale(*precision, *scale)?,
+                b.finish().with_precision_and_scale(*precision, *scale)?,
             ))
         }
         DataType::Map(child_field, _) => {

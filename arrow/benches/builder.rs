@@ -47,7 +47,7 @@ fn bench_primitive(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES {
                 builder.append_slice(&data[..]);
             }
-            hint::black_box(builder.build());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
@@ -61,7 +61,7 @@ fn bench_primitive_nulls(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES * BATCH_SIZE {
                 builder.append_null();
             }
-            hint::black_box(builder.build());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
@@ -118,7 +118,7 @@ fn bench_decimal32(c: &mut Criterion) {
             }
             hint::black_box(
                 decimal_builder
-                    .build()
+                    .finish()
                     .with_precision_and_scale(9, 0)
                     .unwrap(),
             );
@@ -136,7 +136,7 @@ fn bench_decimal64(c: &mut Criterion) {
             }
             hint::black_box(
                 decimal_builder
-                    .build()
+                    .finish()
                     .with_precision_and_scale(18, 0)
                     .unwrap(),
             );
@@ -154,7 +154,7 @@ fn bench_decimal128(c: &mut Criterion) {
             }
             hint::black_box(
                 decimal_builder
-                    .build()
+                    .finish()
                     .with_precision_and_scale(38, 0)
                     .unwrap(),
             );
@@ -173,7 +173,7 @@ fn bench_decimal256(c: &mut Criterion) {
             }
             hint::black_box(
                 decimal_builder
-                    .build()
+                    .finish()
                     .with_precision_and_scale(76, 10)
                     .unwrap(),
             );

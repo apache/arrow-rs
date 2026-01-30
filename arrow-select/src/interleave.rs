@@ -238,7 +238,7 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
             false => keys.append_null(),
         }
     }
-    let array = unsafe { DictionaryArray::new_unchecked(keys.build(), merged.values) };
+    let array = unsafe { DictionaryArray::new_unchecked(keys.finish(), merged.values) };
     Ok(Arc::new(array))
 }
 

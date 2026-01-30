@@ -228,7 +228,7 @@ where
         .zip(b.values())
         .for_each(|(l, r)| *l = op(*l, *r));
 
-    let array = builder.build();
+    let array = builder.finish();
 
     // The builder has the null buffer from `a`, it is not changed.
     let nulls = NullBuffer::union(array.logical_nulls().as_ref(), b.logical_nulls().as_ref());
@@ -345,7 +345,7 @@ where
         if let Err(err) = r {
             return Ok(Err(err));
         }
-        let array_builder = builder.build().into_data().into_builder();
+        let array_builder = builder.finish().into_data().into_builder();
         let array_data = unsafe { array_builder.nulls(Some(nulls)).build_unchecked() };
         Ok(Ok(PrimitiveArray::<T>::from(array_data)))
     }
@@ -411,7 +411,7 @@ where
             };
         };
     }
-    Ok(Ok(builder.build()))
+    Ok(Ok(builder.finish()))
 }
 
 #[cfg(test)]

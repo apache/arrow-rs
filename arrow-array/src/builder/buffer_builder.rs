@@ -219,7 +219,7 @@ mod tests {
         a.append_values(values, is_valid);
 
         assert_eq!(a.len(), 7);
-        let array = a.build();
+        let array = a.finish();
         assert_eq!(array.value(0), 1);
         assert!(array.is_null(1));
         assert_eq!(array.value(2), -2);

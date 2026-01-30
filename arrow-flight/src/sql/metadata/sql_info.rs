@@ -277,15 +277,15 @@ impl SqlInfoUnionBuilder {
         let Self {
             mut string_values,
             mut bool_values,
-            bigint_values,
-            int32_bitmask_values,
+            mut bigint_values,
+            mut int32_bitmask_values,
             mut string_list_values,
             mut int32_to_int32_list_map_values,
-            type_ids,
-            offsets,
+            mut type_ids,
+            mut offsets,
         } = self;
-        let type_ids = type_ids.build();
-        let offsets = offsets.build();
+        let type_ids = type_ids.finish();
+        let offsets = offsets.finish();
 
         // form the correct ArrayData
 
@@ -301,8 +301,8 @@ impl SqlInfoUnionBuilder {
         let child_data = vec![
             string_values.finish().into_data(),
             bool_values.finish().into_data(),
-            bigint_values.build().into_data(),
-            int32_bitmask_values.build().into_data(),
+            bigint_values.finish().into_data(),
+            int32_bitmask_values.finish().into_data(),
             string_list_values.finish().into_data(),
             int32_to_int32_list_map_values.finish().into_data(),
         ];
@@ -366,7 +366,7 @@ impl SqlInfoDataBuilder {
         }
 
         let batch = RecordBatch::try_from_iter(vec![
-            ("info_name", Arc::new(name_builder.build()) as _),
+            ("info_name", Arc::new(name_builder.finish()) as _),
             ("value", Arc::new(value_builder.finish()) as _),
         ])?;
 

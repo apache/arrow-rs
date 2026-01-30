@@ -727,15 +727,15 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
         let mut c1_builder = Decimal32Builder::new().with_data_type(DataType::Decimal32(9, 6));
         c1_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
-        let c1 = c1_builder.build();
+        let c1 = c1_builder.finish();
 
         let mut c2_builder = Decimal64Builder::new().with_data_type(DataType::Decimal64(17, 6));
         c2_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
-        let c2 = c2_builder.build();
+        let c2 = c2_builder.finish();
 
         let mut c3_builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(38, 6));
         c3_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
-        let c3 = c3_builder.build();
+        let c3 = c3_builder.finish();
 
         let mut c4_builder = Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
         c4_builder.extend(vec![
@@ -744,7 +744,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             None,
             Some(i256::from_i128(290472)),
         ]);
-        let c4 = c4_builder.build();
+        let c4 = c4_builder.finish();
 
         let batch = RecordBatch::try_new(
             Arc::new(schema),
