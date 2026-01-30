@@ -96,6 +96,15 @@ pub fn ceil(value: usize, divisor: usize) -> usize {
     value.div_ceil(divisor)
 }
 
+/// Read a u64 from a byte slice, padding with zeros if necessary
+#[inline]
+pub fn read_u64(input: &[u8]) -> u64 {
+    let len = input.len().min(8);
+    let mut buf = [0_u8; 8];
+    buf[..len].copy_from_slice(input);
+    u64::from_le_bytes(buf)
+}
+
 /// Read up to 8 bits from a byte slice starting at a given bit offset.
 ///
 /// # Arguments
