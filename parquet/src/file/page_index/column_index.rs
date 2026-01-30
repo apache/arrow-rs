@@ -191,6 +191,12 @@ impl<T> PrimitiveColumnIndex<T> {
             }
         })
     }
+    /// Returns the null pages.
+    ///
+    /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
+    pub fn null_pages(&self) -> &[bool] {
+        &self.column_index.null_pages
+    }
 
     /// Returns the min value for the page indexed by `idx`
     ///
@@ -598,6 +604,7 @@ impl ColumnIndexMetaData {
     }
 
     /// Returns whether the page indexed by `idx` consists of all null values
+    #[inline]
     pub fn is_null_page(&self, idx: usize) -> bool {
         colidx_enum_func!(self, is_null_page, idx)
     }

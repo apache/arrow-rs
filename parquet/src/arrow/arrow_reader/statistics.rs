@@ -626,9 +626,10 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.and_then(|&x| u8::try_from(x).ok()));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.and_then(|&x| u8::try_from(x).ok())),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -640,9 +641,10 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.and_then(|&x| u16::try_from(x).ok()));
-                                }
+                                b.extend_from_iter_opt(
+                                     index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.and_then(|&x| u16::try_from(x).ok())),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -654,9 +656,10 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    builder.append_option(val.map(|&x| x as u32));
-                                }
+                                builder.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|&x| x as u32)),
+                                );
                             }
                             _ => builder.append_nulls(len),
                         }
@@ -668,9 +671,10 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT64(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    builder.append_option(val.map(|&x| x as u64));
-                                }
+                                builder.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|&x| x as u64)),
+                                );
                             }
                             _ => builder.append_nulls(len),
                         }
@@ -682,9 +686,10 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.and_then(|&x| i8::try_from(x).ok()));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.and_then(|&x| i8::try_from(x).ok())),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -696,9 +701,10 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.and_then(|&x| i16::try_from(x).ok()));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.and_then(|&x| i16::try_from(x).ok())),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -710,9 +716,9 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    builder.append_option(val.copied());
-                                }
+                                let values = index.[<$stat_type_prefix:lower _values>]();
+                                let nulls = index.null_pages();
+                                builder.append_values(values, nulls);
                             }
                             _ => builder.append_nulls(len),
                         }
@@ -724,9 +730,9 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT64(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    builder.append_option(val.copied());
-                                }
+                                let values = index.[<$stat_type_prefix:lower _values>]();
+                                let nulls = index.null_pages();
+                                builder.append_values(values, nulls);
                             }
                             _ => builder.append_nulls(len),
                         }
@@ -738,9 +744,10 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.and_then(|x| from_bytes_to_f16(x.as_ref())));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.and_then(|x| from_bytes_to_f16(x))),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -752,9 +759,10 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::FLOAT(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    builder.append_option(val.copied());
-                                }
+                                builder.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.copied()),
+                                );
                             }
                             _ => builder.append_nulls(len),
                         }
@@ -766,9 +774,9 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::DOUBLE(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    builder.append_option(val.copied());
-                                }
+                                let values = index.[<$stat_type_prefix:lower _values>]();
+                                let nulls = index.null_pages();
+                                builder.append_values(values, nulls);
                             }
                             _ => builder.append_nulls(len),
                         }
@@ -853,9 +861,9 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                            b.append_option(val.copied());
-                                        }
+                                        let values = index.[<$stat_type_prefix:lower _values>]();
+                                        let nulls = index.null_pages();
+                                        b.append_values(values, nulls);
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -867,9 +875,9 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                            b.append_option(val.copied());
-                                        }
+                                        let values = index.[<$stat_type_prefix:lower _values>]();
+                                        let nulls = index.null_pages();
+                                        b.append_values(values, nulls);
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -881,9 +889,9 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                            b.append_option(val.copied());
-                                        }
+                                        let values = index.[<$stat_type_prefix:lower _values>]();
+                                        let nulls = index.null_pages();
+                                        b.append_values(values, nulls);
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -895,9 +903,9 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                            b.append_option(val.copied());
-                                        }
+                                        let values = index.[<$stat_type_prefix:lower _values>]();
+                                        let nulls = index.null_pages();
+                                        b.append_values(values, nulls);
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -911,9 +919,9 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    builder.append_option(val.copied());
-                                }
+                                let values = index.[<$stat_type_prefix:lower _values>]();
+                                let nulls = index.null_pages();
+                                builder.append_values(values, nulls);
                             }
                             _ => builder.append_nulls(len),
                         }
@@ -925,9 +933,10 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|&x| (x as i64) * 24 * 60 * 60 * 1000));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|&x| (x as i64) * 24 * 60 * 60 * 1000)),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -939,9 +948,9 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT64(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    builder.append_option(val.copied());
-                                }
+                                let values = index.[<$stat_type_prefix:lower _values>]();
+                                let nulls = index.null_pages();
+                                builder.append_values(values, nulls);
                             }
                             _ => builder.append_nulls(len),
                         }
@@ -953,24 +962,27 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.copied());
-                                }
+                                let values = index.[<$stat_type_prefix:lower _values>]();
+                                let nulls = index.null_pages();
+                                b.append_values(values, nulls);
                             }
                             ColumnIndexMetaData::INT64(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.and_then(|&x| i32::try_from(x).ok()));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.and_then(|&x| i32::try_from(x).ok())),
+                                );
                             }
                             ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| from_bytes_to_i32(x.as_ref())));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| from_bytes_to_i32(x.as_ref()))),
+                                );
                             }
                             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| from_bytes_to_i32(x.as_ref())));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| from_bytes_to_i32(x.as_ref()))),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -982,24 +994,28 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| *x as i64));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| *x as i64)),
+                                );
                             }
                             ColumnIndexMetaData::INT64(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.copied());
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.copied()),
+                                );
                             }
                             ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| from_bytes_to_i64(x.as_ref())));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| from_bytes_to_i64(x.as_ref()))),
+                                );
                             }
                             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| from_bytes_to_i64(x.as_ref())));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| from_bytes_to_i64(x.as_ref()))),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -1011,24 +1027,28 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| *x as i128));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| *x as i128)),
+                                );
                             }
                             ColumnIndexMetaData::INT64(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| *x as i128));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| *x as i128)),
+                                );
                             }
                             ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| from_bytes_to_i128(x.as_ref())));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| from_bytes_to_i128(x.as_ref()))),
+                                );
                             }
                             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| from_bytes_to_i128(x.as_ref())));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| from_bytes_to_i128(x.as_ref()))),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -1040,24 +1060,28 @@ macro_rules! get_data_page_statistics {
                     for (len, index) in chunks {
                         match index {
                             ColumnIndexMetaData::INT32(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| i256::from_i128(*x as i128)));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| i256::from_i128(*x as i128))),
+                                );
                             }
                             ColumnIndexMetaData::INT64(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| i256::from_i128(*x as i128)));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| i256::from_i128(*x as i128))),
+                                );
                             }
                             ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| from_bytes_to_i256(x.as_ref())));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| from_bytes_to_i256(x.as_ref()))),
+                                );
                             }
                             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                    b.append_option(val.map(|x| from_bytes_to_i256(x.as_ref())));
-                                }
+                                b.extend_from_iter_opt(
+                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                        .map(|val| val.map(|x| from_bytes_to_i256(x.as_ref()))),
+                                );
                             }
                             _ => b.append_nulls(len),
                         }
@@ -1071,9 +1095,10 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT32(index) => {
-                                        for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                            b.append_option(val.copied());
-                                        }
+                                        let values = index.[<$stat_type_prefix:lower _values>]();
+                                        let nulls = index.null_pages();
+                                        b.append_values(values, nulls);
+
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -1085,9 +1110,9 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT32(index) => {
-                                        for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                            b.append_option(val.copied());
-                                        }
+                                        let values = index.[<$stat_type_prefix:lower _values>]();
+                                        let nulls = index.null_pages();
+                                        b.append_values(values, nulls);
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -1106,9 +1131,9 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                            b.append_option(val.copied());
-                                        }
+                                        let values = index.[<$stat_type_prefix:lower _values>]();
+                                        let nulls = index.null_pages();
+                                        b.append_values(values, nulls);
                                     }
                                     _ => b.append_nulls(len),
                                 }
@@ -1120,9 +1145,9 @@ macro_rules! get_data_page_statistics {
                             for (len, index) in chunks {
                                 match index {
                                     ColumnIndexMetaData::INT64(index) => {
-                                        for val in index.[<$stat_type_prefix:lower _values_iter>]() {
-                                            b.append_option(val.copied());
-                                        }
+                                        let values = index.[<$stat_type_prefix:lower _values>]();
+                                        let nulls = index.null_pages();
+                                        b.append_values(values, nulls);
                                     }
                                     _ => b.append_nulls(len),
                                 }

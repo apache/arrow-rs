@@ -260,6 +260,25 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         self.values_builder.extend_from_slice(values);
     }
 
+    /// Appends values from a iter of type `T` and a validity boolean iter
+    ///
+    /// # Panics
+    ///
+    /// Panics if `values` and `is_valid` have different lengths
+    #[inline]
+    pub fn extend_from_iter_option<I: IntoIterator<Item = Option<T::Native>>>(&mut self, iter: I) {
+        let iter = iter.into_iter();
+        self.values_builder.extend(iter.map(|v| 
+            match v {
+                Some(v) => {self.null_buffer_builder.append_non_null(); v},
+                None => {
+                    self.null_buffer_builder.append_null();
+                    T::Native::default()
+                }
+            }
+        ));
+    }
+
     /// Appends array values and null to this builder as is
     /// (this means that underlying null values are copied as is).
     ///
