@@ -836,6 +836,11 @@ pub struct ColumnChunkMetaData {
     column_crypto_metadata: Option<Box<ColumnCryptoMetaData>>,
     #[cfg(feature = "encryption")]
     encrypted_column_metadata: Option<Vec<u8>>,
+    /// When true, indicates the footer is plaintext (not encrypted).
+    /// This affects how column metadata is serialized when `encrypted_column_metadata` is present.
+    /// This field is only used at write time and is not needed when reading metadata.
+    #[cfg(feature = "encryption")]
+    plaintext_footer_mode: bool,
 }
 
 /// Histograms for repetition and definition levels.
@@ -1238,6 +1243,8 @@ impl ColumnChunkMetaDataBuilder {
             column_crypto_metadata: None,
             #[cfg(feature = "encryption")]
             encrypted_column_metadata: None,
+            #[cfg(feature = "encryption")]
+            plaintext_footer_mode: false,
         })
     }
 
