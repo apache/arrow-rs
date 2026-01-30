@@ -99,7 +99,8 @@ pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: Vec<T::Native>,
     null_buffer_builder: NullBufferBuilder,
-    data_type: DataType,
+    /// Optional data type override (e.g. to add timezone or precision/scale)
+    data_type: Option<DataType>,
 }
 
 impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
@@ -151,7 +152,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         Self {
             values_builder: Vec::with_capacity(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),
-            data_type: T::DATA_TYPE,
+            data_type: None,
         }
     }
 
@@ -169,7 +170,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         Self {
             values_builder,
             null_buffer_builder,
-            data_type: T::DATA_TYPE,
+            data_type: None,
         }
     }
 
@@ -182,15 +183,14 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     ///
     /// # Panics
     ///
-    /// This method panics if `data_type` is not [PrimitiveArray::is_compatible]
+    /// This method will not panic, but [`Self::build`], [`Self::finish`] will panics if `data_type` is
+    /// not [PrimitiveArray::is_compatible] with the builder's primitive type
+    /// `T`.
     pub fn with_data_type(self, data_type: DataType) -> Self {
-        assert!(
-            PrimitiveArray::<T>::is_compatible(&data_type),
-            "incompatible data type for builder, expected {} got {}",
-            T::DATA_TYPE,
-            data_type
-        );
-        Self { data_type, ..self }
+        Self {
+            data_type: Some(data_type),
+            ..self
+        }
     }
 
     /// Returns the capacity of this builder measured in slots of type `T`
@@ -267,11 +267,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Panics if `array` and `self` data types are different
     #[inline]
     pub fn append_array(&mut self, array: &PrimitiveArray<T>) {
-        assert_eq!(
-            &self.data_type,
-            array.data_type(),
-            "array data type mismatch"
-        );
+        if let Some(data_type) = &self.data_type {
+            assert_eq!(data_type, array.data_type(), "array data type mismatch");
+        } else {
+            assert_eq!(&T::DATA_TYPE, array.data_type(), "array data type mismatch")
+        }
 
         self.values_builder.extend_from_slice(array.values());
         if let Some(null_buffer) = array.nulls() {
@@ -304,22 +304,22 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let values_buffer = Buffer::from(std::mem::take(&mut self.values_builder));
         let nulls = self.null_buffer_builder.finish();
-        PrimitiveArray::<T>::new_with_datatype(
-            self.data_type.clone(),
-            ScalarBuffer::from(values_buffer),
-            nulls,
-        )
+        let mut new_array = PrimitiveArray::<T>::new(ScalarBuffer::from(values_buffer), nulls);
+        if let Some(data_type) = &self.data_type {
+            new_array = new_array.with_data_type(data_type.clone())
+        }
+        new_array
     }
 
     /// Builds the [`PrimitiveArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> PrimitiveArray<T> {
         let nulls = self.null_buffer_builder.finish_cloned();
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
-        PrimitiveArray::<T>::new_with_datatype(
-            self.data_type.clone(),
-            ScalarBuffer::from(values_buffer),
-            nulls,
-        )
+        let mut new_array = PrimitiveArray::<T>::new(ScalarBuffer::from(values_buffer), nulls);
+        if let Some(data_type) = &self.data_type {
+            new_array = new_array.with_data_type(data_type.clone())
+        }
+        new_array
     }
 
     /// Builds the [`PrimitiveArray`] , consuming this builder.
@@ -344,11 +344,14 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             null_buffer_builder,
             data_type,
         } = self;
-        PrimitiveArray::new_with_datatype(
-            data_type, // reuse data_type to save a DataType::drop()
-            ScalarBuffer::from(values_builder),
-            null_buffer_builder.build(),
-        )
+
+        let nulls = null_buffer_builder.build();
+        let values_buffer = ScalarBuffer::from(Buffer::from(values_builder));
+        let mut new_array = PrimitiveArray::<T>::new(values_buffer, nulls);
+        if let Some(data_type) = data_type {
+            new_array = new_array.with_data_type(data_type)
+        }
+        new_array
     }
 
     /// Returns the current values buffer as a slice
@@ -385,7 +388,7 @@ impl<P: DecimalType> PrimitiveBuilder<P> {
     pub fn with_precision_and_scale(self, precision: u8, scale: i8) -> Result<Self, ArrowError> {
         validate_decimal_precision_and_scale::<P>(precision, scale)?;
         Ok(Self {
-            data_type: P::TYPE_CONSTRUCTOR(precision, scale),
+            data_type: Some(P::TYPE_CONSTRUCTOR(precision, scale)),
             ..self
         })
     }
@@ -400,7 +403,7 @@ impl<P: ArrowTimestampType> PrimitiveBuilder<P> {
     /// Sets an optional timezone
     pub fn with_timezone_opt<S: Into<Arc<str>>>(self, timezone: Option<S>) -> Self {
         Self {
-            data_type: DataType::Timestamp(P::UNIT, timezone.map(Into::into)),
+            data_type: Some(DataType::Timestamp(P::UNIT, timezone.map(Into::into))),
             ..self
         }
     }
@@ -655,9 +658,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "incompatible data type for builder, expected Int32 got Int64")]
-    fn test_invalid_with_data_type() {
-        Int32Builder::new().with_data_type(DataType::Int64);
+    #[should_panic(expected = "PrimitiveArray expected data type Int32 got Int64")]
+    fn test_invalid_with_data_type_finish() {
+        Int32Builder::new().with_data_type(DataType::Int64).finish();
+    }
+
+    #[test]
+    #[should_panic(expected = "PrimitiveArray expected data type Int32 got Int64")]
+    fn test_invalid_with_data_type_finish_cloned() {
+        Int32Builder::new()
+            .with_data_type(DataType::Int64)
+            .finish_cloned();
+    }
+
+    #[test]
+    #[should_panic(expected = "PrimitiveArray expected data type Int32 got Int64")]
+    fn test_invalid_with_data_type_build() {
+        Int32Builder::new().with_data_type(DataType::Int64).build();
     }
 
     #[test]
