@@ -417,6 +417,54 @@ mod variable;
 ///
 ///```
 ///
+/// ## ListView Encoding
+///
+/// ListView arrays differ from List arrays in their representation: instead of using
+/// consecutive offset pairs to define each list, ListView uses explicit offset and size
+/// pairs for each element. This allows ListView elements to reference arbitrary (potentially
+/// overlapping) regions of the child array.
+///
+/// Despite this structural difference, ListView uses the **same row encoding as List**.
+/// Each list value is encoded as the concatenation of its child elements (each separately
+/// variable-length encoded), followed by a variable-length encoded empty byte array terminator.
+///
+/// **Important**: When a ListView is decoded back from row format, it is still a
+/// ListView, but any child element sharing that may have existed in the original
+/// (where multiple list entries could reference overlapping regions of the child
+/// array) is **not preserved** - each list's children are decoded independently
+/// with sequential offsets.
+///
+/// For example, given a ListView with offset/size pairs:
+///
+/// ```text
+/// offsets: [0, 1, 0]
+/// sizes:   [2, 2, 0]
+/// values:  [1_u8, 2_u8, 3_u8]
+///
+/// Resulting lists:
+/// [1_u8, 2_u8]  (offset=0, size=2 -> values[0..2])
+/// [2_u8, 3_u8]  (offset=1, size=2 -> values[1..3])
+/// []            (offset=0, size=0 -> empty)
+/// ```
+///
+/// The elements would be encoded identically to List encoding:
+///
+/// ```text
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [1_u8, 2_u8]           │02│01│01│00│00│02│02│01│02│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 1_u8 ────┘   └──── 2_u8 ────┘
+///
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [2_u8, 3_u8]           │02│01│02│00│00│02│02│01│03│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 2_u8 ────┘   └──── 3_u8 ────┘
+///
+///```
+///
+/// Note that element `2_u8` appears in both encoded rows, even though it was shared
+/// in the original ListView, and `[]` is represented by an empty byte array.
+///
 /// ## Union Encoding
 ///
 /// A union value is encoded as a single type-id byte followed by the row encoding of the selected child value.
@@ -506,6 +554,46 @@ enum Codec {
     Union(Vec<RowConverter>, Vec<i8>, Vec<OwnedRow>),
 }
 
+/// Computes the minimum offset and maximum end (offset + size) for a ListView array.
+/// Returns (min_offset, max_end) which can be used to slice the values array.
+fn compute_list_view_bounds<O: OffsetSizeTrait>(array: &GenericListViewArray<O>) -> (usize, usize) {
+    if array.is_empty() {
+        return (0, 0);
+    }
+
+    let offsets = array.value_offsets();
+    let sizes = array.value_sizes();
+    let values_len = array.values().len();
+
+    let mut min_offset = usize::MAX;
+    let mut max_end = 0usize;
+
+    for i in 0..array.len() {
+        let offset = offsets[i].as_usize();
+        let size = sizes[i].as_usize();
+        let end = offset + size;
+
+        if size > 0 {
+            min_offset = min_offset.min(offset);
+            max_end = max_end.max(end);
+        }
+
+        // Early exit if we've found the full range of the values array. This is possible with
+        // ListViews since offsets and sizes are arbitrary and the full range can be covered early
+        // in the iteration contrary to regular Lists.
+        if min_offset == 0 && max_end == values_len {
+            break;
+        }
+    }
+
+    if min_offset == usize::MAX {
+        // All lists are empty
+        (0, 0)
+    } else {
+        (min_offset, max_end)
+    }
+}
+
 impl Codec {
     fn new(sort_field: &SortField) -> Result<Self, ArrowError> {
         match &sort_field.data_type {
@@ -535,7 +623,10 @@ impl Codec {
                 Ok(Self::RunEndEncoded(converter))
             }
             d if !d.is_nested() => Ok(Self::Stateless),
-            DataType::List(f) | DataType::LargeList(f) => {
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::ListView(f)
+            | DataType::LargeListView(f) => {
                 // The encoded contents will be inverted if descending is set to true
                 // As such we set `descending` to false and negate nulls first if it
                 // it set to true
@@ -647,6 +738,20 @@ impl Codec {
                         list_array
                             .values()
                             .slice(first_offset, last_offset - first_offset)
+                    }
+                    DataType::ListView(_) => {
+                        let list_view_array = array.as_list_view::<i32>();
+                        let (min_offset, max_end) = compute_list_view_bounds(list_view_array);
+                        list_view_array
+                            .values()
+                            .slice(min_offset, max_end - min_offset)
+                    }
+                    DataType::LargeListView(_) => {
+                        let list_view_array = array.as_list_view::<i64>();
+                        let (min_offset, max_end) = compute_list_view_bounds(list_view_array);
+                        list_view_array
+                            .values()
+                            .slice(min_offset, max_end - min_offset)
                     }
                     DataType::FixedSizeList(_, _) => {
                         as_fixed_size_list_array(array).values().clone()
@@ -788,9 +893,11 @@ impl RowConverter {
     fn supports_datatype(d: &DataType) -> bool {
         match d {
             _ if !d.is_nested() => true,
-            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
-                Self::supports_datatype(f.data_type())
-            }
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::ListView(f)
+            | DataType::LargeListView(f)
+            | DataType::FixedSizeList(f, _) => Self::supports_datatype(f.data_type()),
             DataType::Struct(f) => f.iter().all(|x| Self::supports_datatype(x.data_type())),
             DataType::RunEndEncoded(_, values) => Self::supports_datatype(values.data_type()),
             DataType::Union(fs, _mode) => fs
@@ -1617,6 +1724,26 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 DataType::LargeList(_) => {
                     list::compute_lengths(tracker.materialized(), rows, as_large_list_array(array))
                 }
+                DataType::ListView(_) => {
+                    let list_view = array.as_list_view::<i32>();
+                    let (min_offset, _) = compute_list_view_bounds(list_view);
+                    list::compute_lengths_list_view(
+                        tracker.materialized(),
+                        rows,
+                        list_view,
+                        min_offset,
+                    )
+                }
+                DataType::LargeListView(_) => {
+                    let list_view = array.as_list_view::<i64>();
+                    let (min_offset, _) = compute_list_view_bounds(list_view);
+                    list::compute_lengths_list_view(
+                        tracker.materialized(),
+                        rows,
+                        list_view,
+                        min_offset,
+                    )
+                }
                 DataType::FixedSizeList(_, _) => compute_lengths_fixed_size_list(
                     &mut tracker,
                     rows,
@@ -1845,6 +1972,16 @@ fn encode_column(
             DataType::LargeList(_) => {
                 list::encode(data, offsets, rows, opts, as_large_list_array(column))
             }
+            DataType::ListView(_) => {
+                let list_view = column.as_list_view::<i32>();
+                let (min_offset, _) = compute_list_view_bounds(list_view);
+                list::encode_list_view(data, offsets, rows, opts, list_view, min_offset)
+            }
+            DataType::LargeListView(_) => {
+                let list_view = column.as_list_view::<i64>();
+                let (min_offset, _) = compute_list_view_bounds(list_view);
+                list::encode_list_view(data, offsets, rows, opts, list_view, min_offset)
+            }
             DataType::FixedSizeList(_, _) => {
                 encode_fixed_size_list(data, offsets, rows, opts, as_fixed_size_list_array(column))
             }
@@ -2001,6 +2138,12 @@ unsafe fn decode_column(
             DataType::LargeList(_) => {
                 Arc::new(unsafe { list::decode::<i64>(converter, rows, field, validate_utf8) }?)
             }
+            DataType::ListView(_) => Arc::new(unsafe {
+                list::decode_list_view::<i32>(converter, rows, field, validate_utf8)
+            }?),
+            DataType::LargeListView(_) => Arc::new(unsafe {
+                list::decode_list_view::<i64>(converter, rows, field, validate_utf8)
+            }?),
             DataType::FixedSizeList(_, value_length) => Arc::new(unsafe {
                 list::decode_fixed_size_list(
                     converter,
@@ -3193,6 +3336,403 @@ mod tests {
         test_nested_list::<i64>();
     }
 
+    fn test_single_list_view<O: OffsetSizeTrait>() {
+        let mut builder = GenericListViewBuilder::<O, _>::new(Int32Builder::new());
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.values().append_value(32);
+        builder.append(true);
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.values().append_value(12);
+        builder.append(true);
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.append(true);
+        builder.values().append_value(32); // MASKED
+        builder.values().append_value(52); // MASKED
+        builder.append(false);
+        builder.values().append_value(32);
+        builder.values().append_null();
+        builder.append(true);
+        builder.append(true);
+        builder.values().append_value(17); // MASKED
+        builder.values().append_null(); // MASKED
+        builder.append(false);
+
+        let list = Arc::new(builder.finish()) as ArrayRef;
+        let d = list.data_type().clone();
+
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2) < rows.row(1)); // [32, 52] < [32, 52, 12]
+        assert!(rows.row(3) < rows.row(2)); // null < [32, 52]
+        assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 52]
+        assert!(rows.row(5) < rows.row(2)); // [] < [32, 52]
+        assert!(rows.row(3) < rows.row(5)); // null < []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify the content matches (ListView may have different physical layout but same logical content)
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+        let orig_list_view = list
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        let options = SortOptions::default().asc().with_nulls_first(false);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2) < rows.row(1)); // [32, 52] < [32, 52, 12]
+        assert!(rows.row(3) > rows.row(2)); // null > [32, 52]
+        assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 52]
+        assert!(rows.row(5) < rows.row(2)); // [] < [32, 52]
+        assert!(rows.row(3) > rows.row(5)); // null > []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        let options = SortOptions::default().desc().with_nulls_first(false);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2) > rows.row(1)); // [32, 52] > [32, 52, 12]
+        assert!(rows.row(3) > rows.row(2)); // null > [32, 52]
+        assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 52]
+        assert!(rows.row(5) > rows.row(2)); // [] > [32, 52]
+        assert!(rows.row(3) > rows.row(5)); // null > []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        let options = SortOptions::default().desc().with_nulls_first(true);
+        let field = SortField::new_with_options(d, options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2) > rows.row(1)); // [32, 52] > [32, 52, 12]
+        assert!(rows.row(3) < rows.row(2)); // null < [32, 52]
+        assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 52]
+        assert!(rows.row(5) > rows.row(2)); // [] > [32, 52]
+        assert!(rows.row(3) < rows.row(5)); // null < []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        let sliced_list = list.slice(1, 5);
+        let rows_on_sliced_list = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows_on_sliced_list.row(1) > rows_on_sliced_list.row(0)); // [32, 52] > [32, 52, 12]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(1)); // null < [32, 52]
+        assert!(rows_on_sliced_list.row(3) < rows_on_sliced_list.row(1)); // [32, null] < [32, 52]
+        assert!(rows_on_sliced_list.row(4) > rows_on_sliced_list.row(1)); // [] > [32, 52]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(4)); // null < []
+
+        let back = converter.convert_rows(&rows_on_sliced_list).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+    }
+
+    fn test_nested_list_view<O: OffsetSizeTrait>() {
+        let mut builder = GenericListViewBuilder::<O, _>::new(GenericListViewBuilder::<O, _>::new(
+            Int32Builder::new(),
+        ));
+
+        // Row 0: [[1, 2], [1, null]]
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.append(true);
+
+        // Row 1: [[1, null], [1, null]]
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.append(true);
+
+        // Row 2: [[1, null], null]
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.values().append(false);
+        builder.append(true);
+
+        // Row 3: null
+        builder.append(false);
+
+        // Row 4: [[1, 2]]
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.append(true);
+
+        let list = Arc::new(builder.finish()) as ArrayRef;
+        let d = list.data_type().clone();
+
+        // [
+        //   [[1, 2], [1, null]],
+        //   [[1, null], [1, null]],
+        //   [[1, null], null]
+        //   null
+        //   [[1, 2]]
+        // ]
+        let options = SortOptions::default().asc().with_nulls_first(true);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1));
+        assert!(rows.row(1) > rows.row(2));
+        assert!(rows.row(2) > rows.row(3));
+        assert!(rows.row(4) < rows.row(0));
+        assert!(rows.row(4) > rows.row(1));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify the content matches (ListView may have different physical layout but same logical content)
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+        let orig_list_view = list
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        let options = SortOptions::default().desc().with_nulls_first(true);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1));
+        assert!(rows.row(1) > rows.row(2));
+        assert!(rows.row(2) > rows.row(3));
+        assert!(rows.row(4) > rows.row(0));
+        assert!(rows.row(4) > rows.row(1));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify the content matches
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        let options = SortOptions::default().desc().with_nulls_first(false);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1));
+        assert!(rows.row(1) < rows.row(2));
+        assert!(rows.row(2) < rows.row(3));
+        assert!(rows.row(4) > rows.row(0));
+        assert!(rows.row(4) < rows.row(1));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify the content matches
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        let sliced_list = list.slice(1, 3);
+        let rows = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows.row(0) < rows.row(1));
+        assert!(rows.row(1) < rows.row(2));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_list_view() {
+        test_single_list_view::<i32>();
+        test_nested_list_view::<i32>();
+    }
+
+    #[test]
+    fn test_large_list_view() {
+        test_single_list_view::<i64>();
+        test_nested_list_view::<i64>();
+    }
+
+    fn test_list_view_with_shared_values<O: OffsetSizeTrait>() {
+        // Create a values array: [1, 2, 3, 4, 5, 6, 7, 8]
+        let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+
+        // Create a ListView where:
+        // - Row 0: offset=0, size=3 -> [1, 2, 3]
+        // - Row 1: offset=0, size=3 -> [1, 2, 3] (same offset+size as row 0)
+        // - Row 2: offset=5, size=2 -> [6, 7] (non-monotonic offset)
+        // - Row 3: offset=2, size=2 -> [3, 4] (offset goes back)
+        // - Row 4: offset=1, size=4 -> [2, 3, 4, 5] (subset of values that contains row 3's range)
+        // - Row 5: offset=2, size=1 -> [3] (subset of row 3 and row 4)
+        let offsets = ScalarBuffer::<O>::from(vec![
+            O::from_usize(0).unwrap(),
+            O::from_usize(0).unwrap(),
+            O::from_usize(5).unwrap(),
+            O::from_usize(2).unwrap(),
+            O::from_usize(1).unwrap(),
+            O::from_usize(2).unwrap(),
+        ]);
+        let sizes = ScalarBuffer::<O>::from(vec![
+            O::from_usize(3).unwrap(),
+            O::from_usize(3).unwrap(),
+            O::from_usize(2).unwrap(),
+            O::from_usize(2).unwrap(),
+            O::from_usize(4).unwrap(),
+            O::from_usize(1).unwrap(),
+        ]);
+
+        let list_view: GenericListViewArray<O> =
+            GenericListViewArray::try_new(field, offsets, sizes, Arc::new(values), None).unwrap();
+
+        let d = list_view.data_type().clone();
+        let list = Arc::new(list_view) as ArrayRef;
+
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        // Row 0 and Row 1 have the same content [1, 2, 3], so they should be equal
+        assert_eq!(rows.row(0), rows.row(1));
+
+        // [1, 2, 3] < [6, 7] (comparing first elements: 1 < 6)
+        assert!(rows.row(0) < rows.row(2));
+
+        // [3, 4] > [1, 2, 3] (comparing first elements: 3 > 1)
+        assert!(rows.row(3) > rows.row(0));
+
+        // [2, 3, 4, 5] > [1, 2, 3] (comparing first elements: 2 > 1)
+        assert!(rows.row(4) > rows.row(0));
+
+        // [3] < [3, 4] (same prefix but shorter)
+        assert!(rows.row(5) < rows.row(3));
+
+        // [3] < [2, 3, 4, 5] (comparing first elements: 3 > 2)
+        assert!(rows.row(5) > rows.row(4));
+
+        // Round-trip conversion
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify logical content matches
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+        let orig_list_view = list
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        // Test with descending order
+        let options = SortOptions::default().desc();
+        let field = SortField::new_with_options(d, options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        // In descending order, comparisons are reversed
+        assert_eq!(rows.row(0), rows.row(1)); // Equal rows stay equal
+        assert!(rows.row(0) > rows.row(2)); // [1, 2, 3] > [6, 7] in desc
+        assert!(rows.row(3) < rows.row(0)); // [3, 4] < [1, 2, 3] in desc
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_list_view_shared_values() {
+        test_list_view_with_shared_values::<i32>();
+    }
+
+    #[test]
+    fn test_large_list_view_shared_values() {
+        test_list_view_with_shared_values::<i64>();
+    }
+
     #[test]
     fn test_fixed_size_list() {
         let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 3);
@@ -3676,6 +4216,43 @@ mod tests {
         ListArray::new(field, offsets, values, Some(nulls))
     }
 
+    fn generate_list_view<F>(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+        values: F,
+    ) -> ListViewArray
+    where
+        F: FnOnce(usize) -> ArrayRef,
+    {
+        // Generate sizes first, then create a values array large enough
+        let sizes: Vec<i32> = (0..len).map(|_| rng.random_range(0..10)).collect();
+        let values_len: usize = sizes.iter().map(|s| *s as usize).sum::<usize>().max(1);
+        let values = values(values_len);
+
+        // Generate offsets that can overlap, be non-monotonic, or share ranges
+        let offsets: Vec<i32> = sizes
+            .iter()
+            .map(|&size| {
+                if size == 0 {
+                    0
+                } else {
+                    rng.random_range(0..=(values_len as i32 - size))
+                }
+            })
+            .collect();
+
+        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
+        let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+        ListViewArray::new(
+            field,
+            ScalarBuffer::from(offsets),
+            ScalarBuffer::from(sizes),
+            values,
+            Some(nulls),
+        )
+    }
+
     fn generate_nulls(rng: &mut impl RngCore, len: usize) -> Option<NullBuffer> {
         Some(NullBuffer::from_iter(
             (0..len).map(|_| rng.random_bool(0.8)),
@@ -3810,8 +4387,8 @@ mod tests {
         )
     }
 
-    fn generate_column(rng: &mut impl RngCore, len: usize) -> ArrayRef {
-        match rng.random_range(0..19) {
+    fn generate_column(rng: &mut (impl RngCore + Clone), len: usize) -> ArrayRef {
+        match rng.random_range(0..23) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(rng, len, 0.8)),
@@ -3850,12 +4427,36 @@ mod tests {
             15 => Arc::new(generate_byte_view(rng, len, 0.8)),
             16 => Arc::new(generate_fixed_stringview_column(len)),
             17 => Arc::new(
-                generate_list(rng, len + 1000, 0.8, |rng, values_len| {
+                generate_list(&mut rng.clone(), len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
             ),
             18 => Arc::new(generate_boolean_array(rng, len, 0.8)),
+            19 => Arc::new(generate_list_view(
+                &mut rng.clone(),
+                len,
+                0.8,
+                |values_len| Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8)),
+            )),
+            20 => Arc::new(generate_list_view(
+                &mut rng.clone(),
+                len,
+                0.8,
+                |values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.8)),
+            )),
+            21 => Arc::new(generate_list_view(
+                &mut rng.clone(),
+                len,
+                0.8,
+                |values_len| Arc::new(generate_struct(rng, values_len, 0.8)),
+            )),
+            22 => Arc::new(
+                generate_list_view(&mut rng.clone(), len + 1000, 0.8, |values_len| {
+                    Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
+                })
+                .slice(500, len),
+            ),
             _ => unreachable!(),
         }
     }
