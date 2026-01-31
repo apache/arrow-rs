@@ -260,7 +260,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         self.values_builder.extend_from_slice(values);
     }
 
-    /// Appends values from a iter of type `T` and a validity boolean iter
+    /// Appends values from a iter of type `Option<T>`
     ///
     /// # Panics
     ///
