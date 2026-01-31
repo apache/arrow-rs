@@ -499,6 +499,14 @@ mod header;
 mod record;
 mod vlq;
 
+#[cfg(feature = "async")]
+mod async_reader;
+
+#[cfg(feature = "object_store")]
+pub use async_reader::AvroObjectReader;
+#[cfg(feature = "async")]
+pub use async_reader::{AsyncAvroFileReader, AsyncFileReader};
+
 fn is_incomplete_data(err: &AvroError) -> bool {
     matches!(
         err,
@@ -641,6 +649,25 @@ pub struct Decoder {
 }
 
 impl Decoder {
+    pub(crate) fn from_parts(
+        batch_size: usize,
+        active_decoder: RecordDecoder,
+        active_fingerprint: Option<Fingerprint>,
+        cache: IndexMap<Fingerprint, RecordDecoder>,
+        fingerprint_algorithm: FingerprintAlgorithm,
+    ) -> Self {
+        Self {
+            batch_size,
+            remaining_capacity: batch_size,
+            active_fingerprint,
+            active_decoder,
+            cache,
+            fingerprint_algorithm,
+            pending_schema: None,
+            awaiting_body: false,
+        }
+    }
+
     /// Returns the Arrow schema for the rows decoded by this decoder.
     ///
     /// **Note:** With single‑object or Confluent framing, the schema may change
@@ -999,25 +1026,6 @@ impl ReaderBuilder {
         self.make_record_decoder(writer_schema, reader_schema_raw.as_ref())
     }
 
-    fn make_decoder_with_parts(
-        &self,
-        active_decoder: RecordDecoder,
-        active_fingerprint: Option<Fingerprint>,
-        cache: IndexMap<Fingerprint, RecordDecoder>,
-        fingerprint_algorithm: FingerprintAlgorithm,
-    ) -> Decoder {
-        Decoder {
-            batch_size: self.batch_size,
-            remaining_capacity: self.batch_size,
-            active_fingerprint,
-            active_decoder,
-            cache,
-            fingerprint_algorithm,
-            pending_schema: None,
-            awaiting_body: false,
-        }
-    }
-
     fn make_decoder(
         &self,
         header: Option<&Header>,
@@ -1054,7 +1062,8 @@ impl ReaderBuilder {
             let effective_reader_schema = projected_reader_schema.as_ref().or(reader_schema);
             let record_decoder =
                 self.make_record_decoder_from_schemas(&writer_schema, effective_reader_schema)?;
-            return Ok(self.make_decoder_with_parts(
+            return Ok(Decoder::from_parts(
+                self.batch_size,
                 record_decoder,
                 None,
                 IndexMap::new(),
@@ -1121,7 +1130,8 @@ impl ReaderBuilder {
                 "Initial fingerprint {start_fingerprint:?} not found in schema store"
             ))
         })?;
-        Ok(self.make_decoder_with_parts(
+        Ok(Decoder::from_parts(
+            self.batch_size,
             active_decoder,
             Some(start_fingerprint),
             cache,
