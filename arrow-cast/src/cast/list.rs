@@ -156,17 +156,15 @@ where
 
     let cap = array.len() * size as usize;
 
+    let mut null_builder = NullBufferBuilder::new(array.len());
+    if let Some(nulls) = array.nulls().filter(|b| b.null_count() > 0) {
+        null_builder.append_buffer(nulls);
+    } else {
+        null_builder.append_n_non_nulls(array.len());
+    }
+
     // Whether the resulting array may contain null lists
     let nullable = cast_options.safe || array.null_count() != 0;
-    let mut nulls = nullable.then(|| {
-        let mut buffer = BooleanBufferBuilder::new(array.len());
-        match array.nulls() {
-            Some(n) => buffer.append_buffer(n.inner()),
-            None => buffer.append_n(array.len(), true),
-        }
-        buffer
-    });
-
     // Nulls in FixedSizeListArray take up space and so we must pad the values
     let values = array.values().to_data();
     let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
@@ -196,7 +194,7 @@ where
                 }
                 // Pad this slice with nulls
                 mutable.extend_nulls(size as _);
-                nulls.as_mut().unwrap().set_bit(idx, false);
+                null_builder.set_bit(idx, false);
                 // Set last_pos to the end of this slice's values
                 last_pos = end_pos
             } else {
@@ -222,9 +220,7 @@ where
     // Cast the inner values if necessary
     let values = cast_with_options(values.as_ref(), field.data_type(), cast_options)?;
 
-    // Construct the FixedSizeListArray
-    let nulls = nulls.map(|mut x| x.finish().into());
-    let array = FixedSizeListArray::try_new(field.clone(), size, values, nulls)?;
+    let array = FixedSizeListArray::try_new(field.clone(), size, values, null_builder.build())?;
     Ok(Arc::new(array))
 }
 
@@ -237,16 +233,14 @@ pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_list_view::<O>();
 
-    let nullable = cast_options.safe || array.null_count() != 0;
-    let mut nulls = nullable.then(|| {
-        let mut buffer = BooleanBufferBuilder::new(array.len());
-        match array.nulls() {
-            Some(n) => buffer.append_buffer(n.inner()),
-            None => buffer.append_n(array.len(), true),
-        }
-        buffer
-    });
+    let mut null_builder = NullBufferBuilder::new(array.len());
+    if let Some(nulls) = array.nulls().filter(|b| b.null_count() > 0) {
+        null_builder.append_buffer(nulls);
+    } else {
+        null_builder.append_n_non_nulls(array.len());
+    }
 
+    let nullable = cast_options.safe || array.null_count() != 0;
     let values = array.values().to_data();
     let cap = array.len() * size as usize;
     let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
@@ -259,7 +253,7 @@ pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
             // Nulls in FixedSizeListArray take up space and so we must pad the values
             if cast_options.safe || array.is_null(idx) {
                 mutable.extend_nulls(size as _);
-                nulls.as_mut().unwrap().set_bit(idx, false);
+                null_builder.set_bit(idx, false);
             } else {
                 return Err(ArrowError::CastError(format!(
                     "Cannot cast to FixedSizeList({size}): value at index {idx} has length {len}",
@@ -273,8 +267,7 @@ pub(crate) fn cast_list_view_to_fixed_size_list<O: OffsetSizeTrait>(
     let values = make_array(mutable.freeze());
     let values = cast_with_options(values.as_ref(), field.data_type(), cast_options)?;
 
-    let nulls = nulls.map(|mut x| x.finish().into());
-    let array = FixedSizeListArray::try_new(field.clone(), size, values, nulls)?;
+    let array = FixedSizeListArray::try_new(field.clone(), size, values, null_builder.build())?;
     Ok(Arc::new(array))
 }
 
