@@ -53,8 +53,16 @@ impl MapArrayDecoder {
             _ => unreachable!(),
         };
 
-        let keys = ctx.make_decoder(fields[0].data_type(), fields[0].is_nullable())?;
-        let values = ctx.make_decoder(fields[1].data_type(), fields[1].is_nullable())?;
+        let keys = ctx.make_decoder(
+            fields[0].data_type(),
+            fields[0].is_nullable(),
+            fields[0].metadata(),
+        )?;
+        let values = ctx.make_decoder(
+            fields[1].data_type(),
+            fields[1].is_nullable(),
+            fields[1].metadata(),
+        )?;
 
         Ok(Self {
             data_type: data_type.clone(),
