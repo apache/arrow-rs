@@ -28,7 +28,7 @@
 //! use arrow_schema::{DataType, Field, Schema};
 //! use arrow_avro::writer::AsyncAvroWriter;
 //!
-//! # #[tokio::main]
+//! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
 //! let batch = RecordBatch::try_new(
@@ -357,7 +357,7 @@ mod tests {
     use arrow_schema::{DataType, Field};
     use std::io::Cursor;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_async_avro_writer_ocf() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int64, false),
@@ -385,7 +385,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_async_avro_stream_writer() -> Result<(), Box<dyn std::error::Error>> {
         use crate::reader::ReaderBuilder;
         use crate::schema::{AvroSchema, SchemaStore};
@@ -433,7 +433,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_async_writer_multiple_batches() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
 
@@ -452,9 +452,9 @@ mod tests {
         writer.write_batches(&[&batch1, &batch2]).await?;
         writer.finish().await?;
 
-        let mut reader = ReaderBuilder::new().build(Cursor::new(buffer))?;
+        let reader = ReaderBuilder::new().build(Cursor::new(buffer))?;
         let mut total_rows = 0;
-        while let Some(batch) = reader.next() {
+        for batch in reader {
             let out = batch?;
             total_rows += out.num_rows();
         }
@@ -463,7 +463,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_async_writer_builder_configuration() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Schema::new(vec![Field::new("x", DataType::Int64, false)]);
         let batch = RecordBatch::try_new(
@@ -487,7 +487,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_async_writer_into_inner() -> Result<(), Box<dyn std::error::Error>> {
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(
@@ -512,7 +512,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_async_writer_schema_mismatch_error() -> Result<(), Box<dyn std::error::Error>> {
         let schema1 = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
         let schema2 = Schema::new(vec![Field::new("name", DataType::Utf8, false)]);
@@ -531,7 +531,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     #[cfg(feature = "deflate")]
     async fn test_async_writer_with_deflate_compression() -> Result<(), Box<dyn std::error::Error>>
     {
