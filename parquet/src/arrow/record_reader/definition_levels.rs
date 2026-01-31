@@ -184,7 +184,7 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 // Fast path: if all requested levels are valid (max definition level),
                 // we can skip RLE decoding and just append all-ones to the bitmap.
                 // This is faster than decoding RLE data.
-                if let Some(count) = decoder.try_skip_all_valid(num_levels)? {
+                if let Some(count) = decoder.try_consume_all_valid(num_levels)? {
                     nulls.append_n(count, true);
                     return Ok((count, count)); // values_read == levels_read when all valid
                 }
@@ -310,8 +310,10 @@ impl PackedDecoder {
     /// Returns `Ok(Some(count))` if successfully consumed `count` all-valid levels.
     /// Returns `Ok(None)` if there are any nulls or packed data that prevents fast path.
     ///
-    /// On success, advances decoder state. On failure, state is unchanged.
-    fn try_skip_all_valid(&mut self, len: usize) -> Result<Option<usize>> {
+    /// Note: On `None`, the decoder state may have advanced to the next RLE block,
+    /// but only if `rle_left` was zero (i.e., the block would have been loaded
+    /// on the next read anyway).
+    fn try_consume_all_valid(&mut self, len: usize) -> Result<Option<usize>> {
         // If no active run and no packed data pending, try to parse the next RLE block
         if self.rle_left == 0 && self.packed_count == self.packed_offset {
             if self.data_offset < self.data.len() {
@@ -497,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn test_try_skip_all_valid() {
+    fn test_try_consume_all_valid() {
         // Test with all-valid data (all 1s) - single RLE run
         let len = 100;
         let mut encoder = RleEncoder::new(1, 1024);
@@ -508,8 +510,8 @@ mod tests {
         let mut decoder = PackedDecoder::new();
         decoder.set_data(Encoding::RLE, encoded.into());
 
-        // try_skip_all_valid now parses the RLE block itself, no need to read first
-        let result = decoder.try_skip_all_valid(len).unwrap();
+        // try_consume_all_valid now parses the RLE block itself, no need to read first
+        let result = decoder.try_consume_all_valid(len).unwrap();
         assert_eq!(result, Some(len));
 
         // Test with all-null data (all 0s)
@@ -522,7 +524,7 @@ mod tests {
         decoder.set_data(Encoding::RLE, encoded.into());
 
         // Should return None because rle_value is false (all nulls)
-        let result = decoder.try_skip_all_valid(len).unwrap();
+        let result = decoder.try_consume_all_valid(len).unwrap();
         assert_eq!(result, None);
 
         // Test when requesting more than available in current RLE run
@@ -539,7 +541,7 @@ mod tests {
 
         // Request more than the valid run - should return None
         // (because we don't look ahead to next block)
-        let result = decoder.try_skip_all_valid(20).unwrap();
+        let result = decoder.try_consume_all_valid(20).unwrap();
         assert_eq!(result, None);
 
         // Reset decoder and try requesting within the run
@@ -554,15 +556,15 @@ mod tests {
             encoder.consume().into()
         });
 
-        let result = decoder.try_skip_all_valid(5).unwrap();
+        let result = decoder.try_consume_all_valid(5).unwrap();
         assert_eq!(result, Some(5));
 
         // After skipping 5, we should have 5 left in the valid RLE run
-        let result = decoder.try_skip_all_valid(5).unwrap();
+        let result = decoder.try_consume_all_valid(5).unwrap();
         assert_eq!(result, Some(5));
 
         // Now the valid run is exhausted, next call should parse the null run and return None
-        let result = decoder.try_skip_all_valid(5).unwrap();
+        let result = decoder.try_consume_all_valid(5).unwrap();
         assert_eq!(result, None);
     }
 }
