@@ -457,7 +457,6 @@ impl WriterBuilder {
         })
     }
 }
-
 /// A row-by-row encoder for Avro *stream/message* formats (SOE / registry wire formats / raw binary).
 ///
 /// Unlike [`Writer`], which emits a single continuous byte stream to a [`std::io::Write`] sink,
