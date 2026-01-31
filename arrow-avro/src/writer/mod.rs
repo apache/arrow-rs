@@ -162,6 +162,15 @@ mod encoder;
 /// Logic for different Avro container file formats.
 pub mod format;
 
+/// Async Avro writer API
+#[cfg(feature = "async")]
+pub mod async_writer;
+
+#[cfg(feature = "async")]
+pub use async_writer::{
+    AsyncAvroStreamWriter, AsyncAvroWriter, AsyncFileWriter, AsyncWriter, AsyncWriterBuilder,
+};
+
 /// A contiguous set of Avro encoded rows.
 ///
 /// `EncodedRows` stores:
@@ -312,7 +321,6 @@ impl EncodedRows {
         self.offsets.windows(2).map(|w| self.data.slice(w[0]..w[1]))
     }
 }
-
 /// Builder to configure and create a `Writer`.
 #[derive(Debug, Clone)]
 pub struct WriterBuilder {
@@ -448,7 +456,6 @@ impl WriterBuilder {
         })
     }
 }
-
 /// A row-by-row encoder for Avro *stream/message* formats (SOE / registry wire formats / raw binary).
 ///
 /// Unlike [`Writer`], which emits a single continuous byte stream to a [`std::io::Write`] sink,
