@@ -636,7 +636,10 @@ macro_rules! define_variant_to_primitive_builder {
             // This is mainly for `FakeNullBuilder`
             #[allow(unused_mut)]
             fn finish(mut self) -> Result<ArrayRef> {
-                Ok(Arc::new(self.builder.finish()))
+                // Convert into Arc (some builders produce T: Array and others produce ArrayRef),
+                // and then let it coerce to ArrayRef from there if needed.
+                let array: Arc<_> = self.builder.finish().into();
+                Ok(array)
             }
         }
     }

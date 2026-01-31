@@ -1982,7 +1982,7 @@ mod tests {
                 Arc::new(array6),
                 Arc::new(array7),
                 Arc::new(array8),
-                Arc::new(array9),
+                array9,
                 Arc::new(array10),
                 Arc::new(array11),
                 Arc::new(array12),
@@ -2995,7 +2995,7 @@ mod tests {
             )
         };
         expect_ipc_validation_error(
-            Arc::new(invalid_struct_arr),
+            invalid_struct_arr,
             "Invalid argument error: Invalid UTF8 sequence at string index 3 (3..18): invalid utf-8 sequence of 1 bytes from index 11",
         );
     }

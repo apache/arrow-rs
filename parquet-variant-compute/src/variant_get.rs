@@ -180,7 +180,7 @@ fn shredded_get_path(
             ShreddedPathStep::Missing => {
                 let num_rows = input.len();
                 let arr = match as_field.map(|f| f.data_type()) {
-                    Some(data_type) => Arc::new(array::new_null_array(data_type, num_rows)) as _,
+                    Some(data_type) => array::new_null_array(data_type, num_rows),
                     None => Arc::new(array::NullArray::new(num_rows)) as _,
                 };
                 return Ok(arr);

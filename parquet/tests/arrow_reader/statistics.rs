@@ -2357,8 +2357,8 @@ async fn test_struct() {
     .await;
     Test {
         reader: &reader,
-        expected_min: Arc::new(struct_array(vec![(Some(1), Some(6.0), Some(12.0))])),
-        expected_max: Arc::new(struct_array(vec![(Some(2), Some(8.5), Some(14.0))])),
+        expected_min: struct_array(vec![(Some(1), Some(6.0), Some(12.0))]),
+        expected_max: struct_array(vec![(Some(2), Some(8.5), Some(14.0))]),
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: Some(UInt64Array::from(vec![3])),
         expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
