@@ -1213,9 +1213,6 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     break;
                 }
 
-                let mut cache_projection = predicate.projection().clone();
-                cache_projection.intersect(&projection);
-
                 let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
                     .with_parquet_metadata(&reader.metadata)
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
