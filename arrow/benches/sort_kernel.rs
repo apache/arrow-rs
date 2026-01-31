@@ -320,6 +320,21 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("rank string[10] nulls 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(19), 0.5, 10);
+    c.bench_function("sort string[10] nulls 2^19", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(19), 0.5, 100);
+    c.bench_function("sort string[100] nulls 2^19", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(19), 0.5, 1000);
+    c.bench_function("sort string[1000] nulls 2^19", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
 }
 
 criterion_group!(benches, add_benchmark);
