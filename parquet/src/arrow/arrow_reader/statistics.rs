@@ -1179,7 +1179,13 @@ macro_rules! get_data_page_statistics {
                             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
                                 for val in index.[<$stat_type_prefix:lower _values_iter>]() {
                                     match val {
-                                        Some(v) => b.append_value(v.as_ref())?,
+                                        Some(v) => {
+                                           if v.len() == *size as usize {
+                                               let _ = b.append_value(v.as_ref())?;
+                                           } else {
+                                               b.append_null();
+                                           }
+                                       }
                                         None => b.append_null(),
                                     }
                                 }
