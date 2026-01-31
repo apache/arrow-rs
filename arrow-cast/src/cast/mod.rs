@@ -241,20 +241,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
-        (_, Boolean) => {
-            DataType::is_integer(from_type)
-                || DataType::is_floating(from_type)
-                || from_type == &Utf8View
-                || from_type == &Utf8
-                || from_type == &LargeUtf8
-        }
-        (Boolean, _) => {
-            DataType::is_integer(to_type)
-                || DataType::is_floating(to_type)
-                || to_type == &Utf8View
-                || to_type == &Utf8
-                || to_type == &LargeUtf8
-        }
+
+        (_, Boolean) => from_type.is_integer() || from_type.is_floating() || from_type.is_string(),
+        (Boolean, _) => to_type.is_integer() || to_type.is_floating() || to_type.is_string(),
 
         (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View) => {
             true
@@ -284,7 +273,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         ) => true,
         (Utf8 | LargeUtf8, Utf8View) => true,
         (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View) => true,
-        (Utf8View | Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
+        (Utf8View | Utf8 | LargeUtf8, _) => to_type.is_numeric(),
         (_, Utf8 | Utf8View | LargeUtf8) => from_type.is_primitive(),
 
         (_, Binary | LargeBinary) => from_type.is_integer(),
@@ -1217,6 +1206,7 @@ pub fn cast_with_options(
             Int16 => parse_string::<Int16Type, i32>(array, cast_options),
             Int32 => parse_string::<Int32Type, i32>(array, cast_options),
             Int64 => parse_string::<Int64Type, i32>(array, cast_options),
+            Float16 => parse_string::<Float16Type, i32>(array, cast_options),
             Float32 => parse_string::<Float32Type, i32>(array, cast_options),
             Float64 => parse_string::<Float64Type, i32>(array, cast_options),
             Date32 => parse_string::<Date32Type, i32>(array, cast_options),
@@ -1279,6 +1269,7 @@ pub fn cast_with_options(
             Int16 => parse_string_view::<Int16Type>(array, cast_options),
             Int32 => parse_string_view::<Int32Type>(array, cast_options),
             Int64 => parse_string_view::<Int64Type>(array, cast_options),
+            Float16 => parse_string_view::<Float16Type>(array, cast_options),
             Float32 => parse_string_view::<Float32Type>(array, cast_options),
             Float64 => parse_string_view::<Float64Type>(array, cast_options),
             Date32 => parse_string_view::<Date32Type>(array, cast_options),
@@ -1330,6 +1321,7 @@ pub fn cast_with_options(
             Int16 => parse_string::<Int16Type, i64>(array, cast_options),
             Int32 => parse_string::<Int32Type, i64>(array, cast_options),
             Int64 => parse_string::<Int64Type, i64>(array, cast_options),
+            Float16 => parse_string::<Float16Type, i64>(array, cast_options),
             Float32 => parse_string::<Float32Type, i64>(array, cast_options),
             Float64 => parse_string::<Float64Type, i64>(array, cast_options),
             Date32 => parse_string::<Date32Type, i64>(array, cast_options),
@@ -4573,6 +4565,23 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_to_f16() {
+        let arrays = [
+            Arc::new(StringViewArray::from(vec!["3", "4.56", "seven", "8.9"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["3", "4.56", "seven", "8.9"])),
+            Arc::new(LargeStringArray::from(vec!["3", "4.56", "seven", "8.9"])),
+        ];
+        for array in arrays {
+            let b = cast(&array, &DataType::Float16).unwrap();
+            let c = b.as_primitive::<Float16Type>();
+            assert_eq!(half::f16::from_f32(3.0), c.value(0));
+            assert_eq!(half::f16::from_f32(4.56), c.value(1));
+            assert!(!c.is_valid(2));
+            assert_eq!(half::f16::from_f32(8.9), c.value(3));
+        }
+    }
+
+    #[test]
     fn test_cast_utf8view_to_decimal128() {
         let array = StringViewArray::from(vec![None, Some("4"), Some("5.6"), Some("7.89")]);
         let arr = Arc::new(array) as ArrayRef;
@@ -5676,10 +5685,7 @@ mod tests {
             vec!["4869696969", "48656c6c6f", "4869696969", "null"]
         );
         // dictionary should only have two distinct values
-        let dict_array = cast_array
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int8Type>>()
-            .unwrap();
+        let dict_array = cast_array.as_dictionary::<Int8Type>();
         assert_eq!(dict_array.values().len(), 2);
     }
 
@@ -5711,11 +5717,368 @@ mod tests {
             ]
         );
         // dictionary should only have three distinct values
-        let dict_array = cast_array
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int8Type>>()
-            .unwrap();
+        let dict_array = cast_array.as_dictionary::<Int8Type>();
         assert_eq!(dict_array.values().len(), 3);
+    }
+
+    #[test]
+    fn test_cast_string_array_to_dict_utf8_view() {
+        let array = StringArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_string_array_to_dict_utf8_view_null_vs_literal_null() {
+        let array = StringArray::from(vec![Some("one"), None, Some("null"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2);
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("null"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_string_view_array_to_dict_utf8_view() {
+        let array = StringViewArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_string_view_slice_to_dict_utf8_view() {
+        let array = StringViewArray::from(vec![
+            Some("zero"),
+            Some("one"),
+            None,
+            Some("three"),
+            Some("one"),
+        ]);
+        let view = array.slice(1, 4);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(view.data_type(), &cast_type));
+        let cast_array = cast(&view, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2);
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_binary_array_to_dict_binary_view() {
+        let mut builder = GenericBinaryBuilder::<i32>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"hiiii");
+        builder.append_value(b"hiiii"); // duplicate
+        builder.append_null();
+        builder.append_value(b"rustt");
+
+        let array = builder.finish();
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 3);
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(
+            actual,
+            vec![
+                Some(b"hello".as_slice()),
+                Some(b"hiiii".as_slice()),
+                Some(b"hiiii".as_slice()),
+                None,
+                Some(b"rustt".as_slice())
+            ]
+        );
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(3));
+        assert_eq!(keys.value(1), keys.value(2));
+        assert_ne!(keys.value(0), keys.value(1));
+    }
+
+    #[test]
+    fn test_cast_binary_view_array_to_dict_binary_view() {
+        let view = BinaryViewArray::from_iter([
+            Some(b"hello".as_slice()),
+            Some(b"hiiii".as_slice()),
+            Some(b"hiiii".as_slice()), // duplicate
+            None,
+            Some(b"rustt".as_slice()),
+        ]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(view.data_type(), &cast_type));
+        let cast_array = cast(&view, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 3);
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(
+            actual,
+            vec![
+                Some(b"hello".as_slice()),
+                Some(b"hiiii".as_slice()),
+                Some(b"hiiii".as_slice()),
+                None,
+                Some(b"rustt".as_slice())
+            ]
+        );
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(3));
+        assert_eq!(keys.value(1), keys.value(2));
+        assert_ne!(keys.value(0), keys.value(1));
+    }
+
+    #[test]
+    fn test_cast_binary_view_slice_to_dict_binary_view() {
+        let view = BinaryViewArray::from_iter([
+            Some(b"hello".as_slice()),
+            Some(b"hiiii".as_slice()),
+            Some(b"hiiii".as_slice()), // duplicate
+            None,
+            Some(b"rustt".as_slice()),
+        ]);
+        let sliced = view.slice(1, 4);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(sliced.data_type(), &cast_type));
+        let cast_array = cast(&sliced, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 2);
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(
+            actual,
+            vec![
+                Some(b"hiiii".as_slice()),
+                Some(b"hiiii".as_slice()),
+                None,
+                Some(b"rustt".as_slice())
+            ]
+        );
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(2));
+        assert_eq!(keys.value(0), keys.value(1));
+        assert_ne!(keys.value(0), keys.value(3));
+    }
+
+    #[test]
+    fn test_cast_string_array_to_dict_utf8_view_key_overflow_u8() {
+        let array = StringArray::from_iter_values((0..257).map(|i| format!("v{i}")));
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let err = cast(&array, &cast_type).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
+    }
+
+    #[test]
+    fn test_cast_large_string_array_to_dict_utf8_view() {
+        let array = LargeStringArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_large_binary_array_to_dict_binary_view() {
+        let mut builder = GenericBinaryBuilder::<i64>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"world");
+        builder.append_value(b"hello"); // duplicate
+        builder.append_null();
+
+        let array = builder.finish();
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 2); // "hello" and "world" deduplicated
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(
+            actual,
+            vec![
+                Some(b"hello".as_slice()),
+                Some(b"world".as_slice()),
+                Some(b"hello".as_slice()),
+                None
+            ]
+        );
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(3));
+        assert_eq!(keys.value(0), keys.value(2));
+        assert_ne!(keys.value(0), keys.value(1));
+    }
+
+    #[test]
+    fn test_cast_empty_string_array_to_dict_utf8_view() {
+        let array = StringArray::from(Vec::<Option<&str>>::new());
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.len(), 0);
+    }
+
+    #[test]
+    fn test_cast_empty_binary_array_to_dict_binary_view() {
+        let array = BinaryArray::from(Vec::<Option<&[u8]>>::new());
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.len(), 0);
+    }
+
+    #[test]
+    fn test_cast_all_null_string_array_to_dict_utf8_view() {
+        let array = StringArray::from(vec![None::<&str>, None, None]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.null_count(), 3);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 0);
+        assert_eq!(dict_array.keys().null_count(), 3);
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![None, None, None]);
+    }
+
+    #[test]
+    fn test_cast_all_null_binary_array_to_dict_binary_view() {
+        let array = BinaryArray::from(vec![None::<&[u8]>, None, None]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.null_count(), 3);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 0);
+        assert_eq!(dict_array.keys().null_count(), 3);
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![None, None, None]);
     }
 
     #[test]
