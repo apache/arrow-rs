@@ -652,6 +652,10 @@ impl ByteViewArrayDecoderDeltaLength {
 pub struct ByteViewArrayDecoderDelta {
     decoder: DeltaByteArrayDecoder,
     validate_utf8: bool,
+    /// Reusable scratch buffer for UTF-8 validation of short strings.
+    /// Short strings (≤12 bytes) are inlined in views but copied here for batch validation.
+    /// Reusing this buffer avoids allocating 4KB per read() call.
+    utf8_validation_buffer: Vec<u8>,
 }
 
 impl ByteViewArrayDecoderDelta {
@@ -659,6 +663,7 @@ impl ByteViewArrayDecoderDelta {
         Ok(Self {
             decoder: DeltaByteArrayDecoder::new(data)?,
             validate_utf8,
+            utf8_validation_buffer: Vec::new(),
         })
     }
 
@@ -696,10 +701,18 @@ impl ByteViewArrayDecoderDelta {
                 Ok(())
             })?
         } else {
-            // utf8 validation buffer has only short strings. These short
-            // strings are inlined into the views but we copy them into a
-            // contiguous buffer to accelerate validation.®
-            let mut utf8_validation_buffer = Vec::with_capacity(4096);
+            // Reuse the UTF-8 validation buffer - clear it but keep capacity.
+            // Short strings (≤12 bytes) are inlined into views but copied here
+            // for batch validation to accelerate UTF-8 checking.
+            //
+            // Apply a soft cap to prevent unbounded memory retention if a
+            // pathological batch caused excessive growth. 64KB is generous
+            // for short string validation while preventing memory pinning.
+            if self.utf8_validation_buffer.capacity() > 64 * 1024 {
+                self.utf8_validation_buffer = Vec::new();
+            } else {
+                self.utf8_validation_buffer.clear();
+            }
 
             let v = self.decoder.read(len, |bytes| {
                 let offset = array_buffer.len();
@@ -708,7 +721,7 @@ impl ByteViewArrayDecoderDelta {
                     // only copy the data to buffer if the string can not be inlined.
                     array_buffer.extend_from_slice(bytes);
                 } else {
-                    utf8_validation_buffer.extend_from_slice(bytes);
+                    self.utf8_validation_buffer.extend_from_slice(bytes);
                 }
 
                 // # Safety
@@ -721,7 +734,7 @@ impl ByteViewArrayDecoderDelta {
                 Ok(())
             })?;
             check_valid_utf8(&array_buffer)?;
-            check_valid_utf8(&utf8_validation_buffer)?;
+            check_valid_utf8(&self.utf8_validation_buffer)?;
             v
         };
 
