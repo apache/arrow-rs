@@ -19,6 +19,58 @@ use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
 use std::collections::HashMap;
 
+/// A cached batch containing array data and optional definition/repetition levels
+#[derive(Debug, Clone)]
+pub struct CachedBatch {
+    /// The decoded array data
+    pub array: ArrayRef,
+    /// Definition levels for nullability tracking in nested structures
+    pub def_levels: Option<Vec<i16>>,
+    /// Repetition levels for list boundary tracking
+    pub rep_levels: Option<Vec<i16>>,
+}
+
+impl CachedBatch {
+    /// Creates a new cached batch with just array data (no levels)
+    #[cfg(test)]
+    pub fn new(array: ArrayRef) -> Self {
+        Self {
+            array,
+            def_levels: None,
+            rep_levels: None,
+        }
+    }
+
+    /// Creates a new cached batch with array data and levels
+    pub fn with_levels(
+        array: ArrayRef,
+        def_levels: Option<Vec<i16>>,
+        rep_levels: Option<Vec<i16>>,
+    ) -> Self {
+        Self {
+            array,
+            def_levels,
+            rep_levels,
+        }
+    }
+
+    /// Returns the memory size of this cached batch
+    fn memory_size(&self) -> usize {
+        let array_size = get_array_memory_size_for_cache(&self.array);
+        let def_size = self
+            .def_levels
+            .as_ref()
+            .map(|l| l.capacity() * std::mem::size_of::<i16>())
+            .unwrap_or(0);
+        let rep_size = self
+            .rep_levels
+            .as_ref()
+            .map(|l| l.capacity() * std::mem::size_of::<i16>())
+            .unwrap_or(0);
+        array_size + def_size + rep_size
+    }
+}
+
 /// Starting row ID for this batch
 ///
 /// The `BatchID` is used to identify batches of rows within a row group.
@@ -62,8 +114,8 @@ fn get_array_memory_size_for_cache(array: &ArrayRef) -> usize {
 /// appears in both filter predicates and output projection.
 #[derive(Debug)]
 pub struct RowGroupCache {
-    /// Cache storage mapping (column_idx, row_id) -> ArrayRef
-    cache: HashMap<CacheKey, ArrayRef>,
+    /// Cache storage mapping (column_idx, row_id) -> CachedBatch
+    cache: HashMap<CacheKey, CachedBatch>,
     /// Cache granularity
     batch_size: usize,
     /// Maximum cache size in bytes
@@ -83,13 +135,13 @@ impl RowGroupCache {
         }
     }
 
-    /// Inserts an array into the cache for the given column and starting row ID
-    /// Returns true if the array was inserted, false if it would exceed the cache size limit
-    pub fn insert(&mut self, column_idx: usize, batch_id: BatchID, array: ArrayRef) -> bool {
-        let array_size = get_array_memory_size_for_cache(&array);
+    /// Inserts a batch into the cache for the given column and starting row ID
+    /// Returns true if the batch was inserted, false if it would exceed the cache size limit
+    pub fn insert(&mut self, column_idx: usize, batch_id: BatchID, batch: CachedBatch) -> bool {
+        let batch_size = batch.memory_size();
 
-        // Check if adding this array would exceed the cache size limit
-        if self.current_cache_size + array_size > self.max_cache_bytes {
+        // Check if adding this batch would exceed the cache size limit
+        if self.current_cache_size + batch_size > self.max_cache_bytes {
             return false; // Cache is full, don't insert
         }
 
@@ -98,15 +150,15 @@ impl RowGroupCache {
             batch_id,
         };
 
-        let existing = self.cache.insert(key, array);
+        let existing = self.cache.insert(key, batch);
         assert!(existing.is_none());
-        self.current_cache_size += array_size;
+        self.current_cache_size += batch_size;
         true
     }
 
-    /// Retrieves a cached array for the given column and row ID
+    /// Retrieves a cached batch for the given column and row ID
     /// Returns None if not found in cache
-    pub fn get(&self, column_idx: usize, batch_id: BatchID) -> Option<ArrayRef> {
+    pub fn get(&self, column_idx: usize, batch_id: BatchID) -> Option<CachedBatch> {
         let key = CacheKey {
             column_idx,
             batch_id,
@@ -119,15 +171,15 @@ impl RowGroupCache {
         self.batch_size
     }
 
-    /// Removes a cached array for the given column and row ID
+    /// Removes a cached batch for the given column and row ID
     /// Returns true if the entry was found and removed, false otherwise
     pub fn remove(&mut self, column_idx: usize, batch_id: BatchID) -> bool {
         let key = CacheKey {
             column_idx,
             batch_id,
         };
-        if let Some(array) = self.cache.remove(&key) {
-            self.current_cache_size -= get_array_memory_size_for_cache(&array);
+        if let Some(batch) = self.cache.remove(&key) {
+            self.current_cache_size -= batch.memory_size();
             true
         } else {
             false
@@ -147,13 +199,14 @@ mod tests {
 
         // Create test array
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let batch = CachedBatch::new(array);
 
         // Test insert and get
         let batch_id = BatchID { val: 0 };
-        assert!(cache.insert(0, batch_id, array.clone()));
+        assert!(cache.insert(0, batch_id, batch));
         let retrieved = cache.get(0, batch_id);
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().len(), 5);
+        assert_eq!(retrieved.unwrap().array.len(), 5);
 
         // Test miss
         let miss = cache.get(1, batch_id);
@@ -172,10 +225,10 @@ mod tests {
         let array1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let array2: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
 
-        // Insert arrays
-        assert!(cache.insert(0, BatchID { val: 0 }, array1.clone()));
-        assert!(cache.insert(0, BatchID { val: 1000 }, array2.clone()));
-        assert!(cache.insert(1, BatchID { val: 0 }, array1.clone()));
+        // Insert batches
+        assert!(cache.insert(0, BatchID { val: 0 }, CachedBatch::new(array1.clone())));
+        assert!(cache.insert(0, BatchID { val: 1000 }, CachedBatch::new(array2.clone())));
+        assert!(cache.insert(1, BatchID { val: 0 }, CachedBatch::new(array1.clone())));
 
         // Verify they're there
         assert!(cache.get(0, BatchID { val: 0 }).is_some());
