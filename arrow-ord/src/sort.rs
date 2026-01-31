@@ -1107,7 +1107,7 @@ mod tests {
     ) {
         let output = create_decimal_array::<T>(data, precision, scale);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1119,7 +1119,7 @@ mod tests {
     ) {
         let output = create_decimal256_array(data);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1134,8 +1134,8 @@ mod tests {
         let output = create_decimal_array::<T>(data, p, s);
         let expected = Arc::new(create_decimal_array::<T>(expected_data, p, s)) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected)
     }
@@ -1149,8 +1149,8 @@ mod tests {
         let output = create_decimal256_array(data);
         let expected = Arc::new(create_decimal256_array(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected)
     }
@@ -1163,7 +1163,7 @@ mod tests {
     ) {
         let output = BooleanArray::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1178,7 +1178,7 @@ mod tests {
     {
         let output = PrimitiveArray::<T>::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1194,8 +1194,8 @@ mod tests {
         let output = PrimitiveArray::<T>::from(data);
         let expected = Arc::new(PrimitiveArray::<T>::from(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected)
     }
@@ -1208,7 +1208,7 @@ mod tests {
     ) {
         let output = StringArray::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1222,24 +1222,24 @@ mod tests {
         let output = StringArray::from(data.clone());
         let expected = Arc::new(StringArray::from(expected_data.clone())) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected);
 
         let output = LargeStringArray::from(data.clone());
         let expected = Arc::new(LargeStringArray::from(expected_data.clone())) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected);
 
         let output = StringViewArray::from(data);
         let expected = Arc::new(StringViewArray::from(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected);
     }
@@ -1258,8 +1258,8 @@ mod tests {
             .expect("Unable to get dictionary values");
 
         let sorted = match limit {
-            Some(_) => sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(array) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&array, options, limit).unwrap(),
+            _ => sort(&array, options).unwrap(),
         };
         let sorted = sorted
             .as_any()
@@ -1300,8 +1300,8 @@ mod tests {
         let dict = array_values.as_primitive::<T>();
 
         let sorted = match limit {
-            Some(_) => sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(array) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&array, options, limit).unwrap(),
+            _ => sort(&array, options).unwrap(),
         };
         let sorted = sorted
             .as_any()

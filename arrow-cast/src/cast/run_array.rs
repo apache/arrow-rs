@@ -68,7 +68,7 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
                             ));
                         }
                     };
-                    Ok(Arc::new(new_run_array))
+                    Ok(new_run_array)
                 }
 
                 // Expand to logical form
