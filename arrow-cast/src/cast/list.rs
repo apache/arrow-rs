@@ -99,10 +99,7 @@ fn cast_fixed_size_list_to_list_inner<OffsetSize: OffsetSizeTrait, const IS_LIST
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_fixed_size_list();
-    let (inner_field, size) = if let DataType::FixedSizeList(inner_field, size) = array.data_type()
-    {
-        (inner_field, size)
-    } else {
+    let DataType::FixedSizeList(inner_field, size) = array.data_type() else {
         unreachable!()
     };
     let array = if to.data_type() != inner_field.data_type() {
