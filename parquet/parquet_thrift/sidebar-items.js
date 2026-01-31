@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ElementType","FieldType","ThriftProtocolError"],"fn":["read_thrift_vec"],"struct":["FieldIdentifier","ListIdentifier","OrderedF64","ThriftCompactOutputProtocol","ThriftReadInputProtocol","ThriftSliceInputProtocol"],"trait":["ReadThrift","ThriftCompactInputProtocol","WriteThrift","WriteThriftField"],"type":["ThriftProtocolResult"]};
