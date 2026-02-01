@@ -551,4 +551,12 @@ mod tests {
         let err_return = array.into_builder().unwrap_err();
         assert_eq!(&err_return, &shared_array);
     }
+
+    #[test]
+    fn test_non_null_string_array_equal() {
+        let a = StringArray::from(vec![Some("ab"), Some("c")]);
+        let b = StringArray::from(vec![Some("a"), Some("bc")]);
+
+        assert_ne!(a, b);
+    }
 }
