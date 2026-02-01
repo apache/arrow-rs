@@ -94,29 +94,33 @@ mod tests {
     #[test]
     fn test_primitive_array_heap_size() {
         let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let size = array.heap_size();
-        assert!(size >= 5 * std::mem::size_of::<i32>());
+        // HeapSize should mirror the Array memory size APIs
+        assert_eq!(array.heap_size(), array.get_buffer_memory_size());
+        assert_eq!(array.total_size(), array.get_array_memory_size());
     }
 
     #[test]
     fn test_string_array_heap_size() {
         let array = StringArray::from(vec!["hello", "world"]);
-        let size = array.heap_size();
-        // Should include offset buffer + data buffer
-        assert!(size > 0);
+        // Buffer capacities depend on allocator alignment and may vary by platform
+        assert_eq!(array.heap_size(), array.get_buffer_memory_size());
+        assert_eq!(array.total_size(), array.get_array_memory_size());
     }
 
     #[test]
     fn test_boolean_array_heap_size() {
         let array = BooleanArray::from(vec![true, false, true]);
-        let size = array.heap_size();
-        assert!(size > 0);
+        // Packed bits make heap_size small, but struct size is platform-dependent
+        assert_eq!(array.heap_size(), array.get_buffer_memory_size());
+        assert_eq!(array.total_size(), array.get_array_memory_size());
     }
 
     #[test]
     fn test_null_array_heap_size() {
         let array = NullArray::new(100);
-        assert_eq!(array.heap_size(), 0);
+        // NullArray has no buffers; total size still depends on struct layout
+        assert_eq!(array.heap_size(), array.get_buffer_memory_size());
+        assert_eq!(array.total_size(), array.get_array_memory_size());
     }
 
     #[test]
@@ -132,7 +136,8 @@ mod tests {
             .append_value(1);
         builder.append(true);
         let array = builder.finish();
-        let size = array.heap_size();
-        assert!(size > 0);
+        // StructArray aggregates child buffers; sizes depend on allocator and layout
+        assert_eq!(array.heap_size(), array.get_buffer_memory_size());
+        assert_eq!(array.total_size(), array.get_array_memory_size());
     }
 }
