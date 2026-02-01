@@ -1050,7 +1050,7 @@ impl<K: ArrowDictionaryKeyType> AnyDictionaryArray for DictionaryArray<K> {
 mod tests {
     use super::*;
     use crate::cast::as_dictionary_array;
-    use crate::{Int8Array, Int16Array, Int32Array, RunArray};
+    use crate::{Int8Array, Int16Array, Int32Array, RunArray, UInt8Array};
     use arrow_buffer::{Buffer, ToByteSlice};
 
     #[test]
@@ -1533,5 +1533,11 @@ mod tests {
     }
 
     #[test]
-    fn test_all_null_dict() {}
+    fn test_all_null_dict() {
+        let all_null_dict_arr = DictionaryArray::try_new(
+            UInt8Array::new_null(10),
+            Arc::new(StringArray::from_iter_values(["a"])),
+        );
+        assert!(all_null_dict_arr.is_ok())
+    }
 }
