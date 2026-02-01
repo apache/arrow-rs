@@ -292,17 +292,20 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
             Box::new(values.data_type().clone()),
         );
 
-        let zero = K::Native::usize_as(0);
-        let values_len = values.len();
+        // // we can skip the validating the keys if they are all null
+        let all_null = keys.null_count() == keys.len();
 
-        if let Some((idx, v)) =
-            keys.values().iter().enumerate().find(|(idx, v)| {
+        if !all_null {
+            let zero = K::Native::usize_as(0);
+            let values_len = values.len();
+
+            if let Some((idx, v)) = keys.values().iter().enumerate().find(|(idx, v)| {
                 (v.is_lt(zero) || v.as_usize() >= values_len) && keys.is_valid(*idx)
-            })
-        {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Invalid dictionary key {v:?} at index {idx}, expected 0 <= key < {values_len}",
-            )));
+            }) {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Invalid dictionary key {v:?} at index {idx}, expected 0 <= key < {values_len}",
+                )));
+            }
         }
 
         Ok(Self {
@@ -1528,4 +1531,7 @@ mod tests {
         let dictionary = DictionaryArray::new(keys, Arc::new(Int32Array::new_null(2)));
         assert_eq!(&dictionary.normalized_keys(), &[1, 0, 1])
     }
+
+    #[test]
+    fn test_all_null_dict() {}
 }

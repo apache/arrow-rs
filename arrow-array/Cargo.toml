@@ -76,6 +76,10 @@ name = "fixed_size_list_array"
 harness = false
 
 [[bench]]
+name = "null_dict"
+harness = false
+
+[[bench]]
 name = "decimal_overflow"
 harness = false
 
