@@ -6866,45 +6866,141 @@ mod test {
     }
 
     #[test]
-    fn test_nested_record_field_addition_and_read_as_nullable() {
-        let file = arrow_test_data("avro/nested_record_spark.avro");
+    fn test_nested_record_field_addition() {
+        let file = arrow_test_data("avro/nested_records.avro");
 
-        let reader_schema_json = serde_json::json!({
-            "fields": [
-                {
-                    "name": "id",
-                    "type": "int"
-                },
-                {
-                    "name": "person",
-                    "type": [
-                        "null",
-                        {
-                            "fields": [
-                                {
-                                    "name": "name",
-                                    "type": ["null", "string"]
-                                },
-                                {
-                                    "name": "age",
-                                    "type": ["null", "int"]
-                                },
-                                {
-                                    "default": null,
-                                    "name": "city",
-                                    "type": ["null", "string"]
-                                }
-                            ],
-                            "name": "r2",
-                            "type": "record"
+        // Adds fields to the writer schema:
+        // * "ns2.record2" / "f1_4"
+        //   - nullable
+        //   - added last
+        //   - the containing "f1" field is made nullable in the reader
+        // * "ns4.record4" / "f2_3"
+        //   - non-nullable with an integer default value
+        //   - resolution of a record nested in an array
+        // * "ns5.record5" / "f3_0"
+        //   - non-nullable with a string default value
+        //   - prepended before existing fields in the schema order
+        let reader_schema = AvroSchema::new(
+            r#"
+            {
+                "type": "record",
+                "name": "record1",
+                "namespace": "ns1",
+                "fields": [
+                    {
+                        "name": "f1",
+                        "type": [
+                            "null",
+                            {
+                                "type": "record",
+                                "name": "record2",
+                                "namespace": "ns2",
+                                "fields": [
+                                    {
+                                        "name": "f1_1",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "name": "f1_2",
+                                        "type": "int"
+                                    },
+                                    {
+                                        "name": "f1_3",
+                                        "type": {
+                                            "type": "record",
+                                            "name": "record3",
+                                            "namespace": "ns3",
+                                            "fields": [
+                                                {
+                                                    "name": "f1_3_1",
+                                                    "type": "double"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "f1_4",
+                                        "type": ["null", "int"],
+                                        "default": null
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "name": "f2",
+                        "type": {
+                            "type": "array",
+                            "items": {
+                                "type": "record",
+                                "name": "record4",
+                                "namespace": "ns4",
+                                "fields": [
+                                    {
+                                        "name": "f2_1",
+                                        "type": "boolean"
+                                    },
+                                    {
+                                        "name": "f2_2",
+                                        "type": "float"
+                                    },
+                                    {
+                                        "name": "f2_3",
+                                        "type": ["null", "int"],
+                                        "default": 42
+                                    }
+                                ]
+                            }
                         }
-                    ]
-                }
-            ],
-            "name": "table",
-            "type": "record"
-        });
-        let reader_schema = AvroSchema::new(reader_schema_json.to_string());
+                    },
+                    {
+                        "name": "f3",
+                        "type": [
+                            "null",
+                            {
+                                "type": "record",
+                                "name": "record5",
+                                "namespace": "ns5",
+                                "fields": [
+                                    {
+                                        "name": "f3_0",
+                                        "type": "string",
+                                        "default": "lorem ipsum"
+                                    },
+                                    {
+                                        "name": "f3_1",
+                                        "type": "string"
+                                    }
+                                ]
+                            }
+                        ],
+                        "default": null
+                    },
+                    {
+                        "name": "f4",
+                        "type": {
+                            "type": "array",
+                            "items": [
+                                "null",
+                                {
+                                    "type": "record",
+                                    "name": "record6",
+                                    "namespace": "ns6",
+                                    "fields": [
+                                        {
+                                            "name": "f4_1",
+                                            "type": "long"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+            "#
+            .to_string(),
+        );
 
         let file = File::open(&file).unwrap();
         let mut reader = ReaderBuilder::new()
@@ -6918,6 +7014,113 @@ mod test {
             .expect("reading should succeed");
 
         assert!(batch.num_rows() > 0);
+
+        let schema = batch.schema();
+
+        let f1_field = schema.field_with_name("f1").expect("f1 field should exist");
+        if let DataType::Struct(f1_fields) = f1_field.data_type() {
+            let (_, f1_4) = f1_fields
+                .find("f1_4")
+                .expect("f1_4 field should be present in record2");
+            assert!(f1_4.is_nullable(), "f1_4 should be nullable");
+            assert_eq!(f1_4.data_type(), &DataType::Int32, "f1_4 should be Int32");
+            assert_eq!(
+                f1_4.metadata().get("avro.field.default"),
+                Some(&"null".to_string()),
+                "f1_4 should have null default value in metadata"
+            );
+        } else {
+            panic!("f1 should be a struct");
+        }
+
+        let f2_field = schema.field_with_name("f2").expect("f2 field should exist");
+        if let DataType::List(f2_items_field) = f2_field.data_type() {
+            if let DataType::Struct(f2_items_fields) = f2_items_field.data_type() {
+                let (_, f2_3) = f2_items_fields
+                    .find("f2_3")
+                    .expect("f2_3 field should be present in record4");
+                assert!(f2_3.is_nullable(), "f2_3 should be nullable");
+                assert_eq!(f2_3.data_type(), &DataType::Int32, "f2_3 should be Int32");
+                assert_eq!(
+                    f2_3.metadata().get("avro.field.default"),
+                    Some(&"42".to_string()),
+                    "f2_3 should have 42 default value in metadata"
+                );
+            } else {
+                panic!("f2 array items should be a struct");
+            }
+        } else {
+            panic!("f2 should be a list");
+        }
+
+        let f3_field = schema.field_with_name("f3").expect("f3 field should exist");
+        assert!(f3_field.is_nullable(), "f3 should be nullable");
+        if let DataType::Struct(f3_fields) = f3_field.data_type() {
+            let (_, f3_0) = f3_fields
+                .find("f3_0")
+                .expect("f3_0 field should be present in record5");
+            assert!(!f3_0.is_nullable(), "f3_0 should be non-nullable");
+            assert_eq!(f3_0.data_type(), &DataType::Utf8, "f3_0 should be a string");
+            assert_eq!(
+                f3_0.metadata().get("avro.field.default"),
+                Some(&"\"lorem ipsum\"".to_string()),
+                "f3_0 should have \"lorem ipsum\" default value in metadata"
+            );
+        } else {
+            panic!("f3 should be a struct");
+        }
+
+        // Verify the actual values in the columns match the expected defaults
+        let num_rows = batch.num_rows();
+
+        // Check f1_4 values (should all be null since default is null)
+        let f1_array = batch
+            .column_by_name("f1")
+            .expect("f1 column should exist")
+            .as_struct();
+        let f1_4_array = f1_array
+            .column_by_name("f1_4")
+            .expect("f1_4 column should exist in f1 struct")
+            .as_primitive::<Int32Type>();
+
+        assert_eq!(f1_4_array.null_count(), num_rows);
+
+        let f2_array = batch
+            .column_by_name("f2")
+            .expect("f2 column should exist")
+            .as_list::<i32>();
+
+        for i in 0..num_rows {
+            assert!(!f2_array.is_null(i));
+            let f2_value = f2_array.value(i);
+            let f2_record_array = f2_value.as_struct();
+            let f2_3_array = f2_record_array
+                .column_by_name("f2_3")
+                .expect("f2_3 column should exist in f2 array items")
+                .as_primitive::<Int32Type>();
+
+            for j in 0..f2_3_array.len() {
+                assert!(!f2_3_array.is_null(j));
+                assert_eq!(f2_3_array.value(j), 42);
+            }
+        }
+
+        let f3_array = batch
+            .column_by_name("f3")
+            .expect("f3 column should exist")
+            .as_struct();
+        let f3_0_array = f3_array
+            .column_by_name("f3_0")
+            .expect("f3_0 column should exist in f3 struct")
+            .as_string::<i32>();
+
+        for i in 0..num_rows {
+            // Only check f3_0 when the parent f3 struct is not null
+            if !f3_array.is_null(i) {
+                assert!(!f3_0_array.is_null(i));
+                assert_eq!(f3_0_array.value(i), "lorem ipsum");
+            }
+        }
     }
 
     #[test]
