@@ -513,36 +513,42 @@ impl Decoder {
         Ok(match data_type.nullability() {
             Some(nullability) => {
                 // Default to reading a union branch tag unless the resolution directs otherwise.
-                let mut plan = NullablePlan::ReadTag { nullability };
-                match &data_type.resolution {
-                    None => {}
-                    Some(ResolutionInfo::Union(info))
-                        if !info.writer_is_union && info.reader_is_union =>
-                    {
-                        if let Some(Some((_reader_idx, resolution))) = info.writer_to_reader.first()
-                        {
-                            let resolution = ResolutionPlan::try_new(&decoder, resolution)?;
-                            plan = NullablePlan::FromSingle { resolution };
-                        } else {
-                            panic!(
-                                "unexpected union resolution state for non-union writer and union reader type"
-                            );
-                        }
-                    }
-                    Some(ResolutionInfo::Union(_)) => {}
+                let plan = match &data_type.resolution {
+                    None => NullablePlan::ReadTag {
+                        nullability,
+                        resolution: ResolutionPlan::Promotion(Promotion::Direct),
+                    },
                     Some(ResolutionInfo::Promotion(_)) => {
                         // Promotions should have been incorporated
                         // into the inner decoder.
-                        plan = NullablePlan::FromSingle {
+                        NullablePlan::FromSingle {
                             resolution: ResolutionPlan::Promotion(Promotion::Direct),
-                        };
+                        }
                     }
-                    Some(resolution) => {
-                        plan = NullablePlan::FromSingle {
+                    Some(ResolutionInfo::Union(info)) if !info.writer_is_union => {
+                        let Some(Some((_, resolution))) = info.writer_to_reader.first() else {
+                            panic!(
+                                "unexpected union resolution info for non-union writer and union reader type",
+                            );
+                        };
+                        let resolution = ResolutionPlan::try_new(&decoder, resolution)?;
+                        NullablePlan::FromSingle { resolution }
+                    }
+                    Some(ResolutionInfo::Union(info)) => {
+                        let Some((_, resolution)) =
+                            info.writer_to_reader[nullability.non_null_index()].as_ref()
+                        else {
+                            panic!("unexpected union resolution info for nullable writer type");
+                        };
+                        NullablePlan::ReadTag {
+                            nullability,
                             resolution: ResolutionPlan::try_new(&decoder, resolution)?,
-                        };
+                        }
                     }
-                }
+                    Some(resolution) => NullablePlan::FromSingle {
+                        resolution: ResolutionPlan::try_new(&decoder, resolution)?,
+                    },
+                };
                 Self::Nullable(
                     plan,
                     NullBufferBuilder::new(DEFAULT_CAPACITY),
@@ -989,7 +995,10 @@ impl Decoder {
                         encoding.decode_with_resolution(buf, resolution)?;
                         nb.append(true);
                     }
-                    NullablePlan::ReadTag { nullability } => {
+                    NullablePlan::ReadTag {
+                        nullability,
+                        resolution,
+                    } => {
                         let branch = buf.read_vlq()?;
                         let is_not_null = match *nullability {
                             Nullability::NullFirst => branch != 0,
@@ -997,7 +1006,7 @@ impl Decoder {
                         };
                         if is_not_null {
                             // It is important to decode before appending to null buffer in case of decode error
-                            encoding.decode(buf)?;
+                            encoding.decode_with_resolution(buf, resolution)?;
                         } else {
                             encoding.append_null()?;
                         }
@@ -1341,7 +1350,10 @@ impl Decoder {
 #[derive(Debug)]
 enum NullablePlan {
     /// Writer actually wrote a union (branch tag present).
-    ReadTag { nullability: Nullability },
+    ReadTag {
+        nullability: Nullability,
+        resolution: ResolutionPlan,
+    },
     /// Writer wrote a single (non-union) value resolved to the non-null branch
     /// of the reader union; do NOT read a branch tag, but apply any resolution.
     FromSingle { resolution: ResolutionPlan },
@@ -3211,6 +3223,7 @@ mod tests {
         let mut decoder = Decoder::Nullable(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
@@ -3255,6 +3268,7 @@ mod tests {
         let mut decoder = Decoder::Nullable(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
@@ -4136,6 +4150,7 @@ mod tests {
         let mut dec = Decoder::Nullable(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullFirst,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
@@ -4391,6 +4406,7 @@ mod tests {
         let enc_a = Decoder::Nullable(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY))),
@@ -4398,6 +4414,7 @@ mod tests {
         let enc_b = Decoder::Nullable(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(Decoder::String(
