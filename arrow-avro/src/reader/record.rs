@@ -1378,10 +1378,10 @@ impl ResolutionPlan {
             (_, ResolutionInfo::Promotion(p)) => Ok(ResolutionPlan::Promotion(*p)),
             (_, ResolutionInfo::DefaultValue(lit)) => Ok(ResolutionPlan::DefaultValue(lit.clone())),
             (_, ResolutionInfo::EnumMapping(m)) => {
-                Ok(ResolutionPlan::EnumMapping(EnumResolution::new(&m)))
+                Ok(ResolutionPlan::EnumMapping(EnumResolution::new(m)))
             }
             (Decoder::Record(_, _, field_defaults, _), ResolutionInfo::Record(r)) => Ok(
-                ResolutionPlan::Record(ProjectorBuilder::try_new(&r, &field_defaults).build()?),
+                ResolutionPlan::Record(ProjectorBuilder::try_new(r, field_defaults).build()?),
             ),
             (_, ResolutionInfo::Record(_)) => {
                 unreachable!("record resolution on non-record decoder")
