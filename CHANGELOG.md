@@ -30,6 +30,7 @@
 
 **Fixed bugs:**
 
+- Fix string array equality when the values buffer is the same and only the offsets to access it differ [#9330](https://github.com/apache/arrow-rs/pull/9330) ([alamb](https://github.com/alamb))
 - Ensure `BufferBuilder::truncate` doesn't overset length [#9311](https://github.com/apache/arrow-rs/pull/9311) ([alamb](https://github.com/alamb))
 - [parquet] Provide only encrypted column stats in plaintext footer [#9310](https://github.com/apache/arrow-rs/pull/9310) ([alamb](https://github.com/alamb))
 - [regression] Error with adaptive predicate pushdown: "Invalid offset …" [#9309](https://github.com/apache/arrow-rs/pull/9309) ([alamb](https://github.com/alamb))
