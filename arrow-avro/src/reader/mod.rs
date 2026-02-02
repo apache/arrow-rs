@@ -6824,6 +6824,103 @@ mod test {
     }
 
     #[test]
+    fn test_bad_varint_bug_nullable_array_items() {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let gz_path = format!("{manifest_dir}/test/data/bad-varint-bug.avro.gz");
+        let gz_file = File::open(&gz_path).expect("test file should exist");
+        let mut decoder = GzDecoder::new(gz_file);
+        let mut avro_bytes = Vec::new();
+        decoder
+            .read_to_end(&mut avro_bytes)
+            .expect("should decompress");
+        let reader_arrow_schema = Schema::new(vec![Field::new(
+            "int_array",
+            DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+            true,
+        )])
+        .with_metadata(HashMap::from([("avro.name".into(), "table".into())]));
+        let reader_schema = AvroSchema::try_from(&reader_arrow_schema)
+            .expect("should convert Arrow schema to Avro");
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(avro_bytes))
+            .expect("should build reader");
+        let batch = reader
+            .next()
+            .expect("should have one batch")
+            .expect("reading should succeed without bad varint error");
+        assert_eq!(batch.num_rows(), 1);
+        let list_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("should be ListArray");
+        assert_eq!(list_col.len(), 1);
+        let values = list_col.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 2);
+        assert_eq!(int_values.value(0), 1);
+        assert_eq!(int_values.value(1), 2);
+    }
+
+    #[test]
+    fn test_nested_record_field_addition_and_read_as_nullable() {
+        let file = arrow_test_data("avro/nested_record_spark.avro");
+
+        let reader_schema_json = serde_json::json!({
+            "fields": [
+                {
+                    "name": "id",
+                    "type": "int"
+                },
+                {
+                    "name": "person",
+                    "type": [
+                        "null",
+                        {
+                            "fields": [
+                                {
+                                    "name": "name",
+                                    "type": ["null", "string"]
+                                },
+                                {
+                                    "name": "age",
+                                    "type": ["null", "int"]
+                                },
+                                {
+                                    "default": null,
+                                    "name": "city",
+                                    "type": ["null", "string"]
+                                }
+                            ],
+                            "name": "r2",
+                            "type": "record"
+                        }
+                    ]
+                }
+            ],
+            "name": "table",
+            "type": "record"
+        });
+        let reader_schema = AvroSchema::new(reader_schema_json.to_string());
+
+        let file = File::open(&file).unwrap();
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(BufReader::new(file))
+            .expect("reader with evolved reader schema should be built successfully");
+
+        let batch = reader
+            .next()
+            .expect("should have at least one batch")
+            .expect("reading should succeed");
+
+        assert!(batch.num_rows() > 0);
+    }
+
+    #[test]
     fn comprehensive_e2e_test() {
         let path = "test/data/comprehensive_e2e.avro";
         let batch = read_file(path, 1024, false);
@@ -9088,47 +9185,5 @@ mod test {
             expected, batch,
             "entire RecordBatch mismatch (schema, all columns, all rows)"
         );
-    }
-
-    #[test]
-    fn test_bad_varint_bug_nullable_array_items() {
-        use flate2::read::GzDecoder;
-        use std::io::Read;
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let gz_path = format!("{manifest_dir}/test/data/bad-varint-bug.avro.gz");
-        let gz_file = File::open(&gz_path).expect("test file should exist");
-        let mut decoder = GzDecoder::new(gz_file);
-        let mut avro_bytes = Vec::new();
-        decoder
-            .read_to_end(&mut avro_bytes)
-            .expect("should decompress");
-        let reader_arrow_schema = Schema::new(vec![Field::new(
-            "int_array",
-            DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
-            true,
-        )])
-        .with_metadata(HashMap::from([("avro.name".into(), "table".into())]));
-        let reader_schema = AvroSchema::try_from(&reader_arrow_schema)
-            .expect("should convert Arrow schema to Avro");
-        let mut reader = ReaderBuilder::new()
-            .with_reader_schema(reader_schema)
-            .build(Cursor::new(avro_bytes))
-            .expect("should build reader");
-        let batch = reader
-            .next()
-            .expect("should have one batch")
-            .expect("reading should succeed without bad varint error");
-        assert_eq!(batch.num_rows(), 1);
-        let list_col = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .expect("should be ListArray");
-        assert_eq!(list_col.len(), 1);
-        let values = list_col.values();
-        let int_values = values.as_primitive::<Int32Type>();
-        assert_eq!(int_values.len(), 2);
-        assert_eq!(int_values.value(0), 1);
-        assert_eq!(int_values.value(1), 2);
     }
 }
