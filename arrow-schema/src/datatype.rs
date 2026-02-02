@@ -648,7 +648,9 @@ impl DataType {
         matches!(self, Utf8 | LargeUtf8 | Utf8View)
     }
 
-    /// Returns true if this type is a List type
+    /// Returns true if this type is a List type.
+    ///
+    /// List types include List, LargeList, FixedSizeList, ListView, and LargeListView.
     #[inline]
     pub fn is_list(&self) -> bool {
         use DataType::*;
@@ -658,7 +660,9 @@ impl DataType {
         )
     }
 
-    /// Returns true if this type is a Binary type
+    /// Returns true if this type is a Binary type.
+    ///
+    /// Binary types include Binary, LargeBinary, FixedSizeBinary and BinaryView.
     #[inline]
     pub fn is_binary(&self) -> bool {
         use DataType::*;
