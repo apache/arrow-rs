@@ -1954,7 +1954,7 @@ mod tests {
             .len(3)
             .build()
             .unwrap();
-        let array9: ArrayRef = Arc::new(StructArray::from(array9));
+        let array9 = StructArray::from(array9);
 
         let array10_input = vec![Some(1_i32), None, None];
         let mut array10_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
@@ -1982,7 +1982,7 @@ mod tests {
                 Arc::new(array6),
                 Arc::new(array7),
                 Arc::new(array8),
-                array9,
+                Arc::new(array9),
                 Arc::new(array10),
                 Arc::new(array11),
                 Arc::new(array12),
