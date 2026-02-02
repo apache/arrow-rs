@@ -361,9 +361,8 @@ impl MapArray {
     }
 }
 
-impl super::private::Sealed for MapArray {}
-
-impl Array for MapArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for MapArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
