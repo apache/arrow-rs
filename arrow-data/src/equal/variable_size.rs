@@ -113,7 +113,7 @@ mod tests {
                 Buffer::from_vec(vec![0_i32, 3, 6]),
                 Buffer::from_slice_ref(b"foobar"),
             ])
-            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b01_u8])))
+            .null_bit_buffer(Some(Buffer::from_slice_ref([0b01_u8])))
             .len(2)
             .build()
             .unwrap();
@@ -122,7 +122,7 @@ mod tests {
                 Buffer::from_vec(vec![0_i32, 2, 6]),
                 Buffer::from_slice_ref(b"foobar"),
             ])
-            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b01_u8])))
+            .null_bit_buffer(Some(Buffer::from_slice_ref([0b01_u8])))
             .len(2)
             .build()
             .unwrap();
