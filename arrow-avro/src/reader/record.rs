@@ -3057,7 +3057,6 @@ mod tests {
             attributes: Attributes::default(),
         }));
         let dt = resolved_root_datatype(writer_schema, reader_schema, false, false);
-        dbg!(&dt);
         if let Codec::List(inner) = dt.codec() {
             assert_eq!(
                 inner.nullability(),
