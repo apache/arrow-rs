@@ -530,11 +530,16 @@ impl Decoder {
                         }
                     }
                     Some(ResolutionInfo::Union(_)) => {}
-                    Some(_) => {
-                        // Any resolution other than Union should have been incorporated
+                    Some(ResolutionInfo::Promotion(_)) => {
+                        // Promotions should have been incorporated
                         // into the inner decoder.
                         plan = NullablePlan::FromSingle {
                             resolution: ResolutionPlan::Promotion(Promotion::Direct),
+                        };
+                    }
+                    Some(resolution) => {
+                        plan = NullablePlan::FromSingle {
+                            resolution: ResolutionPlan::try_new(&decoder, resolution)?,
                         };
                     }
                 }
@@ -1084,6 +1089,7 @@ impl Decoder {
                 let promotion = *promotion;
                 self.decode_with_promotion(buf, promotion)
             }
+            ResolutionPlan::DefaultValue(lit) => self.append_default(lit),
             ResolutionPlan::EnumMapping(res) => {
                 let Self::Enum(indices, _, _) = self else {
                     panic!("enum mapping resolution provided for non-enum decoder");
@@ -1098,9 +1104,6 @@ impl Decoder {
                     panic!("record projection provided for non-record decoder");
                 };
                 proj.project_record(buf, encodings)
-            }
-            ResolutionPlan::NoSource => {
-                unreachable!("should never look up a reader union branch with no writer branch")
             }
         }
     }
@@ -1349,18 +1352,19 @@ enum NullablePlan {
 enum ResolutionPlan {
     /// Indicates that the writer's type should be promoted to the reader's type.
     Promotion(Promotion),
+    /// Provides a default value for the field missing in the writer type.
+    DefaultValue(AvroLiteral),
     /// Provides mapping information for resolving enums.
     EnumMapping(EnumResolution),
     /// Provides projection information for record fields.
     Record(Projector),
-    /// A sentinel indicating that no source data is available for the reader.
-    NoSource,
 }
 
 impl ResolutionPlan {
     fn try_new(decoder: &Decoder, resolution: &ResolutionInfo) -> Result<Self, AvroError> {
         match (decoder, resolution) {
             (_, ResolutionInfo::Promotion(p)) => Ok(ResolutionPlan::Promotion(*p)),
+            (_, ResolutionInfo::DefaultValue(lit)) => Ok(ResolutionPlan::DefaultValue(lit.clone())),
             (_, ResolutionInfo::EnumMapping(m)) => {
                 Ok(ResolutionPlan::EnumMapping(EnumResolution::new(&m)))
             }
@@ -1372,9 +1376,6 @@ impl ResolutionPlan {
             }
             (_, ResolutionInfo::Union(_)) => Err(AvroError::SchemaError(
                 "union variant cannot be resolved to a union type".into(),
-            )),
-            (_, ResolutionInfo::DefaultValue(_)) => Err(AvroError::SchemaError(
-                "unexpected default value in union resolution".into(),
             )),
         }
     }
@@ -1463,7 +1464,7 @@ impl DispatchLookupTable {
                 }
                 None => {
                     to_reader.push(NO_SOURCE);
-                    resolution.push(ResolutionPlan::NoSource);
+                    resolution.push(ResolutionPlan::DefaultValue(AvroLiteral::Null));
                 }
             }
         }
