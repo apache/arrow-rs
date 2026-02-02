@@ -123,15 +123,55 @@
 //! # Ok(()) }
 //! ```
 //!
+//! ## `async` Reading (`async` feature)
+//!
+//! The [`reader`] module provides async APIs for reading Avro files when the `async`
+//! feature is enabled.
+//!
+//! [`AsyncAvroFileReader`] implements `Stream<Item = Result<RecordBatch, ArrowError>>`,
+//! allowing efficient async streaming of record batches. When the `object_store` feature
+//! is enabled, [`AvroObjectReader`] provides integration with object storage services
+//! such as S3 via the [object_store] crate.
+//!
+//! ```ignore
+//! use std::sync::Arc;
+//! use arrow_avro::reader::{AsyncAvroFileReader, AvroObjectReader};
+//! use futures::TryStreamExt;
+//! use object_store::ObjectStore;
+//! use object_store::local::LocalFileSystem;
+//! use object_store::path::Path;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+//! let path = Path::from("data/example.avro");
+//! let meta = store.head(&path).await?;
+//!
+//! let reader = AvroObjectReader::new(store, path);
+//! let stream = AsyncAvroFileReader::builder(reader, meta.size, 1024)
+//!     .try_build()
+//!     .await?;
+//!
+//! let batches: Vec<_> = stream.try_collect().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! [object_store]: https://docs.rs/object_store/latest/object_store/
+//!
 //! ---
 //!
 //! ### Modules
 //!
 //! - [`reader`]: read Avro (OCF, SOE, Confluent) into Arrow `RecordBatch`es.
+//!   - With the `async` feature: [`AsyncAvroFileReader`] for async streaming reads.
+//!   - With the `object_store` feature: [`AvroObjectReader`] for reading from cloud storage.
 //! - [`writer`]: write Arrow `RecordBatch`es as Avro (OCF, SOE, Confluent, Apicurio).
 //! - [`schema`]: Avro schema parsing / fingerprints / registries.
 //! - [`compression`]: codecs used for **OCF block compression** (i.e., Deflate, Snappy, Zstandard, BZip2, and XZ).
 //! - [`codec`]: internal Avro-Arrow type conversion and row decode/encode plans.
+//!
+//! [`AsyncAvroFileReader`]: reader::AsyncAvroFileReader
+//! [`AvroObjectReader`]: reader::AvroObjectReader
 //!
 //! ### Features
 //!
@@ -141,6 +181,11 @@
 //! - `zstd` — enable Zstandard block compression.
 //! - `bzip2` — enable BZip2 block compression.
 //! - `xz` — enable XZ/LZMA block compression.
+//!
+//! **Async & Object Store (opt‑in)**
+//! - `async` — enable async APIs for reading Avro (`AsyncAvroFileReader`, `AsyncFileReader` trait).
+//! - `object_store` — enable integration with the [`object_store`] crate for reading Avro
+//!   from cloud storage (S3, GCS, Azure Blob, etc.) via `AvroObjectReader`. Implies `async`.
 //!
 //! **Schema fingerprints & helpers (opt‑in)**
 //! - `md5` — enable MD5 writer‑schema fingerprints.
@@ -155,6 +200,8 @@
 //! **Notes**
 //! - OCF compression codecs apply only to **Object Container Files**; they do not affect Avro
 //!   single object encodings.
+//!
+//! [`object_store`]: https://docs.rs/object_store/latest/object_store/
 //!
 //! [canonical extension types]: https://arrow.apache.org/docs/format/CanonicalExtensions.html
 //!
