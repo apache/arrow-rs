@@ -2359,7 +2359,15 @@ mod tests {
         assert!(matches!(result.codec, Codec::Float64));
         assert_eq!(
             result.resolution,
-            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::IntToDouble)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true,
+            }))
         );
         assert_eq!(result.nullability, Some(Nullability::NullFirst));
     }
@@ -2442,7 +2450,18 @@ mod tests {
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(dt.codec(), Codec::Utf8));
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
-        assert!(dt.resolution.is_none());
+        assert_eq!(
+            dt.resolution,
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::Direct)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true
+            }))
+        );
     }
 
     #[test]
@@ -2461,7 +2480,15 @@ mod tests {
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
         assert_eq!(
             dt.resolution,
-            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::IntToDouble)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true
+            }))
         );
     }
 
@@ -2984,14 +3011,7 @@ mod tests {
             assert_eq!(inner.nullability(), Some(Nullability::NullFirst));
             assert!(matches!(inner.codec(), Codec::Int32));
             match inner.resolution.as_ref() {
-                Some(ResolutionInfo::Union(info)) => {
-                    assert!(!info.writer_is_union, "writer should be non-union");
-                    assert!(info.reader_is_union, "reader should be union");
-                    assert_eq!(
-                        info.writer_to_reader.as_ref(),
-                        &[Some((1, ResolutionInfo::Promotion(Promotion::Direct)))]
-                    );
-                }
+                Some(ResolutionInfo::Promotion(Promotion::Direct)) => {}
                 other => panic!("expected Union resolution, got {other:?}"),
             }
         } else {
