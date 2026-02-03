@@ -648,6 +648,27 @@ impl DataType {
         matches!(self, Utf8 | LargeUtf8 | Utf8View)
     }
 
+    /// Returns true if this type is a List type.
+    ///
+    /// List types include List, LargeList, FixedSizeList, ListView, and LargeListView.
+    #[inline]
+    pub fn is_list(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self,
+            List(_) | LargeList(_) | FixedSizeList(_, _) | ListView(_) | LargeListView(_)
+        )
+    }
+
+    /// Returns true if this type is a Binary type.
+    ///
+    /// Binary types include Binary, LargeBinary, FixedSizeBinary and BinaryView.
+    #[inline]
+    pub fn is_binary(&self) -> bool {
+        use DataType::*;
+        matches!(self, Binary | LargeBinary | FixedSizeBinary(_) | BinaryView)
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub fn equals_datatype(&self, other: &DataType) -> bool {
@@ -1191,6 +1212,38 @@ mod tests {
     fn test_datatype_is_null() {
         assert!(DataType::is_null(&DataType::Null));
         assert!(!DataType::is_null(&DataType::Int32));
+    }
+
+    #[test]
+    fn test_is_list() {
+        assert!(DataType::is_list(&DataType::new_list(
+            DataType::Int16,
+            true
+        )));
+        assert!(DataType::is_list(&DataType::new_large_list(
+            DataType::Int16,
+            true
+        )));
+        assert!(DataType::is_list(&DataType::new_fixed_size_list(
+            DataType::Int16,
+            5,
+            true
+        )));
+        assert!(DataType::is_list(&DataType::ListView(Arc::new(
+            Field::new("f", DataType::Int16, true)
+        ))));
+        assert!(DataType::is_list(&DataType::LargeListView(Arc::new(
+            Field::new("f", DataType::Int16, true)
+        ))));
+        assert!(!DataType::is_list(&DataType::Binary));
+    }
+
+    #[test]
+    fn test_is_binary() {
+        assert!(DataType::is_binary(&DataType::Binary));
+        assert!(DataType::is_binary(&DataType::LargeBinary));
+        assert!(DataType::is_binary(&DataType::BinaryView));
+        assert!(!DataType::is_list(&DataType::Utf8View));
     }
 
     #[test]
