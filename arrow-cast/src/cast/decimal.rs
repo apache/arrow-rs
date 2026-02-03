@@ -816,7 +816,7 @@ where
 {
     let array = array.as_primitive::<D>();
 
-    let div: D::Native = base.pow_checked(scale as u32).map_err(|_| {
+    let div: D::Native = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
         ArrowError::CastError(format!(
             "Cannot cast to {:?}. The scale {} causes overflow.",
             D::PREFIX,
@@ -826,36 +826,78 @@ where
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
-    if cast_options.safe {
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                value_builder.append_null();
-            } else {
-                let v = array
-                    .value(i)
-                    .div_checked(div)
-                    .ok()
-                    .and_then(<T::Native as NumCast>::from::<D::Native>);
+    if scale < 0 {
+        match cast_options.safe {
+            true => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = array
+                            .value(i)
+                            .mul_checked(div)
+                            .ok()
+                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        value_builder.append_option(v);
+                    }
+                }
+            }
+            false => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = array.value(i).mul_checked(div)?;
 
-                value_builder.append_option(v);
+                        let value =
+                            <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
+                                ArrowError::CastError(format!(
+                                    "value of {:?} is out of range {}",
+                                    v,
+                                    T::DATA_TYPE
+                                ))
+                            })?;
+
+                        value_builder.append_value(value);
+                    }
+                }
             }
         }
     } else {
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                value_builder.append_null();
-            } else {
-                let v = array.value(i).div_checked(div)?;
+        match cast_options.safe {
+            true => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = array
+                            .value(i)
+                            .div_checked(div)
+                            .ok()
+                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        value_builder.append_option(v);
+                    }
+                }
+            }
+            false => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = array.value(i).div_checked(div)?;
 
-                let value = <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
-                    ArrowError::CastError(format!(
-                        "value of {:?} is out of range {}",
-                        v,
-                        T::DATA_TYPE
-                    ))
-                })?;
+                        let value =
+                            <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
+                                ArrowError::CastError(format!(
+                                    "value of {:?} is out of range {}",
+                                    v,
+                                    T::DATA_TYPE
+                                ))
+                            })?;
 
-                value_builder.append_value(value);
+                        value_builder.append_value(value);
+                    }
+                }
             }
         }
     }

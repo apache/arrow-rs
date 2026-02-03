@@ -636,7 +636,10 @@ macro_rules! define_variant_to_primitive_builder {
             // This is mainly for `FakeNullBuilder`
             #[allow(unused_mut)]
             fn finish(mut self) -> Result<ArrayRef> {
-                Ok(Arc::new(self.builder.finish()))
+                // If the builder produces T: Array, the compiler infers `<Arc<T> as From<T>>::from`
+                // (which then coerces to ArrayRef). If the builder produces ArrayRef directly, the
+                // compiler infers `<ArrayRef as From<ArrayRef>>::from` (no-op, From blanket impl).
+                Ok(Arc::from(self.builder.finish()))
             }
         }
     }
