@@ -45,6 +45,7 @@ mod int96_stats_roundtrip;
 mod io;
 #[cfg(feature = "async")]
 mod predicate_cache;
+mod row_filter;
 mod statistics;
 
 // returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values
