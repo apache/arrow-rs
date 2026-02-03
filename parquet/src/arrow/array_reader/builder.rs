@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use arrow_schema::{DataType, Fields, SchemaBuilder};
 
@@ -47,12 +47,12 @@ pub struct CacheOptionsBuilder<'a> {
     /// Projection mask to apply to the cache
     pub projection_mask: &'a ProjectionMask,
     /// Cache to use for storing row groups
-    pub cache: &'a Arc<Mutex<RowGroupCache>>,
+    pub cache: &'a Arc<RwLock<RowGroupCache>>,
 }
 
 impl<'a> CacheOptionsBuilder<'a> {
     /// create a new cache options builder
-    pub fn new(projection_mask: &'a ProjectionMask, cache: &'a Arc<Mutex<RowGroupCache>>) -> Self {
+    pub fn new(projection_mask: &'a ProjectionMask, cache: &'a Arc<RwLock<RowGroupCache>>) -> Self {
         Self {
             projection_mask,
             cache,
@@ -82,7 +82,7 @@ impl<'a> CacheOptionsBuilder<'a> {
 #[derive(Clone)]
 pub struct CacheOptions<'a> {
     pub projection_mask: &'a ProjectionMask,
-    pub cache: &'a Arc<Mutex<RowGroupCache>>,
+    pub cache: &'a Arc<RwLock<RowGroupCache>>,
     pub role: CacheRole,
 }
 
