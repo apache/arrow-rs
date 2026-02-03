@@ -47,6 +47,8 @@ arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true }
 arrow-ipc = { workspace = true, optional = true }
 arrow-json = { workspace = true, optional = true }
+arrow-memory-size = { workspace = true }
+arrow-memory-size-derive = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-pyarrow = { workspace = true, optional = true }
 arrow-row = { workspace = true }

@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "arrow-buffer"
+name = "arrow-memory-size-derive"
 version = { workspace = true }
-description = "Buffer abstractions for Apache Arrow"
+description = "Derive macro for HeapSize trait"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
@@ -29,39 +29,15 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
-name = "arrow_buffer"
-bench = false
+proc-macro = true
 
 [package.metadata.docs.rs]
 all-features = true
 
-[features]
-pool = []
-
 [dependencies]
-arrow-memory-size = { workspace = true }
-bytes = { version = "1.4" }
-num-bigint = { version = "0.4.6", default-features = false, features = ["std"] }
-num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
-half = { version = "2.1", default-features = false }
+proc-macro2 = { version = "1.0", default-features = false }
+quote = { version = "1.0", default-features = false }
+syn = { version = "2.0", features = ["extra-traits"] }
 
 [dev-dependencies]
-criterion = { workspace = true, default-features = false }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-
-[[bench]]
-name = "bit_mask"
-harness = false
-
-[[bench]]
-name = "i256"
-harness = false
-
-[[bench]]
-name = "offset"
-harness = false
-
-[[bench]]
-name = "mutable_buffer_repeat_slice"
-harness = false
-
+arrow-memory-size = { workspace = true }
