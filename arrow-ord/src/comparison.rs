@@ -109,6 +109,86 @@ where
     Ok(BooleanArray::new(values, None))
 }
 
+/// Checks if a [`GenericListViewArray`] contains a value in the [`PrimitiveArray`]
+pub fn in_list_view<T, OffsetSize>(
+    left: &PrimitiveArray<T>,
+    right: &GenericListViewArray<OffsetSize>,
+) -> Result<BooleanArray, ArrowError>
+where
+    T: ArrowNumericType,
+    OffsetSize: OffsetSizeTrait,
+{
+    let left_len = left.len();
+    if left_len != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length".to_string(),
+        ));
+    }
+
+    let num_bytes = bit_util::ceil(left_len, 8);
+
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+    let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
+    let bool_slice = bool_buf.as_slice_mut();
+
+    // if both array slots are valid, check if list contains primitive
+    for i in 0..left_len {
+        if nulls.as_ref().map(|n| n.is_valid(i)).unwrap_or(true) {
+            let list = right.value(i);
+            let list = list.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+
+            for j in 0..list.len() {
+                if list.is_valid(j) && (left.value(i) == list.value(j)) {
+                    bit_util::set_bit(bool_slice, i);
+                    continue;
+                }
+            }
+        }
+    }
+
+    let values = BooleanBuffer::new(bool_buf.into(), 0, left_len);
+    Ok(BooleanArray::new(values, None))
+}
+
+/// Checks if a [`GenericListViewArray`] contains a value in the [`GenericStringArray`]
+pub fn in_list_view_utf8<OffsetSize>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &GenericListViewArray<OffsetSize>,
+) -> Result<BooleanArray, ArrowError>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let left_len = left.len();
+    if left_len != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length".to_string(),
+        ));
+    }
+
+    let num_bytes = bit_util::ceil(left_len, 8);
+
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+    let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
+    let bool_slice = &mut bool_buf;
+
+    for i in 0..left_len {
+        // contains(null, null) = false
+        if nulls.as_ref().map(|n| n.is_valid(i)).unwrap_or(true) {
+            let list = right.value(i);
+            let list = list.as_string::<OffsetSize>();
+
+            for j in 0..list.len() {
+                if list.is_valid(j) && (left.value(i) == list.value(j)) {
+                    bit_util::set_bit(bool_slice, i);
+                    continue;
+                }
+            }
+        }
+    }
+    let values = BooleanBuffer::new(bool_buf.into(), 0, left_len);
+    Ok(BooleanArray::new(values, None))
+}
+
 // disable wrapping inside literal vectors used for test data and assertions
 #[rustfmt::skip::macros(vec)]
 #[cfg(test)]
@@ -116,7 +196,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::builder::{
-        ListBuilder, PrimitiveDictionaryBuilder, StringBuilder, StringDictionaryBuilder,
+        Int32Builder, ListBuilder, ListViewBuilder, PrimitiveDictionaryBuilder, StringBuilder,
+        StringDictionaryBuilder,
     };
     use arrow_array::types::*;
     use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, i256};
@@ -807,51 +888,103 @@ mod tests {
     // contains(null, null) = false
     #[test]
     fn test_contains() {
-        let value_data = Int32Array::from(vec![
-            Some(0),
-            Some(1),
-            Some(2),
-            Some(3),
-            Some(4),
-            Some(5),
-            Some(6),
-            None,
-            Some(7),
-        ])
-        .into_data();
-        let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 6, 9]);
-        let list_data_type =
-            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(4)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .null_bit_buffer(Some(Buffer::from([0b00001011])))
-            .build()
-            .unwrap();
-
-        //  [[0, 1, 2], [3, 4, 5], null, [6, null, 7]]
-        let list_array = LargeListArray::from(list_data);
-
+        // Test data: [[0, 1, 2], [3, 4, 5], null, [6, null, 7]]
         let nulls = Int32Array::from(vec![None, None, None, None]);
-        let nulls_result = in_list(&nulls, &list_array).unwrap();
-        assert_eq!(
-            nulls_result
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .unwrap(),
-            &BooleanArray::from(vec![false, false, false, false]),
-        );
-
         let values = Int32Array::from(vec![Some(0), Some(0), Some(0), Some(0)]);
-        let values_result = in_list(&values, &list_array).unwrap();
-        assert_eq!(
-            values_result
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .unwrap(),
-            &BooleanArray::from(vec![true, false, false, false]),
-        );
+        let nulls_expected = BooleanArray::from(vec![false, false, false, false]);
+        let values_expected = BooleanArray::from(vec![true, false, false, false]);
+
+        // Test with List
+        {
+            let value_data = Int32Array::from(vec![
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6),
+                None,
+                Some(7),
+            ])
+            .into_data();
+            let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 6, 9]);
+            let list_data_type =
+                DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
+            let list_data = ArrayData::builder(list_data_type)
+                .len(4)
+                .add_buffer(value_offsets)
+                .add_child_data(value_data)
+                .null_bit_buffer(Some(Buffer::from([0b00001011])))
+                .build()
+                .unwrap();
+
+            let list_array = LargeListArray::from(list_data);
+
+            let nulls_result = in_list(&nulls, &list_array).unwrap();
+            assert_eq!(
+                nulls_result
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap(),
+                &nulls_expected,
+            );
+
+            let values_result = in_list(&values, &list_array).unwrap();
+            assert_eq!(
+                values_result
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap(),
+                &values_expected,
+            );
+        }
+
+        // Test with ListView (same data, same expected results)
+        {
+            let mut builder = ListViewBuilder::new(Int32Builder::new());
+
+            // [0, 1, 2]
+            builder.values().append_value(0);
+            builder.values().append_value(1);
+            builder.values().append_value(2);
+            builder.append(true);
+
+            // [3, 4, 5]
+            builder.values().append_value(3);
+            builder.values().append_value(4);
+            builder.values().append_value(5);
+            builder.append(true);
+
+            // null
+            builder.append(false);
+
+            // [6, null, 7]
+            builder.values().append_value(6);
+            builder.values().append_null();
+            builder.values().append_value(7);
+            builder.append(true);
+
+            let list_view_array = builder.finish();
+
+            let nulls_result = in_list_view(&nulls, &list_view_array).unwrap();
+            assert_eq!(
+                nulls_result
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap(),
+                &nulls_expected,
+            );
+
+            let values_result = in_list_view(&values, &list_view_array).unwrap();
+            assert_eq!(
+                values_result
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap(),
+                &values_expected,
+            );
+        }
     }
 
     #[test]
@@ -1061,50 +1194,95 @@ mod tests {
     // contains(null, null) = false
     #[test]
     fn test_contains_utf8() {
-        let values_builder = StringBuilder::new();
-        let mut builder = ListBuilder::new(values_builder);
-
-        builder.values().append_value("Lorem");
-        builder.values().append_value("ipsum");
-        builder.values().append_null();
-        builder.append(true);
-        builder.values().append_value("sit");
-        builder.values().append_value("amet");
-        builder.values().append_value("Lorem");
-        builder.append(true);
-        builder.append(false);
-        builder.values().append_value("ipsum");
-        builder.append(true);
-
-        //  [["Lorem", "ipsum", null], ["sit", "amet", "Lorem"], null, ["ipsum"]]
-        // value_offsets = [0, 3, 6, 6]
-        let list_array = builder.finish();
-
+        // Test data: [["Lorem", "ipsum", null], ["sit", "amet", "Lorem"], null, ["ipsum"]]
         let v: Vec<Option<&str>> = vec![None, None, None, None];
         let nulls = StringArray::from(v);
-        let nulls_result = in_list_utf8(&nulls, &list_array).unwrap();
-        assert_eq!(
-            nulls_result
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .unwrap(),
-            &BooleanArray::from(vec![false, false, false, false]),
-        );
-
         let values = StringArray::from(vec![
             Some("Lorem"),
             Some("Lorem"),
             Some("Lorem"),
             Some("Lorem"),
         ]);
-        let values_result = in_list_utf8(&values, &list_array).unwrap();
-        assert_eq!(
-            values_result
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .unwrap(),
-            &BooleanArray::from(vec![true, true, false, false]),
-        );
+        let nulls_expected = BooleanArray::from(vec![false, false, false, false]);
+        let values_expected = BooleanArray::from(vec![true, true, false, false]);
+
+        // Test with List
+        {
+            let values_builder = StringBuilder::new();
+            let mut builder = ListBuilder::new(values_builder);
+
+            builder.values().append_value("Lorem");
+            builder.values().append_value("ipsum");
+            builder.values().append_null();
+            builder.append(true);
+            builder.values().append_value("sit");
+            builder.values().append_value("amet");
+            builder.values().append_value("Lorem");
+            builder.append(true);
+            builder.append(false);
+            builder.values().append_value("ipsum");
+            builder.append(true);
+
+            let list_array = builder.finish();
+
+            let nulls_result = in_list_utf8(&nulls, &list_array).unwrap();
+            assert_eq!(
+                nulls_result
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap(),
+                &nulls_expected,
+            );
+
+            let values_result = in_list_utf8(&values, &list_array).unwrap();
+            assert_eq!(
+                values_result
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap(),
+                &values_expected,
+            );
+        }
+
+        // Test with ListView (same data, same expected results)
+        {
+            let mut builder = ListViewBuilder::new(StringBuilder::new());
+
+            builder.values().append_value("Lorem");
+            builder.values().append_value("ipsum");
+            builder.values().append_null();
+            builder.append(true);
+
+            builder.values().append_value("sit");
+            builder.values().append_value("amet");
+            builder.values().append_value("Lorem");
+            builder.append(true);
+
+            builder.append(false);
+
+            builder.values().append_value("ipsum");
+            builder.append(true);
+
+            let list_view_array = builder.finish();
+
+            let nulls_result = in_list_view_utf8(&nulls, &list_view_array).unwrap();
+            assert_eq!(
+                nulls_result
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap(),
+                &nulls_expected,
+            );
+
+            let values_result = in_list_view_utf8(&values, &list_view_array).unwrap();
+            assert_eq!(
+                values_result
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap(),
+                &values_expected,
+            );
+        }
     }
 
     macro_rules! test_utf8 {
