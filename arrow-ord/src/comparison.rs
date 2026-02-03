@@ -109,7 +109,7 @@ where
     Ok(BooleanArray::new(values, None))
 }
 
-/// Checks if a [`GenericListViewArray`] contains a value in the [`PrimitiveArray`]
+/// Checks if each value in the [`PrimitiveArray`] is contained in the corresponding [`GenericListViewArray`] element
 pub fn in_list_view<T, OffsetSize>(
     left: &PrimitiveArray<T>,
     right: &GenericListViewArray<OffsetSize>,
@@ -150,7 +150,7 @@ where
     Ok(BooleanArray::new(values, None))
 }
 
-/// Checks if a [`GenericListViewArray`] contains a value in the [`GenericStringArray`]
+/// Checks if each value in the [`GenericStringArray`] is contained in the corresponding [`GenericListViewArray`] element
 pub fn in_list_view_utf8<OffsetSize>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericListViewArray<OffsetSize>,
@@ -171,7 +171,7 @@ where
     let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
     let bool_slice = bool_buf.as_slice_mut();
 
-    // if both array slots are valid, check if list contains primitive
+    // if both array slots are valid, check if list contains the string value
     for i in 0..left_len {
         if nulls.as_ref().map(|n| n.is_valid(i)).unwrap_or(true) {
             let list = right.value(i);
