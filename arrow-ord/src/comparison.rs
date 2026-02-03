@@ -169,10 +169,10 @@ where
 
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
     let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
-    let bool_slice = &mut bool_buf;
+    let bool_slice = bool_buf.as_slice_mut();
 
+    // if both array slots are valid, check if list contains primitive
     for i in 0..left_len {
-        // contains(null, null) = false
         if nulls.as_ref().map(|n| n.is_valid(i)).unwrap_or(true) {
             let list = right.value(i);
             let list = list.as_string::<OffsetSize>();
@@ -185,6 +185,7 @@ where
             }
         }
     }
+
     let values = BooleanBuffer::new(bool_buf.into(), 0, left_len);
     Ok(BooleanArray::new(values, None))
 }
