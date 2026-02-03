@@ -189,7 +189,6 @@ pub fn date_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef, ArrowErr
         DataType::Dictionary(_, _) => {
             let array = array.as_any_dictionary();
             let values = date_part(array.values(), part)?;
-            let values = Arc::new(values) as ArrayRef;
             let new_array = array.with_values(values);
             Ok(new_array)
         }
