@@ -2244,7 +2244,6 @@ mod tests {
     /// Regression test for adaptive predicate pushdown attempting to read skipped pages.
     /// Related issue: https://github.com/apache/arrow-rs/issues/9239
     #[tokio::test]
-
     async fn test_predicate_pushdown_with_skipped_pages() {
         use arrow_array::TimestampNanosecondArray;
         use arrow_schema::TimeUnit;

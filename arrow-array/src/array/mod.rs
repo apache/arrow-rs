@@ -78,7 +78,7 @@ pub use list_view_array::*;
 
 use crate::iterator::ArrayIter;
 
-/// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
+/// An array in the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html)
 ///
 /// # Safety
 ///
@@ -87,7 +87,16 @@ use crate::iterator::ArrayIter;
 /// translate into panics or undefined behavior. For example, a value computed based on `len`
 /// may be used as a direct index into memory regions without checks.
 ///
-/// Use it at your own risk knowing that this trait might be sealed in the future.
+/// Note that it is likely impossible to correctly implement the trait for a
+/// third party type, as substantial arrow-rs functionality is based on the
+/// return values of [`Array::data_type`] and third party types cannot extend
+/// the [`DataType`] enum. So any code that attempts casting based on data type
+/// (including internal arrow library code) risks a panic or undefined behavior.
+/// See [this discussion] for more details.
+///
+/// This trait might be sealed in the future. Use at your own risk.
+///
+/// [this discussion]: https://github.com/apache/arrow-rs/pull/9234#pullrequestreview-3708950936
 pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
