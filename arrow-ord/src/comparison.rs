@@ -807,12 +807,6 @@ mod tests {
     // contains(null, null) = false
     #[test]
     fn test_contains() {
-        // Test data: [[0, 1, 2], [3, 4, 5], null, [6, null, 7]]
-        let nulls = Int32Array::from(vec![None, None, None, None]);
-        let values = Int32Array::from(vec![Some(0), Some(0), Some(0), Some(0)]);
-        let nulls_expected = BooleanArray::from(vec![false, false, false, false]);
-        let values_expected = BooleanArray::from(vec![true, false, false, false]);
-
         let value_data = Int32Array::from(vec![
             Some(0),
             Some(1),
@@ -836,24 +830,27 @@ mod tests {
             .build()
             .unwrap();
 
+        //  [[0, 1, 2], [3, 4, 5], null, [6, null, 7]]
         let list_array = LargeListArray::from(list_data);
 
+        let nulls = Int32Array::from(vec![None, None, None, None]);
         let nulls_result = in_list(&nulls, &list_array).unwrap();
         assert_eq!(
             nulls_result
                 .as_any()
                 .downcast_ref::<BooleanArray>()
                 .unwrap(),
-            &nulls_expected,
+            &BooleanArray::from(vec![false, false, false, false]),
         );
 
+        let values = Int32Array::from(vec![Some(0), Some(0), Some(0), Some(0)]);
         let values_result = in_list(&values, &list_array).unwrap();
         assert_eq!(
             values_result
                 .as_any()
                 .downcast_ref::<BooleanArray>()
                 .unwrap(),
-            &values_expected,
+            &BooleanArray::from(vec![true, false, false, false]),
         );
     }
 
@@ -1064,18 +1061,6 @@ mod tests {
     // contains(null, null) = false
     #[test]
     fn test_contains_utf8() {
-        // Test data: [["Lorem", "ipsum", null], ["sit", "amet", "Lorem"], null, ["ipsum"]]
-        let v: Vec<Option<&str>> = vec![None, None, None, None];
-        let nulls = StringArray::from(v);
-        let values = StringArray::from(vec![
-            Some("Lorem"),
-            Some("Lorem"),
-            Some("Lorem"),
-            Some("Lorem"),
-        ]);
-        let nulls_expected = BooleanArray::from(vec![false, false, false, false]);
-        let values_expected = BooleanArray::from(vec![true, true, false, false]);
-
         let values_builder = StringBuilder::new();
         let mut builder = ListBuilder::new(values_builder);
 
@@ -1091,24 +1076,34 @@ mod tests {
         builder.values().append_value("ipsum");
         builder.append(true);
 
+        //  [["Lorem", "ipsum", null], ["sit", "amet", "Lorem"], null, ["ipsum"]]
+        // value_offsets = [0, 3, 6, 6]
         let list_array = builder.finish();
 
+        let v: Vec<Option<&str>> = vec![None, None, None, None];
+        let nulls = StringArray::from(v);
         let nulls_result = in_list_utf8(&nulls, &list_array).unwrap();
         assert_eq!(
             nulls_result
                 .as_any()
                 .downcast_ref::<BooleanArray>()
                 .unwrap(),
-            &nulls_expected,
+            &BooleanArray::from(vec![false, false, false, false]),
         );
 
+        let values = StringArray::from(vec![
+            Some("Lorem"),
+            Some("Lorem"),
+            Some("Lorem"),
+            Some("Lorem"),
+        ]);
         let values_result = in_list_utf8(&values, &list_array).unwrap();
         assert_eq!(
             values_result
                 .as_any()
                 .downcast_ref::<BooleanArray>()
                 .unwrap(),
-            &values_expected,
+            &BooleanArray::from(vec![true, true, false, false]),
         );
     }
 
