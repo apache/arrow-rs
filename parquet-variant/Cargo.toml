@@ -17,9 +17,7 @@
 
 [package]
 name = "parquet-variant"
-# This package is still in development and thus the version does
-# not follow the versions of the rest of the crates in this repo.
-version = "0.2.0"
+version = { workspace = true }
 license = { workspace = true }
 description = "Apache Parquet Variant implementation in Rust"
 homepage = { workspace = true }
@@ -45,7 +43,7 @@ bench = false
 
 [dev-dependencies]
 paste = { version = "1.0" }
-criterion = { version = "0.6", default-features = false }
+criterion = { workspace = true, default-features = false }
 rand = { version = "0.9", default-features = false, features = [
     "std",
     "std_rng",

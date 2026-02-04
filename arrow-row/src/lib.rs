@@ -157,14 +157,16 @@
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use std::iter::Map;
+use std::slice::Windows;
 use std::sync::Arc;
 
 use arrow_array::cast::*;
-use arrow_array::types::ArrowDictionaryKeyType;
+use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -415,6 +417,89 @@ mod variable;
 ///
 ///```
 ///
+/// ## ListView Encoding
+///
+/// ListView arrays differ from List arrays in their representation: instead of using
+/// consecutive offset pairs to define each list, ListView uses explicit offset and size
+/// pairs for each element. This allows ListView elements to reference arbitrary (potentially
+/// overlapping) regions of the child array.
+///
+/// Despite this structural difference, ListView uses the **same row encoding as List**.
+/// Each list value is encoded as the concatenation of its child elements (each separately
+/// variable-length encoded), followed by a variable-length encoded empty byte array terminator.
+///
+/// **Important**: When a ListView is decoded back from row format, it is still a
+/// ListView, but any child element sharing that may have existed in the original
+/// (where multiple list entries could reference overlapping regions of the child
+/// array) is **not preserved** - each list's children are decoded independently
+/// with sequential offsets.
+///
+/// For example, given a ListView with offset/size pairs:
+///
+/// ```text
+/// offsets: [0, 1, 0]
+/// sizes:   [2, 2, 0]
+/// values:  [1_u8, 2_u8, 3_u8]
+///
+/// Resulting lists:
+/// [1_u8, 2_u8]  (offset=0, size=2 -> values[0..2])
+/// [2_u8, 3_u8]  (offset=1, size=2 -> values[1..3])
+/// []            (offset=0, size=0 -> empty)
+/// ```
+///
+/// The elements would be encoded identically to List encoding:
+///
+/// ```text
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [1_u8, 2_u8]           │02│01│01│00│00│02│02│01│02│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 1_u8 ────┘   └──── 2_u8 ────┘
+///
+///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+///  [2_u8, 3_u8]           │02│01│02│00│00│02│02│01│03│00│00│02│01│
+///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+///                          └──── 2_u8 ────┘   └──── 3_u8 ────┘
+///
+///```
+///
+/// Note that element `2_u8` appears in both encoded rows, even though it was shared
+/// in the original ListView, and `[]` is represented by an empty byte array.
+///
+/// ## Union Encoding
+///
+/// A union value is encoded as a single type-id byte followed by the row encoding of the selected child value.
+/// The type-id byte is always present; union arrays have no top-level null marker, so nulls are represented by the child encoding.
+///
+/// For example, given a union of Int32 (type_id = 0) and Utf8 (type_id = 1):
+///
+/// ```text
+///                           ┌──┬──────────────┐
+///  3                        │00│01│80│00│00│03│
+///                           └──┴──────────────┘
+///                            │  └─ signed integer encoding (non-null)
+///                            └──── type_id
+///
+///                           ┌──┬────────────────────────────────┐
+/// "abc"                     │01│02│'a'│'b'│'c'│00│00│00│00│00│03│
+///                           └──┴────────────────────────────────┘
+///                            │  └─ string encoding (non-null)
+///                            └──── type_id
+///
+///                           ┌──┬──────────────┐
+/// null Int32                │00│00│00│00│00│00│
+///                           └──┴──────────────┘
+///                            │  └─ signed integer encoding (null)
+///                            └──── type_id
+///
+///                           ┌──┬──┐
+/// null Utf8                 │01│00│
+///                           └──┴──┘
+///                            │  └─ string encoding (null)
+///                            └──── type_id
+/// ```
+///
+/// See [`UnionArray`] for more details on union types.
+///
 /// # Ordering
 ///
 /// ## Float Ordering
@@ -430,6 +515,12 @@ mod variable;
 ///
 /// The encoding described above will order nulls first, this can be inverted by representing
 /// nulls as `0xFF_u8` instead of `0_u8`
+///
+/// ## Union Ordering
+///
+/// Values of the same type are ordered according to the ordering of that type.
+/// Values of different types are ordered by their type id.
+/// The type_id is negated when descending order is specified.
 ///
 /// ## Reverse Column Ordering
 ///
@@ -458,6 +549,49 @@ enum Codec {
     List(RowConverter),
     /// A row converter for the values array of a run-end encoded array
     RunEndEncoded(RowConverter),
+    /// Row converters for each union field (indexed by field position)
+    /// the type_ids for each field position, and the encoding of null rows for each field
+    Union(Vec<RowConverter>, Vec<i8>, Vec<OwnedRow>),
+}
+
+/// Computes the minimum offset and maximum end (offset + size) for a ListView array.
+/// Returns (min_offset, max_end) which can be used to slice the values array.
+fn compute_list_view_bounds<O: OffsetSizeTrait>(array: &GenericListViewArray<O>) -> (usize, usize) {
+    if array.is_empty() {
+        return (0, 0);
+    }
+
+    let offsets = array.value_offsets();
+    let sizes = array.value_sizes();
+    let values_len = array.values().len();
+
+    let mut min_offset = usize::MAX;
+    let mut max_end = 0usize;
+
+    for i in 0..array.len() {
+        let offset = offsets[i].as_usize();
+        let size = sizes[i].as_usize();
+        let end = offset + size;
+
+        if size > 0 {
+            min_offset = min_offset.min(offset);
+            max_end = max_end.max(end);
+        }
+
+        // Early exit if we've found the full range of the values array. This is possible with
+        // ListViews since offsets and sizes are arbitrary and the full range can be covered early
+        // in the iteration contrary to regular Lists.
+        if min_offset == 0 && max_end == values_len {
+            break;
+        }
+    }
+
+    if min_offset == usize::MAX {
+        // All lists are empty
+        (0, 0)
+    } else {
+        (min_offset, max_end)
+    }
 }
 
 impl Codec {
@@ -489,7 +623,10 @@ impl Codec {
                 Ok(Self::RunEndEncoded(converter))
             }
             d if !d.is_nested() => Ok(Self::Stateless),
-            DataType::List(f) | DataType::LargeList(f) => {
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::ListView(f)
+            | DataType::LargeListView(f) => {
                 // The encoded contents will be inverted if descending is set to true
                 // As such we set `descending` to false and negate nulls first if it
                 // it set to true
@@ -523,6 +660,37 @@ impl Codec {
                 };
 
                 Ok(Self::Struct(converter, owned))
+            }
+            DataType::Union(fields, _mode) => {
+                // similar to dictionaries and lists, we set descending to false and negate nulls_first
+                // since the encoded contents will be inverted if descending is set
+                let options = SortOptions {
+                    descending: false,
+                    nulls_first: sort_field.options.nulls_first != sort_field.options.descending,
+                };
+
+                let mut converters = Vec::with_capacity(fields.len());
+                let mut type_ids = Vec::with_capacity(fields.len());
+                let mut null_rows = Vec::with_capacity(fields.len());
+
+                for (type_id, field) in fields.iter() {
+                    let sort_field =
+                        SortField::new_with_options(field.data_type().clone(), options);
+                    let converter = RowConverter::new(vec![sort_field])?;
+
+                    let null_array = new_null_array(field.data_type(), 1);
+                    let nulls = converter.convert_columns(&[null_array])?;
+                    let owned = OwnedRow {
+                        data: nulls.buffer.into(),
+                        config: nulls.config,
+                    };
+
+                    converters.push(converter);
+                    type_ids.push(type_id);
+                    null_rows.push(owned);
+                }
+
+                Ok(Self::Union(converters, type_ids, null_rows))
             }
             _ => Err(ArrowError::NotYetImplemented(format!(
                 "not yet implemented: {:?}",
@@ -571,6 +739,20 @@ impl Codec {
                             .values()
                             .slice(first_offset, last_offset - first_offset)
                     }
+                    DataType::ListView(_) => {
+                        let list_view_array = array.as_list_view::<i32>();
+                        let (min_offset, max_end) = compute_list_view_bounds(list_view_array);
+                        list_view_array
+                            .values()
+                            .slice(min_offset, max_end - min_offset)
+                    }
+                    DataType::LargeListView(_) => {
+                        let list_view_array = array.as_list_view::<i64>();
+                        let (min_offset, max_end) = compute_list_view_bounds(list_view_array);
+                        list_view_array
+                            .values()
+                            .slice(min_offset, max_end - min_offset)
+                    }
                     DataType::FixedSizeList(_, _) => {
                         as_fixed_size_list_array(array).values().clone()
                     }
@@ -582,15 +764,39 @@ impl Codec {
             Codec::RunEndEncoded(converter) => {
                 let values = match array.data_type() {
                     DataType::RunEndEncoded(r, _) => match r.data_type() {
-                        DataType::Int16 => array.as_run::<Int16Type>().values(),
-                        DataType::Int32 => array.as_run::<Int32Type>().values(),
-                        DataType::Int64 => array.as_run::<Int64Type>().values(),
+                        DataType::Int16 => array.as_run::<Int16Type>().values_slice(),
+                        DataType::Int32 => array.as_run::<Int32Type>().values_slice(),
+                        DataType::Int64 => array.as_run::<Int64Type>().values_slice(),
                         _ => unreachable!("Unsupported run end index type: {r:?}"),
                     },
                     _ => unreachable!(),
                 };
-                let rows = converter.convert_columns(std::slice::from_ref(values))?;
+                let rows = converter.convert_columns(std::slice::from_ref(&values))?;
                 Ok(Encoder::RunEndEncoded(rows))
+            }
+            Codec::Union(converters, field_to_type_ids, _) => {
+                let union_array = array
+                    .as_any()
+                    .downcast_ref::<UnionArray>()
+                    .expect("expected Union array");
+
+                let type_ids = union_array.type_ids().clone();
+                let offsets = union_array.offsets().cloned();
+
+                let mut child_rows = Vec::with_capacity(converters.len());
+                for (field_idx, converter) in converters.iter().enumerate() {
+                    let type_id = field_to_type_ids[field_idx];
+                    let child_array = union_array.child(type_id);
+                    let rows = converter.convert_columns(std::slice::from_ref(child_array))?;
+                    child_rows.push(rows);
+                }
+
+                Ok(Encoder::Union {
+                    child_rows,
+                    field_to_type_ids: field_to_type_ids.clone(),
+                    type_ids,
+                    offsets,
+                })
             }
         }
     }
@@ -602,6 +808,10 @@ impl Codec {
             Codec::Struct(converter, nulls) => converter.size() + nulls.data.len(),
             Codec::List(converter) => converter.size(),
             Codec::RunEndEncoded(converter) => converter.size(),
+            Codec::Union(converters, _, null_rows) => {
+                converters.iter().map(|c| c.size()).sum::<usize>()
+                    + null_rows.iter().map(|n| n.data.len()).sum::<usize>()
+            }
         }
     }
 }
@@ -622,6 +832,13 @@ enum Encoder<'a> {
     List(Rows),
     /// The row encoding of the values array
     RunEndEncoded(Rows),
+    /// The row encoding of each union field's child array, type_ids buffer, offsets buffer (for Dense), and mode
+    Union {
+        child_rows: Vec<Rows>,
+        field_to_type_ids: Vec<i8>,
+        type_ids: ScalarBuffer<i8>,
+        offsets: Option<ScalarBuffer<i32>>,
+    },
 }
 
 /// Configure the data type and sort order for a given column
@@ -676,11 +893,16 @@ impl RowConverter {
     fn supports_datatype(d: &DataType) -> bool {
         match d {
             _ if !d.is_nested() => true,
-            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
-                Self::supports_datatype(f.data_type())
-            }
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::ListView(f)
+            | DataType::LargeListView(f)
+            | DataType::FixedSizeList(f, _) => Self::supports_datatype(f.data_type()),
             DataType::Struct(f) => f.iter().all(|x| Self::supports_datatype(x.data_type())),
             DataType::RunEndEncoded(_, values) => Self::supports_datatype(values.data_type()),
+            DataType::Union(fs, _mode) => fs
+                .iter()
+                .all(|(_, f)| Self::supports_datatype(f.data_type())),
             _ => false,
         }
     }
@@ -825,7 +1047,7 @@ impl RowConverter {
         // and therefore must be valid
         let result = unsafe { self.convert_raw(&mut rows, validate_utf8) }?;
 
-        if cfg!(test) {
+        if cfg!(debug_assertions) {
             for (i, row) in rows.iter().enumerate() {
                 if !row.is_empty() {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -913,9 +1135,13 @@ impl RowConverter {
             0,
             "can't construct Rows instance from array with nulls"
         );
+        let (offsets, values, _) = array.into_parts();
+        let offsets = offsets.iter().map(|&i| i.as_usize()).collect();
+        // Try zero-copy, if it does not succeed, fall back to copying the values.
+        let buffer = values.into_vec().unwrap_or_else(|values| values.to_vec());
         Rows {
-            buffer: array.values().to_vec(),
-            offsets: array.offsets().iter().map(|&i| i.as_usize()).collect(),
+            buffer,
+            offsets,
             config: RowConfig {
                 fields: Arc::clone(&self.fields),
                 validate_utf8: true,
@@ -1006,6 +1232,9 @@ pub struct Rows {
     config: RowConfig,
 }
 
+/// The iterator type for [`Rows::lengths`]
+pub type RowLengthIter<'a> = Map<Windows<'a, usize>, fn(&'a [usize]) -> usize>;
+
 impl Rows {
     /// Append a [`Row`] to this [`Rows`]
     pub fn push(&mut self, row: Row<'_>) {
@@ -1016,6 +1245,12 @@ impl Rows {
         self.config.validate_utf8 |= row.config.validate_utf8;
         self.buffer.extend_from_slice(row.data);
         self.offsets.push(self.buffer.len())
+    }
+
+    /// Reserve capacity for `row_capacity` rows with a total length of `data_capacity`
+    pub fn reserve(&mut self, row_capacity: usize, data_capacity: usize) {
+        self.buffer.reserve(data_capacity);
+        self.offsets.reserve(row_capacity);
     }
 
     /// Returns the row at index `row`
@@ -1036,6 +1271,19 @@ impl Rows {
             data,
             config: &self.config,
         }
+    }
+
+    /// Returns the number of bytes the row at index `row` is occupying,
+    /// that is, what is the length of the returned [`Row::data`] will be.
+    pub fn row_len(&self, row: usize) -> usize {
+        assert!(row + 1 < self.offsets.len());
+
+        self.offsets[row + 1] - self.offsets[row]
+    }
+
+    /// Get an iterator over the lengths of each row in this [`Rows`]
+    pub fn lengths(&self) -> RowLengthIter<'_> {
+        self.offsets.windows(2).map(|w| w[1] - w[0])
     }
 
     /// Sets the length of this [`Rows`] to 0
@@ -1060,8 +1308,8 @@ impl Rows {
     pub fn size(&self) -> usize {
         // Size of fields is accounted for as part of RowConverter
         std::mem::size_of::<Self>()
-            + self.buffer.len()
-            + self.offsets.len() * std::mem::size_of::<usize>()
+            + self.buffer.capacity()
+            + self.offsets.capacity() * std::mem::size_of::<usize>()
     }
 
     /// Create a [BinaryArray] from the [Rows] data without reallocating the
@@ -1427,36 +1675,12 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     array => tracker.push_fixed(fixed::encoded_len(array)),
                     DataType::Null => {},
                     DataType::Boolean => tracker.push_fixed(bool::ENCODED_LEN),
-                    DataType::Binary => tracker.push_variable(
-                        as_generic_binary_array::<i32>(array)
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
-                    DataType::LargeBinary => tracker.push_variable(
-                        as_generic_binary_array::<i64>(array)
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
-                    DataType::BinaryView => tracker.push_variable(
-                        array.as_binary_view()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
-                    DataType::Utf8 => tracker.push_variable(
-                        array.as_string::<i32>()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
-                    DataType::LargeUtf8 => tracker.push_variable(
-                        array.as_string::<i64>()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
-                    DataType::Utf8View => tracker.push_variable(
-                        array.as_string_view()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
+                    DataType::Binary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i32>(array)),
+                    DataType::LargeBinary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i64>(array)),
+                    DataType::BinaryView => push_byte_view_array_lengths(&mut tracker, array.as_binary_view()),
+                    DataType::Utf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i32>()),
+                    DataType::LargeUtf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i64>()),
+                    DataType::Utf8View => push_byte_view_array_lengths(&mut tracker, array.as_string_view()),
                     DataType::FixedSizeBinary(len) => {
                         let len = len.to_usize().unwrap();
                         tracker.push_fixed(1 + len)
@@ -1469,7 +1693,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     array => {
                         tracker.push_variable(
                             array.keys().iter().map(|v| match v {
-                                Some(k) => values.row(k.as_usize()).data.len(),
+                                Some(k) => values.row_len(k.as_usize()),
                                 None => null.data.len(),
                             })
                         )
@@ -1479,10 +1703,19 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
             }
             Encoder::Struct(rows, null) => {
                 let array = as_struct_array(array);
-                tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
-                    true => 1 + rows.row(idx).as_ref().len(),
-                    false => 1 + null.data.len(),
-                }));
+                if rows.num_rows() > 0 {
+                    // Only calculate row length if there are rows
+                    tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
+                        true => 1 + rows.row_len(idx),
+                        false => 1 + null.data.len(),
+                    }));
+                } else {
+                    // Edge case for Struct([]) arrays (no child fields)
+                    tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
+                        true => 1,
+                        false => 1 + null.data.len(),
+                    }));
+                }
             }
             Encoder::List(rows) => match array.data_type() {
                 DataType::List(_) => {
@@ -1490,6 +1723,26 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 }
                 DataType::LargeList(_) => {
                     list::compute_lengths(tracker.materialized(), rows, as_large_list_array(array))
+                }
+                DataType::ListView(_) => {
+                    let list_view = array.as_list_view::<i32>();
+                    let (min_offset, _) = compute_list_view_bounds(list_view);
+                    list::compute_lengths_list_view(
+                        tracker.materialized(),
+                        rows,
+                        list_view,
+                        min_offset,
+                    )
+                }
+                DataType::LargeListView(_) => {
+                    let list_view = array.as_list_view::<i64>();
+                    let (min_offset, _) = compute_list_view_bounds(list_view);
+                    list::compute_lengths_list_view(
+                        tracker.materialized(),
+                        rows,
+                        list_view,
+                        min_offset,
+                    )
                 }
                 DataType::FixedSizeList(_, _) => compute_lengths_fixed_size_list(
                     &mut tracker,
@@ -1519,10 +1772,90 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 },
                 _ => unreachable!(),
             },
+            Encoder::Union {
+                child_rows,
+                field_to_type_ids,
+                type_ids,
+                offsets,
+            } => {
+                let union_array = array
+                    .as_any()
+                    .downcast_ref::<UnionArray>()
+                    .expect("expected UnionArray");
+
+                let mut type_id_to_field_idx = [0usize; 128];
+                for (field_idx, &type_id) in field_to_type_ids.iter().enumerate() {
+                    type_id_to_field_idx[type_id as usize] = field_idx;
+                }
+
+                let lengths = (0..union_array.len()).map(|i| {
+                    let type_id = type_ids[i];
+                    let field_idx = type_id_to_field_idx[type_id as usize];
+                    let child_row_i = offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
+                    let child_row_len = child_rows[field_idx].row_len(child_row_i);
+
+                    // length: 1 byte type_id + child row bytes
+                    1 + child_row_len
+                });
+
+                tracker.push_variable(lengths);
+            }
         }
     }
 
     tracker
+}
+
+/// Add to [`LengthTracker`] the encoded length of each item in the [`GenericByteArray`]
+fn push_generic_byte_array_lengths<T: ByteArrayType>(
+    tracker: &mut LengthTracker,
+    array: &GenericByteArray<T>,
+) {
+    if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+        tracker.push_variable(
+            array
+                .offsets()
+                .lengths()
+                .zip(nulls.iter())
+                .map(|(length, is_valid)| if is_valid { Some(length) } else { None })
+                .map(variable::padded_length),
+        )
+    } else {
+        tracker.push_variable(
+            array
+                .offsets()
+                .lengths()
+                .map(variable::non_null_padded_length),
+        )
+    }
+}
+
+/// Add to [`LengthTracker`] the encoded length of each item in the [`GenericByteViewArray`]
+fn push_byte_view_array_lengths<T: ByteViewType>(
+    tracker: &mut LengthTracker,
+    array: &GenericByteViewArray<T>,
+) {
+    if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+        tracker.push_variable(
+            array
+                .lengths()
+                .zip(nulls.iter())
+                .map(|(length, is_valid)| {
+                    if is_valid {
+                        Some(length as usize)
+                    } else {
+                        None
+                    }
+                })
+                .map(variable::padded_length),
+        )
+    } else {
+        tracker.push_variable(
+            array
+                .lengths()
+                .map(|len| variable::padded_length(Some(len as usize))),
+        )
+    }
 }
 
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
@@ -1552,24 +1885,22 @@ fn encode_column(
                     }
                 }
                 DataType::Binary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i32>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i32>(column), opts)
                 }
                 DataType::BinaryView => {
                     variable::encode(data, offsets, column.as_binary_view().iter(), opts)
                 }
                 DataType::LargeBinary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i64>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i64>(column), opts)
                 }
-                DataType::Utf8 => variable::encode(
+                DataType::Utf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i32>().iter().map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i32>(),
                     opts,
                 ),
-                DataType::LargeUtf8 => variable::encode(
+                DataType::LargeUtf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i64>()
-                        .iter()
-                        .map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i64>(),
                     opts,
                 ),
                 DataType::Utf8View => variable::encode(
@@ -1591,27 +1922,65 @@ fn encode_column(
             }
         }
         Encoder::Struct(rows, null) => {
+            fn struct_encode_helper<const NO_CHILD_FIELDS: bool>(
+                array: &StructArray,
+                offsets: &mut [usize],
+                null_sentinel: u8,
+                rows: &Rows,
+                null: &Row<'_>,
+                data: &mut [u8],
+            ) {
+                let empty_row = Row {
+                    data: &[],
+                    config: &rows.config,
+                };
+
+                offsets
+                    .iter_mut()
+                    .skip(1)
+                    .enumerate()
+                    .for_each(|(idx, offset)| {
+                        let (row, sentinel) = match array.is_valid(idx) {
+                            true => (
+                                if NO_CHILD_FIELDS {
+                                    empty_row
+                                } else {
+                                    rows.row(idx)
+                                },
+                                0x01,
+                            ),
+                            false => (*null, null_sentinel),
+                        };
+                        let end_offset = *offset + 1 + row.as_ref().len();
+                        data[*offset] = sentinel;
+                        data[*offset + 1..end_offset].copy_from_slice(row.as_ref());
+                        *offset = end_offset;
+                    })
+            }
+
             let array = as_struct_array(column);
             let null_sentinel = null_sentinel(opts);
-            offsets
-                .iter_mut()
-                .skip(1)
-                .enumerate()
-                .for_each(|(idx, offset)| {
-                    let (row, sentinel) = match array.is_valid(idx) {
-                        true => (rows.row(idx), 0x01),
-                        false => (*null, null_sentinel),
-                    };
-                    let end_offset = *offset + 1 + row.as_ref().len();
-                    data[*offset] = sentinel;
-                    data[*offset + 1..end_offset].copy_from_slice(row.as_ref());
-                    *offset = end_offset;
-                })
+            if rows.num_rows() == 0 {
+                // Edge case for Struct([]) arrays (no child fields)
+                struct_encode_helper::<true>(array, offsets, null_sentinel, rows, null, data);
+            } else {
+                struct_encode_helper::<false>(array, offsets, null_sentinel, rows, null, data);
+            }
         }
         Encoder::List(rows) => match column.data_type() {
             DataType::List(_) => list::encode(data, offsets, rows, opts, as_list_array(column)),
             DataType::LargeList(_) => {
                 list::encode(data, offsets, rows, opts, as_large_list_array(column))
+            }
+            DataType::ListView(_) => {
+                let list_view = column.as_list_view::<i32>();
+                let (min_offset, _) = compute_list_view_bounds(list_view);
+                list::encode_list_view(data, offsets, rows, opts, list_view, min_offset)
+            }
+            DataType::LargeListView(_) => {
+                let list_view = column.as_list_view::<i64>();
+                let (min_offset, _) = compute_list_view_bounds(list_view);
+                list::encode_list_view(data, offsets, rows, opts, list_view, min_offset)
             }
             DataType::FixedSizeList(_, _) => {
                 encode_fixed_size_list(data, offsets, rows, opts, as_fixed_size_list_array(column))
@@ -1633,6 +2002,43 @@ fn encode_column(
             },
             _ => unreachable!(),
         },
+        Encoder::Union {
+            child_rows,
+            field_to_type_ids,
+            type_ids,
+            offsets: offsets_buf,
+        } => {
+            let mut type_id_to_field_idx = [0usize; 128];
+            for (field_idx, &type_id) in field_to_type_ids.iter().enumerate() {
+                type_id_to_field_idx[type_id as usize] = field_idx;
+            }
+
+            offsets
+                .iter_mut()
+                .skip(1)
+                .enumerate()
+                .for_each(|(i, offset)| {
+                    let type_id = type_ids[i];
+                    let field_idx = type_id_to_field_idx[type_id as usize];
+
+                    let child_row_idx = offsets_buf.as_ref().map(|o| o[i] as usize).unwrap_or(i);
+                    let child_row = child_rows[field_idx].row(child_row_idx);
+                    let child_bytes = child_row.as_ref();
+
+                    let type_id_byte = if opts.descending {
+                        !(type_id as u8)
+                    } else {
+                        type_id as u8
+                    };
+                    data[*offset] = type_id_byte;
+
+                    let child_start = *offset + 1;
+                    let child_end = child_start + child_bytes.len();
+                    data[child_start..child_end].copy_from_slice(child_bytes);
+
+                    *offset = child_end;
+                });
+        }
     }
 }
 
@@ -1732,6 +2138,12 @@ unsafe fn decode_column(
             DataType::LargeList(_) => {
                 Arc::new(unsafe { list::decode::<i64>(converter, rows, field, validate_utf8) }?)
             }
+            DataType::ListView(_) => Arc::new(unsafe {
+                list::decode_list_view::<i32>(converter, rows, field, validate_utf8)
+            }?),
+            DataType::LargeListView(_) => Arc::new(unsafe {
+                list::decode_list_view::<i64>(converter, rows, field, validate_utf8)
+            }?),
             DataType::FixedSizeList(_, value_length) => Arc::new(unsafe {
                 list::decode_fixed_size_list(
                     converter,
@@ -1758,16 +2170,131 @@ unsafe fn decode_column(
             },
             _ => unreachable!(),
         },
+        Codec::Union(converters, field_to_type_ids, null_rows) => {
+            let len = rows.len();
+
+            let DataType::Union(union_fields, mode) = &field.data_type else {
+                unreachable!()
+            };
+
+            let mut type_id_to_field_idx = [0usize; 128];
+            for (field_idx, &type_id) in field_to_type_ids.iter().enumerate() {
+                type_id_to_field_idx[type_id as usize] = field_idx;
+            }
+
+            let mut type_ids = Vec::with_capacity(len);
+            let mut rows_by_field: Vec<Vec<(usize, &[u8])>> = vec![Vec::new(); converters.len()];
+
+            for (idx, row) in rows.iter_mut().enumerate() {
+                let type_id_byte = {
+                    let id = row[0];
+                    if options.descending { !id } else { id }
+                };
+
+                let type_id = type_id_byte as i8;
+                type_ids.push(type_id);
+
+                let field_idx = type_id_to_field_idx[type_id as usize];
+
+                let child_row = &row[1..];
+                rows_by_field[field_idx].push((idx, child_row));
+            }
+
+            let mut child_arrays: Vec<ArrayRef> = Vec::with_capacity(converters.len());
+            let mut offsets = (*mode == UnionMode::Dense).then(|| Vec::with_capacity(len));
+
+            for (field_idx, converter) in converters.iter().enumerate() {
+                let field_rows = &rows_by_field[field_idx];
+
+                match &mode {
+                    UnionMode::Dense => {
+                        if field_rows.is_empty() {
+                            let (_, field) = union_fields.iter().nth(field_idx).unwrap();
+                            child_arrays.push(arrow_array::new_empty_array(field.data_type()));
+                            continue;
+                        }
+
+                        let mut child_data = field_rows
+                            .iter()
+                            .map(|(_, bytes)| *bytes)
+                            .collect::<Vec<_>>();
+
+                        let child_array =
+                            unsafe { converter.convert_raw(&mut child_data, validate_utf8) }?;
+
+                        // advance row slices by the bytes consumed
+                        for ((row_idx, original_bytes), remaining_bytes) in
+                            field_rows.iter().zip(child_data)
+                        {
+                            let consumed_length = 1 + original_bytes.len() - remaining_bytes.len();
+                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
+                        }
+
+                        child_arrays.push(child_array.into_iter().next().unwrap());
+                    }
+                    UnionMode::Sparse => {
+                        let mut sparse_data: Vec<&[u8]> = Vec::with_capacity(len);
+                        let mut field_row_iter = field_rows.iter().peekable();
+                        let null_row_bytes: &[u8] = &null_rows[field_idx].data;
+
+                        for idx in 0..len {
+                            if let Some((next_idx, bytes)) = field_row_iter.peek() {
+                                if *next_idx == idx {
+                                    sparse_data.push(*bytes);
+
+                                    field_row_iter.next();
+                                    continue;
+                                }
+                            }
+                            sparse_data.push(null_row_bytes);
+                        }
+
+                        let child_array =
+                            unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
+
+                        // advance row slices by the bytes consumed for rows that belong to this field
+                        for (row_idx, child_row) in field_rows.iter() {
+                            let remaining_len = sparse_data[*row_idx].len();
+                            let consumed_length = 1 + child_row.len() - remaining_len;
+                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
+                        }
+
+                        child_arrays.push(child_array.into_iter().next().unwrap());
+                    }
+                }
+            }
+
+            // build offsets for dense unions
+            if let Some(ref mut offsets_vec) = offsets {
+                let mut count = vec![0i32; converters.len()];
+                for type_id in &type_ids {
+                    let field_idx = *type_id as usize;
+                    offsets_vec.push(count[field_idx]);
+
+                    count[field_idx] += 1;
+                }
+            }
+
+            let type_ids_buffer = ScalarBuffer::from(type_ids);
+            let offsets_buffer = offsets.map(ScalarBuffer::from);
+
+            let union_array = UnionArray::try_new(
+                union_fields.clone(),
+                type_ids_buffer,
+                offsets_buffer,
+                child_arrays,
+            )?;
+
+            // note: union arrays don't support physical null buffers
+            // nulls are represented logically though child arrays
+            Arc::new(union_array)
+        }
     };
     Ok(array)
 }
 
 #[cfg(test)]
 mod tests {
-    use rand::distr::uniform::SampleUniform;
-    use rand::distr::{Distribution, StandardUniform};
-    use rand::{Rng, rng};
-
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
@@ -1775,6 +2302,10 @@ mod tests {
     use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_ord::sort::{LexicographicalComparator, SortColumn};
+    use rand::distr::uniform::SampleUniform;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::prelude::StdRng;
+    use rand::{Rng, RngCore, SeedableRng};
 
     use super::*;
 
@@ -2475,6 +3006,19 @@ mod tests {
     }
 
     #[test]
+    fn test_from_binary_shared_buffer() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
+        let array = Arc::new(BinaryArray::from_iter_values([&[0xFF]])) as _;
+        let rows = converter.convert_columns(&[array]).unwrap();
+        let binary_rows = rows.try_into_binary().expect("known-small rows");
+        let _binary_rows_shared_buffer = binary_rows.clone();
+
+        let parsed = converter.from_binary(binary_rows);
+
+        converter.convert_rows(parsed.iter()).unwrap();
+    }
+
+    #[test]
     #[should_panic(expected = "Encountered non UTF-8 data")]
     fn test_invalid_utf8() {
         let converter = RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
@@ -2792,6 +3336,403 @@ mod tests {
         test_nested_list::<i64>();
     }
 
+    fn test_single_list_view<O: OffsetSizeTrait>() {
+        let mut builder = GenericListViewBuilder::<O, _>::new(Int32Builder::new());
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.values().append_value(32);
+        builder.append(true);
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.values().append_value(12);
+        builder.append(true);
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.append(true);
+        builder.values().append_value(32); // MASKED
+        builder.values().append_value(52); // MASKED
+        builder.append(false);
+        builder.values().append_value(32);
+        builder.values().append_null();
+        builder.append(true);
+        builder.append(true);
+        builder.values().append_value(17); // MASKED
+        builder.values().append_null(); // MASKED
+        builder.append(false);
+
+        let list = Arc::new(builder.finish()) as ArrayRef;
+        let d = list.data_type().clone();
+
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2) < rows.row(1)); // [32, 52] < [32, 52, 12]
+        assert!(rows.row(3) < rows.row(2)); // null < [32, 52]
+        assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 52]
+        assert!(rows.row(5) < rows.row(2)); // [] < [32, 52]
+        assert!(rows.row(3) < rows.row(5)); // null < []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify the content matches (ListView may have different physical layout but same logical content)
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+        let orig_list_view = list
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        let options = SortOptions::default().asc().with_nulls_first(false);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2) < rows.row(1)); // [32, 52] < [32, 52, 12]
+        assert!(rows.row(3) > rows.row(2)); // null > [32, 52]
+        assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 52]
+        assert!(rows.row(5) < rows.row(2)); // [] < [32, 52]
+        assert!(rows.row(3) > rows.row(5)); // null > []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        let options = SortOptions::default().desc().with_nulls_first(false);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2) > rows.row(1)); // [32, 52] > [32, 52, 12]
+        assert!(rows.row(3) > rows.row(2)); // null > [32, 52]
+        assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 52]
+        assert!(rows.row(5) > rows.row(2)); // [] > [32, 52]
+        assert!(rows.row(3) > rows.row(5)); // null > []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        let options = SortOptions::default().desc().with_nulls_first(true);
+        let field = SortField::new_with_options(d, options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2) > rows.row(1)); // [32, 52] > [32, 52, 12]
+        assert!(rows.row(3) < rows.row(2)); // null < [32, 52]
+        assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 52]
+        assert!(rows.row(5) > rows.row(2)); // [] > [32, 52]
+        assert!(rows.row(3) < rows.row(5)); // null < []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        let sliced_list = list.slice(1, 5);
+        let rows_on_sliced_list = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows_on_sliced_list.row(1) > rows_on_sliced_list.row(0)); // [32, 52] > [32, 52, 12]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(1)); // null < [32, 52]
+        assert!(rows_on_sliced_list.row(3) < rows_on_sliced_list.row(1)); // [32, null] < [32, 52]
+        assert!(rows_on_sliced_list.row(4) > rows_on_sliced_list.row(1)); // [] > [32, 52]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(4)); // null < []
+
+        let back = converter.convert_rows(&rows_on_sliced_list).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+    }
+
+    fn test_nested_list_view<O: OffsetSizeTrait>() {
+        let mut builder = GenericListViewBuilder::<O, _>::new(GenericListViewBuilder::<O, _>::new(
+            Int32Builder::new(),
+        ));
+
+        // Row 0: [[1, 2], [1, null]]
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.append(true);
+
+        // Row 1: [[1, null], [1, null]]
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.append(true);
+
+        // Row 2: [[1, null], null]
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.values().append(false);
+        builder.append(true);
+
+        // Row 3: null
+        builder.append(false);
+
+        // Row 4: [[1, 2]]
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.append(true);
+
+        let list = Arc::new(builder.finish()) as ArrayRef;
+        let d = list.data_type().clone();
+
+        // [
+        //   [[1, 2], [1, null]],
+        //   [[1, null], [1, null]],
+        //   [[1, null], null]
+        //   null
+        //   [[1, 2]]
+        // ]
+        let options = SortOptions::default().asc().with_nulls_first(true);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1));
+        assert!(rows.row(1) > rows.row(2));
+        assert!(rows.row(2) > rows.row(3));
+        assert!(rows.row(4) < rows.row(0));
+        assert!(rows.row(4) > rows.row(1));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify the content matches (ListView may have different physical layout but same logical content)
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+        let orig_list_view = list
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        let options = SortOptions::default().desc().with_nulls_first(true);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1));
+        assert!(rows.row(1) > rows.row(2));
+        assert!(rows.row(2) > rows.row(3));
+        assert!(rows.row(4) > rows.row(0));
+        assert!(rows.row(4) > rows.row(1));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify the content matches
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        let options = SortOptions::default().desc().with_nulls_first(false);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1));
+        assert!(rows.row(1) < rows.row(2));
+        assert!(rows.row(2) < rows.row(3));
+        assert!(rows.row(4) > rows.row(0));
+        assert!(rows.row(4) < rows.row(1));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify the content matches
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        let sliced_list = list.slice(1, 3);
+        let rows = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows.row(0) < rows.row(1));
+        assert!(rows.row(1) < rows.row(2));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_list_view() {
+        test_single_list_view::<i32>();
+        test_nested_list_view::<i32>();
+    }
+
+    #[test]
+    fn test_large_list_view() {
+        test_single_list_view::<i64>();
+        test_nested_list_view::<i64>();
+    }
+
+    fn test_list_view_with_shared_values<O: OffsetSizeTrait>() {
+        // Create a values array: [1, 2, 3, 4, 5, 6, 7, 8]
+        let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+
+        // Create a ListView where:
+        // - Row 0: offset=0, size=3 -> [1, 2, 3]
+        // - Row 1: offset=0, size=3 -> [1, 2, 3] (same offset+size as row 0)
+        // - Row 2: offset=5, size=2 -> [6, 7] (non-monotonic offset)
+        // - Row 3: offset=2, size=2 -> [3, 4] (offset goes back)
+        // - Row 4: offset=1, size=4 -> [2, 3, 4, 5] (subset of values that contains row 3's range)
+        // - Row 5: offset=2, size=1 -> [3] (subset of row 3 and row 4)
+        let offsets = ScalarBuffer::<O>::from(vec![
+            O::from_usize(0).unwrap(),
+            O::from_usize(0).unwrap(),
+            O::from_usize(5).unwrap(),
+            O::from_usize(2).unwrap(),
+            O::from_usize(1).unwrap(),
+            O::from_usize(2).unwrap(),
+        ]);
+        let sizes = ScalarBuffer::<O>::from(vec![
+            O::from_usize(3).unwrap(),
+            O::from_usize(3).unwrap(),
+            O::from_usize(2).unwrap(),
+            O::from_usize(2).unwrap(),
+            O::from_usize(4).unwrap(),
+            O::from_usize(1).unwrap(),
+        ]);
+
+        let list_view: GenericListViewArray<O> =
+            GenericListViewArray::try_new(field, offsets, sizes, Arc::new(values), None).unwrap();
+
+        let d = list_view.data_type().clone();
+        let list = Arc::new(list_view) as ArrayRef;
+
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        // Row 0 and Row 1 have the same content [1, 2, 3], so they should be equal
+        assert_eq!(rows.row(0), rows.row(1));
+
+        // [1, 2, 3] < [6, 7] (comparing first elements: 1 < 6)
+        assert!(rows.row(0) < rows.row(2));
+
+        // [3, 4] > [1, 2, 3] (comparing first elements: 3 > 1)
+        assert!(rows.row(3) > rows.row(0));
+
+        // [2, 3, 4, 5] > [1, 2, 3] (comparing first elements: 2 > 1)
+        assert!(rows.row(4) > rows.row(0));
+
+        // [3] < [3, 4] (same prefix but shorter)
+        assert!(rows.row(5) < rows.row(3));
+
+        // [3] < [2, 3, 4, 5] (comparing first elements: 3 > 2)
+        assert!(rows.row(5) > rows.row(4));
+
+        // Round-trip conversion
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify logical content matches
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+        let orig_list_view = list
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        // Test with descending order
+        let options = SortOptions::default().desc();
+        let field = SortField::new_with_options(d, options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        // In descending order, comparisons are reversed
+        assert_eq!(rows.row(0), rows.row(1)); // Equal rows stay equal
+        assert!(rows.row(0) > rows.row(2)); // [1, 2, 3] > [6, 7] in desc
+        assert!(rows.row(3) < rows.row(0)); // [3, 4] < [1, 2, 3] in desc
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_list_view_shared_values() {
+        test_list_view_with_shared_values::<i32>();
+    }
+
+    #[test]
+    fn test_large_list_view_shared_values() {
+        test_list_view_with_shared_values::<i64>();
+    }
+
     #[test]
     fn test_fixed_size_list() {
         let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 3);
@@ -3091,22 +4032,35 @@ mod tests {
         assert_eq!(&back[1], &second);
     }
 
-    fn generate_primitive_array<K>(len: usize, valid_percent: f64) -> PrimitiveArray<K>
+    fn generate_primitive_array<K>(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
         StandardUniform: Distribution<K::Native>,
     {
-        let mut rng = rng();
         (0..len)
             .map(|_| rng.random_bool(valid_percent).then(|| rng.random()))
             .collect()
     }
 
+    fn generate_boolean_array(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> BooleanArray {
+        (0..len)
+            .map(|_| rng.random_bool(valid_percent).then(|| rng.random_bool(0.5)))
+            .collect()
+    }
+
     fn generate_strings<O: OffsetSizeTrait>(
+        rng: &mut impl RngCore,
         len: usize,
         valid_percent: f64,
     ) -> GenericStringArray<O> {
-        let mut rng = rng();
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -3118,8 +4072,11 @@ mod tests {
             .collect()
     }
 
-    fn generate_string_view(len: usize, valid_percent: f64) -> StringViewArray {
-        let mut rng = rng();
+    fn generate_string_view(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> StringViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -3131,8 +4088,11 @@ mod tests {
             .collect()
     }
 
-    fn generate_byte_view(len: usize, valid_percent: f64) -> BinaryViewArray {
-        let mut rng = rng();
+    fn generate_byte_view(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> BinaryViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -3173,6 +4133,7 @@ mod tests {
     }
 
     fn generate_dictionary<K>(
+        rng: &mut impl RngCore,
         values: ArrayRef,
         len: usize,
         valid_percent: f64,
@@ -3181,7 +4142,6 @@ mod tests {
         K: ArrowDictionaryKeyType,
         K::Native: SampleUniform,
     {
-        let mut rng = rng();
         let min_key = K::Native::from_usize(0).unwrap();
         let max_key = K::Native::from_usize(values.len()).unwrap();
         let keys: PrimitiveArray<K> = (0..len)
@@ -3205,8 +4165,11 @@ mod tests {
         DictionaryArray::from(data)
     }
 
-    fn generate_fixed_size_binary(len: usize, valid_percent: f64) -> FixedSizeBinaryArray {
-        let mut rng = rng();
+    fn generate_fixed_size_binary(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> FixedSizeBinaryArray {
         let width = rng.random_range(0..20);
         let mut builder = FixedSizeBinaryBuilder::new(width);
 
@@ -3224,11 +4187,10 @@ mod tests {
         builder.finish()
     }
 
-    fn generate_struct(len: usize, valid_percent: f64) -> StructArray {
-        let mut rng = rng();
+    fn generate_struct(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> StructArray {
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
-        let a = generate_primitive_array::<Int32Type>(len, valid_percent);
-        let b = generate_strings::<i32>(len, valid_percent);
+        let a = generate_primitive_array::<Int32Type>(rng, len, valid_percent);
+        let b = generate_strings::<i32>(rng, len, valid_percent);
         let fields = Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Utf8, true),
@@ -3237,61 +4199,261 @@ mod tests {
         StructArray::new(fields, values, Some(nulls))
     }
 
-    fn generate_list<F>(len: usize, valid_percent: f64, values: F) -> ListArray
+    fn generate_list<R: RngCore, F>(
+        rng: &mut R,
+        len: usize,
+        valid_percent: f64,
+        values: F,
+    ) -> ListArray
     where
-        F: FnOnce(usize) -> ArrayRef,
+        F: FnOnce(&mut R, usize) -> ArrayRef,
     {
-        let mut rng = rng();
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
         let values_len = offsets.last().unwrap().to_usize().unwrap();
-        let values = values(values_len);
+        let values = values(rng, values_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
         ListArray::new(field, offsets, values, Some(nulls))
     }
 
-    fn generate_column(len: usize) -> ArrayRef {
-        let mut rng = rng();
-        match rng.random_range(0..18) {
-            0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
-            1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
-            2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
-            3 => Arc::new(generate_primitive_array::<UInt64Type>(len, 0.8)),
-            4 => Arc::new(generate_primitive_array::<Float32Type>(len, 0.8)),
-            5 => Arc::new(generate_primitive_array::<Float64Type>(len, 0.8)),
-            6 => Arc::new(generate_strings::<i32>(len, 0.8)),
-            7 => Arc::new(generate_dictionary::<Int64Type>(
+    fn generate_list_view<F>(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+        values: F,
+    ) -> ListViewArray
+    where
+        F: FnOnce(usize) -> ArrayRef,
+    {
+        // Generate sizes first, then create a values array large enough
+        let sizes: Vec<i32> = (0..len).map(|_| rng.random_range(0..10)).collect();
+        let values_len: usize = sizes.iter().map(|s| *s as usize).sum::<usize>().max(1);
+        let values = values(values_len);
+
+        // Generate offsets that can overlap, be non-monotonic, or share ranges
+        let offsets: Vec<i32> = sizes
+            .iter()
+            .map(|&size| {
+                if size == 0 {
+                    0
+                } else {
+                    rng.random_range(0..=(values_len as i32 - size))
+                }
+            })
+            .collect();
+
+        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
+        let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+        ListViewArray::new(
+            field,
+            ScalarBuffer::from(offsets),
+            ScalarBuffer::from(sizes),
+            values,
+            Some(nulls),
+        )
+    }
+
+    fn generate_nulls(rng: &mut impl RngCore, len: usize) -> Option<NullBuffer> {
+        Some(NullBuffer::from_iter(
+            (0..len).map(|_| rng.random_bool(0.8)),
+        ))
+    }
+
+    fn change_underlying_null_values_for_primitive<T: ArrowPrimitiveType>(
+        array: &PrimitiveArray<T>,
+    ) -> PrimitiveArray<T> {
+        let (dt, values, nulls) = array.clone().into_parts();
+
+        let new_values = ScalarBuffer::<T::Native>::from_iter(
+            values
+                .iter()
+                .zip(nulls.as_ref().unwrap().iter())
+                .map(|(val, is_valid)| {
+                    if is_valid {
+                        *val
+                    } else {
+                        val.add_wrapping(T::Native::usize_as(1))
+                    }
+                }),
+        );
+
+        PrimitiveArray::new(new_values, nulls).with_data_type(dt)
+    }
+
+    fn change_underline_null_values_for_byte_array<T: ByteArrayType>(
+        array: &GenericByteArray<T>,
+    ) -> GenericByteArray<T> {
+        let (offsets, values, nulls) = array.clone().into_parts();
+
+        let new_offsets = OffsetBuffer::<T::Offset>::from_lengths(
+            offsets
+                .lengths()
+                .zip(nulls.as_ref().unwrap().iter())
+                .map(|(len, is_valid)| if is_valid { len } else { len + 1 }),
+        );
+
+        let mut new_bytes = Vec::<u8>::with_capacity(new_offsets[new_offsets.len() - 1].as_usize());
+
+        offsets
+            .windows(2)
+            .zip(nulls.as_ref().unwrap().iter())
+            .for_each(|(start_and_end, is_valid)| {
+                let start = start_and_end[0].as_usize();
+                let end = start_and_end[1].as_usize();
+                new_bytes.extend_from_slice(&values.as_slice()[start..end]);
+
+                // add an extra byte
+                if !is_valid {
+                    new_bytes.push(b'c');
+                }
+            });
+
+        GenericByteArray::<T>::new(new_offsets, Buffer::from_vec(new_bytes), nulls)
+    }
+
+    fn change_underline_null_values_for_list_array<O: OffsetSizeTrait>(
+        array: &GenericListArray<O>,
+    ) -> GenericListArray<O> {
+        let (field, offsets, values, nulls) = array.clone().into_parts();
+
+        let (new_values, new_offsets) = {
+            let concat_values = offsets
+                .windows(2)
+                .zip(nulls.as_ref().unwrap().iter())
+                .map(|(start_and_end, is_valid)| {
+                    let start = start_and_end[0].as_usize();
+                    let end = start_and_end[1].as_usize();
+                    if is_valid {
+                        return (start, end - start);
+                    }
+
+                    // If reached end, we take one less
+                    if end == values.len() {
+                        (start, (end - start).saturating_sub(1))
+                    } else {
+                        (start, end - start + 1)
+                    }
+                })
+                .map(|(start, length)| values.slice(start, length))
+                .collect::<Vec<_>>();
+
+            let new_offsets =
+                OffsetBuffer::<O>::from_lengths(concat_values.iter().map(|s| s.len()));
+
+            let new_values = {
+                let values = concat_values.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+                arrow_select::concat::concat(&values).expect("should be able to concat")
+            };
+
+            (new_values, new_offsets)
+        };
+
+        GenericListArray::<O>::new(field, new_offsets, new_values, nulls)
+    }
+
+    fn change_underline_null_values(array: &ArrayRef) -> ArrayRef {
+        if array.null_count() == 0 {
+            return Arc::clone(array);
+        }
+
+        downcast_primitive_array!(
+            array => {
+                let output = change_underlying_null_values_for_primitive(array);
+
+                Arc::new(output)
+            }
+
+            DataType::Utf8 => {
+                Arc::new(change_underline_null_values_for_byte_array(array.as_string::<i32>()))
+            }
+            DataType::LargeUtf8 => {
+                Arc::new(change_underline_null_values_for_byte_array(array.as_string::<i64>()))
+            }
+            DataType::Binary => {
+                Arc::new(change_underline_null_values_for_byte_array(array.as_binary::<i32>()))
+            }
+            DataType::LargeBinary => {
+                Arc::new(change_underline_null_values_for_byte_array(array.as_binary::<i64>()))
+            }
+            DataType::List(_) => {
+                Arc::new(change_underline_null_values_for_list_array(array.as_list::<i32>()))
+            }
+            DataType::LargeList(_) => {
+                Arc::new(change_underline_null_values_for_list_array(array.as_list::<i64>()))
+            }
+            _ => {
+                Arc::clone(array)
+            }
+        )
+    }
+
+    fn generate_column(rng: &mut (impl RngCore + Clone), len: usize) -> ArrayRef {
+        match rng.random_range(0..23) {
+            0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
+            1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
+            2 => Arc::new(generate_primitive_array::<Int64Type>(rng, len, 0.8)),
+            3 => Arc::new(generate_primitive_array::<UInt64Type>(rng, len, 0.8)),
+            4 => Arc::new(generate_primitive_array::<Float32Type>(rng, len, 0.8)),
+            5 => Arc::new(generate_primitive_array::<Float64Type>(rng, len, 0.8)),
+            6 => Arc::new(generate_strings::<i32>(rng, len, 0.8)),
+            7 => {
+                let dict_values_len = rng.random_range(1..len);
                 // Cannot test dictionaries containing null values because of #2687
-                Arc::new(generate_strings::<i32>(rng.random_range(1..len), 1.0)),
-                len,
-                0.8,
-            )),
-            8 => Arc::new(generate_dictionary::<Int64Type>(
+                let strings = Arc::new(generate_strings::<i32>(rng, dict_values_len, 1.0));
+                Arc::new(generate_dictionary::<Int64Type>(rng, strings, len, 0.8))
+            }
+            8 => {
+                let dict_values_len = rng.random_range(1..len);
                 // Cannot test dictionaries containing null values because of #2687
-                Arc::new(generate_primitive_array::<Int64Type>(
-                    rng.random_range(1..len),
+                let values = Arc::new(generate_primitive_array::<Int64Type>(
+                    rng,
+                    dict_values_len,
                     1.0,
-                )),
-                len,
-                0.8,
-            )),
-            9 => Arc::new(generate_fixed_size_binary(len, 0.8)),
-            10 => Arc::new(generate_struct(len, 0.8)),
-            11 => Arc::new(generate_list(len, 0.8, |values_len| {
-                Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
+                ));
+                Arc::new(generate_dictionary::<Int64Type>(rng, values, len, 0.8))
+            }
+            9 => Arc::new(generate_fixed_size_binary(rng, len, 0.8)),
+            10 => Arc::new(generate_struct(rng, len, 0.8)),
+            11 => Arc::new(generate_list(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
             })),
-            12 => Arc::new(generate_list(len, 0.8, |values_len| {
-                Arc::new(generate_strings::<i32>(values_len, 0.8))
+            12 => Arc::new(generate_list(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_strings::<i32>(rng, values_len, 0.8))
             })),
-            13 => Arc::new(generate_list(len, 0.8, |values_len| {
-                Arc::new(generate_struct(values_len, 0.8))
+            13 => Arc::new(generate_list(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_struct(rng, values_len, 0.8))
             })),
-            14 => Arc::new(generate_string_view(len, 0.8)),
-            15 => Arc::new(generate_byte_view(len, 0.8)),
+            14 => Arc::new(generate_string_view(rng, len, 0.8)),
+            15 => Arc::new(generate_byte_view(rng, len, 0.8)),
             16 => Arc::new(generate_fixed_stringview_column(len)),
             17 => Arc::new(
-                generate_list(len + 1000, 0.8, |values_len| {
-                    Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
+                generate_list(&mut rng.clone(), len + 1000, 0.8, |rng, values_len| {
+                    Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
+                })
+                .slice(500, len),
+            ),
+            18 => Arc::new(generate_boolean_array(rng, len, 0.8)),
+            19 => Arc::new(generate_list_view(
+                &mut rng.clone(),
+                len,
+                0.8,
+                |values_len| Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8)),
+            )),
+            20 => Arc::new(generate_list_view(
+                &mut rng.clone(),
+                len,
+                0.8,
+                |values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.8)),
+            )),
+            21 => Arc::new(generate_list_view(
+                &mut rng.clone(),
+                len,
+                0.8,
+                |values_len| Arc::new(generate_struct(rng, values_len, 0.8)),
+            )),
+            22 => Arc::new(
+                generate_list_view(&mut rng.clone(), len + 1000, 0.8, |values_len| {
+                    Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
             ),
@@ -3322,88 +4484,206 @@ mod tests {
         t.join(",")
     }
 
+    #[derive(Debug, PartialEq)]
+    enum Nulls {
+        /// Keep the generated array as is
+        AsIs,
+
+        /// Replace the null buffer with different null buffer to point to different positions as null
+        Different,
+
+        /// Remove all nulls
+        None,
+    }
+
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_test() {
+        let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..100 {
-            let mut rng = rng();
-            let num_columns = rng.random_range(1..5);
-            let len = rng.random_range(5..100);
-            let arrays: Vec<_> = (0..num_columns).map(|_| generate_column(len)).collect();
+            for null_behavior in [Nulls::AsIs, Nulls::Different, Nulls::None] {
+                let num_columns = rng.random_range(1..5);
+                let len = rng.random_range(5..100);
+                let mut arrays: Vec<_> = (0..num_columns)
+                    .map(|_| generate_column(&mut rng, len))
+                    .collect();
 
-            let options: Vec<_> = (0..num_columns)
-                .map(|_| SortOptions {
-                    descending: rng.random_bool(0.5),
-                    nulls_first: rng.random_bool(0.5),
-                })
-                .collect();
+                match null_behavior {
+                    Nulls::AsIs => {
+                        // Keep as is
+                    }
+                    Nulls::Different => {
+                        // Replace nulls with different nulls to allow for testing different underlying null values
+                        arrays = arrays
+                            .into_iter()
+                            .map(|a| replace_array_nulls(a, generate_nulls(&mut rng, len)))
+                            .collect()
+                    }
+                    Nulls::None => {
+                        // Remove nulls
+                        arrays = arrays
+                            .into_iter()
+                            .map(|a| replace_array_nulls(a, None))
+                            .collect()
+                    }
+                }
 
-            let sort_columns: Vec<_> = options
-                .iter()
-                .zip(&arrays)
-                .map(|(o, c)| SortColumn {
-                    values: Arc::clone(c),
-                    options: Some(*o),
-                })
-                .collect();
+                let options: Vec<_> = (0..num_columns)
+                    .map(|_| SortOptions {
+                        descending: rng.random_bool(0.5),
+                        nulls_first: rng.random_bool(0.5),
+                    })
+                    .collect();
 
-            let comparator = LexicographicalComparator::try_new(&sort_columns).unwrap();
+                let sort_columns: Vec<_> = options
+                    .iter()
+                    .zip(&arrays)
+                    .map(|(o, c)| SortColumn {
+                        values: Arc::clone(c),
+                        options: Some(*o),
+                    })
+                    .collect();
 
-            let columns: Vec<SortField> = options
-                .into_iter()
-                .zip(&arrays)
-                .map(|(o, a)| SortField::new_with_options(a.data_type().clone(), o))
-                .collect();
+                let comparator = LexicographicalComparator::try_new(&sort_columns).unwrap();
 
-            let converter = RowConverter::new(columns).unwrap();
-            let rows = converter.convert_columns(&arrays).unwrap();
+                let columns: Vec<SortField> = options
+                    .into_iter()
+                    .zip(&arrays)
+                    .map(|(o, a)| SortField::new_with_options(a.data_type().clone(), o))
+                    .collect();
 
-            for i in 0..len {
-                for j in 0..len {
-                    let row_i = rows.row(i);
-                    let row_j = rows.row(j);
-                    let row_cmp = row_i.cmp(&row_j);
-                    let lex_cmp = comparator.compare(i, j);
-                    assert_eq!(
-                        row_cmp,
-                        lex_cmp,
-                        "({:?} vs {:?}) vs ({:?} vs {:?}) for types {}",
-                        print_row(&sort_columns, i),
-                        print_row(&sort_columns, j),
-                        row_i,
-                        row_j,
-                        print_col_types(&sort_columns)
+                let converter = RowConverter::new(columns).unwrap();
+                let rows = converter.convert_columns(&arrays).unwrap();
+
+                // Assert that the underlying null values are not taken into account when converting
+                // even for different inputs
+                if !matches!(null_behavior, Nulls::None) {
+                    assert_same_rows_when_changing_input_underlying_null_values(
+                        &arrays, &converter, &rows,
                     );
                 }
-            }
 
-            // Convert rows produced from convert_columns().
-            // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
-            let back = converter.convert_rows(&rows).unwrap();
-            for (actual, expected) in back.iter().zip(&arrays) {
-                actual.to_data().validate_full().unwrap();
-                dictionary_eq(actual, expected)
-            }
+                for i in 0..len {
+                    for j in 0..len {
+                        let row_i = rows.row(i);
+                        let row_j = rows.row(j);
+                        let row_cmp = row_i.cmp(&row_j);
+                        let lex_cmp = comparator.compare(i, j);
+                        assert_eq!(
+                            row_cmp,
+                            lex_cmp,
+                            "({:?} vs {:?}) vs ({:?} vs {:?}) for types {}",
+                            print_row(&sort_columns, i),
+                            print_row(&sort_columns, j),
+                            row_i,
+                            row_j,
+                            print_col_types(&sort_columns)
+                        );
+                    }
+                }
 
-            // Check that we can convert rows into ByteArray and then parse, convert it back to array
-            // Note: validate_utf8 is set to true since Row is initialized through RowParser
-            let rows = rows.try_into_binary().expect("reasonable size");
-            let parser = converter.parser();
-            let back = converter
-                .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
-                .unwrap();
-            for (actual, expected) in back.iter().zip(&arrays) {
-                actual.to_data().validate_full().unwrap();
-                dictionary_eq(actual, expected)
-            }
+                // Validate rows length iterator
+                {
+                    let mut rows_iter = rows.iter();
+                    let mut rows_lengths_iter = rows.lengths();
+                    for (index, row) in rows_iter.by_ref().enumerate() {
+                        let len = rows_lengths_iter
+                            .next()
+                            .expect("Reached end of length iterator while still have rows");
+                        assert_eq!(
+                            row.data.len(),
+                            len,
+                            "Row length mismatch: {} vs {}",
+                            row.data.len(),
+                            len
+                        );
+                        assert_eq!(
+                            len,
+                            rows.row_len(index),
+                            "Row length mismatch at index {}: {} vs {}",
+                            index,
+                            len,
+                            rows.row_len(index)
+                        );
+                    }
 
-            let rows = converter.from_binary(rows);
-            let back = converter.convert_rows(&rows).unwrap();
-            for (actual, expected) in back.iter().zip(&arrays) {
-                actual.to_data().validate_full().unwrap();
-                dictionary_eq(actual, expected)
+                    assert_eq!(
+                        rows_lengths_iter.next(),
+                        None,
+                        "Length iterator did not reach end"
+                    );
+                }
+
+                // Convert rows produced from convert_columns().
+                // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
+                let back = converter.convert_rows(&rows).unwrap();
+                for (actual, expected) in back.iter().zip(&arrays) {
+                    actual.to_data().validate_full().unwrap();
+                    dictionary_eq(actual, expected)
+                }
+
+                // Check that we can convert rows into ByteArray and then parse, convert it back to array
+                // Note: validate_utf8 is set to true since Row is initialized through RowParser
+                let rows = rows.try_into_binary().expect("reasonable size");
+                let parser = converter.parser();
+                let back = converter
+                    .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
+                    .unwrap();
+                for (actual, expected) in back.iter().zip(&arrays) {
+                    actual.to_data().validate_full().unwrap();
+                    dictionary_eq(actual, expected)
+                }
+
+                let rows = converter.from_binary(rows);
+                let back = converter.convert_rows(&rows).unwrap();
+                for (actual, expected) in back.iter().zip(&arrays) {
+                    actual.to_data().validate_full().unwrap();
+                    dictionary_eq(actual, expected)
+                }
             }
         }
+    }
+
+    fn replace_array_nulls(array: ArrayRef, new_nulls: Option<NullBuffer>) -> ArrayRef {
+        make_array(
+            array
+                .into_data()
+                .into_builder()
+                // Replace the nulls
+                .nulls(new_nulls)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn assert_same_rows_when_changing_input_underlying_null_values(
+        arrays: &[ArrayRef],
+        converter: &RowConverter,
+        rows: &Rows,
+    ) {
+        let arrays_with_different_data_behind_nulls = arrays
+            .iter()
+            .map(|arr| change_underline_null_values(arr))
+            .collect::<Vec<_>>();
+
+        // Skip assertion if we did not change anything
+        if arrays
+            .iter()
+            .zip(arrays_with_different_data_behind_nulls.iter())
+            .all(|(a, b)| Arc::ptr_eq(a, b))
+        {
+            return;
+        }
+
+        let rows_with_different_nulls = converter
+            .convert_columns(&arrays_with_different_data_behind_nulls)
+            .unwrap();
+
+        assert_eq!(
+            rows.iter().collect::<Vec<_>>(),
+            rows_with_different_nulls.iter().collect::<Vec<_>>(),
+            "Different underlying nulls should not output different rows"
+        )
     }
 
     #[test]
@@ -3580,5 +4860,535 @@ mod tests {
         // Since there is single long string, len of values buffer is 13
         assert_eq!(unchecked_values_len, 13);
         assert!(checked_values_len > unchecked_values_len);
+    }
+
+    #[test]
+    fn test_sparse_union() {
+        // create a sparse union with Int32 (type_id = 0) and Utf8 (type_id = 1)
+        let int_array = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
+        let str_array = StringArray::from(vec![None, Some("b"), None, Some("d"), None]);
+
+        // [1, "b", 3, "d", 5]
+        let type_ids = vec![0, 1, 0, 1, 0].into();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("int", DataType::Int32, false))),
+            (1, Arc::new(Field::new("str", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect();
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            None,
+            vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)],
+        )
+        .unwrap();
+
+        let union_type = union_array.data_type().clone();
+        let converter = RowConverter::new(vec![SortField::new(union_type)]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone())])
+            .unwrap();
+
+        // round trip
+        let back = converter.convert_rows(&rows).unwrap();
+        let back_union = back[0].as_any().downcast_ref::<UnionArray>().unwrap();
+
+        assert_eq!(union_array.len(), back_union.len());
+        for i in 0..union_array.len() {
+            assert_eq!(union_array.type_id(i), back_union.type_id(i));
+        }
+    }
+
+    #[test]
+    fn test_sparse_union_with_nulls() {
+        // create a sparse union with Int32 (type_id = 0) and Utf8 (type_id = 1)
+        let int_array = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
+        let str_array = StringArray::from(vec![None::<&str>; 5]);
+
+        // [1, null (both children null), 3, null (both children null), 5]
+        let type_ids = vec![0, 1, 0, 1, 0].into();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("int", DataType::Int32, true))),
+            (1, Arc::new(Field::new("str", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect();
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            None,
+            vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)],
+        )
+        .unwrap();
+
+        let union_type = union_array.data_type().clone();
+        let converter = RowConverter::new(vec![SortField::new(union_type)]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone())])
+            .unwrap();
+
+        // round trip
+        let back = converter.convert_rows(&rows).unwrap();
+        let back_union = back[0].as_any().downcast_ref::<UnionArray>().unwrap();
+
+        assert_eq!(union_array.len(), back_union.len());
+        for i in 0..union_array.len() {
+            let expected_null = union_array.is_null(i);
+            let actual_null = back_union.is_null(i);
+            assert_eq!(expected_null, actual_null, "Null mismatch at index {i}");
+            if !expected_null {
+                assert_eq!(union_array.type_id(i), back_union.type_id(i));
+            }
+        }
+    }
+
+    #[test]
+    fn test_dense_union() {
+        // create a dense union with Int32 (type_id = 0) and use Utf8 (type_id = 1)
+        let int_array = Int32Array::from(vec![1, 3, 5]);
+        let str_array = StringArray::from(vec!["a", "b"]);
+
+        let type_ids = vec![0, 1, 0, 1, 0].into();
+
+        // [1, "a", 3, "b", 5]
+        let offsets = vec![0, 0, 1, 1, 2].into();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("int", DataType::Int32, false))),
+            (1, Arc::new(Field::new("str", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect();
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            Some(offsets), // Dense mode
+            vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)],
+        )
+        .unwrap();
+
+        let union_type = union_array.data_type().clone();
+        let converter = RowConverter::new(vec![SortField::new(union_type)]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone())])
+            .unwrap();
+
+        // round trip
+        let back = converter.convert_rows(&rows).unwrap();
+        let back_union = back[0].as_any().downcast_ref::<UnionArray>().unwrap();
+
+        assert_eq!(union_array.len(), back_union.len());
+        for i in 0..union_array.len() {
+            assert_eq!(union_array.type_id(i), back_union.type_id(i));
+        }
+    }
+
+    #[test]
+    fn test_dense_union_with_nulls() {
+        // create a dense union with Int32 (type_id = 0) and Utf8 (type_id = 1)
+        let int_array = Int32Array::from(vec![Some(1), None, Some(5)]);
+        let str_array = StringArray::from(vec![Some("a"), None]);
+
+        // [1, "a", 5, null (str null), null (int null)]
+        let type_ids = vec![0, 1, 0, 1, 0].into();
+        let offsets = vec![0, 0, 1, 1, 2].into();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("int", DataType::Int32, true))),
+            (1, Arc::new(Field::new("str", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect();
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            Some(offsets),
+            vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)],
+        )
+        .unwrap();
+
+        let union_type = union_array.data_type().clone();
+        let converter = RowConverter::new(vec![SortField::new(union_type)]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone())])
+            .unwrap();
+
+        // round trip
+        let back = converter.convert_rows(&rows).unwrap();
+        let back_union = back[0].as_any().downcast_ref::<UnionArray>().unwrap();
+
+        assert_eq!(union_array.len(), back_union.len());
+        for i in 0..union_array.len() {
+            let expected_null = union_array.is_null(i);
+            let actual_null = back_union.is_null(i);
+            assert_eq!(expected_null, actual_null, "Null mismatch at index {i}");
+            if !expected_null {
+                assert_eq!(union_array.type_id(i), back_union.type_id(i));
+            }
+        }
+    }
+
+    #[test]
+    fn test_union_ordering() {
+        let int_array = Int32Array::from(vec![100, 5, 20]);
+        let str_array = StringArray::from(vec!["z", "a"]);
+
+        // [100, "z", 5, "a", 20]
+        let type_ids = vec![0, 1, 0, 1, 0].into();
+        let offsets = vec![0, 0, 1, 1, 2].into();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("int", DataType::Int32, false))),
+            (1, Arc::new(Field::new("str", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect();
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            Some(offsets),
+            vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)],
+        )
+        .unwrap();
+
+        let union_type = union_array.data_type().clone();
+        let converter = RowConverter::new(vec![SortField::new(union_type)]).unwrap();
+
+        let rows = converter.convert_columns(&[Arc::new(union_array)]).unwrap();
+
+        /*
+        expected ordering
+
+        row 2: 5    - type_id 0
+        row 4: 20   - type_id 0
+        row 0: 100  - type id 0
+        row 3: "a"  - type id 1
+        row 1: "z"  - type id 1
+        */
+
+        // 5 < "z"
+        assert!(rows.row(2) < rows.row(1));
+
+        // 100 < "a"
+        assert!(rows.row(0) < rows.row(3));
+
+        // among ints
+        // 5 < 20
+        assert!(rows.row(2) < rows.row(4));
+        // 20 < 100
+        assert!(rows.row(4) < rows.row(0));
+
+        // among strigns
+        // "a" < "z"
+        assert!(rows.row(3) < rows.row(1));
+    }
+
+    #[test]
+    fn test_row_converter_roundtrip_with_many_union_columns() {
+        // col 1: Union(Int32, Utf8) [67, "hello"]
+        let fields1 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array1 = Int32Array::from(vec![Some(67), None]);
+        let string_array1 = StringArray::from(vec![None::<&str>, Some("hello")]);
+        let type_ids1 = vec![0i8, 1].into();
+
+        let union_array1 = UnionArray::try_new(
+            fields1.clone(),
+            type_ids1,
+            None,
+            vec![
+                Arc::new(int_array1) as ArrayRef,
+                Arc::new(string_array1) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        // col 2: Union(Int32, Utf8) [100, "world"]
+        let fields2 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array2 = Int32Array::from(vec![Some(100), None]);
+        let string_array2 = StringArray::from(vec![None::<&str>, Some("world")]);
+        let type_ids2 = vec![0i8, 1].into();
+
+        let union_array2 = UnionArray::try_new(
+            fields2.clone(),
+            type_ids2,
+            None,
+            vec![
+                Arc::new(int_array2) as ArrayRef,
+                Arc::new(string_array2) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        // create a row converter with 2 union columns
+        let field1 = Field::new("col1", DataType::Union(fields1, UnionMode::Sparse), true);
+        let field2 = Field::new("col2", DataType::Union(fields2, UnionMode::Sparse), true);
+
+        let sort_field1 = SortField::new(field1.data_type().clone());
+        let sort_field2 = SortField::new(field2.data_type().clone());
+
+        let converter = RowConverter::new(vec![sort_field1, sort_field2]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[
+                Arc::new(union_array1.clone()) as ArrayRef,
+                Arc::new(union_array2.clone()) as ArrayRef,
+            ])
+            .unwrap();
+
+        // roundtrip
+        let out = converter.convert_rows(&rows).unwrap();
+
+        let [col1, col2] = out.as_slice() else {
+            panic!("expected 2 columns")
+        };
+
+        let col1 = col1.as_any().downcast_ref::<UnionArray>().unwrap();
+        let col2 = col2.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        for (expected, got) in [union_array1, union_array2].iter().zip([col1, col2]) {
+            assert_eq!(expected.len(), got.len());
+            assert_eq!(expected.type_ids(), got.type_ids());
+
+            for i in 0..expected.len() {
+                assert_eq!(expected.value(i).as_ref(), got.value(i).as_ref());
+            }
+        }
+    }
+
+    #[test]
+    fn test_row_converter_roundtrip_with_one_union_column() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array = Int32Array::from(vec![Some(67), None]);
+        let string_array = StringArray::from(vec![None::<&str>, Some("hello")]);
+        let type_ids = vec![0i8, 1].into();
+
+        let union_array = UnionArray::try_new(
+            fields.clone(),
+            type_ids,
+            None,
+            vec![
+                Arc::new(int_array) as ArrayRef,
+                Arc::new(string_array) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let field = Field::new("col", DataType::Union(fields, UnionMode::Sparse), true);
+        let sort_field = SortField::new(field.data_type().clone());
+        let converter = RowConverter::new(vec![sort_field]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone()) as ArrayRef])
+            .unwrap();
+
+        // roundtrip
+        let out = converter.convert_rows(&rows).unwrap();
+
+        let [col1] = out.as_slice() else {
+            panic!("expected 1 column")
+        };
+
+        let col = col1.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(col.len(), union_array.len());
+        assert_eq!(col.type_ids(), union_array.type_ids());
+
+        for i in 0..col.len() {
+            assert_eq!(col.value(i).as_ref(), union_array.value(i).as_ref());
+        }
+    }
+
+    #[test]
+    fn test_row_converter_roundtrip_with_non_default_union_type_ids() {
+        // test with non-sequential type IDs (70, 85) instead of (0, 1)
+        let fields = UnionFields::try_new(
+            vec![70, 85],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array = Int32Array::from(vec![Some(67), None]);
+        let string_array = StringArray::from(vec![None::<&str>, Some("hello")]);
+        let type_ids = vec![70i8, 85].into();
+
+        let union_array = UnionArray::try_new(
+            fields.clone(),
+            type_ids,
+            None,
+            vec![
+                Arc::new(int_array) as ArrayRef,
+                Arc::new(string_array) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let field = Field::new("col", DataType::Union(fields, UnionMode::Sparse), true);
+        let sort_field = SortField::new(field.data_type().clone());
+        let converter = RowConverter::new(vec![sort_field]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone()) as ArrayRef])
+            .unwrap();
+
+        // roundtrip
+        let out = converter.convert_rows(&rows).unwrap();
+
+        let [col1] = out.as_slice() else {
+            panic!("expected 1 column")
+        };
+
+        let col = col1.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(col.len(), union_array.len());
+        assert_eq!(col.type_ids(), union_array.type_ids());
+
+        for i in 0..col.len() {
+            assert_eq!(col.value(i).as_ref(), union_array.value(i).as_ref());
+        }
+    }
+
+    #[test]
+    fn rows_size_should_count_for_capacity() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+
+        let empty_rows_size_with_preallocate_rows_and_data = {
+            let rows = row_converter.empty_rows(1000, 1000);
+
+            rows.size()
+        };
+        let empty_rows_size_with_preallocate_rows = {
+            let rows = row_converter.empty_rows(1000, 0);
+
+            rows.size()
+        };
+        let empty_rows_size_with_preallocate_data = {
+            let rows = row_converter.empty_rows(0, 1000);
+
+            rows.size()
+        };
+        let empty_rows_size_without_preallocate = {
+            let rows = row_converter.empty_rows(0, 0);
+
+            rows.size()
+        };
+
+        assert!(
+            empty_rows_size_with_preallocate_rows_and_data > empty_rows_size_with_preallocate_rows,
+            "{empty_rows_size_with_preallocate_rows_and_data} should be larger than {empty_rows_size_with_preallocate_rows}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_rows_and_data > empty_rows_size_with_preallocate_data,
+            "{empty_rows_size_with_preallocate_rows_and_data} should be larger than {empty_rows_size_with_preallocate_data}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_rows > empty_rows_size_without_preallocate,
+            "{empty_rows_size_with_preallocate_rows} should be larger than {empty_rows_size_without_preallocate}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_data > empty_rows_size_without_preallocate,
+            "{empty_rows_size_with_preallocate_data} should be larger than {empty_rows_size_without_preallocate}"
+        );
+    }
+
+    #[test]
+    fn test_struct_no_child_fields() {
+        fn run_test(array: ArrayRef) {
+            let sort_fields = vec![SortField::new(array.data_type().clone())];
+            let converter = RowConverter::new(sort_fields).unwrap();
+            let r = converter.convert_columns(&[Arc::clone(&array)]).unwrap();
+
+            let back = converter.convert_rows(&r).unwrap();
+            assert_eq!(back.len(), 1);
+            assert_eq!(&back[0], &array);
+        }
+
+        let s = Arc::new(StructArray::new_empty_fields(5, None)) as ArrayRef;
+        run_test(s);
+
+        let s = Arc::new(StructArray::new_empty_fields(
+            5,
+            Some(vec![true, false, true, false, false].into()),
+        )) as ArrayRef;
+        run_test(s);
+    }
+
+    #[test]
+    fn reserve_should_increase_capacity_to_the_requested_size() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+        let mut empty_rows = row_converter.empty_rows(0, 0);
+        empty_rows.reserve(50, 50);
+        let before_size = empty_rows.size();
+        empty_rows.reserve(50, 50);
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when reserving already reserved space"
+        );
+        empty_rows.reserve(10, 20);
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when already have space for the expected reserved data"
+        );
+
+        empty_rows.reserve(100, 20);
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
+        );
+
+        let before_size = empty_rows.size();
+
+        empty_rows.reserve(20, 100);
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
+        );
+    }
+
+    #[test]
+    fn empty_rows_should_return_empty_lengths_iterator() {
+        let rows = RowConverter::new(vec![SortField::new(DataType::UInt8)])
+            .unwrap()
+            .empty_rows(0, 0);
+        let mut lengths_iter = rows.lengths();
+        assert_eq!(lengths_iter.next(), None);
     }
 }

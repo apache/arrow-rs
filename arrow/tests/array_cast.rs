@@ -18,23 +18,23 @@
 use arrow_array::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder, UnionBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    ArrowDictionaryKeyType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, TimestampMicrosecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DurationMicrosecondArray,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
     DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    FixedSizeListArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, NullArray, PrimitiveArray,
-    StringArray, StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array, UnionArray,
+    FixedSizeListArray, Float16Array, Float32Array, Float64Array, Int8Array, Int16Array,
+    Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
+    NullArray, PrimitiveArray, StringArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array, UnionArray,
 };
-use arrow_buffer::{i256, Buffer, IntervalDayTime, IntervalMonthDayNano};
+use arrow_buffer::{Buffer, IntervalDayTime, IntervalMonthDayNano, i256};
 use arrow_cast::pretty::pretty_format_columns;
 use arrow_cast::{can_cast_types, cast};
 use arrow_data::ArrayData;
@@ -164,13 +164,22 @@ fn test_can_cast_types() {
             // check for mismatch
             match (cast_result, reported_cast_ability) {
                 (Ok(_), false) => {
-                    panic!("Was able to cast array {:?} from {:?} to {:?} but can_cast_types reported false",
-                           array, array.data_type(), to_type)
+                    panic!(
+                        "Was able to cast array {:?} from {:?} to {:?} but can_cast_types reported false",
+                        array,
+                        array.data_type(),
+                        to_type
+                    )
                 }
                 (Err(e), true) => {
-                    panic!("Was not able to cast array {:?} from {:?} to {:?} but can_cast_types reported true. \
+                    panic!(
+                        "Was not able to cast array {:?} from {:?} to {:?} but can_cast_types reported true. \
                                 Error was {:?}",
-                           array, array.data_type(), to_type, e)
+                        array,
+                        array.data_type(),
+                        to_type,
+                        e
+                    )
                 }
                 // otherwise it was a match
                 _ => {}
@@ -543,13 +552,14 @@ fn get_all_types() -> Vec<DataType> {
             Field::new("f2", DataType::Utf8, true),
         ])),
         Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("f1", DataType::Int32, false),
                     Field::new("f2", DataType::Utf8, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         Decimal128(38, 0),
@@ -582,7 +592,7 @@ fn get_all_types() -> Vec<DataType> {
 fn test_timestamp_cast_utf8() {
     let array: PrimitiveArray<TimestampMicrosecondType> =
         vec![Some(37800000000), None, Some(86339000000)].into();
-    let out = cast(&(Arc::new(array) as ArrayRef), &DataType::Utf8).unwrap();
+    let out = cast(&array, &DataType::Utf8).unwrap();
 
     let expected = StringArray::from(vec![
         Some("1970-01-01T10:30:00"),
@@ -598,7 +608,7 @@ fn test_timestamp_cast_utf8() {
     let array: PrimitiveArray<TimestampMicrosecondType> =
         vec![Some(37800000000), None, Some(86339000000)].into();
     let array = array.with_timezone("Australia/Sydney".to_string());
-    let out = cast(&(Arc::new(array) as ArrayRef), &DataType::Utf8).unwrap();
+    let out = cast(&array, &DataType::Utf8).unwrap();
 
     let expected = StringArray::from(vec![
         Some("1970-01-01T20:30:00+10:00"),

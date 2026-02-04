@@ -190,22 +190,27 @@ pub mod async_reader;
 #[cfg(feature = "async")]
 pub mod async_writer;
 
+pub mod push_decoder;
+
+mod in_memory_row_group;
 mod record_reader;
+
 experimental!(mod schema);
 
-use std::sync::Arc;
+use std::fmt::Debug;
 
 pub use self::arrow_writer::ArrowWriter;
 #[cfg(feature = "async")]
 pub use self::async_reader::ParquetRecordBatchStreamBuilder;
 #[cfg(feature = "async")]
 pub use self::async_writer::AsyncArrowWriter;
-use crate::schema::types::{SchemaDescriptor, Type};
+use crate::schema::types::SchemaDescriptor;
 use arrow_schema::{FieldRef, Schema};
 
 pub use self::schema::{
-    add_encoded_arrow_schema_to_metadata, encode_arrow_schema, parquet_to_arrow_field_levels,
-    parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns, ArrowSchemaConverter, FieldLevels,
+    ArrowSchemaConverter, FieldLevels, add_encoded_arrow_schema_to_metadata, encode_arrow_schema,
+    parquet_to_arrow_field_levels, parquet_to_arrow_field_levels_with_virtual,
+    parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns, virtual_type::*,
 };
 
 /// Schema metadata key used to store serialized Arrow schema
@@ -260,7 +265,7 @@ pub struct ProjectionMask {
     /// A mask of `[true, false, true, false]` will result in a schema 2
     /// elements long:
     /// * `fields[0]`: `a`
-    /// * `fields[1]`: `c`    
+    /// * `fields[1]`: `c`
     ///
     /// A mask of `None` will result in a schema 4 elements long:
     /// * `fields[0]`: `a`
@@ -318,21 +323,6 @@ impl ProjectionMask {
         Self { mask: Some(mask) }
     }
 
-    // Given a starting point in the schema, do a DFS for that node adding leaf paths to `paths`.
-    fn find_leaves(root: &Arc<Type>, parent: Option<&String>, paths: &mut Vec<String>) {
-        let path = parent
-            .map(|p| [p, root.name()].join("."))
-            .unwrap_or(root.name().to_string());
-        if root.is_group() {
-            for child in root.get_fields() {
-                Self::find_leaves(child, Some(&path), paths);
-            }
-        } else {
-            // Reached a leaf, add to paths
-            paths.push(path);
-        }
-    }
-
     /// Create a [`ProjectionMask`] which selects only the named columns
     ///
     /// All leaf columns that fall below a given name will be selected. For example, given
@@ -360,21 +350,24 @@ impl ProjectionMask {
     /// Note: repeated or out of order indices will not impact the final mask.
     ///
     /// i.e. `["b", "c"]` will construct the same mask as `["c", "b", "c"]`.
+    ///
+    /// Also, this will not produce the desired results if a column contains a '.' in its name.
+    /// Use [`Self::leaves`] or [`Self::roots`] in that case.
     pub fn columns<'a>(
         schema: &SchemaDescriptor,
         names: impl IntoIterator<Item = &'a str>,
     ) -> Self {
-        // first make vector of paths for leaf columns
-        let mut paths: Vec<String> = vec![];
-        for root in schema.root_schema().get_fields() {
-            Self::find_leaves(root, None, &mut paths);
-        }
-        assert_eq!(paths.len(), schema.num_columns());
-
         let mut mask = vec![false; schema.num_columns()];
         for name in names {
-            for idx in 0..schema.num_columns() {
-                if paths[idx].starts_with(name) {
+            let name_path: Vec<&str> = name.split('.').collect();
+            for (idx, col) in schema.columns().iter().enumerate() {
+                let path = col.path().parts();
+                // searching for "a.b.c" cannot match "a.b"
+                if name_path.len() > path.len() {
+                    continue;
+                }
+                // now path >= name_path, so check that each element in name_path matches
+                if name_path.iter().zip(path.iter()).all(|(a, b)| a == b) {
                     mask[idx] = true;
                 }
             }
@@ -426,6 +419,51 @@ impl ProjectionMask {
             }
         }
     }
+
+    /// Return a new [`ProjectionMask`] that excludes any leaf columns that are
+    /// part of a nested type, such as struct, list, or map
+    ///
+    /// If there are no non-nested columns in the mask, returns `None`
+    pub(crate) fn without_nested_types(&self, schema: &SchemaDescriptor) -> Option<Self> {
+        let num_leaves = schema.num_columns();
+
+        // Count how many leaves each root column has
+        let num_roots = schema.root_schema().get_fields().len();
+        let mut root_leaf_counts = vec![0usize; num_roots];
+        for leaf_idx in 0..num_leaves {
+            let root_idx = schema.get_column_root_idx(leaf_idx);
+            root_leaf_counts[root_idx] += 1;
+        }
+
+        // Keep only leaves whose root has exactly one leaf (non-nested) and is not a
+        // LIST. LIST is encoded as a wrapped logical type with a single leaf, e.g.
+        // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+        //
+        // ```text
+        // // List<String> (list non-null, elements nullable)
+        // required group my_list (LIST) {
+        //   repeated group list {
+        //     optional binary element (STRING);
+        //   }
+        // }
+        // ```
+        let mut included_leaves = Vec::new();
+        for leaf_idx in 0..num_leaves {
+            if self.leaf_included(leaf_idx) {
+                let root = schema.get_column_root(leaf_idx);
+                let root_idx = schema.get_column_root_idx(leaf_idx);
+                if root_leaf_counts[root_idx] == 1 && !root.is_list() {
+                    included_leaves.push(leaf_idx);
+                }
+            }
+        }
+
+        if included_leaves.is_empty() {
+            None
+        } else {
+            Some(ProjectionMask::leaves(schema, included_leaves))
+        }
+    }
 }
 
 /// Lookups up the parquet column by name
@@ -456,7 +494,9 @@ pub fn parquet_column<'a>(
 #[cfg(test)]
 mod test {
     use crate::arrow::ArrowWriter;
-    use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader, ParquetMetaDataWriter};
+    use crate::file::metadata::{
+        ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader, ParquetMetaDataWriter,
+    };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
@@ -473,13 +513,17 @@ mod test {
         let parquet_bytes = create_parquet_file();
 
         // read the metadata from the file WITHOUT the page index structures
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let original_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
         // this should error because the page indexes are not present, but have offsets specified
         let metadata_bytes = metadata_to_bytes(&original_metadata);
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let err = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .with_page_indexes(true) // there are no page indexes in the metadata
             .parse_and_finish(&metadata_bytes)
             .err()
@@ -495,7 +539,9 @@ mod test {
         let parquet_bytes = create_parquet_file();
 
         // read the metadata from the file
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let original_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
@@ -507,7 +553,9 @@ mod test {
             "metadata is subset of parquet"
         );
 
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let roundtrip_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .parse_and_finish(&metadata_bytes)
             .unwrap();
 
@@ -521,14 +569,18 @@ mod test {
 
         // read the metadata from the file including the page index structures
         // (which are stored elsewhere in the footer)
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let original_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .with_page_indexes(true)
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
         // read metadata back from the serialized bytes and ensure it is the same
         let metadata_bytes = metadata_to_bytes(&original_metadata);
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let roundtrip_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
             .with_page_indexes(true)
             .parse_and_finish(&metadata_bytes)
             .unwrap();
@@ -597,7 +649,8 @@ mod test {
 
     #[test]
     fn test_mask_from_column_names() {
-        let message_type = "
+        let schema = parse_schema(
+            "
             message test_schema {
                 OPTIONAL group a (MAP) {
                     REPEATED group key_value {
@@ -613,9 +666,8 @@ mod test {
                 REQUIRED INT32 b;
                 REQUIRED DOUBLE c;
             }
-            ";
-        let parquet_group_type = parse_message_type(message_type).unwrap();
-        let schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+            ",
+        );
 
         let mask = ProjectionMask::columns(&schema, ["foo", "bar"]);
         assert_eq!(mask.mask.unwrap(), vec![false; 5]);
@@ -632,7 +684,8 @@ mod test {
         let mask = ProjectionMask::columns(&schema, ["a.key_value.value", "b"]);
         assert_eq!(mask.mask.unwrap(), [false, true, true, true, false]);
 
-        let message_type = "
+        let schema = parse_schema(
+            "
             message test_schema {
                 OPTIONAL group a (LIST) {
                     REPEATED group list {
@@ -649,9 +702,8 @@ mod test {
                 }
                 REQUIRED INT32 b;
             }
-            ";
-        let parquet_group_type = parse_message_type(message_type).unwrap();
-        let schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+            ",
+        );
 
         let mask = ProjectionMask::columns(&schema, ["a", "b"]);
         assert_eq!(mask.mask.unwrap(), [true, true]);
@@ -666,7 +718,8 @@ mod test {
         let mask = ProjectionMask::columns(&schema, ["b"]);
         assert_eq!(mask.mask.unwrap(), [false, true]);
 
-        let message_type = "
+        let schema = parse_schema(
+            "
             message test_schema {
                 OPTIONAL INT32 a;
                 OPTIONAL INT32 b;
@@ -674,9 +727,8 @@ mod test {
                 OPTIONAL INT32 d;
                 OPTIONAL INT32 e;
             }
-            ";
-        let parquet_group_type = parse_message_type(message_type).unwrap();
-        let schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+            ",
+        );
 
         let mask = ProjectionMask::columns(&schema, ["a", "b"]);
         assert_eq!(mask.mask.unwrap(), [true, true, false, false, false]);
@@ -684,7 +736,8 @@ mod test {
         let mask = ProjectionMask::columns(&schema, ["d", "b", "d"]);
         assert_eq!(mask.mask.unwrap(), [false, true, false, true, false]);
 
-        let message_type = "
+        let schema = parse_schema(
+            "
             message test_schema {
                 OPTIONAL INT32 a;
                 OPTIONAL INT32 b;
@@ -692,12 +745,23 @@ mod test {
                 OPTIONAL INT32 d;
                 OPTIONAL INT32 e;
             }
-            ";
-        let parquet_group_type = parse_message_type(message_type).unwrap();
-        let schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+            ",
+        );
 
         let mask = ProjectionMask::columns(&schema, ["a", "e"]);
         assert_eq!(mask.mask.unwrap(), [true, false, true, false, true]);
+
+        let schema = parse_schema(
+            "
+            message test_schema {
+                OPTIONAL INT32 a;
+                OPTIONAL INT32 aa;
+            }
+            ",
+        );
+
+        let mask = ProjectionMask::columns(&schema, ["a"]);
+        assert_eq!(mask.mask.unwrap(), [true, false]);
     }
 
     #[test]
@@ -760,5 +824,227 @@ mod test {
         let mask2 = ProjectionMask { mask: None };
         mask1.intersect(&mask2);
         assert_eq!(mask1.mask, None);
+    }
+
+    #[test]
+    fn test_projection_mask_without_nested_no_nested() {
+        // Schema with no nested types
+        let schema = parse_schema(
+            "
+            message test_schema {
+                OPTIONAL INT32 a;
+                OPTIONAL INT32 b;
+                REQUIRED DOUBLE d;
+            }
+            ",
+        );
+
+        let mask = ProjectionMask::all();
+        // All columns are non-nested, but without_nested_types returns a new mask
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [0, 1, 2])),
+            mask.without_nested_types(&schema)
+        );
+
+        // select b, c
+        let mask = ProjectionMask::leaves(&schema, [1, 2]);
+        assert_eq!(Some(mask.clone()), mask.without_nested_types(&schema));
+    }
+
+    #[test]
+    fn test_projection_mask_without_nested_nested() {
+        // Schema with nested types (structs)
+        let schema = parse_schema(
+            "
+            message test_schema {
+                OPTIONAL INT32 a;
+                OPTIONAL group b {
+                    REQUIRED INT32 b1;
+                    OPTIONAL INT64 b2;
+                }
+                OPTIONAL group c (LIST) {
+                    REPEATED group list {
+                        OPTIONAL INT32 element;
+                    }
+                }
+                REQUIRED DOUBLE d;
+            }
+            ",
+        );
+
+        // all leaves --> a, d
+        let mask = ProjectionMask::all();
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [0, 4])),
+            mask.without_nested_types(&schema)
+        );
+
+        // b1 --> empty (it is nested)
+        let mask = ProjectionMask::leaves(&schema, [1]);
+        assert_eq!(None, mask.without_nested_types(&schema));
+
+        // b2, d --> d
+        let mask = ProjectionMask::leaves(&schema, [1, 4]);
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [4])),
+            mask.without_nested_types(&schema)
+        );
+
+        // element --> empty (it is nested)
+        let mask = ProjectionMask::leaves(&schema, [3]);
+        assert_eq!(None, mask.without_nested_types(&schema));
+    }
+
+    #[test]
+    fn test_projection_mask_without_nested_map_only() {
+        // Example from https://github.com/apache/parquet-format/blob/master/LogicalTypes.md
+        let schema = parse_schema(
+            "
+            message test_schema {
+                required group my_map (MAP) {
+                    repeated group key_value {
+                        required binary key (STRING);
+                        optional int32 value;
+                    }
+                }
+            }
+            ",
+        );
+
+        let mask = ProjectionMask::all();
+        assert_eq!(None, mask.without_nested_types(&schema));
+
+        // key --> empty (it is nested)
+        let mask = ProjectionMask::leaves(&schema, [0]);
+        assert_eq!(None, mask.without_nested_types(&schema));
+
+        // value --> empty (it is nested)
+        let mask = ProjectionMask::leaves(&schema, [1]);
+        assert_eq!(None, mask.without_nested_types(&schema));
+    }
+
+    #[test]
+    fn test_projection_mask_without_nested_map_with_non_nested() {
+        // Example from https://github.com/apache/parquet-format/blob/master/LogicalTypes.md
+        // with an additional non-nested field
+        let schema = parse_schema(
+            "
+            message test_schema {
+                REQUIRED INT32 a;
+                required group my_map (MAP) {
+                    repeated group key_value {
+                        required binary key (STRING);
+                        optional int32 value;
+                    }
+                }
+                REQUIRED INT32 b;
+            }
+            ",
+        );
+
+        // all leaves --> a, b which are the only non nested ones
+        let mask = ProjectionMask::all();
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [0, 3])),
+            mask.without_nested_types(&schema)
+        );
+
+        // key, value, b --> b (the only non-nested one)
+        let mask = ProjectionMask::leaves(&schema, [1, 2, 3]);
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [3])),
+            mask.without_nested_types(&schema)
+        );
+
+        // key, value --> NONE
+        let mask = ProjectionMask::leaves(&schema, [1, 2]);
+        assert_eq!(None, mask.without_nested_types(&schema));
+    }
+
+    #[test]
+    fn test_projection_mask_without_nested_deeply_nested() {
+        // Map of Maps
+        let schema = parse_schema(
+            "
+            message test_schema {
+                OPTIONAL group a (MAP) {
+                    REPEATED group key_value {
+                        REQUIRED BYTE_ARRAY key (UTF8);
+                        OPTIONAL group value (MAP) {
+                            REPEATED group key_value {
+                                REQUIRED INT32 key;
+                                REQUIRED BOOLEAN value;
+                            }
+                        }
+                    }
+                }
+                REQUIRED INT32 b;
+                REQUIRED DOUBLE c;
+            ",
+        );
+
+        let mask = ProjectionMask::all();
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [3, 4])),
+            mask.without_nested_types(&schema)
+        );
+
+        // (first) key, c --> c (the only non-nested one)
+        let mask = ProjectionMask::leaves(&schema, [0, 4]);
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [4])),
+            mask.without_nested_types(&schema)
+        );
+
+        // (second) key, value, b --> b (the only non-nested one)
+        let mask = ProjectionMask::leaves(&schema, [1, 2, 3]);
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [3])),
+            mask.without_nested_types(&schema)
+        );
+
+        // key --> NONE (the only non-nested one)
+        let mask = ProjectionMask::leaves(&schema, [0]);
+        assert_eq!(None, mask.without_nested_types(&schema));
+    }
+
+    #[test]
+    fn test_projection_mask_without_nested_list() {
+        // Example from https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+        let schema = parse_schema(
+            "
+            message test_schema {
+                required group my_list (LIST) {
+                    repeated group list {
+                        optional binary element (STRING);
+                    }
+                }
+                REQUIRED INT32 b;
+            }
+            ",
+        );
+
+        let mask = ProjectionMask::all();
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [1])),
+            mask.without_nested_types(&schema),
+        );
+
+        // element --> empty (it is nested)
+        let mask = ProjectionMask::leaves(&schema, [0]);
+        assert_eq!(None, mask.without_nested_types(&schema));
+
+        // element, b --> b (it is nested)
+        let mask = ProjectionMask::leaves(&schema, [0, 1]);
+        assert_eq!(
+            Some(ProjectionMask::leaves(&schema, [1])),
+            mask.without_nested_types(&schema),
+        );
+    }
+
+    /// Converts a schema string into a `SchemaDescriptor`
+    fn parse_schema(schema: &str) -> SchemaDescriptor {
+        let parquet_group_type = parse_message_type(schema).unwrap();
+        SchemaDescriptor::new(Arc::new(parquet_group_type))
     }
 }

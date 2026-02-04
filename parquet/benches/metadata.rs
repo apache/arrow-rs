@@ -15,86 +15,88 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use parquet::file::metadata::ParquetMetaDataReader;
+use std::hint::black_box;
+use std::sync::Arc;
+
+use parquet::basic::{Encoding, PageType, Type as PhysicalType};
+use parquet::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, LevelHistogram, PageEncodingStats, ParquetMetaData,
+    ParquetMetaDataOptions, ParquetMetaDataReader, ParquetMetaDataWriter, ParquetStatisticsPolicy,
+    RowGroupMetaData,
+};
+use parquet::file::statistics::Statistics;
+use parquet::file::writer::TrackedWrite;
+use parquet::schema::parser::parse_message_type;
+use parquet::schema::types::{
+    ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as SchemaType,
+};
 use rand::Rng;
-use thrift::protocol::TCompactOutputProtocol;
 
 use arrow::util::test_util::seedable_rng;
 use bytes::Bytes;
-use criterion::*;
+use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
-use parquet::format::{
-    ColumnChunk, ColumnMetaData, CompressionCodec, Encoding, FieldRepetitionType, FileMetaData,
-    PageEncodingStats, PageType, RowGroup, SchemaElement, Type,
-};
-use parquet::thrift::TSerializable;
 
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
 
-fn encoded_meta() -> Vec<u8> {
+fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
     let mut rng = seedable_rng();
 
-    let mut schema = Vec::with_capacity(NUM_COLUMNS + 1);
-    schema.push(SchemaElement {
-        type_: None,
-        type_length: None,
-        repetition_type: None,
-        name: Default::default(),
-        num_children: Some(NUM_COLUMNS as _),
-        converted_type: None,
-        scale: None,
-        precision: None,
-        field_id: None,
-        logical_type: None,
-    });
+    let mut column_desc_ptrs: Vec<ColumnDescPtr> = Vec::with_capacity(NUM_COLUMNS);
+    let mut message_type = "message test_schema {".to_string();
     for i in 0..NUM_COLUMNS {
-        schema.push(SchemaElement {
-            type_: Some(Type::FLOAT),
-            type_length: None,
-            repetition_type: Some(FieldRepetitionType::REQUIRED),
-            name: i.to_string(),
-            num_children: None,
-            converted_type: None,
-            scale: None,
-            precision: None,
-            field_id: None,
-            logical_type: None,
-        })
+        message_type.push_str(&format!("REQUIRED FLOAT {};", i));
+        column_desc_ptrs.push(ColumnDescPtr::new(ColumnDescriptor::new(
+            Arc::new(
+                SchemaType::primitive_type_builder(&i.to_string(), PhysicalType::FLOAT)
+                    .build()
+                    .unwrap(),
+            ),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        )));
     }
+    message_type.push('}');
 
-    let stats = parquet::format::Statistics {
-        min: None,
-        max: None,
-        null_count: Some(0),
-        distinct_count: None,
-        max_value: Some(vec![rng.random(); 8]),
-        min_value: Some(vec![rng.random(); 8]),
-        is_max_value_exact: Some(true),
-        is_min_value_exact: Some(true),
+    let schema_descr = parse_message_type(&message_type)
+        .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+        .unwrap();
+
+    let stats = Statistics::float(Some(rng.random()), Some(rng.random()), None, Some(0), false);
+
+    let (var_size, rep_hist, def_hist) = match (is_nullable, has_lists) {
+        (true, true) => {
+            let rep_hist = LevelHistogram::from(vec![1500i64; 2]);
+            let def_hist = LevelHistogram::from(vec![1000i64; 3]);
+            (
+                Some(rng.random_range(0..1000000000)),
+                Some(rep_hist),
+                Some(def_hist),
+            )
+        }
+        (true, false) => {
+            let def_hist = LevelHistogram::from(vec![1500i64; 2]);
+            (Some(rng.random_range(0..1000000000)), None, Some(def_hist))
+        }
+        (_, _) => (None, None, None),
     };
 
     let row_groups = (0..NUM_ROW_GROUPS)
         .map(|i| {
             let columns = (0..NUM_COLUMNS)
-                .map(|_| ColumnChunk {
-                    file_path: None,
-                    file_offset: 0,
-                    meta_data: Some(ColumnMetaData {
-                        type_: Type::FLOAT,
-                        encodings: vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY],
-                        path_in_schema: vec![],
-                        codec: CompressionCodec::UNCOMPRESSED,
-                        num_values: rng.random_range(1..1000000),
-                        total_uncompressed_size: rng.random_range(100000..100000000),
-                        total_compressed_size: rng.random_range(50000..5000000),
-                        key_value_metadata: None,
-                        data_page_offset: rng.random_range(4..2000000000),
-                        index_page_offset: None,
-                        dictionary_page_offset: Some(rng.random_range(4..2000000000)),
-                        statistics: Some(stats.clone()),
-                        encoding_stats: Some(vec![
+                .map(|j| {
+                    ColumnChunkMetaData::builder(column_desc_ptrs[j].clone())
+                        .set_encodings(vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY])
+                        .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+                        .set_num_values(rng.random_range(1..1000000))
+                        .set_total_compressed_size(rng.random_range(50000..5000000))
+                        .set_data_page_offset(rng.random_range(4..2000000000))
+                        .set_dictionary_page_offset(Some(rng.random_range(4..2000000000)))
+                        .set_statistics(stats.clone())
+                        .set_page_encoding_stats(vec![
                             PageEncodingStats {
                                 page_type: PageType::DICTIONARY_PAGE,
                                 encoding: Encoding::PLAIN,
@@ -105,51 +107,47 @@ fn encoded_meta() -> Vec<u8> {
                                 encoding: Encoding::RLE_DICTIONARY,
                                 count: 10,
                             },
-                        ]),
-                        bloom_filter_offset: None,
-                        bloom_filter_length: None,
-                        size_statistics: None,
-                        geospatial_statistics: None,
-                    }),
-                    offset_index_offset: Some(rng.random_range(0..2000000000)),
-                    offset_index_length: Some(rng.random_range(1..100000)),
-                    column_index_offset: Some(rng.random_range(0..2000000000)),
-                    column_index_length: Some(rng.random_range(1..100000)),
-                    crypto_metadata: None,
-                    encrypted_column_metadata: None,
+                        ])
+                        .set_offset_index_offset(Some(rng.random_range(0..2000000000)))
+                        .set_offset_index_length(Some(rng.random_range(1..100000)))
+                        .set_column_index_offset(Some(rng.random_range(0..2000000000)))
+                        .set_column_index_length(Some(rng.random_range(1..100000)))
+                        .set_unencoded_byte_array_data_bytes(var_size)
+                        .set_repetition_level_histogram(rep_hist.clone())
+                        .set_definition_level_histogram(def_hist.clone())
+                        .build()
+                        .unwrap()
                 })
                 .collect();
 
-            RowGroup {
-                columns,
-                total_byte_size: rng.random_range(1..2000000000),
-                num_rows: rng.random_range(1..10000000000),
-                sorting_columns: None,
-                file_offset: None,
-                total_compressed_size: Some(rng.random_range(1..1000000000)),
-                ordinal: Some(i as _),
-            }
+            RowGroupMetaData::builder(schema_descr.clone())
+                .set_column_metadata(columns)
+                .set_total_byte_size(rng.random_range(1..2000000000))
+                .set_num_rows(rng.random_range(1..10000000000))
+                .set_ordinal(i as i16)
+                .build()
+                .unwrap()
         })
         .collect();
 
-    let file = FileMetaData {
-        schema,
-        row_groups,
-        version: 1,
-        num_rows: rng.random_range(1..2000000000),
-        key_value_metadata: None,
-        created_by: Some("parquet-rs".into()),
-        column_orders: None,
-        encryption_algorithm: None,
-        footer_signing_key_metadata: None,
-    };
+    let file_metadata = FileMetaData::new(
+        1,
+        rng.random_range(1..2000000000),
+        Some("parquet-rs".into()),
+        None,
+        schema_descr,
+        None,
+    );
 
-    let mut buf = Vec::with_capacity(1024);
+    let metadata = ParquetMetaData::new(file_metadata, row_groups);
+    let mut buffer = Vec::with_capacity(1024);
     {
-        let mut out = TCompactOutputProtocol::new(&mut buf);
-        file.write_to_out_protocol(&mut out).unwrap();
+        let buf = TrackedWrite::new(&mut buffer);
+        let writer = ParquetMetaDataWriter::new_with_tracked(buf, &metadata);
+        writer.finish().unwrap();
     }
-    buf
+
+    buffer
 }
 
 fn get_footer_bytes(data: Bytes) -> Bytes {
@@ -170,27 +168,135 @@ fn criterion_benchmark(c: &mut Criterion) {
     let data = Bytes::from(data);
 
     c.bench_function("open(default)", |b| {
-        b.iter(|| SerializedFileReader::new(data.clone()).unwrap())
+        b.iter(|| {
+            let options = ReadOptionsBuilder::new()
+                .with_encoding_stats_as_mask(false)
+                .build();
+            SerializedFileReader::new_with_options(data.clone(), options).unwrap()
+        })
     });
 
     c.bench_function("open(page index)", |b| {
         b.iter(|| {
-            let options = ReadOptionsBuilder::new().with_page_index().build();
+            let options = ReadOptionsBuilder::new()
+                .with_page_index()
+                .with_encoding_stats_as_mask(false)
+                .build();
             SerializedFileReader::new_with_options(data.clone(), options).unwrap()
         })
     });
 
     let meta_data = get_footer_bytes(data.clone());
+    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
     c.bench_function("decode parquet metadata", |b| {
         b.iter(|| {
-            ParquetMetaDataReader::decode_metadata(&meta_data).unwrap();
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                .unwrap();
         })
     });
 
-    let buf: Bytes = black_box(encoded_meta()).into();
+    let schema = ParquetMetaDataReader::decode_schema(&meta_data).unwrap();
+    let options = ParquetMetaDataOptions::new()
+        .with_schema(schema)
+        .with_encoding_stats_as_mask(false);
+    c.bench_function("decode metadata with schema", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                .unwrap();
+        })
+    });
+
+    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(true);
+    c.bench_function("decode metadata with stats mask", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                .unwrap();
+        })
+    });
+
+    let options =
+        ParquetMetaDataOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    c.bench_function("decode metadata with skip PES", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                .unwrap();
+        })
+    });
+
+    let options = ParquetMetaDataOptions::new()
+        .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
+        .with_encoding_stats_as_mask(false);
+    c.bench_function("decode metadata with skip column stats", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                .unwrap();
+        })
+    });
+
+    let buf: Bytes = black_box(encoded_meta(false, false)).into();
+    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
     c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let schema = ParquetMetaDataReader::decode_schema(&buf).unwrap();
+    let options = ParquetMetaDataOptions::new()
+        .with_schema(schema)
+        .with_encoding_stats_as_mask(false);
+    c.bench_function("decode metadata (wide) with schema", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(true);
+    c.bench_function("decode metadata (wide) with stats mask", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let options =
+        ParquetMetaDataOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    c.bench_function("decode metadata (wide) with skip PES", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let options = ParquetMetaDataOptions::new()
+        .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
+        .with_encoding_stats_as_mask(false);
+    c.bench_function("decode metadata (wide) with skip column stats", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let buf: Bytes = black_box(encoded_meta(true, true)).into();
+    c.bench_function("decode parquet metadata w/ size stats (wide)", |b| {
+        b.iter(|| {
             ParquetMetaDataReader::decode_metadata(&buf).unwrap();
+        })
+    });
+
+    let options =
+        ParquetMetaDataOptions::new().with_size_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    c.bench_function("decode metadata (wide) with skip size stats", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let options = ParquetMetaDataOptions::new()
+        .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
+        .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
+        .with_size_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    c.bench_function("decode metadata (wide) with skip all stats", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
         })
     });
 }

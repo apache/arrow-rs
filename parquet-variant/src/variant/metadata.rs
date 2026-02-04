@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
+use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice,
     try_binary_search_range_by,
@@ -285,14 +285,13 @@ impl<'m> VariantMetadata<'m> {
                 let mut current_offset = offsets.next().unwrap_or(0);
                 let mut prev_value: Option<&str> = None;
                 for next_offset in offsets {
-                    let current_value =
-                        value_buffer
-                            .get(current_offset..next_offset)
-                            .ok_or_else(|| {
-                                ArrowError::InvalidArgumentError(format!(
+                    let current_value = value_buffer.get(current_offset..next_offset).ok_or_else(
+                        || {
+                            ArrowError::InvalidArgumentError(format!(
                                 "range {current_offset}..{next_offset} is invalid or out of bounds"
                             ))
-                            })?;
+                        },
+                    )?;
 
                     if let Some(prev_val) = prev_value {
                         if current_value <= prev_val {

@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow_array::StringViewArray;
-use criterion::*;
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 
 fn gen_view_array(size: usize) -> StringViewArray {
     StringViewArray::from_iter((0..size).map(|v| match v % 3 {

@@ -76,7 +76,8 @@ impl NullArray {
     }
 }
 
-impl Array for NullArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for NullArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -136,21 +137,19 @@ impl Array for NullArray {
 
 impl From<ArrayData> for NullArray {
     fn from(data: ArrayData) -> Self {
+        let (data_type, len, nulls, _offset, buffers, _child_data) = data.into_parts();
+
         assert_eq!(
-            data.data_type(),
-            &DataType::Null,
+            data_type,
+            DataType::Null,
             "NullArray data type should be Null"
         );
-        assert_eq!(
-            data.buffers().len(),
-            0,
-            "NullArray data should contain 0 buffers"
-        );
+        assert_eq!(buffers.len(), 0, "NullArray data should contain 0 buffers");
         assert!(
-            data.nulls().is_none(),
+            nulls.is_none(),
             "NullArray data should not contain a null buffer, as no buffers are required"
         );
-        Self { len: data.len() }
+        Self { len }
     }
 }
 

@@ -174,10 +174,14 @@ type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 /// some return over the naive approach used by MutableArrayData
 ///
 /// `len` is the total length of the merged output
+///
+/// Returns `(should_merge, has_overflow)` where:
+/// - `should_merge`: whether dictionary values should be merged
+/// - `has_overflow`: whether the combined dictionary values would overflow the key type
 pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     len: usize,
-) -> bool {
+) -> (bool, bool) {
     use DataType::*;
     let first_values = dictionaries[0].values().as_ref();
     let ptr_eq: PtrEq = match first_values.data_type() {
@@ -187,7 +191,11 @@ pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
         LargeBinary => bytes_ptr_eq::<LargeBinaryType>,
         dt => {
             if !dt.is_primitive() {
-                return false;
+                return (
+                    false,
+                    K::Native::from_usize(dictionaries.iter().map(|d| d.values().len()).sum())
+                        .is_none(),
+                );
             }
             |a, b| a.to_data().ptr_eq(&b.to_data())
         }
@@ -206,7 +214,10 @@ pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     let overflow = K::Native::from_usize(total_values).is_none();
     let values_exceed_length = total_values >= len;
 
-    !single_dictionary && (overflow || values_exceed_length)
+    (
+        !single_dictionary && (overflow || values_exceed_length),
+        overflow,
+    )
 }
 
 /// Given an array of dictionaries and an optional key mask compute a values array

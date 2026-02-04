@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
+use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
 };
@@ -390,7 +390,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Returns the value of the field with the specified name, if any.
     ///
-    /// `Ok(None)` means the field does not exist; `Err` means the search encountered an error.
+    /// Returns `Some(Variant)` if the field exists, or `None` if the field does not exist.
     pub fn get(&self, name: &str) -> Option<Variant<'m, 'v>> {
         // Binary search through the field IDs of this object to find the requested field name.
         //
@@ -419,13 +419,9 @@ impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
         // IFF two objects are valid and logically equal, they will have the same
         // field names in the same order, because the spec requires the object
         // fields to be sorted lexicographically.
-        for ((name_a, value_a), (name_b, value_b)) in self.iter().zip(other.iter()) {
-            if name_a != name_b || value_a != value_b {
-                return false;
-            }
-        }
-
-        true
+        self.iter()
+            .zip(other.iter())
+            .all(|((name_a, value_a), (name_b, value_b))| name_a == name_b && value_a == value_b)
     }
 }
 

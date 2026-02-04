@@ -84,7 +84,7 @@ python dev/release/label_issues.py
 
 # review change log / edit issues and labels if needed, rerun, repeat as necessary
 # note you need to revert changes to CHANGELOG-old.md if you want to rerun the script
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+./dev/release/update_change_log.sh
 
 # Commit the changes
 git commit -a -m 'Update changelog'
@@ -244,21 +244,23 @@ Rust Arrow Crates:
 (cd arrow-data && cargo publish)
 (cd arrow-array && cargo publish)
 (cd arrow-select && cargo publish)
+(cd arrow-ord && cargo publish)
 (cd arrow-cast && cargo publish)
 (cd arrow-ipc && cargo publish)
 (cd arrow-csv && cargo publish)
 (cd arrow-json && cargo publish)
 (cd arrow-avro && cargo publish)
-(cd arrow-ord && cargo publish)
 (cd arrow-arith && cargo publish)
 (cd arrow-string && cargo publish)
 (cd arrow-row && cargo publish)
 (cd arrow-pyarrow && cargo publish)
 (cd arrow && cargo publish)
+(cd arrow-avro && cargo publish)
 (cd arrow-flight && cargo publish)
 (cd parquet-variant && cargo publish)
 (cd parquet-variant-json && cargo publish)
 (cd parquet-variant-compute && cargo publish)
+(cd parquet-geospatial && cargo publish)
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
 (cd arrow-integration-test && cargo publish)

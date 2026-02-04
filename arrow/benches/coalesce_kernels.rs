@@ -24,7 +24,7 @@ use arrow::array::*;
 use arrow_array::types::{Float64Type, Int32Type, TimestampNanosecondType};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 /// Benchmarks for generating evently sized output RecordBatches
 /// from a sequence of filtered source batches

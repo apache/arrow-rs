@@ -20,13 +20,13 @@
 //! This crate provides:
 //! - a [`reader`] that decodes Avro (Object Container Files, Avro Single‑Object encoding,
 //!   and Confluent Schema Registry wire format) into Arrow `RecordBatch`es,
-//! - and a [`writer`] that encodes Arrow `RecordBatch`es into Avro (OCF or raw Avro binary).
+//! - and a [`writer`] that encodes Arrow `RecordBatch`es into Avro (OCF or SOE).
 //!
 //! If you’re new to Arrow or Avro, see:
 //! - Arrow project site: <https://arrow.apache.org/>
 //! - Avro 1.11.1 specification: <https://avro.apache.org/docs/1.11.1/specification/>
 //!
-//! ## Example: OCF (Object Container File) round‑trip
+//! ## Example: OCF (Object Container File) round‑trip *(runnable)*
 //!
 //! The example below creates an Arrow table, writes an **Avro OCF** fully in memory,
 //! and then reads it back. OCF is a self‑describing file format that embeds the Avro
@@ -64,82 +64,7 @@
 //! # Ok(()) }
 //! ```
 //!
-//! ## Quickstart: Confluent wire‑format round‑trip *(runnable)*
-//!
-//! The **Confluent Schema Registry wire format** prefixes each Avro message with a
-//! 1‑byte magic `0x00` and a **4‑byte big‑endian** schema ID, followed by the Avro body.
-//! See: <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
-//!
-//! In this round‑trip, we:
-//! 1) Use `AvroStreamWriter` to create a **raw Avro body** for a single‑row batch,
-//! 2) Wrap it with the Confluent prefix (magic and schema ID),
-//! 3) Decode it back to Arrow using a `Decoder` configured with a `SchemaStore` that
-//!    maps the schema ID to the Avro schema used by the writer.
-//!
-//! ```
-//! use std::collections::HashMap;
-//! use std::sync::Arc;
-//! use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-//! use arrow_schema::{DataType, Field, Schema};
-//! use arrow_avro::writer::{AvroStreamWriter, WriterBuilder};
-//! use arrow_avro::reader::ReaderBuilder;
-//! use arrow_avro::schema::{
-//!     AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm,
-//!     FingerprintStrategy, SCHEMA_METADATA_KEY
-//! };
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // Writer schema registered under Schema Registry ID 1
-//! let avro_json = r#"{
-//!   "type":"record","name":"User",
-//!   "fields":[{"name":"id","type":"long"},{"name":"name","type":"string"}]
-//! }"#;
-//!
-//! let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
-//! let id: u32 = 1;
-//! store.set(Fingerprint::Id(id), AvroSchema::new(avro_json.to_string()))?;
-//!
-//! // Build an Arrow schema that references the same Avro JSON
-//! let mut md = HashMap::new();
-//! md.insert(SCHEMA_METADATA_KEY.to_string(), avro_json.to_string());
-//! let schema = Schema::new_with_metadata(
-//!     vec![
-//!         Field::new("id", DataType::Int64, false),
-//!         Field::new("name", DataType::Utf8, false),
-//!     ],
-//!     md,
-//! );
-//!
-//! // One‑row batch: { id: 42, name: "alice" }
-//! let batch = RecordBatch::try_new(
-//!     Arc::new(schema.clone()),
-//!     vec![
-//!         Arc::new(Int64Array::from(vec![42])) as ArrayRef,
-//!         Arc::new(StringArray::from(vec!["alice"])) as ArrayRef,
-//!     ],
-//! )?;
-//!
-//! // Stream‑write a single record, letting the writer add the **Confluent** prefix.
-//! let sink: Vec<u8> = Vec::new();
-//! let mut w: AvroStreamWriter<Vec<u8>> = WriterBuilder::new(schema.clone())
-//!     .with_fingerprint_strategy(FingerprintStrategy::Id(id))
-//!     .build(sink)?;
-//! w.write(&batch)?;
-//! w.finish()?;
-//! let frame = w.into_inner(); // already: 0x00 + 4B BE ID + Avro body
-//! assert!(frame.len() > 5);
-//!
-//! // Decode
-//! let mut dec = ReaderBuilder::new()
-//!   .with_writer_schema_store(store)
-//!   .build_decoder()?;
-//! dec.decode(&frame)?;
-//! let out = dec.flush()?.expect("one row");
-//! assert_eq!(out.num_rows(), 1);
-//! # Ok(()) }
-//! ```
-//!
-//! ## Quickstart: Avro Single‑Object Encoding round‑trip *(runnable)*
+//! ## Quickstart: SOE (Single‑Object Encoding) round‑trip *(runnable)*
 //!
 //! Avro **Single‑Object Encoding (SOE)** wraps an Avro body with a 2‑byte marker
 //! `0xC3 0x01` and an **8‑byte little‑endian CRC‑64‑AVRO Rabin fingerprint** of the
@@ -198,22 +123,87 @@
 //! # Ok(()) }
 //! ```
 //!
+//! ## `async` Reading (`async` feature)
+//!
+//! The [`reader`] module provides async APIs for reading Avro files when the `async`
+//! feature is enabled.
+//!
+//! [`AsyncAvroFileReader`] implements `Stream<Item = Result<RecordBatch, ArrowError>>`,
+//! allowing efficient async streaming of record batches. When the `object_store` feature
+//! is enabled, [`AvroObjectReader`] provides integration with object storage services
+//! such as S3 via the [object_store] crate.
+//!
+//! ```ignore
+//! use std::sync::Arc;
+//! use arrow_avro::reader::{AsyncAvroFileReader, AvroObjectReader};
+//! use futures::TryStreamExt;
+//! use object_store::ObjectStore;
+//! use object_store::local::LocalFileSystem;
+//! use object_store::path::Path;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+//! let path = Path::from("data/example.avro");
+//! let meta = store.head(&path).await?;
+//!
+//! let reader = AvroObjectReader::new(store, path);
+//! let stream = AsyncAvroFileReader::builder(reader, meta.size, 1024)
+//!     .try_build()
+//!     .await?;
+//!
+//! let batches: Vec<_> = stream.try_collect().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! [object_store]: https://docs.rs/object_store/latest/object_store/
+//!
 //! ---
 //!
 //! ### Modules
 //!
 //! - [`reader`]: read Avro (OCF, SOE, Confluent) into Arrow `RecordBatch`es.
-//! - [`writer`]: write Arrow `RecordBatch`es as Avro (OCF, SOE, Confluent).
+//!   - With the `async` feature: [`AsyncAvroFileReader`] for async streaming reads.
+//!   - With the `object_store` feature: [`AvroObjectReader`] for reading from cloud storage.
+//! - [`writer`]: write Arrow `RecordBatch`es as Avro (OCF, SOE, Confluent, Apicurio).
 //! - [`schema`]: Avro schema parsing / fingerprints / registries.
-//! - [`compression`]: codecs used for OCF blocks (i.e., Deflate, Snappy, Zstandard).
-//! - [`codec`]: internal Avro↔Arrow type conversion and row decode/encode plans.
+//! - [`compression`]: codecs used for **OCF block compression** (i.e., Deflate, Snappy, Zstandard, BZip2, and XZ).
+//! - [`codec`]: internal Avro-Arrow type conversion and row decode/encode plans.
+//!
+//! [`AsyncAvroFileReader`]: reader::AsyncAvroFileReader
+//! [`AvroObjectReader`]: reader::AvroObjectReader
 //!
 //! ### Features
 //!
-//! - `md5`: enables dependency `md5` for md5 fingerprint hashing
-//! - `sha256`: enables dependency `sha2` for sha256 fingerprint hashing
-//! - `small_decimals`: enables support for small decimal types
-//! - `avro_custom_types`: Enables custom logic that interprets an annotated Avro long with logicalType values of `arrow.duration-nanos`, `arrow.duration-micros`, `arrow.duration-millis`, or `arrow.duration-seconds` as a more descriptive Arrow Duration(TimeUnit) type.
+//! **OCF compression (enabled by default)**
+//! - `deflate` — enable DEFLATE block compression (via `flate2`).
+//! - `snappy` — enable Snappy block compression with 4‑byte BE CRC32 (per Avro).
+//! - `zstd` — enable Zstandard block compression.
+//! - `bzip2` — enable BZip2 block compression.
+//! - `xz` — enable XZ/LZMA block compression.
+//!
+//! **Async & Object Store (opt‑in)**
+//! - `async` — enable async APIs for reading Avro (`AsyncAvroFileReader`, `AsyncFileReader` trait).
+//! - `object_store` — enable integration with the [`object_store`] crate for reading Avro
+//!   from cloud storage (S3, GCS, Azure Blob, etc.) via `AvroObjectReader`. Implies `async`.
+//!
+//! **Schema fingerprints & helpers (opt‑in)**
+//! - `md5` — enable MD5 writer‑schema fingerprints.
+//! - `sha256` — enable SHA‑256 writer‑schema fingerprints.
+//! - `small_decimals` — support for compact Arrow representations of small Avro decimals (`Decimal32` and `Decimal64`).
+//! - `avro_custom_types` — interpret Avro fields annotated with Arrow‑specific logical
+//!   types such as `arrow.duration-nanos`, `arrow.duration-micros`,
+//!   `arrow.duration-millis`, or `arrow.duration-seconds` as Arrow `Duration(TimeUnit)`.
+//! - `canonical_extension_types` — enable support for Arrow [canonical extension types]
+//!   from `arrow-schema` so `arrow-avro` can respect them during Avro↔Arrow mapping.
+//!
+//! **Notes**
+//! - OCF compression codecs apply only to **Object Container Files**; they do not affect Avro
+//!   single object encodings.
+//!
+//! [`object_store`]: https://docs.rs/object_store/latest/object_store/
+//!
+//! [canonical extension types]: https://arrow.apache.org/docs/format/CanonicalExtensions.html
 //!
 //! [Apache Arrow]: https://arrow.apache.org/
 //! [Apache Avro]: https://avro.apache.org/
@@ -222,9 +212,8 @@
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
-#![allow(unused)] // Temporary
 
 /// Core functionality for reading Avro data into Arrow arrays
 ///
@@ -252,6 +241,9 @@ pub mod compression;
 /// This module contains the necessary types and functions to convert between
 /// Avro data types and Arrow data types.
 pub mod codec;
+
+/// AvroError variants
+pub mod errors;
 
 /// Extension trait for AvroField to add Utf8View support
 ///

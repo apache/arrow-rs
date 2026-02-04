@@ -21,7 +21,7 @@ use crate::basic::Encoding;
 use crate::column::page::{Page, PageIterator};
 use crate::column::page::{PageMetadata, PageReader};
 use crate::data_type::DataType;
-use crate::encodings::encoding::{get_encoder, Encoder};
+use crate::encodings::encoding::{Encoder, get_encoder};
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};

@@ -18,7 +18,7 @@ extern crate arrow;
 
 use std::sync::Arc;
 
-use arrow::compute::{filter_record_batch, FilterBuilder, FilterPredicate};
+use arrow::compute::{FilterBuilder, FilterPredicate, filter_record_batch};
 use arrow::util::bench_util::*;
 
 use arrow::array::*;
@@ -26,7 +26,7 @@ use arrow::compute::filter;
 use arrow::datatypes::{Field, Float32Type, Int32Type, Int64Type, Schema, UInt8Type};
 
 use arrow_array::types::Decimal128Type;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint;
 
 fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {

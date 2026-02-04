@@ -22,7 +22,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 #![recursion_limit = "128"]
 
@@ -34,7 +34,7 @@ extern crate quote;
 
 extern crate parquet;
 
-use ::syn::{parse_macro_input, Data, DataStruct, DeriveInput};
+use ::syn::{Data, DataStruct, DeriveInput, parse_macro_input};
 
 mod parquet_field;
 
@@ -277,7 +277,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
                   return Err(::parquet::errors::ParquetError::General(error_msg));
                 }
               };
-              if let Ok(mut column_reader) = row_group_reader.get_column_reader(idx) {
+              if let Ok(column_reader) = row_group_reader.get_column_reader(idx) {
                   #reader_snippets
               } else {
                   return Err(::parquet::errors::ParquetError::General("Failed to get next column".into()))

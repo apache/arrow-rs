@@ -17,9 +17,7 @@
 
 //! Parquet metadata API
 //!
-//! Most users should use these structures to interact with Parquet metadata.
-//! The [crate::format] module contains lower level structures generated from the
-//! Parquet thrift definition.
+//! Users should use these structures to interact with Parquet metadata.
 //!
 //! * [`ParquetMetaData`]: Top level metadata container, read from the Parquet
 //!   file footer.
@@ -44,7 +42,6 @@
 //! * [`ParquetMetaDataPushDecoder`] for decoding from bytes without I/O
 //! * [`ParquetMetaDataWriter`] for writing.
 //!
-//!
 //! # Examples
 //!
 //! Please see [`external_metadata.rs`]
@@ -66,7 +63,6 @@
 //!    with a more idiomatic API. Note that, confusingly, some but not all
 //!    of these structures have the same name as the [`format`] structures.
 //!
-//! [`format`]: crate::format
 //! [`file::metadata`]: crate::file::metadata
 //! [parquet.thrift]:  https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 //!
@@ -92,40 +88,50 @@
 //! ```
 mod footer_tail;
 mod memory;
+mod options;
 mod parser;
 mod push_decoder;
 pub(crate) mod reader;
+pub(crate) mod thrift;
 mod writer;
 
-use crate::basic::{ColumnOrder, Compression, Encoding, Type};
+use crate::basic::{EncodingMask, PageType};
 #[cfg(feature = "encryption")]
-use crate::encryption::{
-    decrypt::FileDecryptor,
-    modules::{create_module_aad, ModuleType},
-};
-use crate::errors::{ParquetError, Result};
+use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
-use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
+use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 pub(crate) use crate::file::metadata::memory::HeapSize;
-use crate::file::page_encoding_stats::{self, PageEncodingStats};
-use crate::file::page_index::index::Index;
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use crate::file::statistics::{self, Statistics};
-use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
-use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
-    SizeStatistics, SortingColumn,
-};
+#[cfg(feature = "encryption")]
+use crate::file::metadata::thrift::encryption::EncryptionAlgorithm;
+use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
+use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
+use crate::file::statistics::Statistics;
 use crate::geospatial::statistics as geo_statistics;
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
-#[cfg(feature = "encryption")]
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+use crate::thrift_struct;
+use crate::{
+    basic::BoundaryOrder,
+    errors::{ParquetError, Result},
+};
+use crate::{
+    basic::{ColumnOrder, Compression, Encoding, Type},
+    parquet_thrift::{
+        ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
+        ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
+    },
+};
+use crate::{
+    data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
+};
+
 pub use footer_tail::FooterTail;
+pub use options::{ParquetMetaDataOptions, ParquetStatisticsPolicy};
 pub use push_decoder::ParquetMetaDataPushDecoder;
 pub use reader::{PageIndexPolicy, ParquetMetaDataReader};
+use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
@@ -135,18 +141,19 @@ pub(crate) use writer::ThriftMetadataWriter;
 ///
 /// This structure is an in-memory representation of multiple [`ColumnIndex`]
 /// structures in a parquet file footer, as described in the Parquet [PageIndex
-/// documentation]. Each [`Index`] holds statistics about all the pages in a
+/// documentation]. Each [`ColumnIndex`] holds statistics about all the pages in a
 /// particular column chunk.
 ///
 /// `column_index[row_group_number][column_number]` holds the
-/// [`Index`] corresponding to column `column_number` of row group
+/// [`ColumnIndex`] corresponding to column `column_number` of row group
 /// `row_group_number`.
 ///
-/// For example `column_index[2][3]` holds the [`Index`] for the fourth
+/// For example `column_index[2][3]` holds the [`ColumnIndex`] for the fourth
 /// column in the third row group of the parquet file.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-pub type ParquetColumnIndex = Vec<Vec<Index>>;
+/// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
+pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
 
 /// [`OffsetIndexMetaData`] for each data page of each row group of each column
 ///
@@ -158,6 +165,7 @@ pub type ParquetColumnIndex = Vec<Vec<Index>>;
 /// `column_number`of row group `row_group_number`.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 
 /// Parsed metadata for a single Parquet file
@@ -189,7 +197,7 @@ pub struct ParquetMetaData {
     offset_index: Option<ParquetOffsetIndex>,
     /// Optional file decryptor
     #[cfg(feature = "encryption")]
-    file_decryptor: Option<FileDecryptor>,
+    file_decryptor: Option<Box<FileDecryptor>>,
 }
 
 impl ParquetMetaData {
@@ -210,7 +218,7 @@ impl ParquetMetaData {
     /// encrypted data.
     #[cfg(feature = "encryption")]
     pub(crate) fn with_file_decryptor(&mut self, file_decryptor: Option<FileDecryptor>) {
-        self.file_decryptor = file_decryptor;
+        self.file_decryptor = file_decryptor.map(Box::new);
     }
 
     /// Convert this ParquetMetaData into a [`ParquetMetaDataBuilder`]
@@ -226,7 +234,7 @@ impl ParquetMetaData {
     /// Returns file decryptor as reference.
     #[cfg(feature = "encryption")]
     pub(crate) fn file_decryptor(&self) -> Option<&FileDecryptor> {
-        self.file_decryptor.as_ref()
+        self.file_decryptor.as_deref()
     }
 
     /// Returns number of row groups in this file.
@@ -280,11 +288,17 @@ impl ParquetMetaData {
     ///
     /// 4. Does not include any allocator overheads
     pub fn memory_size(&self) -> usize {
+        #[cfg(feature = "encryption")]
+        let encryption_size = self.file_decryptor.heap_size();
+        #[cfg(not(feature = "encryption"))]
+        let encryption_size = 0usize;
+
         std::mem::size_of::<Self>()
             + self.file_metadata.heap_size()
             + self.row_groups.heap_size()
             + self.column_index.heap_size()
             + self.offset_index.heap_size()
+            + encryption_size
     }
 
     /// Override the column index
@@ -406,6 +420,13 @@ impl ParquetMetaDataBuilder {
         self.0.offset_index.as_ref()
     }
 
+    /// Sets the file decryptor needed to decrypt this metadata.
+    #[cfg(feature = "encryption")]
+    pub(crate) fn set_file_decryptor(mut self, file_decryptor: Option<FileDecryptor>) -> Self {
+        self.0.with_file_decryptor(file_decryptor);
+        self
+    }
+
     /// Creates a new ParquetMetaData from the builder
     pub fn build(self) -> ParquetMetaData {
         let Self(metadata) = self;
@@ -419,8 +440,45 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     }
 }
 
+thrift_struct!(
 /// A key-value pair for [`FileMetaData`].
-pub type KeyValue = crate::format::KeyValue;
+pub struct KeyValue {
+  1: required string key
+  2: optional string value
+}
+);
+
+impl KeyValue {
+    /// Create a new key value pair
+    pub fn new<F2>(key: String, value: F2) -> KeyValue
+    where
+        F2: Into<Option<String>>,
+    {
+        KeyValue {
+            key,
+            value: value.into(),
+        }
+    }
+}
+
+thrift_struct!(
+/// PageEncodingStats for a column chunk and data page.
+pub struct PageEncodingStats {
+  1: required PageType page_type;
+  2: required Encoding encoding;
+  3: required i32 count;
+}
+);
+
+/// Internal representation of the page encoding stats in the [`ColumnChunkMetaData`].
+/// This is not publicly exposed, with different getters defined for each variant.
+#[derive(Debug, Clone, PartialEq)]
+enum ParquetPageEncodingStats {
+    /// The full array of stats as defined in the Parquet spec.
+    Full(Vec<PageEncodingStats>),
+    /// A condensed version of only page encodings seen.
+    Mask(EncodingMask),
+}
 
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;
@@ -436,6 +494,10 @@ pub struct FileMetaData {
     key_value_metadata: Option<Vec<KeyValue>>,
     schema_descr: SchemaDescPtr,
     column_orders: Option<Vec<ColumnOrder>>,
+    #[cfg(feature = "encryption")]
+    encryption_algorithm: Option<Box<EncryptionAlgorithm>>,
+    #[cfg(feature = "encryption")]
+    footer_signing_key_metadata: Option<Vec<u8>>,
 }
 
 impl FileMetaData {
@@ -455,7 +517,29 @@ impl FileMetaData {
             key_value_metadata,
             schema_descr,
             column_orders,
+            #[cfg(feature = "encryption")]
+            encryption_algorithm: None,
+            #[cfg(feature = "encryption")]
+            footer_signing_key_metadata: None,
         }
+    }
+
+    #[cfg(feature = "encryption")]
+    pub(crate) fn with_encryption_algorithm(
+        mut self,
+        encryption_algorithm: Option<EncryptionAlgorithm>,
+    ) -> Self {
+        self.encryption_algorithm = encryption_algorithm.map(Box::new);
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    pub(crate) fn with_footer_signing_key_metadata(
+        mut self,
+        footer_signing_key_metadata: Option<Vec<u8>>,
+    ) -> Self {
+        self.footer_signing_key_metadata = footer_signing_key_metadata;
+        self
     }
 
     /// Returns version of this file.
@@ -522,6 +606,21 @@ impl FileMetaData {
             .unwrap_or(ColumnOrder::UNDEFINED)
     }
 }
+
+thrift_struct!(
+/// Sort order within a RowGroup of a leaf column
+pub struct SortingColumn {
+  /// The ordinal position of the column (in this row group)
+  1: required i32 column_idx
+
+  /// If true, indicates this column is sorted in descending order.
+  2: required bool descending
+
+  /// If true, nulls will come before non-null values, otherwise,
+  /// nulls go at the end. */
+  3: required bool nulls_first
+}
+);
 
 /// Reference counted pointer for [`RowGroupMetaData`].
 pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
@@ -614,129 +713,6 @@ impl RowGroupMetaData {
         self.file_offset
     }
 
-    /// Method to convert from encrypted Thrift.
-    #[cfg(feature = "encryption")]
-    fn from_encrypted_thrift(
-        schema_descr: SchemaDescPtr,
-        mut rg: RowGroup,
-        decryptor: Option<&FileDecryptor>,
-    ) -> Result<RowGroupMetaData> {
-        if schema_descr.num_columns() != rg.columns.len() {
-            return Err(general_err!(
-                "Column count mismatch. Schema has {} columns while Row Group has {}",
-                schema_descr.num_columns(),
-                rg.columns.len()
-            ));
-        }
-        let total_byte_size = rg.total_byte_size;
-        let num_rows = rg.num_rows;
-        let mut columns = vec![];
-
-        for (i, (mut c, d)) in rg
-            .columns
-            .drain(0..)
-            .zip(schema_descr.columns())
-            .enumerate()
-        {
-            // Read encrypted metadata if it's present and we have a decryptor.
-            if let (true, Some(decryptor)) = (c.encrypted_column_metadata.is_some(), decryptor) {
-                let column_decryptor = match c.crypto_metadata.as_ref() {
-                    None => {
-                        return Err(general_err!(
-                            "No crypto_metadata is set for column '{}', which has encrypted metadata",
-                            d.path().string()
-                        ));
-                    }
-                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
-                        let column_name = crypto_metadata.path_in_schema.join(".");
-                        decryptor.get_column_metadata_decryptor(
-                            column_name.as_str(),
-                            crypto_metadata.key_metadata.as_deref(),
-                        )?
-                    }
-                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
-                        decryptor.get_footer_decryptor()?
-                    }
-                };
-
-                let column_aad = create_module_aad(
-                    decryptor.file_aad(),
-                    ModuleType::ColumnMetaData,
-                    rg.ordinal.unwrap() as usize,
-                    i,
-                    None,
-                )?;
-
-                let buf = c.encrypted_column_metadata.clone().unwrap();
-                let decrypted_cc_buf = column_decryptor
-                    .decrypt(buf.as_slice(), column_aad.as_ref())
-                    .map_err(|_| {
-                        general_err!(
-                            "Unable to decrypt column '{}', perhaps the column key is wrong?",
-                            d.path().string()
-                        )
-                    })?;
-
-                let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
-                c.meta_data = Some(ColumnMetaData::read_from_in_protocol(&mut prot)?);
-            }
-            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
-        }
-
-        let sorting_columns = rg.sorting_columns;
-        Ok(RowGroupMetaData {
-            columns,
-            num_rows,
-            sorting_columns,
-            total_byte_size,
-            schema_descr,
-            file_offset: rg.file_offset,
-            ordinal: rg.ordinal,
-        })
-    }
-
-    /// Method to convert from Thrift.
-    pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
-        if schema_descr.num_columns() != rg.columns.len() {
-            return Err(general_err!(
-                "Column count mismatch. Schema has {} columns while Row Group has {}",
-                schema_descr.num_columns(),
-                rg.columns.len()
-            ));
-        }
-        let total_byte_size = rg.total_byte_size;
-        let num_rows = rg.num_rows;
-        let mut columns = vec![];
-
-        for (c, d) in rg.columns.drain(0..).zip(schema_descr.columns()) {
-            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
-        }
-
-        let sorting_columns = rg.sorting_columns;
-        Ok(RowGroupMetaData {
-            columns,
-            num_rows,
-            sorting_columns,
-            total_byte_size,
-            schema_descr,
-            file_offset: rg.file_offset,
-            ordinal: rg.ordinal,
-        })
-    }
-
-    /// Method to convert to Thrift.
-    pub fn to_thrift(&self) -> RowGroup {
-        RowGroup {
-            columns: self.columns().iter().map(|v| v.to_thrift()).collect(),
-            total_byte_size: self.total_byte_size,
-            num_rows: self.num_rows,
-            sorting_columns: self.sorting_columns().cloned(),
-            file_offset: self.file_offset(),
-            total_compressed_size: Some(self.compressed_size()),
-            ordinal: self.ordinal,
-        }
-    }
-
     /// Converts this [`RowGroupMetaData`] into a [`RowGroupMetaDataBuilder`]
     pub fn into_builder(self) -> RowGroupMetaDataBuilder {
         RowGroupMetaDataBuilder(self)
@@ -823,13 +799,18 @@ impl RowGroupMetaDataBuilder {
 
         Ok(self.0)
     }
+
+    /// Build row group metadata without validation.
+    pub(super) fn build_unchecked(self) -> RowGroupMetaData {
+        self.0
+    }
 }
 
 /// Metadata for a column chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnChunkMetaData {
     column_descr: ColumnDescPtr,
-    encodings: Vec<Encoding>,
+    encodings: EncodingMask,
     file_path: Option<String>,
     file_offset: i64,
     num_values: i64,
@@ -841,7 +822,7 @@ pub struct ColumnChunkMetaData {
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
     geo_statistics: Option<Box<geo_statistics::GeospatialStatistics>>,
-    encoding_stats: Option<Vec<PageEncodingStats>>,
+    encoding_stats: Option<ParquetPageEncodingStats>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
     offset_index_offset: Option<i64>,
@@ -852,7 +833,14 @@ pub struct ColumnChunkMetaData {
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
     #[cfg(feature = "encryption")]
-    column_crypto_metadata: Option<ColumnCryptoMetaData>,
+    column_crypto_metadata: Option<Box<ColumnCryptoMetaData>>,
+    #[cfg(feature = "encryption")]
+    encrypted_column_metadata: Option<Vec<u8>>,
+    /// When true, indicates the footer is plaintext (not encrypted).
+    /// This affects how column metadata is serialized when `encrypted_column_metadata` is present.
+    /// This field is only used at write time and is not needed when reading metadata.
+    #[cfg(feature = "encryption")]
+    plaintext_footer_mode: bool,
 }
 
 /// Histograms for repetition and definition levels.
@@ -1007,7 +995,12 @@ impl ColumnChunkMetaData {
     }
 
     /// All encodings used for this column.
-    pub fn encodings(&self) -> &Vec<Encoding> {
+    pub fn encodings(&self) -> impl Iterator<Item = Encoding> {
+        self.encodings.encodings()
+    }
+
+    /// All encodings used for this column, returned as a bitmask.
+    pub fn encodings_mask(&self) -> &EncodingMask {
         &self.encodings
     }
 
@@ -1072,10 +1065,53 @@ impl ColumnChunkMetaData {
         self.geo_statistics.as_deref()
     }
 
-    /// Returns the offset for the page encoding stats,
-    /// or `None` if no page encoding stats are available.
+    /// Returns the page encoding statistics, or `None` if no page encoding statistics
+    /// are available (or they were converted to a mask).
+    ///
+    /// Note: By default, this crate converts page encoding statistics to a mask for performance
+    /// reasons. To get the full statistics, you must set [`ParquetMetaDataOptions::with_encoding_stats_as_mask`]
+    /// to `false`.
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
-        self.encoding_stats.as_ref()
+        match self.encoding_stats.as_ref() {
+            Some(ParquetPageEncodingStats::Full(stats)) => Some(stats),
+            _ => None,
+        }
+    }
+
+    /// Returns the page encoding statistics reduced to a bitmask, or `None` if statistics are
+    /// not available (or they were left in their original form).
+    ///
+    /// Note: This is the default behavior for this crate.
+    ///
+    /// The [`PageEncodingStats`] struct was added to the Parquet specification specifically to
+    /// enable fast determination of whether all pages in a column chunk are dictionary encoded
+    /// (see <https://github.com/apache/parquet-format/pull/16>).
+    /// Decoding the full page encoding statistics, however, can be very costly, and is not
+    /// necessary to support the aforementioned use case. As an alternative, this crate can
+    /// instead distill the list of `PageEncodingStats` down to a bitmask of just the encodings
+    /// used for data pages
+    /// (see [`ParquetMetaDataOptions::set_encoding_stats_as_mask`]).
+    /// To test for an all-dictionary-encoded chunk one could use this bitmask in the following way:
+    ///
+    /// ```rust
+    /// use parquet::basic::Encoding;
+    /// use parquet::file::metadata::ColumnChunkMetaData;
+    /// // test if all data pages in the column chunk are dictionary encoded
+    /// fn is_all_dictionary_encoded(col_meta: &ColumnChunkMetaData) -> bool {
+    ///     // check that dictionary encoding was used
+    ///     col_meta.dictionary_page_offset().is_some()
+    ///         && col_meta.page_encoding_stats_mask().is_some_and(|mask| {
+    ///             // mask should only have one bit set, either for PLAIN_DICTIONARY or
+    ///             // RLE_DICTIONARY
+    ///             mask.is_only(Encoding::PLAIN_DICTIONARY) || mask.is_only(Encoding::RLE_DICTIONARY)
+    ///         })
+    /// }
+    /// ```
+    pub fn page_encoding_stats_mask(&self) -> Option<&EncodingMask> {
+        match self.encoding_stats.as_ref() {
+            Some(ParquetPageEncodingStats::Mask(stats)) => Some(stats),
+            _ => None,
+        }
     }
 
     /// Returns the offset for the bloom filter.
@@ -1151,185 +1187,12 @@ impl ColumnChunkMetaData {
     /// Returns the encryption metadata for this column chunk.
     #[cfg(feature = "encryption")]
     pub fn crypto_metadata(&self) -> Option<&ColumnCryptoMetaData> {
-        self.column_crypto_metadata.as_ref()
-    }
-
-    /// Method to convert from Thrift.
-    pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
-        if cc.meta_data.is_none() {
-            return Err(general_err!("Expected to have column metadata"));
-        }
-        let mut col_metadata: ColumnMetaData = cc.meta_data.unwrap();
-        let column_type = Type::try_from(col_metadata.type_)?;
-        let encodings = col_metadata
-            .encodings
-            .drain(0..)
-            .map(Encoding::try_from)
-            .collect::<Result<_>>()?;
-        let compression = Compression::try_from(col_metadata.codec)?;
-        let file_path = cc.file_path;
-        let file_offset = cc.file_offset;
-        let num_values = col_metadata.num_values;
-        let total_compressed_size = col_metadata.total_compressed_size;
-        let total_uncompressed_size = col_metadata.total_uncompressed_size;
-        let data_page_offset = col_metadata.data_page_offset;
-        let index_page_offset = col_metadata.index_page_offset;
-        let dictionary_page_offset = col_metadata.dictionary_page_offset;
-        let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
-        let geo_statistics =
-            geo_statistics::from_thrift(col_metadata.geospatial_statistics).map(Box::new);
-        let encoding_stats = col_metadata
-            .encoding_stats
-            .as_ref()
-            .map(|vec| {
-                vec.iter()
-                    .map(page_encoding_stats::try_from_thrift)
-                    .collect::<Result<_>>()
-            })
-            .transpose()?;
-        let bloom_filter_offset = col_metadata.bloom_filter_offset;
-        let bloom_filter_length = col_metadata.bloom_filter_length;
-        let offset_index_offset = cc.offset_index_offset;
-        let offset_index_length = cc.offset_index_length;
-        let column_index_offset = cc.column_index_offset;
-        let column_index_length = cc.column_index_length;
-        let (
-            unencoded_byte_array_data_bytes,
-            repetition_level_histogram,
-            definition_level_histogram,
-        ) = if let Some(size_stats) = col_metadata.size_statistics {
-            (
-                size_stats.unencoded_byte_array_data_bytes,
-                size_stats.repetition_level_histogram,
-                size_stats.definition_level_histogram,
-            )
-        } else {
-            (None, None, None)
-        };
-
-        let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
-        let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
-
-        #[cfg(feature = "encryption")]
-        let column_crypto_metadata = if let Some(crypto_metadata) = cc.crypto_metadata {
-            Some(column_crypto_metadata::try_from_thrift(&crypto_metadata)?)
-        } else {
-            None
-        };
-
-        let result = ColumnChunkMetaData {
-            column_descr,
-            encodings,
-            file_path,
-            file_offset,
-            num_values,
-            compression,
-            total_compressed_size,
-            total_uncompressed_size,
-            data_page_offset,
-            index_page_offset,
-            dictionary_page_offset,
-            statistics,
-            encoding_stats,
-            bloom_filter_offset,
-            bloom_filter_length,
-            offset_index_offset,
-            offset_index_length,
-            column_index_offset,
-            column_index_length,
-            unencoded_byte_array_data_bytes,
-            repetition_level_histogram,
-            definition_level_histogram,
-            geo_statistics,
-            #[cfg(feature = "encryption")]
-            column_crypto_metadata,
-        };
-        Ok(result)
-    }
-
-    /// Method to convert to Thrift.
-    pub fn to_thrift(&self) -> ColumnChunk {
-        let column_metadata = self.to_column_metadata_thrift();
-
-        ColumnChunk {
-            file_path: self.file_path().map(|s| s.to_owned()),
-            file_offset: self.file_offset,
-            meta_data: Some(column_metadata),
-            offset_index_offset: self.offset_index_offset,
-            offset_index_length: self.offset_index_length,
-            column_index_offset: self.column_index_offset,
-            column_index_length: self.column_index_length,
-            crypto_metadata: self.column_crypto_metadata_thrift(),
-            encrypted_column_metadata: None,
-        }
-    }
-
-    /// Method to convert to Thrift `ColumnMetaData`
-    pub fn to_column_metadata_thrift(&self) -> ColumnMetaData {
-        let size_statistics = if self.unencoded_byte_array_data_bytes.is_some()
-            || self.repetition_level_histogram.is_some()
-            || self.definition_level_histogram.is_some()
-        {
-            let repetition_level_histogram = self
-                .repetition_level_histogram
-                .as_ref()
-                .map(|hist| hist.clone().into_inner());
-
-            let definition_level_histogram = self
-                .definition_level_histogram
-                .as_ref()
-                .map(|hist| hist.clone().into_inner());
-
-            Some(SizeStatistics {
-                unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes,
-                repetition_level_histogram,
-                definition_level_histogram,
-            })
-        } else {
-            None
-        };
-
-        ColumnMetaData {
-            type_: self.column_type().into(),
-            encodings: self.encodings().iter().map(|&v| v.into()).collect(),
-            path_in_schema: self.column_path().as_ref().to_vec(),
-            codec: self.compression.into(),
-            num_values: self.num_values,
-            total_uncompressed_size: self.total_uncompressed_size,
-            total_compressed_size: self.total_compressed_size,
-            key_value_metadata: None,
-            data_page_offset: self.data_page_offset,
-            index_page_offset: self.index_page_offset,
-            dictionary_page_offset: self.dictionary_page_offset,
-            statistics: statistics::to_thrift(self.statistics.as_ref()),
-            encoding_stats: self
-                .encoding_stats
-                .as_ref()
-                .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
-            bloom_filter_offset: self.bloom_filter_offset,
-            bloom_filter_length: self.bloom_filter_length,
-            size_statistics,
-            geospatial_statistics: geo_statistics::to_thrift(
-                self.geo_statistics.as_ref().map(|boxed| boxed.as_ref()),
-            ),
-        }
+        self.column_crypto_metadata.as_deref()
     }
 
     /// Converts this [`ColumnChunkMetaData`] into a [`ColumnChunkMetaDataBuilder`]
     pub fn into_builder(self) -> ColumnChunkMetaDataBuilder {
         ColumnChunkMetaDataBuilder::from(self)
-    }
-
-    #[cfg(feature = "encryption")]
-    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
-        self.column_crypto_metadata
-            .as_ref()
-            .map(column_crypto_metadata::to_thrift)
-    }
-
-    #[cfg(not(feature = "encryption"))]
-    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
-        None
     }
 }
 
@@ -1360,7 +1223,7 @@ impl ColumnChunkMetaDataBuilder {
     fn new(column_descr: ColumnDescPtr) -> Self {
         Self(ColumnChunkMetaData {
             column_descr,
-            encodings: Vec::new(),
+            encodings: Default::default(),
             file_path: None,
             file_offset: 0,
             num_values: 0,
@@ -1384,11 +1247,21 @@ impl ColumnChunkMetaDataBuilder {
             definition_level_histogram: None,
             #[cfg(feature = "encryption")]
             column_crypto_metadata: None,
+            #[cfg(feature = "encryption")]
+            encrypted_column_metadata: None,
+            #[cfg(feature = "encryption")]
+            plaintext_footer_mode: false,
         })
     }
 
     /// Sets list of encodings for this column chunk.
     pub fn set_encodings(mut self, encodings: Vec<Encoding>) -> Self {
+        self.0.encodings = EncodingMask::new_from_encodings(encodings.iter());
+        self
+    }
+
+    /// Sets the encodings mask for this column chunk.
+    pub fn set_encodings_mask(mut self, encodings: EncodingMask) -> Self {
         self.0.encodings = encodings;
         self
     }
@@ -1460,8 +1333,18 @@ impl ColumnChunkMetaDataBuilder {
     }
 
     /// Sets page encoding stats for this column chunk.
+    ///
+    /// This will overwrite any existing stats, either `Vec` based or bitmask.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
-        self.0.encoding_stats = Some(value);
+        self.0.encoding_stats = Some(ParquetPageEncodingStats::Full(value));
+        self
+    }
+
+    /// Sets page encoding stats mask for this column chunk.
+    ///
+    /// This will overwrite any existing stats, either `Vec` based or bitmask.
+    pub fn set_page_encoding_stats_mask(mut self, value: EncodingMask) -> Self {
+        self.0.encoding_stats = Some(ParquetPageEncodingStats::Mask(value));
         self
     }
 
@@ -1528,7 +1411,14 @@ impl ColumnChunkMetaDataBuilder {
     #[cfg(feature = "encryption")]
     /// Set the encryption metadata for an encrypted column
     pub fn set_column_crypto_metadata(mut self, value: Option<ColumnCryptoMetaData>) -> Self {
-        self.0.column_crypto_metadata = value;
+        self.0.column_crypto_metadata = value.map(Box::new);
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the encryption metadata for an encrypted column
+    pub fn set_encrypted_column_metadata(mut self, value: Option<Vec<u8>>) -> Self {
+        self.0.encrypted_column_metadata = value;
         self
     }
 
@@ -1541,7 +1431,9 @@ impl ColumnChunkMetaDataBuilder {
 /// Builder for Parquet [`ColumnIndex`], part of the Parquet [PageIndex]
 ///
 /// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct ColumnIndexBuilder {
+    column_type: Type,
     null_pages: Vec<bool>,
     min_values: Vec<Vec<u8>>,
     max_values: Vec<Vec<u8>>,
@@ -1561,16 +1453,11 @@ pub struct ColumnIndexBuilder {
     valid: bool,
 }
 
-impl Default for ColumnIndexBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ColumnIndexBuilder {
     /// Creates a new column index builder.
-    pub fn new() -> Self {
+    pub fn new(column_type: Type) -> Self {
         ColumnIndexBuilder {
+            column_type,
             null_pages: Vec::new(),
             min_values: Vec::new(),
             max_values: Vec::new(),
@@ -1598,6 +1485,8 @@ impl ColumnIndexBuilder {
 
     /// Append the given page-level histograms to the [`ColumnIndex`] histograms.
     /// Does nothing if the `ColumnIndexBuilder` is not in the `valid` state.
+    ///
+    /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn append_histograms(
         &mut self,
         repetition_level_histogram: &Option<LevelHistogram>,
@@ -1606,12 +1495,12 @@ impl ColumnIndexBuilder {
         if !self.valid {
             return;
         }
-        if let Some(ref rep_lvl_hist) = repetition_level_histogram {
+        if let Some(rep_lvl_hist) = repetition_level_histogram {
             let hist = self.repetition_level_histograms.get_or_insert(Vec::new());
             hist.reserve(rep_lvl_hist.len());
             hist.extend(rep_lvl_hist.values());
         }
-        if let Some(ref def_lvl_hist) = definition_level_histogram {
+        if let Some(def_lvl_hist) = definition_level_histogram {
             let hist = self.definition_level_histograms.get_or_insert(Vec::new());
             hist.reserve(def_lvl_hist.len());
             hist.extend(def_lvl_hist.values());
@@ -1633,18 +1522,76 @@ impl ColumnIndexBuilder {
         self.valid
     }
 
-    /// Build and get the thrift metadata of column index
+    /// Build and get the column index
     ///
     /// Note: callers should check [`Self::valid`] before calling this method
-    pub fn build_to_thrift(self) -> ColumnIndex {
-        ColumnIndex::new(
+    pub fn build(self) -> Result<ColumnIndexMetaData> {
+        Ok(match self.column_type {
+            Type::BOOLEAN => {
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::BOOLEAN(index)
+            }
+            Type::INT32 => {
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::INT32(index)
+            }
+            Type::INT64 => {
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::INT64(index)
+            }
+            Type::INT96 => {
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::INT96(index)
+            }
+            Type::FLOAT => {
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::FLOAT(index)
+            }
+            Type::DOUBLE => {
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::DOUBLE(index)
+            }
+            Type::BYTE_ARRAY => {
+                let index = self.build_byte_array_index()?;
+                ColumnIndexMetaData::BYTE_ARRAY(index)
+            }
+            Type::FIXED_LEN_BYTE_ARRAY => {
+                let index = self.build_byte_array_index()?;
+                ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)
+            }
+        })
+    }
+
+    fn build_page_index<T>(self) -> Result<PrimitiveColumnIndex<T>>
+    where
+        T: ParquetValueType,
+    {
+        let min_values: Vec<&[u8]> = self.min_values.iter().map(|v| v.as_slice()).collect();
+        let max_values: Vec<&[u8]> = self.max_values.iter().map(|v| v.as_slice()).collect();
+
+        PrimitiveColumnIndex::try_new(
             self.null_pages,
-            self.min_values,
-            self.max_values,
             self.boundary_order,
-            self.null_counts,
+            Some(self.null_counts),
             self.repetition_level_histograms,
             self.definition_level_histograms,
+            min_values,
+            max_values,
+        )
+    }
+
+    fn build_byte_array_index(self) -> Result<ByteArrayColumnIndex> {
+        let min_values: Vec<&[u8]> = self.min_values.iter().map(|v| v.as_slice()).collect();
+        let max_values: Vec<&[u8]> = self.max_values.iter().map(|v| v.as_slice()).collect();
+
+        ByteArrayColumnIndex::try_new(
+            self.null_pages,
+            self.boundary_order,
+            Some(self.null_counts),
+            self.repetition_level_histograms,
+            self.definition_level_histograms,
+            min_values,
+            max_values,
         )
     }
 }
@@ -1710,15 +1657,22 @@ impl OffsetIndexBuilder {
     }
 
     /// Build and get the thrift metadata of offset index
-    pub fn build_to_thrift(self) -> OffsetIndex {
+    pub fn build(self) -> OffsetIndexMetaData {
         let locations = self
             .offset_array
             .iter()
             .zip(self.compressed_page_size_array.iter())
             .zip(self.first_row_index_array.iter())
-            .map(|((offset, size), row_index)| PageLocation::new(*offset, *size, *row_index))
+            .map(|((offset, size), row_index)| PageLocation {
+                offset: *offset,
+                compressed_page_size: *size,
+                first_row_index: *row_index,
+            })
             .collect::<Vec<_>>();
-        OffsetIndex::new(locations, self.unencoded_byte_array_data_bytes_array)
+        OffsetIndexMetaData {
+            page_locations: locations,
+            unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes_array,
+        }
     }
 }
 
@@ -1726,7 +1680,9 @@ impl OffsetIndexBuilder {
 mod tests {
     use super::*;
     use crate::basic::{PageType, SortOrder};
-    use crate::file::page_index::index::NativeIndex;
+    use crate::file::metadata::thrift::tests::{
+        read_column_chunk, read_column_chunk_with_options, read_row_group,
+    };
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -1745,12 +1701,13 @@ mod tests {
             .build()
             .unwrap();
 
-        let row_group_exp = row_group_meta.to_thrift();
-        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
-            .unwrap()
-            .to_thrift();
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        row_group_meta.write_thrift(&mut writer).unwrap();
 
-        assert_eq!(row_group_res, row_group_exp);
+        let row_group_res = read_row_group(&mut buf, schema_descr).unwrap();
+
+        assert_eq!(row_group_res, row_group_meta);
     }
 
     #[test]
@@ -1826,11 +1783,13 @@ mod tests {
             .set_ordinal(1)
             .build()
             .unwrap();
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        row_group_meta_2cols.write_thrift(&mut writer).unwrap();
 
-        let err =
-            RowGroupMetaData::from_thrift(schema_descr_3cols, row_group_meta_2cols.to_thrift())
-                .unwrap_err()
-                .to_string();
+        let err = read_row_group(&mut buf, schema_descr_3cols)
+            .unwrap_err()
+            .to_string();
         assert_eq!(
             err,
             "Parquet error: Column count mismatch. Schema has 3 columns while Row Group has 2"
@@ -1840,9 +1799,10 @@ mod tests {
     #[test]
     fn test_column_chunk_metadata_thrift_conversion() {
         let column_descr = get_test_schema_descr().column(0);
-
         let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
-            .set_encodings(vec![Encoding::PLAIN, Encoding::RLE])
+            .set_encodings_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].iter(),
+            ))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
             .set_compression(Compression::SNAPPY)
@@ -1874,8 +1834,75 @@ mod tests {
             .build()
             .unwrap();
 
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+        let col_chunk_res = read_column_chunk(&mut buf, column_descr.clone()).unwrap();
+
+        let expected_metadata = ColumnChunkMetaData::builder(column_descr)
+            .set_encodings_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].iter(),
+            ))
+            .set_file_path("file_path".to_owned())
+            .set_num_values(1000)
+            .set_compression(Compression::SNAPPY)
+            .set_total_compressed_size(2000)
+            .set_total_uncompressed_size(3000)
+            .set_data_page_offset(4000)
+            .set_dictionary_page_offset(Some(5000))
+            .set_page_encoding_stats_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].iter(),
+            ))
+            .set_bloom_filter_offset(Some(6000))
+            .set_bloom_filter_length(Some(25))
+            .set_offset_index_offset(Some(7000))
+            .set_offset_index_length(Some(25))
+            .set_column_index_offset(Some(8000))
+            .set_column_index_length(Some(25))
+            .set_unencoded_byte_array_data_bytes(Some(2000))
+            .set_repetition_level_histogram(Some(LevelHistogram::from(vec![100, 100])))
+            .set_definition_level_histogram(Some(LevelHistogram::from(vec![0, 200])))
+            .build()
+            .unwrap();
+
+        assert_eq!(col_chunk_res, expected_metadata);
+    }
+
+    #[test]
+    fn test_column_chunk_metadata_thrift_conversion_full_stats() {
+        let column_descr = get_test_schema_descr().column(0);
+        let stats = vec![
+            PageEncodingStats {
+                page_type: PageType::DATA_PAGE,
+                encoding: Encoding::PLAIN,
+                count: 3,
+            },
+            PageEncodingStats {
+                page_type: PageType::DATA_PAGE,
+                encoding: Encoding::RLE,
+                count: 5,
+            },
+        ];
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .set_encodings_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].iter(),
+            ))
+            .set_num_values(1000)
+            .set_compression(Compression::SNAPPY)
+            .set_total_compressed_size(2000)
+            .set_total_uncompressed_size(3000)
+            .set_data_page_offset(4000)
+            .set_page_encoding_stats(stats)
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift()).unwrap();
+            read_column_chunk_with_options(&mut buf, column_descr, Some(&options)).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -1888,12 +1915,12 @@ mod tests {
             .build()
             .unwrap();
 
-        let col_chunk_exp = col_metadata.to_thrift();
-        let col_chunk_res = ColumnChunkMetaData::from_thrift(column_descr, col_chunk_exp.clone())
-            .unwrap()
-            .to_thrift();
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+        let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
 
-        assert_eq!(col_chunk_res, col_chunk_exp);
+        assert_eq!(col_chunk_res, col_metadata);
     }
 
     #[test]
@@ -1992,16 +2019,19 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2344;
+        let base_expected_size = 2766;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2680;
+        let base_expected_size = 2934;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
-        let mut column_index = ColumnIndexBuilder::new();
+        let mut column_index = ColumnIndexBuilder::new(Type::BOOLEAN);
         column_index.append(false, vec![1u8], vec![2u8, 3u8], 4);
-        let column_index = column_index.build_to_thrift();
-        let native_index = NativeIndex::<bool>::try_new(column_index).unwrap();
+        let column_index = column_index.build().unwrap();
+        let native_index = match column_index {
+            ColumnIndexMetaData::BOOLEAN(index) => index,
+            _ => panic!("wrong type of column index"),
+        };
 
         // Now, add in OffsetIndex
         let mut offset_index = OffsetIndexBuilder::new();
@@ -2011,24 +2041,97 @@ mod tests {
         offset_index.append_row_count(1);
         offset_index.append_offset_and_size(2, 3);
         offset_index.append_unencoded_byte_array_data_bytes(Some(10));
-        let offset_index = offset_index.build_to_thrift();
+        let offset_index = offset_index.build();
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
-            .set_column_index(Some(vec![vec![Index::BOOLEAN(native_index)]]))
-            .set_offset_index(Some(vec![vec![
-                OffsetIndexMetaData::try_new(offset_index).unwrap()
-            ]]))
+            .set_column_index(Some(vec![vec![ColumnIndexMetaData::BOOLEAN(native_index)]]))
+            .set_offset_index(Some(vec![vec![offset_index]]))
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2848;
+        let bigger_expected_size = 3192;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3184;
+        let bigger_expected_size = 3360;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_memory_size_with_decryptor() {
+        use crate::encryption::decrypt::FileDecryptionProperties;
+        use crate::file::metadata::thrift::encryption::AesGcmV1;
+
+        let schema_descr = get_test_schema_descr();
+
+        let columns = schema_descr
+            .columns()
+            .iter()
+            .map(|column_descr| ColumnChunkMetaData::builder(column_descr.clone()).build())
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        let row_group_meta = RowGroupMetaData::builder(schema_descr.clone())
+            .set_num_rows(1000)
+            .set_column_metadata(columns)
+            .build()
+            .unwrap();
+        let row_group_meta = vec![row_group_meta];
+
+        let version = 2;
+        let num_rows = 1000;
+        let aad_file_unique = vec![1u8; 8];
+        let aad_prefix = vec![2u8; 8];
+        let encryption_algorithm = EncryptionAlgorithm::AES_GCM_V1(AesGcmV1 {
+            aad_prefix: Some(aad_prefix.clone()),
+            aad_file_unique: Some(aad_file_unique.clone()),
+            supply_aad_prefix: Some(true),
+        });
+        let footer_key_metadata = Some(vec![3u8; 8]);
+        let file_metadata =
+            FileMetaData::new(version, num_rows, None, None, schema_descr.clone(), None)
+                .with_encryption_algorithm(Some(encryption_algorithm))
+                .with_footer_signing_key_metadata(footer_key_metadata.clone());
+
+        let parquet_meta_data = ParquetMetaDataBuilder::new(file_metadata.clone())
+            .set_row_groups(row_group_meta.clone())
+            .build();
+
+        let base_expected_size = 2058;
+        assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
+
+        let footer_key = "0123456789012345".as_bytes();
+        let column_key = "1234567890123450".as_bytes();
+        let mut decryption_properties_builder =
+            FileDecryptionProperties::builder(footer_key.to_vec())
+                .with_aad_prefix(aad_prefix.clone());
+        for column in schema_descr.columns() {
+            decryption_properties_builder = decryption_properties_builder
+                .with_column_key(&column.path().string(), column_key.to_vec());
+        }
+        let decryption_properties = decryption_properties_builder.build().unwrap();
+        let decryptor = FileDecryptor::new(
+            &decryption_properties,
+            footer_key_metadata.as_deref(),
+            aad_file_unique,
+            aad_prefix,
+        )
+        .unwrap();
+
+        let parquet_meta_data = ParquetMetaDataBuilder::new(file_metadata.clone())
+            .set_row_groups(row_group_meta.clone())
+            .set_file_decryptor(Some(decryptor))
+            .build();
+
+        let expected_size_with_decryptor = 3072;
+        assert!(expected_size_with_decryptor > base_expected_size);
+
+        assert_eq!(
+            parquet_meta_data.memory_size(),
+            expected_size_with_decryptor
+        );
     }
 
     /// Returns sample schema descriptor so we can create column metadata.

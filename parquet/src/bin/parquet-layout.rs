@@ -17,6 +17,10 @@
 
 //! Binary that prints the physical layout of a parquet file
 //!
+//! NOTE: due to this binary's use of the deprecated [`parquet::format`] module, it
+//! will no longer be maintained, and will likely be removed in the future.
+//! Alternatives to this include [`parquet-cli`] and [`parquet-viewer`].
+//!
 //! # Install
 //!
 //! `parquet-layout` can be installed using `cargo`:
@@ -32,6 +36,9 @@
 //! ```
 //! cargo run --features=cli --bin parquet-layout XYZ.parquet
 //! ```
+//!
+//! [`parquet-cli`]: https://github.com/apache/parquet-java/tree/master/parquet-cli
+//! [`parquet-viewer`]: https://github.com/xiangpenghao/parquet-viewer
 
 use std::fs::File;
 use std::io::Read;
@@ -41,15 +48,28 @@ use parquet::file::metadata::ParquetMetaDataReader;
 use serde::Serialize;
 use thrift::protocol::TCompactInputProtocol;
 
-use parquet::basic::{Compression, Encoding};
+use parquet::basic::Compression;
 use parquet::errors::Result;
 use parquet::file::reader::ChunkReader;
+#[allow(deprecated)]
 use parquet::format::PageHeader;
 use parquet::thrift::TSerializable;
 
 #[derive(Serialize, Debug)]
+struct Index {
+    offset: i64,
+    length: Option<i32>,
+}
+
+#[derive(Serialize, Debug)]
+struct Footer {
+    metadata_size: Option<usize>,
+}
+
+#[derive(Serialize, Debug)]
 struct ParquetFile {
     row_groups: Vec<RowGroup>,
+    footer: Footer,
 }
 
 #[derive(Serialize, Debug)]
@@ -64,6 +84,9 @@ struct ColumnChunk {
     has_offset_index: bool,
     has_column_index: bool,
     has_bloom_filter: bool,
+    offset_index: Option<Index>,
+    column_index: Option<Index>,
+    bloom_filter: Option<Index>,
     pages: Vec<Page>,
 }
 
@@ -79,8 +102,12 @@ struct Page {
     num_values: i32,
 }
 
+#[allow(deprecated)]
 fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
-    let metadata = ParquetMetaDataReader::new().parse_and_finish(reader)?;
+    let mut metadata_reader = ParquetMetaDataReader::new();
+    metadata_reader.try_parse(reader)?;
+    let metadata_size = metadata_reader.metadata_size();
+    let metadata = metadata_reader.finish()?;
     let schema = metadata.file_metadata().schema_descr();
 
     let row_groups = (0..metadata.num_row_groups())
@@ -105,7 +132,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                         if let Some(dictionary) = header.dictionary_page_header {
                             pages.push(Page {
                                 compression,
-                                encoding: encoding(dictionary.encoding),
+                                encoding: encoding(dictionary.encoding.0),
                                 page_type: "dictionary",
                                 offset: start,
                                 compressed_bytes: header.compressed_page_size,
@@ -116,7 +143,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                         } else if let Some(data_page) = header.data_page_header {
                             pages.push(Page {
                                 compression,
-                                encoding: encoding(data_page.encoding),
+                                encoding: encoding(data_page.encoding.0),
                                 page_type: "data_page_v1",
                                 offset: start,
                                 compressed_bytes: header.compressed_page_size,
@@ -129,7 +156,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
 
                             pages.push(Page {
                                 compression: compression.filter(|_| is_compressed),
-                                encoding: encoding(data_page.encoding),
+                                encoding: encoding(data_page.encoding.0),
                                 page_type: "data_page_v2",
                                 offset: start,
                                 compressed_bytes: header.compressed_page_size,
@@ -146,6 +173,18 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                         has_offset_index: column.offset_index_offset().is_some(),
                         has_column_index: column.column_index_offset().is_some(),
                         has_bloom_filter: column.bloom_filter_offset().is_some(),
+                        offset_index: column.offset_index_offset().map(|offset| Index {
+                            offset,
+                            length: column.offset_index_length(),
+                        }),
+                        column_index: column.column_index_offset().map(|offset| Index {
+                            offset,
+                            length: column.column_index_length(),
+                        }),
+                        bloom_filter: column.bloom_filter_offset().map(|offset| Index {
+                            offset,
+                            length: column.bloom_filter_length(),
+                        }),
                         pages,
                     })
                 })
@@ -158,11 +197,15 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(ParquetFile { row_groups })
+    Ok(ParquetFile {
+        row_groups,
+        footer: Footer { metadata_size },
+    })
 }
 
 /// Reads the page header at `offset` from `reader`, returning
 /// both the `PageHeader` and its length in bytes
+#[allow(deprecated)]
 fn read_page_header<C: ChunkReader>(reader: &C, offset: u64) -> Result<(usize, PageHeader)> {
     struct TrackedRead<R>(R, usize);
 
@@ -196,19 +239,19 @@ fn compression(compression: Compression) -> Option<&'static str> {
 }
 
 /// Returns a string representation for a given encoding
-fn encoding(encoding: parquet::format::Encoding) -> &'static str {
-    match Encoding::try_from(encoding) {
-        Ok(Encoding::PLAIN) => "plain",
-        Ok(Encoding::PLAIN_DICTIONARY) => "plain_dictionary",
-        Ok(Encoding::RLE) => "rle",
+fn encoding(encoding: i32) -> &'static str {
+    match encoding {
+        0 => "plain",
+        2 => "plain_dictionary",
+        3 => "rle",
         #[allow(deprecated)]
-        Ok(Encoding::BIT_PACKED) => "bit_packed",
-        Ok(Encoding::DELTA_BINARY_PACKED) => "delta_binary_packed",
-        Ok(Encoding::DELTA_LENGTH_BYTE_ARRAY) => "delta_length_byte_array",
-        Ok(Encoding::DELTA_BYTE_ARRAY) => "delta_byte_array",
-        Ok(Encoding::RLE_DICTIONARY) => "rle_dictionary",
-        Ok(Encoding::BYTE_STREAM_SPLIT) => "byte_stream_split",
-        Err(_) => "unknown",
+        4 => "bit_packed",
+        5 => "delta_binary_packed",
+        6 => "delta_length_byte_array",
+        7 => "delta_byte_array",
+        8 => "rle_dictionary",
+        9 => "byte_stream_split",
+        _ => "unknown",
     }
 }
 

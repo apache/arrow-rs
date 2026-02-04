@@ -42,7 +42,7 @@
 //! * [`Reader`](crate::reader::Reader): a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
 //!   input. Implements [`Iterator<Item = Result<RecordBatch, ArrowError>>`] and
 //!   `RecordBatchReader`.
-//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes raw Avro bytes and yields ready
+//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes SOE framed Avro bytes and yields ready
 //!   `RecordBatch` values when batches fill. This is suitable for integrating with async
 //!   byte streams, network protocols, or other custom data sources.
 //!
@@ -60,9 +60,14 @@
 //!   <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
 //! * **Confluent Schema Registry wire format**: A 1‑byte magic `0x00`, a **4‑byte big‑endian**
 //!   schema ID, then the Avro‑encoded body. Use `Decoder` with a `SchemaStore` configured
-//!   for `FingerprintAlgorithm::None` and entries keyed by `Fingerprint::Id`. See
+//!   for `FingerprintAlgorithm::Id` and entries keyed by `Fingerprint::Id`. See
 //!   Confluent’s “Wire format” documentation.
 //!   <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
+//! * **Apicurio Schema Registry wire format**: A 1‑byte magic `0x00`, a **8‑byte big‑endian**
+//!   global schema ID, then the Avro‑encoded body. Use `Decoder` with a `SchemaStore` configured
+//!   for `FingerprintAlgorithm::Id64` and entries keyed by `Fingerprint::Id64`. See
+//!   Apicurio’s “Avro SerDe” documentation.
+//!   <https://www.apicur.io/registry/docs/apicurio-registry/1.3.3.Final/getting-started/assembly-using-kafka-client-serdes.html#registry-serdes-types-avro-registry>
 //!
 //! ## Basic file usage (OCF)
 //!
@@ -99,7 +104,7 @@
 //! # Ok(()) }
 //! ```
 //!
-//! ## Streaming usage (single‑object / Confluent)
+//! ## Streaming usage (single‑object / Confluent / Apicurio)
 //!
 //! The `Decoder` lets you integrate Avro decoding with **any** source of bytes by
 //! periodically calling `Decoder::decode` with new data and calling `Decoder::flush`
@@ -114,14 +119,13 @@
 //! use futures::{Stream, StreamExt};
 //! use std::task::{Poll, ready};
 //! use arrow_array::RecordBatch;
-//! use arrow_schema::ArrowError;
-//! use arrow_avro::reader::Decoder;
+//! use arrow_avro::{reader::Decoder, errors::AvroError};
 //!
 //! /// Decode a stream of Avro-framed bytes into RecordBatch values.
 //! fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
 //!     mut decoder: Decoder,
 //!     mut input: S,
-//! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
+//! ) -> impl Stream<Item = Result<RecordBatch, AvroError>> {
 //!     let mut buffered = Bytes::new();
 //!     futures::stream::poll_fn(move |cx| {
 //!         loop {
@@ -162,7 +166,7 @@
 //! use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 //! use arrow_schema::{DataType, Field, Schema};
 //! use arrow_avro::schema::{AvroSchema, SchemaStore, SCHEMA_METADATA_KEY, FingerprintStrategy};
-//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 //! use arrow_avro::reader::ReaderBuilder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -182,7 +186,7 @@
 //! )?;
 //! let mut w = WriterBuilder::new(arrow)
 //!     .with_fingerprint_strategy(FingerprintStrategy::Rabin) // SOE prefix
-//!     .build::<_, AvroBinaryFormat>(Vec::new())?;
+//!     .build::<_, AvroSoeFormat>(Vec::new())?;
 //! w.write(&batch)?;
 //! w.finish()?;
 //! let frame = w.into_inner(); // C3 01 + fp + Avro body
@@ -215,12 +219,12 @@
 //! use arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
 //! use arrow_schema::{DataType, Field, Schema};
 //! use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY, FingerprintStrategy};
-//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 //! use arrow_avro::reader::ReaderBuilder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Set up a store keyed by numeric IDs (Confluent).
-//! let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+//! let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
 //! let schema_id = 7u32;
 //! let avro_schema = AvroSchema::new(r#"{"type":"record","name":"User","fields":[
 //!   {"name":"id","type":"long"}, {"name":"name","type":"string"}]}"#.to_string());
@@ -243,7 +247,7 @@
 //!     )?;
 //!     let mut w = WriterBuilder::new(arrow)
 //!         .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id)) // 0x00 + ID + body
-//!         .build::<_, AvroBinaryFormat>(Vec::new())?;
+//!         .build::<_, AvroSoeFormat>(Vec::new())?;
 //!     w.write(&batch)?; w.finish()?;
 //!     Ok(w.into_inner())
 //! }
@@ -380,7 +384,7 @@
 //!     let id_v0: u32 = 0;
 //!     let id_v1: u32 = 1;
 //!
-//!     let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None); // integer IDs
+//!     let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id); // integer IDs
 //!     store.set(Fingerprint::Id(id_v0), writer_v0.clone())?;
 //!     store.set(Fingerprint::Id(id_v1), writer_v1.clone())?;
 //!
@@ -397,7 +401,7 @@
 //!              Arc::new(StringArray::from(vec!["v0-alice"])) as ArrayRef])?;
 //!     let mut w0 = arrow_avro::writer::WriterBuilder::new(arrow0)
 //!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v0))
-//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!         .build::<_, arrow_avro::writer::format::AvroSoeFormat>(Vec::new())?;
 //!     w0.write(&batch0)?; w0.finish()?;
 //!     let frame0 = w0.into_inner(); // 0x00 + id_v0 + body
 //!
@@ -415,7 +419,7 @@
 //!              Arc::new(StringArray::from(vec![Some("bob@example.com")])) as ArrayRef])?;
 //!     let mut w1 = arrow_avro::writer::WriterBuilder::new(arrow1)
 //!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v1))
-//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!         .build::<_, arrow_avro::writer::format::AvroSoeFormat>(Vec::new())?;
 //!     w1.write(&batch1)?; w1.finish()?;
 //!     let frame1 = w1.into_inner(); // 0x00 + id_v1 + body
 //!
@@ -474,18 +478,19 @@
 //!   descriptive error. Populate the store up front to avoid this.
 //!
 //! ---
-use crate::codec::{AvroField, AvroFieldBuilder};
+use crate::codec::AvroFieldBuilder;
+use crate::errors::AvroError;
+use crate::reader::header::read_header;
 use crate::schema::{
-    compare_schemas, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema, SchemaStore,
-    CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
+    AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY,
+    SINGLE_OBJECT_MAGIC, Schema, SchemaStore,
 };
-use arrow_array::{Array, RecordBatch, RecordBatchReader};
+use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
 use block::BlockDecoder;
-use header::{Header, HeaderDecoder};
+use header::Header;
 use indexmap::IndexMap;
 use record::RecordDecoder;
-use std::collections::HashMap;
 use std::io::BufRead;
 
 mod block;
@@ -494,31 +499,18 @@ mod header;
 mod record;
 mod vlq;
 
-/// Read the Avro file header (magic, metadata, sync marker) from `reader`.
-fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
-    let mut decoder = HeaderDecoder::default();
-    loop {
-        let buf = reader.fill_buf()?;
-        if buf.is_empty() {
-            break;
-        }
-        let read = buf.len();
-        let decoded = decoder.decode(buf)?;
-        reader.consume(decoded);
-        if decoded != read {
-            break;
-        }
-    }
-    decoder.flush().ok_or_else(|| {
-        ArrowError::ParseError("Unexpected EOF while reading Avro header".to_string())
-    })
-}
+#[cfg(feature = "async")]
+mod async_reader;
 
-fn is_incomplete_data(err: &ArrowError) -> bool {
+#[cfg(feature = "object_store")]
+pub use async_reader::AvroObjectReader;
+#[cfg(feature = "async")]
+pub use async_reader::{AsyncAvroFileReader, AsyncFileReader};
+
+fn is_incomplete_data(err: &AvroError) -> bool {
     matches!(
         err,
-        ArrowError::ParseError(msg)
-            if msg.contains("Unexpected EOF")
+        AvroError::EOF(_) | AvroError::NeedMoreData(_) | AvroError::NeedMoreDataRange(_)
     )
 }
 
@@ -578,7 +570,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
-/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 /// # let mut md = HashMap::new();
 /// # md.insert(SCHEMA_METADATA_KEY.to_string(),
 /// #     r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string());
@@ -586,7 +578,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// # let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![7])) as ArrayRef])?;
 /// # let mut w = WriterBuilder::new(arrow)
 /// #     .with_fingerprint_strategy(fp.into())
-/// #     .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// #     .build::<_, AvroSoeFormat>(Vec::new())?;
 /// # w.write(&batch)?; w.finish()?; let frame = w.into_inner();
 ///
 /// let mut decoder = ReaderBuilder::new()
@@ -611,7 +603,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// use arrow_avro::reader::ReaderBuilder;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
 /// store.set(Fingerprint::Id(1234), AvroSchema::new(r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string()))?;
 ///
 /// // --- Hidden: encode two Confluent-framed messages {x:1} and {x:2} ---
@@ -620,7 +612,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
-/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 /// # fn msg(x: i64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 /// #   let mut md = HashMap::new();
 /// #   md.insert(SCHEMA_METADATA_KEY.to_string(),
@@ -629,7 +621,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// #   let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![x])) as ArrayRef])?;
 /// #   let mut w = WriterBuilder::new(arrow)
 /// #       .with_fingerprint_strategy(FingerprintStrategy::Id(1234))
-/// #       .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// #       .build::<_, AvroSoeFormat>(Vec::new())?;
 /// #   w.write(&batch)?; w.finish()?; Ok(w.into_inner())
 /// # }
 /// # let m1 = msg(1)?;
@@ -652,13 +644,30 @@ pub struct Decoder {
     remaining_capacity: usize,
     cache: IndexMap<Fingerprint, RecordDecoder>,
     fingerprint_algorithm: FingerprintAlgorithm,
-    utf8_view: bool,
-    strict_mode: bool,
     pending_schema: Option<(Fingerprint, RecordDecoder)>,
     awaiting_body: bool,
 }
 
 impl Decoder {
+    pub(crate) fn from_parts(
+        batch_size: usize,
+        active_decoder: RecordDecoder,
+        active_fingerprint: Option<Fingerprint>,
+        cache: IndexMap<Fingerprint, RecordDecoder>,
+        fingerprint_algorithm: FingerprintAlgorithm,
+    ) -> Self {
+        Self {
+            batch_size,
+            remaining_capacity: batch_size,
+            active_fingerprint,
+            active_decoder,
+            cache,
+            fingerprint_algorithm,
+            pending_schema: None,
+            awaiting_body: false,
+        }
+    }
+
     /// Returns the Arrow schema for the rows decoded by this decoder.
     ///
     /// **Note:** With single‑object or Confluent framing, the schema may change
@@ -692,7 +701,7 @@ impl Decoder {
     ///   `SchemaStore`;
     /// * The Avro body is malformed;
     /// * A strict‑mode union rule is violated (see `ReaderBuilder::with_strict_mode`).
-    pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
+    pub fn decode(&mut self, data: &[u8]) -> Result<usize, AvroError> {
         let mut total_consumed = 0usize;
         while total_consumed < data.len() && self.remaining_capacity > 0 {
             if self.awaiting_body {
@@ -704,7 +713,7 @@ impl Decoder {
                         continue;
                     }
                     Err(ref e) if is_incomplete_data(e) => break,
-                    err => return err,
+                    Err(e) => return Err(e),
                 };
             }
             match self.handle_prefix(&data[total_consumed..])? {
@@ -715,9 +724,9 @@ impl Decoder {
                     self.awaiting_body = true;
                 }
                 None => {
-                    return Err(ArrowError::ParseError(
+                    return Err(AvroError::ParseError(
                         "Missing magic bytes and fingerprint".to_string(),
-                    ))
+                    ));
                 }
             }
         }
@@ -728,16 +737,19 @@ impl Decoder {
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
-    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
+    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, AvroError> {
         match self.fingerprint_algorithm {
             FingerprintAlgorithm::Rabin => {
                 self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
                     Fingerprint::Rabin(u64::from_le_bytes(bytes))
                 })
             }
-            FingerprintAlgorithm::None => {
+            FingerprintAlgorithm::Id => self.handle_prefix_common(buf, &CONFLUENT_MAGIC, |bytes| {
+                Fingerprint::Id(u32::from_be_bytes(bytes))
+            }),
+            FingerprintAlgorithm::Id64 => {
                 self.handle_prefix_common(buf, &CONFLUENT_MAGIC, |bytes| {
-                    Fingerprint::Id(u32::from_be_bytes(bytes))
+                    Fingerprint::Id64(u64::from_be_bytes(bytes))
                 })
             }
             #[cfg(feature = "md5")]
@@ -763,7 +775,7 @@ impl Decoder {
         buf: &[u8],
         magic: &[u8; MAGIC_LEN],
         fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
-    ) -> Result<Option<usize>, ArrowError> {
+    ) -> Result<Option<usize>, AvroError> {
         // Need at least the magic bytes to decide
         // 2 bytes for Avro Spec and 1 byte for Confluent Wire Protocol.
         if buf.len() < MAGIC_LEN {
@@ -788,7 +800,7 @@ impl Decoder {
         &mut self,
         buf: &[u8],
         fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
-    ) -> Result<Option<usize>, ArrowError> {
+    ) -> Result<Option<usize>, AvroError> {
         // Need enough bytes to get fingerprint (next N bytes)
         let Some(fingerprint_bytes) = buf.get(..N) else {
             return Ok(None); // insufficient bytes
@@ -798,7 +810,7 @@ impl Decoder {
         // If the fingerprint indicates a schema change, prepare to switch decoders.
         if self.active_fingerprint != Some(new_fingerprint) {
             let Some(new_decoder) = self.cache.shift_remove(&new_fingerprint) else {
-                return Err(ArrowError::ParseError(format!(
+                return Err(AvroError::ParseError(format!(
                     "Unknown fingerprint: {new_fingerprint:?}"
                 )));
             };
@@ -830,7 +842,7 @@ impl Decoder {
         }
     }
 
-    fn flush_and_reset(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    fn flush_and_reset(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         if self.batch_is_empty() {
             return Ok(None);
         }
@@ -845,7 +857,7 @@ impl Decoder {
     /// If a schema change was detected while decoding rows for the current batch, the
     /// schema switch is applied **after** flushing this batch, so the **next** batch
     /// (if any) may have a different schema.
-    pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    pub fn flush(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         // We must flush the active decoder before switching to the pending one.
         let batch = self.flush_and_reset();
         self.apply_pending_schema();
@@ -870,7 +882,7 @@ impl Decoder {
     // Decode either the block count or remaining capacity from `data` (an OCF block payload).
     //
     // Returns the number of bytes consumed from `data` along with the number of records decoded.
-    fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize), ArrowError> {
+    fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize), AvroError> {
         // OCF decoding never interleaves records across blocks, so no chunking.
         let to_decode = std::cmp::min(count, self.remaining_capacity);
         if to_decode == 0 {
@@ -883,7 +895,7 @@ impl Decoder {
 
     // Produce a `RecordBatch` if at least one row is fully decoded, returning
     // `Ok(None)` if no new rows are available.
-    fn flush_block(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    fn flush_block(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         self.flush_and_reset()
     }
 }
@@ -904,6 +916,17 @@ impl Decoder {
 ///   See `Self::with_strict_mode`.
 /// * **`reader_schema`**: Optional reader schema (projection / evolution) used when decoding
 ///   values (default: `None`). See `Self::with_reader_schema`.
+/// * **`projection`**: Optional projection of **top‑level record fields** by index (default: `None`).
+///
+///   If set, the effective reader schema is **pruned** to include only the projected fields, in the
+///   specified order:
+///
+///   * If a reader schema is provided, that schema is pruned.
+///   * Otherwise, a reader schema is derived from the writer schema and then pruned.
+///   * For streaming `Decoder` with multiple writer schemas and no reader schema, a projected reader
+///     schema is derived **per writer schema** in the `SchemaStore`.
+///
+///   See `Self::with_projection`.
 /// * **`writer_schema_store`**: Required for building a `Decoder` for single‑object or
 ///   Confluent framing. Maps fingerprints to Avro schemas. See `Self::with_writer_schema_store`.
 /// * **`active_fingerprint`**: Optional starting fingerprint for streaming decode when the
@@ -927,11 +950,11 @@ impl Decoder {
 ///
 /// Build a `Decoder` for Confluent messages:
 ///
-/// ```no_run
+/// ```
 /// use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm};
 /// use arrow_avro::reader::ReaderBuilder;
 ///
-/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
 /// store.set(Fingerprint::Id(1234), AvroSchema::new(r#"{"type":"record","name":"E","fields":[]}"#.to_string()))?;
 ///
 /// let decoder = ReaderBuilder::new()
@@ -945,6 +968,7 @@ pub struct ReaderBuilder {
     strict_mode: bool,
     utf8_view: bool,
     reader_schema: Option<AvroSchema>,
+    projection: Option<Vec<usize>>,
     writer_schema_store: Option<SchemaStore>,
     active_fingerprint: Option<Fingerprint>,
 }
@@ -956,6 +980,7 @@ impl Default for ReaderBuilder {
             strict_mode: false,
             utf8_view: false,
             reader_schema: None,
+            projection: None,
             writer_schema_store: None,
             active_fingerprint: None,
         }
@@ -969,6 +994,7 @@ impl ReaderBuilder {
     /// * `strict_mode = false`
     /// * `utf8_view = false`
     /// * `reader_schema = None`
+    /// * `projection = None`
     /// * `writer_schema_store = None`
     /// * `active_fingerprint = None`
     pub fn new() -> Self {
@@ -979,7 +1005,7 @@ impl ReaderBuilder {
         &self,
         writer_schema: &Schema,
         reader_schema: Option<&Schema>,
-    ) -> Result<RecordDecoder, ArrowError> {
+    ) -> Result<RecordDecoder, AvroError> {
         let mut builder = AvroFieldBuilder::new(writer_schema);
         if let Some(reader_schema) = reader_schema {
             builder = builder.with_reader_schema(reader_schema);
@@ -988,54 +1014,56 @@ impl ReaderBuilder {
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
             .build()?;
-        RecordDecoder::try_new_with_options(root.data_type(), self.utf8_view)
+        RecordDecoder::try_new_with_options(root.data_type())
     }
 
     fn make_record_decoder_from_schemas(
         &self,
         writer_schema: &Schema,
         reader_schema: Option<&AvroSchema>,
-    ) -> Result<RecordDecoder, ArrowError> {
+    ) -> Result<RecordDecoder, AvroError> {
         let reader_schema_raw = reader_schema.map(|s| s.schema()).transpose()?;
         self.make_record_decoder(writer_schema, reader_schema_raw.as_ref())
-    }
-
-    fn make_decoder_with_parts(
-        &self,
-        active_decoder: RecordDecoder,
-        active_fingerprint: Option<Fingerprint>,
-        cache: IndexMap<Fingerprint, RecordDecoder>,
-        fingerprint_algorithm: FingerprintAlgorithm,
-    ) -> Decoder {
-        Decoder {
-            batch_size: self.batch_size,
-            remaining_capacity: self.batch_size,
-            active_fingerprint,
-            active_decoder,
-            cache,
-            utf8_view: self.utf8_view,
-            fingerprint_algorithm,
-            strict_mode: self.strict_mode,
-            pending_schema: None,
-            awaiting_body: false,
-        }
     }
 
     fn make_decoder(
         &self,
         header: Option<&Header>,
         reader_schema: Option<&AvroSchema>,
-    ) -> Result<Decoder, ArrowError> {
+    ) -> Result<Decoder, AvroError> {
         if let Some(hdr) = header {
-            let writer_schema = hdr
-                .schema()
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?
-                .ok_or_else(|| {
-                    ArrowError::ParseError("No Avro schema present in file header".into())
-                })?;
+            let writer_schema = hdr.schema()?.ok_or_else(|| {
+                AvroError::ParseError("No Avro schema present in file header".into())
+            })?;
+            let projected_reader_schema = self
+                .projection
+                .as_deref()
+                .map(|projection| {
+                    let base_schema = if let Some(reader_schema) = reader_schema {
+                        reader_schema.clone()
+                    } else {
+                        let raw = hdr.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
+                            AvroError::ParseError(
+                                "No Avro schema present in file header".to_string(),
+                            )
+                        })?;
+                        let json_string = std::str::from_utf8(raw)
+                            .map_err(|e| {
+                                AvroError::ParseError(format!(
+                                    "Invalid UTF-8 in Avro schema header: {e}"
+                                ))
+                            })?
+                            .to_string();
+                        AvroSchema::new(json_string)
+                    };
+                    base_schema.project(projection)
+                })
+                .transpose()?;
+            let effective_reader_schema = projected_reader_schema.as_ref().or(reader_schema);
             let record_decoder =
-                self.make_record_decoder_from_schemas(&writer_schema, reader_schema)?;
-            return Ok(self.make_decoder_with_parts(
+                self.make_record_decoder_from_schemas(&writer_schema, effective_reader_schema)?;
+            return Ok(Decoder::from_parts(
+                self.batch_size,
                 record_decoder,
                 None,
                 IndexMap::new(),
@@ -1043,11 +1071,11 @@ impl ReaderBuilder {
             ));
         }
         let store = self.writer_schema_store.as_ref().ok_or_else(|| {
-            ArrowError::ParseError("Writer schema store required for raw Avro".into())
+            AvroError::ParseError("Writer schema store required for raw Avro".into())
         })?;
         let fingerprints = store.fingerprints();
         if fingerprints.is_empty() {
-            return Err(ArrowError::ParseError(
+            return Err(AvroError::ParseError(
                 "Writer schema store must contain at least one schema".into(),
             ));
         }
@@ -1055,22 +1083,42 @@ impl ReaderBuilder {
             .active_fingerprint
             .or_else(|| fingerprints.first().copied())
             .ok_or_else(|| {
-                ArrowError::ParseError("Could not determine initial schema fingerprint".into())
+                AvroError::ParseError("Could not determine initial schema fingerprint".into())
             })?;
+        let projection = self.projection.as_deref();
+        let projected_reader_schema = match (projection, reader_schema) {
+            (Some(projection), Some(reader_schema)) => Some(reader_schema.project(projection)?),
+            _ => None,
+        };
         let mut cache = IndexMap::with_capacity(fingerprints.len().saturating_sub(1));
         let mut active_decoder: Option<RecordDecoder> = None;
         for fingerprint in store.fingerprints() {
             let avro_schema = match store.lookup(&fingerprint) {
                 Some(schema) => schema,
                 None => {
-                    return Err(ArrowError::ComputeError(format!(
+                    return Err(AvroError::General(format!(
                         "Fingerprint {fingerprint:?} not found in schema store",
                     )));
                 }
             };
             let writer_schema = avro_schema.schema()?;
-            let record_decoder =
-                self.make_record_decoder_from_schemas(&writer_schema, reader_schema)?;
+            let record_decoder = match projection {
+                None => self.make_record_decoder_from_schemas(&writer_schema, reader_schema)?,
+                Some(projection) => {
+                    if let Some(ref pruned_reader_schema) = projected_reader_schema {
+                        self.make_record_decoder_from_schemas(
+                            &writer_schema,
+                            Some(pruned_reader_schema),
+                        )?
+                    } else {
+                        let derived_reader_schema = avro_schema.project(projection)?;
+                        self.make_record_decoder_from_schemas(
+                            &writer_schema,
+                            Some(&derived_reader_schema),
+                        )?
+                    }
+                }
+            };
             if fingerprint == start_fingerprint {
                 active_decoder = Some(record_decoder);
             } else {
@@ -1078,11 +1126,12 @@ impl ReaderBuilder {
             }
         }
         let active_decoder = active_decoder.ok_or_else(|| {
-            ArrowError::ComputeError(format!(
+            AvroError::General(format!(
                 "Initial fingerprint {start_fingerprint:?} not found in schema store"
             ))
         })?;
-        Ok(self.make_decoder_with_parts(
+        Ok(Decoder::from_parts(
+            self.batch_size,
             active_decoder,
             Some(start_fingerprint),
             cache,
@@ -1132,6 +1181,68 @@ impl ReaderBuilder {
     /// A reader schema can be used for **schema evolution** or **projection**.
     pub fn with_reader_schema(mut self, schema: AvroSchema) -> Self {
         self.reader_schema = Some(schema);
+        self
+    }
+
+    /// Sets an explicit top-level field projection by index.
+    ///
+    /// The provided `projection` is a list of indices into the **top-level record** fields.
+    /// The output schema will contain only these fields, in the specified order.
+    ///
+    /// Internally, this is implemented by pruning the effective Avro *reader schema*:
+    ///
+    /// * If a reader schema is provided via `Self::with_reader_schema`, that schema is pruned.
+    /// * Otherwise, a reader schema is derived from the writer schema and then pruned.
+    /// * For streaming `Decoder` with multiple writer schemas and no reader schema, a projected
+    ///   reader schema is derived **per writer schema** in the `SchemaStore`.
+    ///
+    /// # Example
+    ///
+    /// Read only specific columns from an Avro OCF file:
+    ///
+    /// ```
+    /// use std::io::Cursor;
+    /// use std::sync::Arc;
+    /// use arrow_array::{ArrayRef, Int32Array, StringArray, Float64Array, RecordBatch};
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// use arrow_avro::writer::AvroWriter;
+    /// use arrow_avro::reader::ReaderBuilder;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Original schema has three fields: id, name, value
+    /// let schema = Schema::new(vec![
+    ///     Field::new("id", DataType::Int32, false),
+    ///     Field::new("name", DataType::Utf8, false),
+    ///     Field::new("value", DataType::Float64, false),
+    /// ]);
+    /// let batch = RecordBatch::try_new(
+    ///     Arc::new(schema.clone()),
+    ///     vec![
+    ///         Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+    ///         Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef,
+    ///         Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])) as ArrayRef,
+    ///     ],
+    /// )?;
+    ///
+    /// // Write Avro OCF
+    /// let mut writer = AvroWriter::new(Vec::new(), schema)?;
+    /// writer.write(&batch)?;
+    /// writer.finish()?;
+    /// let bytes = writer.into_inner();
+    ///
+    /// // Read only fields at indices 2 and 0 (value, id) — in that order
+    /// let mut reader = ReaderBuilder::new()
+    ///     .with_projection(vec![2, 0])
+    ///     .build(Cursor::new(bytes))?;
+    ///
+    /// let out = reader.next().unwrap()?;
+    /// assert_eq!(out.num_columns(), 2);
+    /// assert_eq!(out.schema().field(0).name(), "value");
+    /// assert_eq!(out.schema().field(1).name(), "id");
+    /// # Ok(()) }
+    /// ```
+    pub fn with_projection(mut self, projection: Vec<usize>) -> Self {
+        self.projection = Some(projection);
         self
     }
 
@@ -1191,6 +1302,7 @@ impl ReaderBuilder {
             ));
         }
         self.make_decoder(None, self.reader_schema.as_ref())
+            .map_err(ArrowError::from)
     }
 }
 
@@ -1231,7 +1343,7 @@ impl<R: BufRead> Reader<R> {
     ///
     /// Batches are bounded by `batch_size`; a single OCF block may yield multiple batches,
     /// and a batch may also span multiple blocks.
-    fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    fn read(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         'outer: while !self.finished && !self.decoder.batch_is_full() {
             while self.block_cursor == self.block_data.len() {
                 let buf = self.reader.fill_buf()?;
@@ -1245,7 +1357,8 @@ impl<R: BufRead> Reader<R> {
                 if let Some(block) = self.block_decoder.flush() {
                     // Successfully decoded a block.
                     self.block_data = if let Some(ref codec) = self.header.compression()? {
-                        codec.decompress(&block.data)?
+                        let decompressed: Vec<u8> = codec.decompress(&block.data)?;
+                        decompressed
                     } else {
                         block.data
                     };
@@ -1253,7 +1366,7 @@ impl<R: BufRead> Reader<R> {
                     self.block_cursor = 0;
                 } else if consumed == 0 {
                     // The block decoder made no progress on a non-empty buffer.
-                    return Err(ArrowError::ParseError(
+                    return Err(AvroError::ParseError(
                         "Could not decode next Avro block from partial data".to_string(),
                     ));
                 }
@@ -1275,7 +1388,7 @@ impl<R: BufRead> Iterator for Reader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.read().transpose()
+        self.read().map_err(ArrowError::from).transpose()
     }
 }
 
@@ -1287,45 +1400,69 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 
 #[cfg(test)]
 mod test {
-    use crate::codec::{AvroDataType, AvroField, AvroFieldBuilder, Codec};
-    use crate::compression::CompressionCodec;
+    use crate::codec::AvroFieldBuilder;
     use crate::reader::record::RecordDecoder;
-    use crate::reader::vlq::VLQDecoder;
-    use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
+    use crate::reader::{Decoder, Reader, ReaderBuilder};
     use crate::schema::{
-        AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, Schema as AvroRaw,
-        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
+        AVRO_ENUM_SYMBOLS_METADATA_KEY, AVRO_NAME_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY,
+        AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, PrimitiveType,
+        SINGLE_OBJECT_MAGIC, SchemaStore,
     };
     use crate::test_util::arrow_test_data;
-    use arrow::array::ArrayDataBuilder;
+    use crate::writer::AvroWriter;
     use arrow_array::builder::{
-        ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
-        ListBuilder, MapBuilder, StringBuilder, StructBuilder,
+        ArrayBuilder, BooleanBuilder, Float32Builder, Int32Builder, Int64Builder, ListBuilder,
+        MapBuilder, StringBuilder, StructBuilder,
     };
+    #[cfg(feature = "snappy")]
+    use arrow_array::builder::{Float64Builder, MapFieldNames};
     use arrow_array::cast::AsArray;
+    #[cfg(not(feature = "avro_custom_types"))]
+    use arrow_array::types::Int64Type;
+    #[cfg(feature = "avro_custom_types")]
     use arrow_array::types::{
         DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-        DurationSecondType, Int64Type,
+        DurationSecondType,
     };
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
-    use arrow_buffer::{
-        i256, Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer,
-    };
+    #[cfg(feature = "snappy")]
+    use arrow_buffer::{Buffer, NullBuffer};
+    use arrow_buffer::{IntervalMonthDayNano, OffsetBuffer, ScalarBuffer, i256};
+    #[cfg(feature = "avro_custom_types")]
     use arrow_schema::{
         ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit, UnionFields,
         UnionMode,
     };
-    use bytes::{Buf, BufMut, Bytes};
+    #[cfg(not(feature = "avro_custom_types"))]
+    use arrow_schema::{
+        ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, UnionFields, UnionMode,
+    };
+    use bytes::Bytes;
     use futures::executor::block_on;
-    use futures::{stream, Stream, StreamExt, TryStreamExt};
-    use serde_json::{json, Value};
+    use futures::{Stream, StreamExt, TryStreamExt, stream};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
-    use std::fs;
     use std::fs::File;
-    use std::io::{BufReader, Cursor, Read};
+    use std::io::{BufReader, Cursor};
     use std::sync::Arc;
-    use std::task::{ready, Poll};
+
+    fn files() -> impl Iterator<Item = &'static str> {
+        [
+            // TODO: avoid requiring snappy for this file
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.avro",
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.snappy.avro",
+            #[cfg(feature = "zstd")]
+            "avro/alltypes_plain.zstandard.avro",
+            #[cfg(feature = "bzip2")]
+            "avro/alltypes_plain.bzip2.avro",
+            #[cfg(feature = "xz")]
+            "avro/alltypes_plain.xz.avro",
+        ]
+        .into_iter()
+    }
 
     fn read_file(path: &str, batch_size: usize, utf8_view: bool) -> RecordBatch {
         let file = File::open(path).unwrap();
@@ -1409,6 +1546,9 @@ mod test {
             Fingerprint::Id(v) => {
                 panic!("make_prefix expects a Rabin fingerprint, got ({v})");
             }
+            Fingerprint::Id64(v) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({v})");
+            }
             #[cfg(feature = "md5")]
             Fingerprint::MD5(v) => {
                 panic!("make_prefix expects a Rabin fingerprint, got ({v:?})");
@@ -1441,6 +1581,21 @@ mod test {
     fn make_message_id(id: u32, value: i64) -> Vec<u8> {
         let encoded_value = encode_zigzag(value);
         let mut msg = make_id_prefix(id, encoded_value.len());
+        msg.extend_from_slice(&encoded_value);
+        msg
+    }
+
+    fn make_id64_prefix(id: u64, additional: usize) -> Vec<u8> {
+        let capacity = CONFLUENT_MAGIC.len() + size_of::<u64>() + additional;
+        let mut out = Vec::with_capacity(capacity);
+        out.extend_from_slice(&CONFLUENT_MAGIC);
+        out.extend_from_slice(&id.to_be_bytes());
+        out
+    }
+
+    fn make_message_id64(id: u64, value: i64) -> Vec<u8> {
+        let encoded_value = encode_zigzag(value);
+        let mut msg = make_id64_prefix(id, encoded_value.len());
         msg.extend_from_slice(&encoded_value);
         msg
     }
@@ -1615,16 +1770,327 @@ mod test {
         AvroSchema::new(root.to_string())
     }
 
+    fn write_ocf(schema: &Schema, batches: &[RecordBatch]) -> Vec<u8> {
+        let mut w = AvroWriter::new(Vec::<u8>::new(), schema.clone()).expect("writer");
+        for b in batches {
+            w.write(b).expect("write");
+        }
+        w.finish().expect("finish");
+        w.into_inner()
+    }
+
+    #[test]
+    fn ocf_projection_no_reader_schema_reorder() -> Result<(), Box<dyn std::error::Error>> {
+        // Writer: { id: int, name: string, is_active: boolean }
+        let writer_schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("is_active", DataType::Boolean, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef,
+            ],
+        )?;
+        let bytes = write_ocf(&writer_schema, &[batch]);
+        // Project and reorder: [is_active, id]
+        let mut reader = ReaderBuilder::new()
+            .with_projection(vec![2, 0])
+            .build(Cursor::new(bytes))?;
+        let out = reader.next().unwrap()?;
+        assert_eq!(out.num_columns(), 2);
+        assert_eq!(out.schema().field(0).name(), "is_active");
+        assert_eq!(out.schema().field(1).name(), "id");
+        let is_active = out.column(0).as_boolean();
+        assert!(is_active.value(0));
+        assert!(!is_active.value(1));
+        let id = out.column(1).as_primitive::<Int32Type>();
+        assert_eq!(id.value(0), 1);
+        assert_eq!(id.value(1), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn ocf_projection_with_reader_schema_alias_and_default()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Writer: { id: long, name: string }
+        let writer_schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+            ],
+        )?;
+        let bytes = write_ocf(&writer_schema, &[batch]);
+        // Reader adds alias + default field:
+        //  - rename `name` -> `full_name` via aliases
+        //  - add `is_active` with default true
+        let reader_json = r#"
+    {
+      "type": "record",
+      "name": "topLevelRecord",
+      "fields": [
+        { "name": "id", "type": "long" },
+        { "name": "full_name", "type": ["null","string"], "aliases": ["name"], "default": null },
+        { "name": "is_active", "type": "boolean", "default": true }
+      ]
+    }"#;
+        // Project only [full_name, is_active] (indices relative to the reader schema)
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(AvroSchema::new(reader_json.to_string()))
+            .with_projection(vec![1, 2])
+            .build(Cursor::new(bytes))?;
+        let out = reader.next().unwrap()?;
+        assert_eq!(out.num_columns(), 2);
+        assert_eq!(out.schema().field(0).name(), "full_name");
+        assert_eq!(out.schema().field(1).name(), "is_active");
+        let full_name = out.column(0).as_string::<i32>();
+        assert_eq!(full_name.value(0), "a");
+        assert_eq!(full_name.value(1), "b");
+        let is_active = out.column(1).as_boolean();
+        assert!(is_active.value(0));
+        assert!(is_active.value(1));
+        Ok(())
+    }
+
+    #[test]
+    fn projection_errors_out_of_bounds_and_duplicate() -> Result<(), Box<dyn std::error::Error>> {
+        let writer_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![2])) as ArrayRef,
+            ],
+        )?;
+        let bytes = write_ocf(&writer_schema, &[batch]);
+        let err = ReaderBuilder::new()
+            .with_projection(vec![2])
+            .build(Cursor::new(bytes.clone()))
+            .unwrap_err();
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("out of bounds"));
+        let err = ReaderBuilder::new()
+            .with_projection(vec![0, 0])
+            .build(Cursor::new(bytes))
+            .unwrap_err();
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("Duplicate projection index"));
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "snappy")]
+    fn test_alltypes_plain_with_projection_and_reader_schema() {
+        use std::fs::File;
+        use std::io::BufReader;
+        let path = arrow_test_data("avro/alltypes_plain.avro");
+        // Build a reader schema that selects [double_col, id, tinyint_col] in that order
+        let reader_schema = make_reader_schema_with_selected_fields_in_order(
+            &path,
+            &["double_col", "id", "tinyint_col"],
+        );
+        let file = File::open(&path).expect("open avro/alltypes_plain.avro");
+        let reader = ReaderBuilder::new()
+            .with_batch_size(1024)
+            .with_reader_schema(reader_schema)
+            .with_projection(vec![1, 2]) // Select indices 1 and 2 from reader schema: [id, tinyint_col]
+            .build(BufReader::new(file))
+            .expect("build reader with projection and reader schema");
+        let schema = reader.schema();
+        // Verify the projected schema has exactly 2 fields in the correct order
+        assert_eq!(schema.fields().len(), 2);
+        assert_eq!(schema.field(0).name(), "id");
+        assert_eq!(schema.field(1).name(), "tinyint_col");
+        let batches: Vec<RecordBatch> = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 2);
+        // Build expected batch with exact values from alltypes_plain.avro:
+        // - id values: [4, 5, 6, 7, 2, 3, 0, 1]
+        // - tinyint_col values: [0, 1, 0, 1, 0, 1, 0, 1] (i.e., row_index % 2)
+        let expected = RecordBatch::try_from_iter_with_nullable([
+            (
+                "id",
+                Arc::new(Int32Array::from(vec![4, 5, 6, 7, 2, 3, 0, 1])) as ArrayRef,
+                true,
+            ),
+            (
+                "tinyint_col",
+                Arc::new(Int32Array::from(vec![0, 1, 0, 1, 0, 1, 0, 1])) as ArrayRef,
+                true,
+            ),
+        ])
+        .unwrap();
+        assert_eq!(
+            batch, &expected,
+            "Projected batch mismatch for alltypes_plain.avro with reader schema and projection [1, 2]"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "snappy")]
+    fn test_alltypes_plain_with_projection() {
+        use std::fs::File;
+        use std::io::BufReader;
+        let path = arrow_test_data("avro/alltypes_plain.avro");
+        let file = File::open(&path).expect("open avro/alltypes_plain.avro");
+        let reader = ReaderBuilder::new()
+            .with_batch_size(1024)
+            .with_projection(vec![2, 0, 5])
+            .build(BufReader::new(file))
+            .expect("build reader with projection");
+        let schema = reader.schema();
+        assert_eq!(schema.fields().len(), 3);
+        assert_eq!(schema.field(0).name(), "tinyint_col");
+        assert_eq!(schema.field(1).name(), "id");
+        assert_eq!(schema.field(2).name(), "bigint_col");
+        let batches: Vec<RecordBatch> = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 3);
+        let expected = RecordBatch::try_from_iter_with_nullable([
+            (
+                "tinyint_col",
+                Arc::new(Int32Array::from(vec![0, 1, 0, 1, 0, 1, 0, 1])) as ArrayRef,
+                true,
+            ),
+            (
+                "id",
+                Arc::new(Int32Array::from(vec![4, 5, 6, 7, 2, 3, 0, 1])) as ArrayRef,
+                true,
+            ),
+            (
+                "bigint_col",
+                Arc::new(Int64Array::from(vec![0, 10, 0, 10, 0, 10, 0, 10])) as ArrayRef,
+                true,
+            ),
+        ])
+        .unwrap();
+        assert_eq!(
+            batch, &expected,
+            "Projected batch mismatch for alltypes_plain.avro with projection [2, 0, 5]"
+        );
+    }
+
+    #[test]
+    fn writer_string_reader_nullable_with_alias() -> Result<(), Box<dyn std::error::Error>> {
+        let writer_schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+            ],
+        )?;
+        let bytes = write_ocf(&writer_schema, &[batch]);
+        let reader_json = r#"
+    {
+      "type": "record",
+      "name": "topLevelRecord",
+      "fields": [
+        { "name": "id", "type": "long" },
+        { "name": "full_name", "type": ["null","string"], "aliases": ["name"], "default": null },
+        { "name": "is_active", "type": "boolean", "default": true }
+      ]
+    }"#;
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(AvroSchema::new(reader_json.to_string()))
+            .build(Cursor::new(bytes))?;
+        let out = reader.next().unwrap()?;
+        let full_name = out.column(1).as_string::<i32>();
+        assert_eq!(full_name.value(0), "a");
+        assert_eq!(full_name.value(1), "b");
+        Ok(())
+    }
+
+    #[test]
+    fn writer_string_reader_string_null_order_second() -> Result<(), Box<dyn std::error::Error>> {
+        // Writer: { name: string }
+        let writer_schema = Schema::new(vec![Field::new("name", DataType::Utf8, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef],
+        )?;
+        let bytes = write_ocf(&writer_schema, &[batch]);
+
+        // Reader: ["string","null"] (NullSecond)
+        let reader_json = r#"
+    {
+      "type":"record", "name":"topLevelRecord",
+      "fields":[ { "name":"name", "type":["string","null"], "default":"x" } ]
+    }"#;
+
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(AvroSchema::new(reader_json.to_string()))
+            .build(Cursor::new(bytes))?;
+
+        let out = reader.next().unwrap()?;
+        assert_eq!(out.num_rows(), 2);
+
+        // Should decode as non-null strings (writer non-union -> reader union)
+        let name = out.column(0).as_string::<i32>();
+        assert_eq!(name.value(0), "x");
+        assert_eq!(name.value(1), "y");
+
+        Ok(())
+    }
+
+    #[test]
+    fn promotion_writer_int_reader_nullable_long() -> Result<(), Box<dyn std::error::Error>> {
+        // Writer: { v: int }
+        let writer_schema = Schema::new(vec![Field::new("v", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )?;
+        let bytes = write_ocf(&writer_schema, &[batch]);
+
+        // Reader: { v: ["null","long"] }
+        let reader_json = r#"
+    {
+      "type":"record", "name":"topLevelRecord",
+      "fields":[ { "name":"v", "type":["null","long"], "default": null } ]
+    }"#;
+
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(AvroSchema::new(reader_json.to_string()))
+            .build(Cursor::new(bytes))?;
+
+        let out = reader.next().unwrap()?;
+        assert_eq!(out.num_rows(), 3);
+
+        // Should have promoted to Int64 and be non-null (no union tag in writer)
+        let v = out
+            .column(0)
+            .as_primitive::<arrow_array::types::Int64Type>();
+        assert_eq!(v.values(), &[1, 2, 3]);
+        assert!(
+            out.column(0).nulls().is_none(),
+            "expected no validity bitmap for all-valid column"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn test_alltypes_schema_promotion_mixed() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
             let mut promotions: HashMap<&str, &str> = HashMap::new();
             promotions.insert("id", "long");
@@ -1732,14 +2198,7 @@ mod test {
 
     #[test]
     fn test_alltypes_schema_promotion_long_to_float_only() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
             let mut promotions: HashMap<&str, &str> = HashMap::new();
             promotions.insert("bigint_col", "float");
@@ -1836,14 +2295,7 @@ mod test {
 
     #[test]
     fn test_alltypes_schema_promotion_bytes_to_string_only() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
             let mut promotions: HashMap<&str, &str> = HashMap::new();
             promotions.insert("date_string_col", "string");
@@ -1936,6 +2388,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_illegal_promotion_bool_to_double_errors() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let mut promotions: HashMap<&str, &str> = HashMap::new();
@@ -1963,6 +2417,7 @@ mod test {
         let reader_schema = make_reader_schema_with_enum_remap(&file, &remap);
         let actual = read_alltypes_with_reader_schema(&file, reader_schema);
         let dict_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        // f1
         let f1_keys = Int32Array::from(vec![3, 2, 1, 0]);
         let f1_vals = StringArray::from(vec!["d", "c", "b", "a"]);
         let f1 = DictionaryArray::<Int32Type>::try_new(f1_keys, Arc::new(f1_vals)).unwrap();
@@ -1971,7 +2426,11 @@ mod test {
             AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
             r#"["d","c","b","a"]"#.to_string(),
         );
+        // New named-type metadata
+        md_f1.insert("avro.name".to_string(), "enum1".to_string());
+        md_f1.insert("avro.namespace".to_string(), "ns1".to_string());
         let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
+        // f2
         let f2_keys = Int32Array::from(vec![1, 0, 3, 2]);
         let f2_vals = StringArray::from(vec!["h", "g", "f", "e"]);
         let f2 = DictionaryArray::<Int32Type>::try_new(f2_keys, Arc::new(f2_vals)).unwrap();
@@ -1980,7 +2439,11 @@ mod test {
             AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
             r#"["h","g","f","e"]"#.to_string(),
         );
+        // New named-type metadata
+        md_f2.insert("avro.name".to_string(), "enum2".to_string());
+        md_f2.insert("avro.namespace".to_string(), "ns2".to_string());
         let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
+        // f3
         let f3_keys = Int32Array::from(vec![Some(2), Some(0), None, Some(1)]);
         let f3_vals = StringArray::from(vec!["k", "i", "j"]);
         let f3 = DictionaryArray::<Int32Type>::try_new(f3_keys, Arc::new(f3_vals)).unwrap();
@@ -1989,6 +2452,9 @@ mod test {
             AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
             r#"["k","i","j"]"#.to_string(),
         );
+        // New named-type metadata
+        md_f3.insert("avro.name".to_string(), "enum3".to_string());
+        md_f3.insert("avro.namespace".to_string(), "ns1".to_string());
         let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
         let expected_schema = Arc::new(Schema::new(vec![f1_field, f2_field, f3_field]));
         let expected = RecordBatch::try_new(
@@ -2051,6 +2517,7 @@ mod test {
         let long_bytes = match fp_long {
             Fingerprint::Rabin(v) => v.to_le_bytes(),
             Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            Fingerprint::Id64(id) => panic!("expected Rabin fingerprint, got ({id})"),
             #[cfg(feature = "md5")]
             Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
             #[cfg(feature = "sha256")]
@@ -2069,13 +2536,13 @@ mod test {
         let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let writer_schema_long = schema_long.schema().unwrap();
         let root_long = AvroFieldBuilder::new(&writer_schema_long).build().unwrap();
-        let long_decoder =
-            RecordDecoder::try_new_with_options(root_long.data_type(), decoder.utf8_view).unwrap();
+        let long_decoder = RecordDecoder::try_new_with_options(root_long.data_type()).unwrap();
         let _ = decoder.cache.insert(fp_long, long_decoder);
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         match fp_long {
             Fingerprint::Rabin(v) => buf.extend_from_slice(&v.to_le_bytes()),
             Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            Fingerprint::Id64(id) => panic!("expected Rabin fingerprint, got ({id})"),
             #[cfg(feature = "md5")]
             Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
             #[cfg(feature = "sha256")]
@@ -2085,6 +2552,53 @@ mod test {
         assert_eq!(consumed, buf.len());
         assert!(decoder.pending_schema.is_some());
         assert_eq!(decoder.pending_schema.as_ref().unwrap().0, fp_long);
+    }
+
+    #[test]
+    fn test_decoder_projection_multiple_writer_schemas_no_reader_schema()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Two writer schemas with different shapes
+        let writer_v1 = AvroSchema::new(
+            r#"{"type":"record","name":"E","fields":[{"name":"a","type":"int"},{"name":"b","type":"string"}]}"#
+                .to_string(),
+        );
+        let writer_v2 = AvroSchema::new(
+            r#"{"type":"record","name":"E","fields":[{"name":"a","type":"long"},{"name":"b","type":"string"},{"name":"c","type":"int"}]}"#
+                .to_string(),
+        );
+        let mut store = SchemaStore::new();
+        let fp1 = store.register(writer_v1)?;
+        let fp2 = store.register(writer_v2)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp1)
+            .with_batch_size(8)
+            .with_projection(vec![1])
+            .build_decoder()?;
+        // Message for v1: {a:1, b:"x"}
+        let mut msg1 = make_prefix(fp1);
+        msg1.extend_from_slice(&encode_zigzag(1)); // a = 1
+        msg1.push((1u8) << 1);
+        msg1.extend_from_slice(b"x");
+        // Message for v2: {a:2, b:"y", c:7}
+        let mut msg2 = make_prefix(fp2);
+        msg2.extend_from_slice(&encode_zigzag(2)); // a = 2
+        msg2.push((1u8) << 1);
+        msg2.extend_from_slice(b"y");
+        msg2.extend_from_slice(&encode_zigzag(7)); // c = 7
+        decoder.decode(&msg1)?;
+        let batch1 = decoder.flush()?.expect("batch1");
+        assert_eq!(batch1.num_columns(), 1);
+        assert_eq!(batch1.schema().field(0).name(), "b");
+        let b1 = batch1.column(0).as_string::<i32>();
+        assert_eq!(b1.value(0), "x");
+        decoder.decode(&msg2)?;
+        let batch2 = decoder.flush()?.expect("batch2");
+        assert_eq!(batch2.num_columns(), 1);
+        assert_eq!(batch2.schema().field(0).name(), "b");
+        let b2 = batch2.column(0).as_string::<i32>();
+        assert_eq!(b2.value(0), "y");
+        Ok(())
     }
 
     #[test]
@@ -2119,7 +2633,6 @@ mod test {
     fn test_two_messages_schema_switch() {
         let w_int = make_value_schema(PrimitiveType::Int);
         let w_long = make_value_schema(PrimitiveType::Long);
-        let r_long = w_long.clone();
         let mut store = SchemaStore::new();
         let fp_int = store.register(w_int).unwrap();
         let fp_long = store.register(w_long).unwrap();
@@ -2163,7 +2676,7 @@ mod test {
         let reader_schema = writer_schema.clone();
         let id = 100u32;
         // Set up store with None fingerprint algorithm and register schema by id
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
         let _ = store
             .set(Fingerprint::Id(id), writer_schema.clone())
             .expect("set id schema");
@@ -2194,7 +2707,7 @@ mod test {
         let writer_schema = make_value_schema(PrimitiveType::Int);
         let id_known = 7u32;
         let id_unknown = 9u32;
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
         let _ = store
             .set(Fingerprint::Id(id_known), writer_schema.clone())
             .expect("set id schema");
@@ -2218,7 +2731,7 @@ mod test {
     fn test_handle_prefix_id_incomplete_magic() {
         let writer_schema = make_value_schema(PrimitiveType::Int);
         let id = 5u32;
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
         let _ = store
             .set(Fingerprint::Id(id), writer_schema.clone())
             .expect("set id schema");
@@ -2229,69 +2742,42 @@ mod test {
             .with_active_fingerprint(Fingerprint::Id(id))
             .build_decoder()
             .unwrap();
-        let buf = &crate::schema::CONFLUENT_MAGIC[..0]; // empty incomplete magic
+        let buf = &CONFLUENT_MAGIC[..0]; // empty incomplete magic
         let res = decoder.handle_prefix(buf).unwrap();
         assert_eq!(res, Some(0));
         assert!(decoder.pending_schema.is_none());
     }
 
-    fn test_split_message_across_chunks() {
+    #[test]
+    fn test_two_messages_same_schema_id64() {
         let writer_schema = make_value_schema(PrimitiveType::Int);
         let reader_schema = writer_schema.clone();
-        let mut store = SchemaStore::new();
-        let fp = store.register(writer_schema).unwrap();
-        let msg1 = make_message(fp, 7);
-        let msg2 = make_message(fp, 8);
-        let msg3 = make_message(fp, 9);
-        let (pref2, body2) = msg2.split_at(10);
-        let (pref3, body3) = msg3.split_at(10);
+        let id = 100u64;
+        // Set up store with None fingerprint algorithm and register schema by id
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id64);
+        let _ = store
+            .set(Fingerprint::Id64(id), writer_schema.clone())
+            .expect("set id schema");
+        let msg1 = make_message_id64(id, 21);
+        let msg2 = make_message_id64(id, 22);
+        let input = [msg1.clone(), msg2.clone()].concat();
         let mut decoder = ReaderBuilder::new()
             .with_batch_size(8)
             .with_reader_schema(reader_schema)
             .with_writer_schema_store(store)
-            .with_active_fingerprint(fp)
+            .with_active_fingerprint(Fingerprint::Id64(id))
             .build_decoder()
             .unwrap();
-        let _ = decoder.decode(&msg1).unwrap();
-        let batch1 = decoder.flush().unwrap().expect("batch1");
-        assert_eq!(batch1.num_rows(), 1);
-        assert_eq!(
-            batch1
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            7
-        );
-        let _ = decoder.decode(pref2).unwrap();
-        assert!(decoder.flush().unwrap().is_none());
-        let mut chunk3 = Vec::from(body2);
-        chunk3.extend_from_slice(pref3);
-        let _ = decoder.decode(&chunk3).unwrap();
-        let batch2 = decoder.flush().unwrap().expect("batch2");
-        assert_eq!(batch2.num_rows(), 1);
-        assert_eq!(
-            batch2
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            8
-        );
-        let _ = decoder.decode(body3).unwrap();
-        let batch3 = decoder.flush().unwrap().expect("batch3");
-        assert_eq!(batch3.num_rows(), 1);
-        assert_eq!(
-            batch3
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            9
-        );
+        let _ = decoder.decode(&input).unwrap();
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.num_rows(), 2);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(col.value(0), 21);
+        assert_eq!(col.value(1), 22);
     }
 
     #[test]
@@ -2379,20 +2865,6 @@ mod test {
 
     #[test]
     fn test_utf8view_support() {
-        let schema_json = r#"{
-            "type": "record",
-            "name": "test",
-            "fields": [{
-                "name": "str_field",
-                "type": "string"
-            }]
-        }"#;
-
-        let schema: crate::schema::Schema = serde_json::from_str(schema_json).unwrap();
-        let avro_field = AvroField::try_from(&schema).unwrap();
-
-        let data_type = avro_field.data_type();
-
         struct TestHelper;
         impl TestHelper {
             fn with_utf8view(field: &Field) -> Field {
@@ -2657,6 +3129,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_skip_writer_fields_keep_double_only() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let reader_schema =
@@ -2674,6 +3148,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_skip_writer_fields_reorder_and_skip_many() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let reader_schema =
@@ -2727,6 +3203,31 @@ mod test {
             fields_json.len(),
             "full read column count vs writer fields"
         );
+        fn rebuild_list_array_with_element(
+            col: &ArrayRef,
+            new_elem: Arc<Field>,
+            is_large: bool,
+        ) -> ArrayRef {
+            if is_large {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .expect("expected LargeListArray");
+                let offsets = list.offsets().clone();
+                let values = list.values().clone();
+                let validity = list.nulls().cloned();
+                Arc::new(LargeListArray::try_new(new_elem, offsets, values, validity).unwrap())
+            } else {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .expect("expected ListArray");
+                let offsets = list.offsets().clone();
+                let values = list.values().clone();
+                let validity = list.nulls().cloned();
+                Arc::new(ListArray::try_new(new_elem, offsets, values, validity).unwrap())
+            }
+        }
         for (idx, f) in fields_json.iter().enumerate() {
             let name = f
                 .get("name")
@@ -2744,12 +3245,46 @@ mod test {
                 num_rows,
                 "row count mismatch for projected column '{name}'"
             );
-            let field = schema_full.field(idx).clone();
-            let col = full.column(idx).clone();
-            let expected =
-                RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![col]).unwrap();
-            // Equality means: (1) read the right column values; and (2) all other
-            // writer fields were skipped correctly for this projection (no misalignment).
+            let col_full = full.column(idx).clone();
+            let full_field = schema_full.field(idx).as_ref().clone();
+            let proj_field_ref = projected.schema().field(0).clone();
+            let proj_field = proj_field_ref.as_ref();
+            let top_meta = proj_field.metadata().clone();
+            let (expected_field_ref, expected_col): (Arc<Field>, ArrayRef) =
+                match (full_field.data_type(), proj_field.data_type()) {
+                    (&DataType::List(_), DataType::List(proj_elem)) => {
+                        let new_col =
+                            rebuild_list_array_with_element(&col_full, proj_elem.clone(), false);
+                        let nf = Field::new(
+                            full_field.name().clone(),
+                            proj_field.data_type().clone(),
+                            full_field.is_nullable(),
+                        )
+                        .with_metadata(top_meta);
+                        (Arc::new(nf), new_col)
+                    }
+                    (&DataType::LargeList(_), DataType::LargeList(proj_elem)) => {
+                        let new_col =
+                            rebuild_list_array_with_element(&col_full, proj_elem.clone(), true);
+                        let nf = Field::new(
+                            full_field.name().clone(),
+                            proj_field.data_type().clone(),
+                            full_field.is_nullable(),
+                        )
+                        .with_metadata(top_meta);
+                        (Arc::new(nf), new_col)
+                    }
+                    _ => {
+                        let nf = full_field.with_metadata(top_meta);
+                        (Arc::new(nf), col_full)
+                    }
+                };
+
+            let expected = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![expected_field_ref])),
+                vec![expected_col],
+            )
+            .unwrap();
             assert_eq!(
                 projected, expected,
                 "projected column '{name}' mismatch vs full read column"
@@ -2893,7 +3428,6 @@ mod test {
         let mut tid_rec_a: Option<i8> = None;
         let mut tid_rec_b: Option<i8> = None;
         let mut tid_array: Option<i8> = None;
-        let mut tid_map: Option<i8> = None;
         for (tid, f) in fields.iter() {
             match f.data_type() {
                 DataType::Dictionary(_, _) => tid_enum = Some(tid),
@@ -2908,7 +3442,6 @@ mod test {
                     }
                 }
                 DataType::List(_) => tid_array = Some(tid),
-                DataType::Map(_, _) => tid_map = Some(tid),
                 _ => {}
             }
         }
@@ -3527,7 +4060,7 @@ mod test {
                     return tid;
                 }
             }
-            panic!("no union child matches predicate")
+            panic!("no union child matches predicate");
         }
 
         fn uuid16_from_str(s: &str) -> [u8; 16] {
@@ -3772,6 +4305,14 @@ mod test {
         {
             let (uf, mode) = get_union("union_prim");
             assert!(matches!(mode, UnionMode::Dense));
+            let generated_names: Vec<&str> = uf.iter().map(|(_, f)| f.name().as_str()).collect();
+            let expected_names = vec![
+                "boolean", "int", "long", "float", "double", "bytes", "string",
+            ];
+            assert_eq!(
+                generated_names, expected_names,
+                "Field names for union_prim are incorrect"
+            );
             let tids = vec![
                 tid_by_name(&uf, "long"),
                 tid_by_name(&uf, "int"),
@@ -3858,6 +4399,12 @@ mod test {
                 }
                 _ => None,
             });
+            let generated_names: Vec<&str> = uf.iter().map(|(_, f)| f.name().as_str()).collect();
+            let expected_names = vec!["Fx8", "Dur12", "DecFix16"];
+            assert_eq!(
+                generated_names, expected_names,
+                "Data type names were not generated correctly for union_fixed_dur_decfix"
+            );
             expected_cols.push(arr);
         }
         // 6) union_enum_records_array_map: [enum ColorU, record RecA, record RecB, array<long>, map<string>]
@@ -4365,14 +4912,6 @@ mod test {
 
     #[test]
     fn test_alltypes() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-
         let expected = RecordBatch::try_from_iter_with_nullable([
             (
                 "id",
@@ -4457,7 +4996,7 @@ mod test {
         ])
         .unwrap();
 
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
 
             assert_eq!(read_file(&file, 8, false), expected);
@@ -4466,6 +5005,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_dictionary() {
         let file = "avro/alltypes_dictionary.avro";
         let expected = RecordBatch::try_from_iter_with_nullable([
@@ -4588,6 +5129,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_binary() {
         let file = arrow_test_data("avro/binary.avro");
         let batch = read_file(&file, 8, false);
@@ -4614,63 +5157,147 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for these files
+    #[cfg(feature = "snappy")]
     fn test_decimal() {
         // Choose expected Arrow types depending on the `small_decimals` feature flag.
         // With `small_decimals` enabled, Decimal32/Decimal64 are used where their
         // precision allows; otherwise, those cases resolve to Decimal128.
         #[cfg(feature = "small_decimals")]
-        let files: [(&str, DataType); 8] = [
+        let files: [(&str, DataType, HashMap<String, String>); 8] = [
             (
                 "avro/fixed_length_decimal.avro",
                 DataType::Decimal128(25, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
             ),
             (
                 "avro/fixed_length_decimal_legacy.avro",
                 DataType::Decimal64(13, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
             ),
-            ("avro/int32_decimal.avro", DataType::Decimal32(4, 2)),
-            ("avro/int64_decimal.avro", DataType::Decimal64(10, 2)),
+            (
+                "avro/int32_decimal.avro",
+                DataType::Decimal32(4, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
+            ),
+            (
+                "avro/int64_decimal.avro",
+                DataType::Decimal64(10, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
+            ),
             (
                 "test/data/int256_decimal.avro",
                 DataType::Decimal256(76, 10),
+                HashMap::new(),
             ),
             (
                 "test/data/fixed256_decimal.avro",
                 DataType::Decimal256(76, 10),
+                HashMap::from([("avro.name".to_string(), "Decimal256Fixed".to_string())]),
             ),
             (
                 "test/data/fixed_length_decimal_legacy_32.avro",
                 DataType::Decimal32(9, 2),
+                HashMap::from([("avro.name".to_string(), "Decimal32FixedLegacy".to_string())]),
             ),
-            ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
+            (
+                "test/data/int128_decimal.avro",
+                DataType::Decimal128(38, 2),
+                HashMap::new(),
+            ),
         ];
         #[cfg(not(feature = "small_decimals"))]
-        let files: [(&str, DataType); 8] = [
+        let files: [(&str, DataType, HashMap<String, String>); 8] = [
             (
                 "avro/fixed_length_decimal.avro",
                 DataType::Decimal128(25, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
             ),
             (
                 "avro/fixed_length_decimal_legacy.avro",
                 DataType::Decimal128(13, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
             ),
-            ("avro/int32_decimal.avro", DataType::Decimal128(4, 2)),
-            ("avro/int64_decimal.avro", DataType::Decimal128(10, 2)),
+            (
+                "avro/int32_decimal.avro",
+                DataType::Decimal128(4, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
+            ),
+            (
+                "avro/int64_decimal.avro",
+                DataType::Decimal128(10, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
+            ),
             (
                 "test/data/int256_decimal.avro",
                 DataType::Decimal256(76, 10),
+                HashMap::new(),
             ),
             (
                 "test/data/fixed256_decimal.avro",
                 DataType::Decimal256(76, 10),
+                HashMap::from([("avro.name".to_string(), "Decimal256Fixed".to_string())]),
             ),
             (
                 "test/data/fixed_length_decimal_legacy_32.avro",
                 DataType::Decimal128(9, 2),
+                HashMap::from([("avro.name".to_string(), "Decimal32FixedLegacy".to_string())]),
             ),
-            ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
+            (
+                "test/data/int128_decimal.avro",
+                DataType::Decimal128(38, 2),
+                HashMap::new(),
+            ),
         ];
-        for (file, expected_dt) in files {
+        for (file, expected_dt, mut metadata) in files {
             let (precision, scale) = match expected_dt {
                 DataType::Decimal32(p, s)
                 | DataType::Decimal64(p, s)
@@ -4732,11 +5359,10 @@ mod test {
             let actual_batch = read_file(&file_path, 8, false);
             let actual_nullable = actual_batch.schema().field(0).is_nullable();
             let expected_array = build_expected(&expected_dt, &values_i128);
-            let mut meta = HashMap::new();
-            meta.insert("precision".to_string(), precision.to_string());
-            meta.insert("scale".to_string(), scale.to_string());
+            metadata.insert("precision".to_string(), precision.to_string());
+            metadata.insert("scale".to_string(), scale.to_string());
             let field =
-                Field::new("value", expected_dt.clone(), actual_nullable).with_metadata(meta);
+                Field::new("value", expected_dt.clone(), actual_nullable).with_metadata(metadata);
             let expected_schema = Arc::new(Schema::new(vec![field]));
             let expected_batch =
                 RecordBatch::try_new(expected_schema.clone(), vec![expected_array]).unwrap();
@@ -4764,7 +5390,6 @@ mod test {
         let expected_batch = {
             #[cfg(feature = "avro_custom_types")]
             {
-                println!("Testing with 'avro_custom_types' feature ENABLED");
                 let schema = Arc::new(Schema::new(vec![
                     Field::new(
                         "duration_time_nanos",
@@ -4855,6 +5480,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_dict_pages_offset_zero() {
         let file = arrow_test_data("avro/dict-page-offset-zero.avro");
         let batch = read_file(&file, 32, false);
@@ -4870,6 +5497,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_list_columns() {
         let file = arrow_test_data("avro/list_columns.avro");
         let mut int64_list_builder = ListBuilder::new(Int64Builder::new());
@@ -4932,6 +5561,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_nested_lists() {
         use arrow_data::ArrayDataBuilder;
         let file = arrow_test_data("avro/nested_lists.snappy.avro");
@@ -5029,18 +5659,24 @@ mod test {
                 AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 r#"["a","b","c","d"]"#.to_string(),
             );
+            md_f1.insert(AVRO_NAME_METADATA_KEY.to_string(), "enum1".to_string());
+            md_f1.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns1".to_string());
             let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
             let mut md_f2 = HashMap::new();
             md_f2.insert(
                 AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 r#"["e","f","g","h"]"#.to_string(),
             );
+            md_f2.insert(AVRO_NAME_METADATA_KEY.to_string(), "enum2".to_string());
+            md_f2.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns2".to_string());
             let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
             let mut md_f3 = HashMap::new();
             md_f3.insert(
                 AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 r#"["i","j","k"]"#.to_string(),
             );
+            md_f3.insert(AVRO_NAME_METADATA_KEY.to_string(), "enum3".to_string());
+            md_f3.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns1".to_string());
             let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
             let expected_schema = Arc::new(Schema::new(vec![f1_field, f2_field, f3_field]));
             RecordBatch::try_new(
@@ -5065,11 +5701,44 @@ mod test {
                 6,
             )
             .unwrap();
+
+            // Add Avro named-type metadata for fixed fields
+            let mut md_f1 = HashMap::new();
+            md_f1.insert(
+                crate::schema::AVRO_NAME_METADATA_KEY.to_string(),
+                "fixed1".to_string(),
+            );
+            md_f1.insert(
+                crate::schema::AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "ns1".to_string(),
+            );
+
+            let mut md_f2 = HashMap::new();
+            md_f2.insert(
+                crate::schema::AVRO_NAME_METADATA_KEY.to_string(),
+                "fixed2".to_string(),
+            );
+            md_f2.insert(
+                crate::schema::AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "ns2".to_string(),
+            );
+
+            let mut md_f3 = HashMap::new();
+            md_f3.insert(
+                crate::schema::AVRO_NAME_METADATA_KEY.to_string(),
+                "fixed3".to_string(),
+            );
+            md_f3.insert(
+                crate::schema::AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "ns1".to_string(),
+            );
+
             let expected_schema = Arc::new(Schema::new(vec![
-                Field::new("f1", DataType::FixedSizeBinary(5), false),
-                Field::new("f2", DataType::FixedSizeBinary(10), false),
-                Field::new("f3", DataType::FixedSizeBinary(6), true),
+                Field::new("f1", DataType::FixedSizeBinary(5), false).with_metadata(md_f1),
+                Field::new("f2", DataType::FixedSizeBinary(10), false).with_metadata(md_f2),
+                Field::new("f3", DataType::FixedSizeBinary(6), true).with_metadata(md_f3),
             ]));
+
             RecordBatch::try_new(
                 expected_schema,
                 vec![
@@ -5090,6 +5759,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_single_nan() {
         let file = arrow_test_data("avro/single_nan.avro");
         let actual = read_file(&file, 1, false);
@@ -5168,6 +5838,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_datapage_v2() {
         let file = arrow_test_data("avro/datapage_v2.snappy.avro");
         let batch = read_file(&file, 8, false);
@@ -5222,6 +5893,10 @@ mod test {
             Arc::new(Field::new("f1_3_1", DataType::Float64, false)),
             Arc::new(f1_f1_3_1) as Arc<dyn Array>,
         )]);
+        // Add Avro named-type metadata to nested field f1_3 (ns3.record3)
+        let mut f1_3_md: HashMap<String, String> = HashMap::new();
+        f1_3_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns3".to_string());
+        f1_3_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record3".to_string());
         let f1_expected = StructArray::from(vec![
             (
                 Arc::new(Field::new("f1_1", DataType::Utf8, false)),
@@ -5232,20 +5907,22 @@ mod test {
                 Arc::new(f1_f1_2) as Arc<dyn Array>,
             ),
             (
-                Arc::new(Field::new(
-                    "f1_3",
-                    DataType::Struct(Fields::from(vec![Field::new(
-                        "f1_3_1",
-                        DataType::Float64,
+                Arc::new(
+                    Field::new(
+                        "f1_3",
+                        DataType::Struct(Fields::from(vec![Field::new(
+                            "f1_3_1",
+                            DataType::Float64,
+                            false,
+                        )])),
                         false,
-                    )])),
-                    false,
-                )),
+                    )
+                    .with_metadata(f1_3_md),
+                ),
                 Arc::new(f1_f1_3) as Arc<dyn Array>,
             ),
         ]);
-
-        let f2_fields = vec![
+        let f2_fields = [
             Field::new("f2_1", DataType::Boolean, false),
             Field::new("f2_2", DataType::Float32, false),
         ];
@@ -5297,14 +5974,19 @@ mod test {
         }
 
         let list_array_with_nullable_items = f2_list_builder.finish();
-
-        let item_field = Arc::new(Field::new(
-            "item",
-            list_array_with_nullable_items.values().data_type().clone(),
-            false,
-        ));
+        // Add Avro named-type metadata to f2's list item (ns4.record4)
+        let mut f2_item_md: HashMap<String, String> = HashMap::new();
+        f2_item_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record4".to_string());
+        f2_item_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns4".to_string());
+        let item_field = Arc::new(
+            Field::new(
+                "item",
+                list_array_with_nullable_items.values().data_type().clone(),
+                false, // items are non-nullable for f2
+            )
+            .with_metadata(f2_item_md),
+        );
         let list_data_type = DataType::List(item_field);
-
         let f2_array_data = list_array_with_nullable_items
             .to_data()
             .into_builder()
@@ -5312,7 +5994,6 @@ mod test {
             .build()
             .unwrap();
         let f2_expected = ListArray::from(f2_array_data);
-
         let mut f3_struct_builder = StructBuilder::new(
             vec![Arc::new(Field::new("f3_1", DataType::Utf8, false))],
             vec![Box::new(StringBuilder::new()) as Box<dyn ArrayBuilder>],
@@ -5366,15 +6047,45 @@ mod test {
             f4_list_builder.append(true);
         }
         let f4_expected = f4_list_builder.finish();
-
-        let expected = RecordBatch::try_from_iter_with_nullable([
-            ("f1", Arc::new(f1_expected) as Arc<dyn Array>, false),
-            ("f2", Arc::new(f2_expected) as Arc<dyn Array>, false),
-            ("f3", Arc::new(f3_expected) as Arc<dyn Array>, true),
-            ("f4", Arc::new(f4_expected) as Arc<dyn Array>, false),
-        ])
+        // Add Avro named-type metadata to f4's list item (ns6.record6), item is nullable
+        let mut f4_item_md: HashMap<String, String> = HashMap::new();
+        f4_item_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns6".to_string());
+        f4_item_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record6".to_string());
+        let f4_item_field = Arc::new(
+            Field::new("item", f4_expected.values().data_type().clone(), true)
+                .with_metadata(f4_item_md),
+        );
+        let f4_list_data_type = DataType::List(f4_item_field);
+        let f4_array_data = f4_expected
+            .to_data()
+            .into_builder()
+            .data_type(f4_list_data_type)
+            .build()
+            .unwrap();
+        let f4_expected = ListArray::from(f4_array_data);
+        // Build Schema with Avro named-type metadata on the top-level f1 and f3 fields
+        let mut f1_md: HashMap<String, String> = HashMap::new();
+        f1_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record2".to_string());
+        f1_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns2".to_string());
+        let mut f3_md: HashMap<String, String> = HashMap::new();
+        f3_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns5".to_string());
+        f3_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record5".to_string());
+        let expected_schema = Schema::new(vec![
+            Field::new("f1", f1_expected.data_type().clone(), false).with_metadata(f1_md),
+            Field::new("f2", f2_expected.data_type().clone(), false),
+            Field::new("f3", f3_expected.data_type().clone(), true).with_metadata(f3_md),
+            Field::new("f4", f4_expected.data_type().clone(), false),
+        ]);
+        let expected = RecordBatch::try_new(
+            Arc::new(expected_schema),
+            vec![
+                Arc::new(f1_expected) as Arc<dyn Array>,
+                Arc::new(f2_expected) as Arc<dyn Array>,
+                Arc::new(f3_expected) as Arc<dyn Array>,
+                Arc::new(f4_expected) as Arc<dyn Array>,
+            ],
+        )
         .unwrap();
-
         let file = arrow_test_data("avro/nested_records.avro");
         let batch_large = read_file(&file, 8, false);
         assert_eq!(
@@ -5389,13 +6100,15 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_repeated_no_annotation() {
+        use arrow_data::ArrayDataBuilder;
         let file = arrow_test_data("avro/repeated_no_annotation.avro");
         let batch_large = read_file(&file, 8, false);
-        use arrow_array::{Int32Array, Int64Array, ListArray, StringArray, StructArray};
-        use arrow_buffer::Buffer;
-        use arrow_schema::{DataType, Field, Fields};
+        // id column
         let id_array = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        // Build the inner Struct<number:int64, kind:utf8>
         let number_array = Int64Array::from(vec![
             Some(5555555555),
             Some(1111111111),
@@ -5415,9 +6128,18 @@ mod test {
             .build()
             .unwrap();
         let phone_struct_array = StructArray::from(phone_struct_data);
-        let phone_list_offsets = Buffer::from_slice_ref([0, 0, 0, 0, 1, 2, 5]);
+        // Build List<item: Struct<...>> with Avro named-type metadata on the *element* field
+        let phone_list_offsets = Buffer::from_slice_ref([0i32, 0, 0, 0, 1, 2, 5]);
         let phone_list_validity = Buffer::from_iter([false, false, true, true, true, true]);
-        let phone_item_field = Field::new("item", phone_struct_array.data_type().clone(), true);
+        // The Avro schema names this inner record "phone" in namespace "topLevelRecord.phoneNumbers"
+        let mut phone_item_md = HashMap::new();
+        phone_item_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "phone".to_string());
+        phone_item_md.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "topLevelRecord.phoneNumbers".to_string(),
+        );
+        let phone_item_field = Field::new("item", phone_struct_array.data_type().clone(), true)
+            .with_metadata(phone_item_md);
         let phone_list_data = ArrayDataBuilder::new(DataType::List(Arc::new(phone_item_field)))
             .len(6)
             .add_buffer(phone_list_offsets)
@@ -5426,6 +6148,7 @@ mod test {
             .build()
             .unwrap();
         let phone_list_array = ListArray::from(phone_list_data);
+        // Wrap in Struct { phone: List<...> }
         let phone_numbers_validity = Buffer::from_iter([false, false, true, true, true, true]);
         let phone_numbers_field = Field::new("phone", phone_list_array.data_type().clone(), true);
         let phone_numbers_struct_data =
@@ -5436,14 +6159,32 @@ mod test {
                 .build()
                 .unwrap();
         let phone_numbers_struct_array = StructArray::from(phone_numbers_struct_data);
-        let expected = arrow_array::RecordBatch::try_from_iter_with_nullable([
-            ("id", Arc::new(id_array) as _, true),
-            (
-                "phoneNumbers",
+        // Build the expected Schema, annotating the top-level "phoneNumbers" field with Avro name/namespace
+        let mut phone_numbers_md = HashMap::new();
+        phone_numbers_md.insert(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            "phoneNumbers".to_string(),
+        );
+        phone_numbers_md.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "topLevelRecord".to_string(),
+        );
+        let id_field = Field::new("id", DataType::Int32, true);
+        let phone_numbers_schema_field = Field::new(
+            "phoneNumbers",
+            phone_numbers_struct_array.data_type().clone(),
+            true,
+        )
+        .with_metadata(phone_numbers_md);
+        let expected_schema = Schema::new(vec![id_field, phone_numbers_schema_field]);
+        // Final expected RecordBatch (arrays already carry matching list-element metadata)
+        let expected = RecordBatch::try_new(
+            Arc::new(expected_schema),
+            vec![
+                Arc::new(id_array) as _,
                 Arc::new(phone_numbers_struct_array) as _,
-                true,
-            ),
-        ])
+            ],
+        )
         .unwrap();
         assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
         let batch_small = read_file(&file, 3, false);
@@ -5451,6 +6192,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nonnullable_impala() {
         let file = arrow_test_data("avro/nonnullable.impala.avro");
         let id = Int64Array::from(vec![Some(8)]);
@@ -5474,7 +6217,6 @@ mod test {
         }
         iaa_builder.append(true);
         let int_array_array = iaa_builder.finish();
-        use arrow_array::builder::MapFieldNames;
         let field_names = MapFieldNames {
             entry: "entries".to_string(),
             key: "key".to_string(),
@@ -5513,106 +6255,119 @@ mod test {
         }
         ima_builder.append(true);
         let int_map_array_ = ima_builder.finish();
+        // Helper metadata maps
+        let meta_nested_struct: HashMap<String, String> = [
+            ("avro.name", "nested_Struct"),
+            ("avro.namespace", "topLevelRecord"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta_c: HashMap<String, String> = [
+            ("avro.name", "c"),
+            ("avro.namespace", "topLevelRecord.nested_Struct"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta_d_item_struct: HashMap<String, String> = [
+            ("avro.name", "D"),
+            ("avro.namespace", "topLevelRecord.nested_Struct.c"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta_g_value: HashMap<String, String> = [
+            ("avro.name", "G"),
+            ("avro.namespace", "topLevelRecord.nested_Struct"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta_h: HashMap<String, String> = [
+            ("avro.name", "h"),
+            ("avro.namespace", "topLevelRecord.nested_Struct.G"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        // Types used multiple times below
+        let ef_struct_field = Arc::new(
+            Field::new(
+                "item",
+                DataType::Struct(
+                    vec![
+                        Field::new("e", DataType::Int32, true),
+                        Field::new("f", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            )
+            .with_metadata(meta_d_item_struct.clone()),
+        );
+        let d_inner_list_field = Arc::new(Field::new(
+            "item",
+            DataType::List(ef_struct_field.clone()),
+            true,
+        ));
+        let d_field = Field::new("D", DataType::List(d_inner_list_field.clone()), true);
+        // G.value.h.i : List<Float64>
+        let i_list_field = Arc::new(Field::new("item", DataType::Float64, true));
+        let i_field = Field::new("i", DataType::List(i_list_field.clone()), true);
+        // G.value.h : Struct<{ i: List<Float64> }> with metadata (h)
+        let h_field = Field::new("h", DataType::Struct(vec![i_field.clone()].into()), true)
+            .with_metadata(meta_h.clone());
+        // G.value : Struct<{ h: ... }> with metadata (G)
+        let g_value_struct_field = Field::new(
+            "value",
+            DataType::Struct(vec![h_field.clone()].into()),
+            true,
+        )
+        .with_metadata(meta_g_value.clone());
+        // entries struct for Map G
+        let entries_struct_field = Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    g_value_struct_field.clone(),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        // Top-level nested_Struct fields (include metadata on "c")
+        let a_field = Arc::new(Field::new("a", DataType::Int32, true));
+        let b_field = Arc::new(Field::new(
+            "B",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        ));
+        let c_field = Arc::new(
+            Field::new("c", DataType::Struct(vec![d_field.clone()].into()), true)
+                .with_metadata(meta_c.clone()),
+        );
+        let g_field = Arc::new(Field::new(
+            "G",
+            DataType::Map(Arc::new(entries_struct_field.clone()), false),
+            true,
+        ));
+        // Now create builders that match these exact field types (so nested types carry metadata)
         let mut nested_sb = StructBuilder::new(
             vec![
-                Arc::new(Field::new("a", DataType::Int32, true)),
-                Arc::new(Field::new(
-                    "B",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                    true,
-                )),
-                Arc::new(Field::new(
-                    "c",
-                    DataType::Struct(
-                        vec![Field::new(
-                            "D",
-                            DataType::List(Arc::new(Field::new(
-                                "item",
-                                DataType::List(Arc::new(Field::new(
-                                    "item",
-                                    DataType::Struct(
-                                        vec![
-                                            Field::new("e", DataType::Int32, true),
-                                            Field::new("f", DataType::Utf8, true),
-                                        ]
-                                        .into(),
-                                    ),
-                                    true,
-                                ))),
-                                true,
-                            ))),
-                            true,
-                        )]
-                        .into(),
-                    ),
-                    true,
-                )),
-                Arc::new(Field::new(
-                    "G",
-                    DataType::Map(
-                        Arc::new(Field::new(
-                            "entries",
-                            DataType::Struct(
-                                vec![
-                                    Field::new("key", DataType::Utf8, false),
-                                    Field::new(
-                                        "value",
-                                        DataType::Struct(
-                                            vec![Field::new(
-                                                "h",
-                                                DataType::Struct(
-                                                    vec![Field::new(
-                                                        "i",
-                                                        DataType::List(Arc::new(Field::new(
-                                                            "item",
-                                                            DataType::Float64,
-                                                            true,
-                                                        ))),
-                                                        true,
-                                                    )]
-                                                    .into(),
-                                                ),
-                                                true,
-                                            )]
-                                            .into(),
-                                        ),
-                                        true,
-                                    ),
-                                ]
-                                .into(),
-                            ),
-                            false,
-                        )),
-                        false,
-                    ),
-                    true,
-                )),
+                a_field.clone(),
+                b_field.clone(),
+                c_field.clone(),
+                g_field.clone(),
             ],
             vec![
                 Box::new(Int32Builder::new()),
                 Box::new(ListBuilder::new(Int32Builder::new())),
                 {
-                    let d_field = Field::new(
-                        "D",
-                        DataType::List(Arc::new(Field::new(
-                            "item",
-                            DataType::List(Arc::new(Field::new(
-                                "item",
-                                DataType::Struct(
-                                    vec![
-                                        Field::new("e", DataType::Int32, true),
-                                        Field::new("f", DataType::Utf8, true),
-                                    ]
-                                    .into(),
-                                ),
-                                true,
-                            ))),
-                            true,
-                        ))),
-                        true,
-                    );
+                    // builder for "c" with correctly typed "D" including metadata on inner list item
                     Box::new(StructBuilder::new(
-                        vec![Arc::new(d_field)],
+                        vec![Arc::new(d_field.clone())],
                         vec![Box::new({
                             let ef_struct_builder = StructBuilder::new(
                                 vec![
@@ -5624,7 +6379,10 @@ mod test {
                                     Box::new(StringBuilder::new()),
                                 ],
                             );
-                            let list_of_ef = ListBuilder::new(ef_struct_builder);
+                            // Inner list that holds Struct<e,f> with Avro named-type metadata ("D")
+                            let list_of_ef = ListBuilder::new(ef_struct_builder)
+                                .with_field(ef_struct_field.clone());
+                            // Outer list for "D"
                             ListBuilder::new(list_of_ef)
                         })],
                     ))
@@ -5636,38 +6394,37 @@ mod test {
                         value: "value".to_string(),
                     };
                     let i_list_builder = ListBuilder::new(Float64Builder::new());
-                    let h_struct = StructBuilder::new(
+                    let h_struct_builder = StructBuilder::new(
                         vec![Arc::new(Field::new(
                             "i",
-                            DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+                            DataType::List(i_list_field.clone()),
                             true,
                         ))],
                         vec![Box::new(i_list_builder)],
                     );
                     let g_value_builder = StructBuilder::new(
-                        vec![Arc::new(Field::new(
-                            "h",
-                            DataType::Struct(
-                                vec![Field::new(
-                                    "i",
-                                    DataType::List(Arc::new(Field::new(
-                                        "item",
-                                        DataType::Float64,
-                                        true,
-                                    ))),
-                                    true,
-                                )]
-                                .into(),
-                            ),
-                            true,
-                        ))],
-                        vec![Box::new(h_struct)],
+                        vec![Arc::new(
+                            Field::new("h", DataType::Struct(vec![i_field.clone()].into()), true)
+                                .with_metadata(meta_h.clone()),
+                        )],
+                        vec![Box::new(h_struct_builder)],
                     );
-                    Box::new(MapBuilder::new(
+                    // Use with_values_field to attach metadata to "value" field in the map's entries
+                    let map_builder = MapBuilder::new(
                         Some(map_field_names),
                         StringBuilder::new(),
                         g_value_builder,
-                    ))
+                    )
+                    .with_values_field(Arc::new(
+                        Field::new(
+                            "value",
+                            DataType::Struct(vec![h_field.clone()].into()),
+                            true,
+                        )
+                        .with_metadata(meta_g_value.clone()),
+                    ));
+
+                    Box::new(map_builder)
                 },
             ],
         );
@@ -5715,14 +6472,26 @@ mod test {
             g_map_builder.append(true).unwrap();
         }
         let nested_struct = nested_sb.finish();
-        let expected = RecordBatch::try_from_iter_with_nullable([
-            ("ID", Arc::new(id) as Arc<dyn Array>, true),
-            ("Int_Array", Arc::new(int_array), true),
-            ("int_array_array", Arc::new(int_array_array), true),
-            ("Int_Map", Arc::new(int_map), true),
-            ("int_map_array", Arc::new(int_map_array_), true),
-            ("nested_Struct", Arc::new(nested_struct), true),
-        ])
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("ID", id.data_type().clone(), true),
+            Field::new("Int_Array", int_array.data_type().clone(), true),
+            Field::new("int_array_array", int_array_array.data_type().clone(), true),
+            Field::new("Int_Map", int_map.data_type().clone(), true),
+            Field::new("int_map_array", int_map_array_.data_type().clone(), true),
+            Field::new("nested_Struct", nested_struct.data_type().clone(), true)
+                .with_metadata(meta_nested_struct.clone()),
+        ]));
+        let expected = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(id) as Arc<dyn Array>,
+                Arc::new(int_array),
+                Arc::new(int_array_array),
+                Arc::new(int_map),
+                Arc::new(int_map_array_),
+                Arc::new(nested_struct),
+            ],
+        )
         .unwrap();
         let batch_large = read_file(&file, 8, false);
         assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
@@ -5740,6 +6509,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nullable_impala() {
         let file = arrow_test_data("avro/nullable.impala.avro");
         let batch1 = read_file(&file, 3, false);
@@ -6050,5 +6821,2314 @@ mod test {
             first_array_values.value(first_array_dict_array.key(2).unwrap() as usize),
             "INACTIVE"
         );
+    }
+
+    #[test]
+    fn comprehensive_e2e_test() {
+        let path = "test/data/comprehensive_e2e.avro";
+        let batch = read_file(path, 1024, false);
+        let schema = batch.schema();
+
+        #[inline]
+        fn tid_by_name(fields: &UnionFields, want: &str) -> i8 {
+            for (tid, f) in fields.iter() {
+                if f.name() == want {
+                    return tid;
+                }
+            }
+            panic!("union child '{want}' not found");
+        }
+
+        #[inline]
+        fn tid_by_dt(fields: &UnionFields, pred: impl Fn(&DataType) -> bool) -> i8 {
+            for (tid, f) in fields.iter() {
+                if pred(f.data_type()) {
+                    return tid;
+                }
+            }
+            panic!("no union child matches predicate");
+        }
+
+        fn mk_dense_union(
+            fields: &UnionFields,
+            type_ids: Vec<i8>,
+            offsets: Vec<i32>,
+            provide: impl Fn(&Field) -> Option<ArrayRef>,
+        ) -> ArrayRef {
+            fn empty_child_for(dt: &DataType) -> Arc<dyn Array> {
+                match dt {
+                    DataType::Null => Arc::new(NullArray::new(0)),
+                    DataType::Boolean => Arc::new(BooleanArray::from(Vec::<bool>::new())),
+                    DataType::Int32 => Arc::new(Int32Array::from(Vec::<i32>::new())),
+                    DataType::Int64 => Arc::new(Int64Array::from(Vec::<i64>::new())),
+                    DataType::Float32 => Arc::new(Float32Array::from(Vec::<f32>::new())),
+                    DataType::Float64 => Arc::new(Float64Array::from(Vec::<f64>::new())),
+                    DataType::Binary => Arc::new(BinaryArray::from(Vec::<&[u8]>::new())),
+                    DataType::Utf8 => Arc::new(StringArray::from(Vec::<&str>::new())),
+                    DataType::Date32 => Arc::new(Date32Array::from(Vec::<i32>::new())),
+                    DataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
+                        Arc::new(Time32MillisecondArray::from(Vec::<i32>::new()))
+                    }
+                    DataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
+                        Arc::new(Time64MicrosecondArray::from(Vec::<i64>::new()))
+                    }
+                    DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => {
+                        let a = TimestampMillisecondArray::from(Vec::<i64>::new());
+                        Arc::new(if let Some(tz) = tz {
+                            a.with_timezone(tz.clone())
+                        } else {
+                            a
+                        })
+                    }
+                    DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => {
+                        let a = TimestampMicrosecondArray::from(Vec::<i64>::new());
+                        Arc::new(if let Some(tz) = tz {
+                            a.with_timezone(tz.clone())
+                        } else {
+                            a
+                        })
+                    }
+                    DataType::Interval(IntervalUnit::MonthDayNano) => Arc::new(
+                        IntervalMonthDayNanoArray::from(Vec::<IntervalMonthDayNano>::new()),
+                    ),
+                    DataType::FixedSizeBinary(sz) => Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                            std::iter::empty::<Option<Vec<u8>>>(),
+                            *sz,
+                        )
+                        .unwrap(),
+                    ),
+                    DataType::Dictionary(_, _) => {
+                        let keys = Int32Array::from(Vec::<i32>::new());
+                        let values = Arc::new(StringArray::from(Vec::<&str>::new()));
+                        Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                    }
+                    DataType::Struct(fields) => {
+                        let children: Vec<ArrayRef> = fields
+                            .iter()
+                            .map(|f| empty_child_for(f.data_type()) as ArrayRef)
+                            .collect();
+                        Arc::new(StructArray::new(fields.clone(), children, None))
+                    }
+                    DataType::List(field) => {
+                        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0]));
+                        Arc::new(
+                            ListArray::try_new(
+                                field.clone(),
+                                offsets,
+                                empty_child_for(field.data_type()),
+                                None,
+                            )
+                            .unwrap(),
+                        )
+                    }
+                    DataType::Map(entry_field, is_sorted) => {
+                        let (key_field, val_field) = match entry_field.data_type() {
+                            DataType::Struct(fs) => (fs[0].clone(), fs[1].clone()),
+                            other => panic!("unexpected map entries type: {other:?}"),
+                        };
+                        let keys = StringArray::from(Vec::<&str>::new());
+                        let vals: ArrayRef = match val_field.data_type() {
+                            DataType::Null => Arc::new(NullArray::new(0)) as ArrayRef,
+                            DataType::Boolean => {
+                                Arc::new(BooleanArray::from(Vec::<bool>::new())) as ArrayRef
+                            }
+                            DataType::Int32 => {
+                                Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef
+                            }
+                            DataType::Int64 => {
+                                Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef
+                            }
+                            DataType::Float32 => {
+                                Arc::new(Float32Array::from(Vec::<f32>::new())) as ArrayRef
+                            }
+                            DataType::Float64 => {
+                                Arc::new(Float64Array::from(Vec::<f64>::new())) as ArrayRef
+                            }
+                            DataType::Utf8 => {
+                                Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef
+                            }
+                            DataType::Binary => {
+                                Arc::new(BinaryArray::from(Vec::<&[u8]>::new())) as ArrayRef
+                            }
+                            DataType::Union(uf, _) => {
+                                let children: Vec<ArrayRef> = uf
+                                    .iter()
+                                    .map(|(_, f)| empty_child_for(f.data_type()))
+                                    .collect();
+                                Arc::new(
+                                    UnionArray::try_new(
+                                        uf.clone(),
+                                        ScalarBuffer::<i8>::from(Vec::<i8>::new()),
+                                        Some(ScalarBuffer::<i32>::from(Vec::<i32>::new())),
+                                        children,
+                                    )
+                                    .unwrap(),
+                                ) as ArrayRef
+                            }
+                            other => panic!("unsupported map value type: {other:?}"),
+                        };
+                        let entries = StructArray::new(
+                            Fields::from(vec![
+                                key_field.as_ref().clone(),
+                                val_field.as_ref().clone(),
+                            ]),
+                            vec![Arc::new(keys) as ArrayRef, vals],
+                            None,
+                        );
+                        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0]));
+                        Arc::new(MapArray::new(
+                            entry_field.clone(),
+                            offsets,
+                            entries,
+                            None,
+                            *is_sorted,
+                        ))
+                    }
+                    other => panic!("empty_child_for: unhandled type {other:?}"),
+                }
+            }
+            let children: Vec<ArrayRef> = fields
+                .iter()
+                .map(|(_, f)| provide(f).unwrap_or_else(|| empty_child_for(f.data_type())))
+                .collect();
+            Arc::new(
+                UnionArray::try_new(
+                    fields.clone(),
+                    ScalarBuffer::<i8>::from(type_ids),
+                    Some(ScalarBuffer::<i32>::from(offsets)),
+                    children,
+                )
+                .unwrap(),
+            ) as ArrayRef
+        }
+
+        #[inline]
+        fn uuid16_from_str(s: &str) -> [u8; 16] {
+            let mut out = [0u8; 16];
+            let mut idx = 0usize;
+            let mut hi: Option<u8> = None;
+            for ch in s.chars() {
+                if ch == '-' {
+                    continue;
+                }
+                let v = ch.to_digit(16).expect("invalid hex digit in UUID") as u8;
+                if let Some(h) = hi {
+                    out[idx] = (h << 4) | v;
+                    idx += 1;
+                    hi = None;
+                } else {
+                    hi = Some(v);
+                }
+            }
+            assert_eq!(idx, 16, "UUID must decode to 16 bytes");
+            out
+        }
+        let date_a: i32 = 19_000; // 2022-01-08
+        let time_ms_a: i32 = 12 * 3_600_000 + 34 * 60_000 + 56_000 + 789;
+        let time_us_eod: i64 = 86_400_000_000 - 1;
+        let ts_ms_2024_01_01: i64 = 1_704_067_200_000; // 2024-01-01T00:00:00Z
+        let ts_us_2024_01_01: i64 = ts_ms_2024_01_01 * 1_000;
+        let dur_small = IntervalMonthDayNanoType::make_value(1, 2, 3_000_000_000);
+        let dur_zero = IntervalMonthDayNanoType::make_value(0, 0, 0);
+        let dur_large =
+            IntervalMonthDayNanoType::make_value(12, 31, ((86_400_000 - 1) as i64) * 1_000_000);
+        let dur_2years = IntervalMonthDayNanoType::make_value(24, 0, 0);
+        let uuid1 = uuid16_from_str("fe7bc30b-4ce8-4c5e-b67c-2234a2d38e66");
+        let uuid2 = uuid16_from_str("0826cc06-d2e3-4599-b4ad-af5fa6905cdb");
+
+        #[inline]
+        fn push_like(
+            reader_schema: &arrow_schema::Schema,
+            name: &str,
+            arr: ArrayRef,
+            fields: &mut Vec<FieldRef>,
+            cols: &mut Vec<ArrayRef>,
+        ) {
+            let src = reader_schema
+                .field_with_name(name)
+                .unwrap_or_else(|_| panic!("source schema missing field '{name}'"));
+            let mut f = Field::new(name, arr.data_type().clone(), src.is_nullable());
+            let md = src.metadata();
+            if !md.is_empty() {
+                f = f.with_metadata(md.clone());
+            }
+            fields.push(Arc::new(f));
+            cols.push(arr);
+        }
+
+        let mut fields: Vec<FieldRef> = Vec::new();
+        let mut columns: Vec<ArrayRef> = Vec::new();
+        push_like(
+            schema.as_ref(),
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "flag",
+            Arc::new(BooleanArray::from(vec![true, false, true, false])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "ratio_f32",
+            Arc::new(Float32Array::from(vec![1.25f32, -0.0, 3.5, 9.75])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "ratio_f64",
+            Arc::new(Float64Array::from(vec![2.5f64, -1.0, 7.0, -2.25])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "count_i32",
+            Arc::new(Int32Array::from(vec![7, -1, 0, 123])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "count_i64",
+            Arc::new(Int64Array::from(vec![
+                7_000_000_000i64,
+                -2,
+                0,
+                -9_876_543_210i64,
+            ])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "opt_i32_nullfirst",
+            Arc::new(Int32Array::from(vec![None, Some(42), None, Some(0)])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "opt_str_nullsecond",
+            Arc::new(StringArray::from(vec![
+                Some("alpha"),
+                None,
+                Some("s3"),
+                Some(""),
+            ])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        {
+            let uf = match schema
+                .field_with_name("tri_union_prim")
+                .unwrap()
+                .data_type()
+            {
+                DataType::Union(f, UnionMode::Dense) => f.clone(),
+                other => panic!("tri_union_prim should be dense union, got {other:?}"),
+            };
+            let tid_i = tid_by_name(&uf, "int");
+            let tid_s = tid_by_name(&uf, "string");
+            let tid_b = tid_by_name(&uf, "boolean");
+            let tids = vec![tid_i, tid_s, tid_b, tid_s];
+            let offs = vec![0, 0, 0, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Int32 => Some(Arc::new(Int32Array::from(vec![0])) as ArrayRef),
+                DataType::Utf8 => Some(Arc::new(StringArray::from(vec!["hi", ""])) as ArrayRef),
+                DataType::Boolean => Some(Arc::new(BooleanArray::from(vec![true])) as ArrayRef),
+                _ => None,
+            });
+            push_like(
+                schema.as_ref(),
+                "tri_union_prim",
+                arr,
+                &mut fields,
+                &mut columns,
+            );
+        }
+
+        push_like(
+            schema.as_ref(),
+            "str_utf8",
+            Arc::new(StringArray::from(vec!["hello", "", "world", "✓ unicode"])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "raw_bytes",
+            Arc::new(BinaryArray::from(vec![
+                b"\x00\x01".as_ref(),
+                b"".as_ref(),
+                b"\xFF\x00".as_ref(),
+                b"\x10\x20\x30\x40".as_ref(),
+            ])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        {
+            let it = [
+                Some(*b"0123456789ABCDEF"),
+                Some([0u8; 16]),
+                Some(*b"ABCDEFGHIJKLMNOP"),
+                Some([0xAA; 16]),
+            ]
+            .into_iter();
+            let arr =
+                Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 16).unwrap())
+                    as ArrayRef;
+            push_like(
+                schema.as_ref(),
+                "fx16_plain",
+                arr,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            #[cfg(feature = "small_decimals")]
+            let dec10_2 = Arc::new(
+                Decimal64Array::from_iter_values([123456i64, -1, 0, 9_999_999_999i64])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ) as ArrayRef;
+            #[cfg(not(feature = "small_decimals"))]
+            let dec10_2 = Arc::new(
+                Decimal128Array::from_iter_values([123456i128, -1, 0, 9_999_999_999i128])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ) as ArrayRef;
+            push_like(
+                schema.as_ref(),
+                "dec_bytes_s10_2",
+                dec10_2,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            #[cfg(feature = "small_decimals")]
+            let dec20_4 = Arc::new(
+                Decimal128Array::from_iter_values([1_234_567_891_234i128, -420_000i128, 0, -1i128])
+                    .with_precision_and_scale(20, 4)
+                    .unwrap(),
+            ) as ArrayRef;
+            #[cfg(not(feature = "small_decimals"))]
+            let dec20_4 = Arc::new(
+                Decimal128Array::from_iter_values([1_234_567_891_234i128, -420_000i128, 0, -1i128])
+                    .with_precision_and_scale(20, 4)
+                    .unwrap(),
+            ) as ArrayRef;
+            push_like(
+                schema.as_ref(),
+                "dec_fix_s20_4",
+                dec20_4,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let it = [Some(uuid1), Some(uuid2), Some(uuid1), Some(uuid2)].into_iter();
+            let arr =
+                Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 16).unwrap())
+                    as ArrayRef;
+            push_like(schema.as_ref(), "uuid_str", arr, &mut fields, &mut columns);
+        }
+        push_like(
+            schema.as_ref(),
+            "d_date",
+            Arc::new(Date32Array::from(vec![date_a, 0, 1, 365])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "t_millis",
+            Arc::new(Time32MillisecondArray::from(vec![
+                time_ms_a,
+                0,
+                1,
+                86_400_000 - 1,
+            ])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "t_micros",
+            Arc::new(Time64MicrosecondArray::from(vec![
+                time_us_eod,
+                0,
+                1,
+                1_000_000,
+            ])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        {
+            let a = TimestampMillisecondArray::from(vec![
+                ts_ms_2024_01_01,
+                -1,
+                ts_ms_2024_01_01 + 123,
+                0,
+            ])
+            .with_timezone("+00:00");
+            push_like(
+                schema.as_ref(),
+                "ts_millis_utc",
+                Arc::new(a) as ArrayRef,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let a = TimestampMicrosecondArray::from(vec![
+                ts_us_2024_01_01,
+                1,
+                ts_us_2024_01_01 + 456,
+                0,
+            ])
+            .with_timezone("+00:00");
+            push_like(
+                schema.as_ref(),
+                "ts_micros_utc",
+                Arc::new(a) as ArrayRef,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        push_like(
+            schema.as_ref(),
+            "ts_millis_local",
+            Arc::new(TimestampMillisecondArray::from(vec![
+                ts_ms_2024_01_01 + 86_400_000,
+                0,
+                ts_ms_2024_01_01 + 789,
+                123_456_789,
+            ])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        push_like(
+            schema.as_ref(),
+            "ts_micros_local",
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                ts_us_2024_01_01 + 123_456,
+                0,
+                ts_us_2024_01_01 + 101_112,
+                987_654_321,
+            ])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        {
+            let v = vec![dur_small, dur_zero, dur_large, dur_2years];
+            push_like(
+                schema.as_ref(),
+                "interval_mdn",
+                Arc::new(IntervalMonthDayNanoArray::from(v)) as ArrayRef,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let keys = Int32Array::from(vec![1, 2, 3, 0]); // NEW, PROCESSING, DONE, UNKNOWN
+            let values = Arc::new(StringArray::from(vec![
+                "UNKNOWN",
+                "NEW",
+                "PROCESSING",
+                "DONE",
+            ])) as ArrayRef;
+            let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+            push_like(
+                schema.as_ref(),
+                "status",
+                Arc::new(dict) as ArrayRef,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let list_field = match schema.field_with_name("arr_union").unwrap().data_type() {
+                DataType::List(f) => f.clone(),
+                other => panic!("arr_union should be List, got {other:?}"),
+            };
+            let uf = match list_field.data_type() {
+                DataType::Union(f, UnionMode::Dense) => f.clone(),
+                other => panic!("arr_union item should be union, got {other:?}"),
+            };
+            let tid_l = tid_by_name(&uf, "long");
+            let tid_s = tid_by_name(&uf, "string");
+            let tid_n = tid_by_name(&uf, "null");
+            let type_ids = vec![
+                tid_l, tid_s, tid_n, tid_l, tid_n, tid_s, tid_l, tid_l, tid_s, tid_n, tid_l,
+            ];
+            let offsets = vec![0, 0, 0, 1, 1, 1, 2, 3, 2, 2, 4];
+            let values = mk_dense_union(&uf, type_ids, offsets, |f| match f.data_type() {
+                DataType::Int64 => {
+                    Some(Arc::new(Int64Array::from(vec![1i64, -3, 0, -1, 0])) as ArrayRef)
+                }
+                DataType::Utf8 => {
+                    Some(Arc::new(StringArray::from(vec!["x", "z", "end"])) as ArrayRef)
+                }
+                DataType::Null => Some(Arc::new(NullArray::new(3)) as ArrayRef),
+                _ => None,
+            });
+            let list_offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 4, 7, 8, 11]));
+            let arr = Arc::new(ListArray::try_new(list_field, list_offsets, values, None).unwrap())
+                as ArrayRef;
+            push_like(schema.as_ref(), "arr_union", arr, &mut fields, &mut columns);
+        }
+        {
+            let (entry_field, entries_fields, uf, is_sorted) =
+                match schema.field_with_name("map_union").unwrap().data_type() {
+                    DataType::Map(entry_field, is_sorted) => {
+                        let fs = match entry_field.data_type() {
+                            DataType::Struct(fs) => fs.clone(),
+                            other => panic!("map entries must be struct, got {other:?}"),
+                        };
+                        let val_f = fs[1].clone();
+                        let uf = match val_f.data_type() {
+                            DataType::Union(f, UnionMode::Dense) => f.clone(),
+                            other => panic!("map value must be union, got {other:?}"),
+                        };
+                        (entry_field.clone(), fs, uf, *is_sorted)
+                    }
+                    other => panic!("map_union should be Map, got {other:?}"),
+                };
+            let keys = StringArray::from(vec!["a", "b", "c", "neg", "pi", "ok"]);
+            let moff = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 4, 4, 6]));
+            let tid_null = tid_by_name(&uf, "null");
+            let tid_d = tid_by_name(&uf, "double");
+            let tid_s = tid_by_name(&uf, "string");
+            let type_ids = vec![tid_d, tid_null, tid_s, tid_d, tid_d, tid_s];
+            let offsets = vec![0, 0, 0, 1, 2, 1];
+            let pi_5dp = (std::f64::consts::PI * 100_000.0).trunc() / 100_000.0;
+            let vals = mk_dense_union(&uf, type_ids, offsets, |f| match f.data_type() {
+                DataType::Float64 => {
+                    Some(Arc::new(Float64Array::from(vec![1.5f64, -0.5, pi_5dp])) as ArrayRef)
+                }
+                DataType::Utf8 => {
+                    Some(Arc::new(StringArray::from(vec!["yes", "true"])) as ArrayRef)
+                }
+                DataType::Null => Some(Arc::new(NullArray::new(2)) as ArrayRef),
+                _ => None,
+            });
+            let entries = StructArray::new(
+                entries_fields.clone(),
+                vec![Arc::new(keys) as ArrayRef, vals],
+                None,
+            );
+            let map =
+                Arc::new(MapArray::new(entry_field, moff, entries, None, is_sorted)) as ArrayRef;
+            push_like(schema.as_ref(), "map_union", map, &mut fields, &mut columns);
+        }
+        {
+            let fs = match schema.field_with_name("address").unwrap().data_type() {
+                DataType::Struct(fs) => fs.clone(),
+                other => panic!("address should be Struct, got {other:?}"),
+            };
+            let street = Arc::new(StringArray::from(vec![
+                "100 Main",
+                "",
+                "42 Galaxy Way",
+                "End Ave",
+            ])) as ArrayRef;
+            let zip = Arc::new(Int32Array::from(vec![12345, 0, 42424, 1])) as ArrayRef;
+            let country = Arc::new(StringArray::from(vec!["US", "CA", "US", "GB"])) as ArrayRef;
+            let arr = Arc::new(StructArray::new(fs, vec![street, zip, country], None)) as ArrayRef;
+            push_like(schema.as_ref(), "address", arr, &mut fields, &mut columns);
+        }
+        {
+            let fs = match schema.field_with_name("maybe_auth").unwrap().data_type() {
+                DataType::Struct(fs) => fs.clone(),
+                other => panic!("maybe_auth should be Struct, got {other:?}"),
+            };
+            let user =
+                Arc::new(StringArray::from(vec!["alice", "bob", "carol", "dave"])) as ArrayRef;
+            let token_values: Vec<Option<&[u8]>> = vec![
+                None,                           // row 1: null
+                Some(b"\x01\x02\x03".as_ref()), // row 2: bytes
+                None,                           // row 3: null
+                Some(b"".as_ref()),             // row 4: empty bytes
+            ];
+            let token = Arc::new(BinaryArray::from(token_values)) as ArrayRef;
+            let arr = Arc::new(StructArray::new(fs, vec![user, token], None)) as ArrayRef;
+            push_like(
+                schema.as_ref(),
+                "maybe_auth",
+                arr,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let uf = match schema
+                .field_with_name("union_enum_record_array_map")
+                .unwrap()
+                .data_type()
+            {
+                DataType::Union(f, UnionMode::Dense) => f.clone(),
+                other => panic!("union_enum_record_array_map should be union, got {other:?}"),
+            };
+            let mut tid_enum: Option<i8> = None;
+            let mut tid_rec_a: Option<i8> = None;
+            let mut tid_array: Option<i8> = None;
+            let mut tid_map: Option<i8> = None;
+            let mut map_entry_field: Option<FieldRef> = None;
+            let mut map_sorted: bool = false;
+            for (tid, f) in uf.iter() {
+                match f.data_type() {
+                    DataType::Dictionary(_, _) => tid_enum = Some(tid),
+                    DataType::Struct(childs)
+                        if childs.len() == 2
+                            && childs[0].name() == "a"
+                            && childs[1].name() == "b" =>
+                    {
+                        tid_rec_a = Some(tid)
+                    }
+                    DataType::List(item) if matches!(item.data_type(), DataType::Int64) => {
+                        tid_array = Some(tid)
+                    }
+                    DataType::Map(ef, is_sorted) => {
+                        tid_map = Some(tid);
+                        map_entry_field = Some(ef.clone());
+                        map_sorted = *is_sorted;
+                    }
+                    _ => {}
+                }
+            }
+            let (tid_enum, tid_rec_a, tid_array, tid_map) = (
+                tid_enum.unwrap(),
+                tid_rec_a.unwrap(),
+                tid_array.unwrap(),
+                tid_map.unwrap(),
+            );
+            let tids = vec![tid_enum, tid_rec_a, tid_array, tid_map];
+            let offs = vec![0, 0, 0, 0];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Dictionary(_, _) => {
+                    let keys = Int32Array::from(vec![0i32]);
+                    let values =
+                        Arc::new(StringArray::from(vec!["RED", "GREEN", "BLUE"])) as ArrayRef;
+                    Some(
+                        Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                            as ArrayRef,
+                    )
+                }
+                DataType::Struct(fs)
+                    if fs.len() == 2 && fs[0].name() == "a" && fs[1].name() == "b" =>
+                {
+                    let a = Int32Array::from(vec![7]);
+                    let b = StringArray::from(vec!["rec"]);
+                    Some(Arc::new(StructArray::new(
+                        fs.clone(),
+                        vec![Arc::new(a), Arc::new(b)],
+                        None,
+                    )) as ArrayRef)
+                }
+                DataType::List(field) => {
+                    let values = Int64Array::from(vec![1i64, 2, 3]);
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3]));
+                    Some(Arc::new(
+                        ListArray::try_new(field.clone(), offsets, Arc::new(values), None).unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::Map(_, _) => {
+                    let entry_field = map_entry_field.clone().unwrap();
+                    let (key_field, val_field) = match entry_field.data_type() {
+                        DataType::Struct(fs) => (fs[0].clone(), fs[1].clone()),
+                        _ => unreachable!(),
+                    };
+                    let keys = StringArray::from(vec!["k"]);
+                    let vals = StringArray::from(vec!["v"]);
+                    let entries = StructArray::new(
+                        Fields::from(vec![key_field.as_ref().clone(), val_field.as_ref().clone()]),
+                        vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
+                        None,
+                    );
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1]));
+                    Some(Arc::new(MapArray::new(
+                        entry_field.clone(),
+                        offsets,
+                        entries,
+                        None,
+                        map_sorted,
+                    )) as ArrayRef)
+                }
+                _ => None,
+            });
+            push_like(
+                schema.as_ref(),
+                "union_enum_record_array_map",
+                arr,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let uf = match schema
+                .field_with_name("union_date_or_fixed4")
+                .unwrap()
+                .data_type()
+            {
+                DataType::Union(f, UnionMode::Dense) => f.clone(),
+                other => panic!("union_date_or_fixed4 should be union, got {other:?}"),
+            };
+            let tid_date = tid_by_dt(&uf, |dt| matches!(dt, DataType::Date32));
+            let tid_fx4 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(4)));
+            let tids = vec![tid_date, tid_fx4, tid_date, tid_fx4];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Date32 => Some(Arc::new(Date32Array::from(vec![date_a, 0])) as ArrayRef),
+                DataType::FixedSizeBinary(4) => {
+                    let it = [Some(*b"\x00\x11\x22\x33"), Some(*b"ABCD")].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 4).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            push_like(
+                schema.as_ref(),
+                "union_date_or_fixed4",
+                arr,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let uf = match schema
+                .field_with_name("union_interval_or_string")
+                .unwrap()
+                .data_type()
+            {
+                DataType::Union(f, UnionMode::Dense) => f.clone(),
+                other => panic!("union_interval_or_string should be union, got {other:?}"),
+            };
+            let tid_dur = tid_by_dt(&uf, |dt| {
+                matches!(dt, DataType::Interval(IntervalUnit::MonthDayNano))
+            });
+            let tid_str = tid_by_dt(&uf, |dt| matches!(dt, DataType::Utf8));
+            let tids = vec![tid_dur, tid_str, tid_dur, tid_str];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Interval(IntervalUnit::MonthDayNano) => Some(Arc::new(
+                    IntervalMonthDayNanoArray::from(vec![dur_small, dur_large]),
+                )
+                    as ArrayRef),
+                DataType::Utf8 => Some(Arc::new(StringArray::from(vec![
+                    "duration-as-text",
+                    "iso-8601-period-P1Y",
+                ])) as ArrayRef),
+                _ => None,
+            });
+            push_like(
+                schema.as_ref(),
+                "union_interval_or_string",
+                arr,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let uf = match schema
+                .field_with_name("union_uuid_or_fixed10")
+                .unwrap()
+                .data_type()
+            {
+                DataType::Union(f, UnionMode::Dense) => f.clone(),
+                other => panic!("union_uuid_or_fixed10 should be union, got {other:?}"),
+            };
+            let tid_uuid = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(16)));
+            let tid_fx10 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(10)));
+            let tids = vec![tid_uuid, tid_fx10, tid_uuid, tid_fx10];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::FixedSizeBinary(16) => {
+                    let it = [Some(uuid1), Some(uuid2)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 16).unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::FixedSizeBinary(10) => {
+                    let fx10_a = [0xAAu8; 10];
+                    let fx10_b = [0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99];
+                    let it = [Some(fx10_a), Some(fx10_b)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 10).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            push_like(
+                schema.as_ref(),
+                "union_uuid_or_fixed10",
+                arr,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let list_field = match schema
+                .field_with_name("array_records_with_union")
+                .unwrap()
+                .data_type()
+            {
+                DataType::List(f) => f.clone(),
+                other => panic!("array_records_with_union should be List, got {other:?}"),
+            };
+            let kv_fields = match list_field.data_type() {
+                DataType::Struct(fs) => fs.clone(),
+                other => panic!("array_records_with_union items must be Struct, got {other:?}"),
+            };
+            let val_field = kv_fields
+                .iter()
+                .find(|f| f.name() == "val")
+                .unwrap()
+                .clone();
+            let uf = match val_field.data_type() {
+                DataType::Union(f, UnionMode::Dense) => f.clone(),
+                other => panic!("KV.val should be union, got {other:?}"),
+            };
+            let keys = Arc::new(StringArray::from(vec!["k1", "k2", "k", "k3", "x"])) as ArrayRef;
+            let tid_null = tid_by_name(&uf, "null");
+            let tid_i = tid_by_name(&uf, "int");
+            let tid_l = tid_by_name(&uf, "long");
+            let type_ids = vec![tid_i, tid_null, tid_l, tid_null, tid_i];
+            let offsets = vec![0, 0, 0, 1, 1];
+            let vals = mk_dense_union(&uf, type_ids, offsets, |f| match f.data_type() {
+                DataType::Int32 => Some(Arc::new(Int32Array::from(vec![5, -5])) as ArrayRef),
+                DataType::Int64 => Some(Arc::new(Int64Array::from(vec![99i64])) as ArrayRef),
+                DataType::Null => Some(Arc::new(NullArray::new(2)) as ArrayRef),
+                _ => None,
+            });
+            let values_struct =
+                Arc::new(StructArray::new(kv_fields.clone(), vec![keys, vals], None)) as ArrayRef;
+            let list_offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3, 4, 5]));
+            let arr = Arc::new(
+                ListArray::try_new(list_field, list_offsets, values_struct, None).unwrap(),
+            ) as ArrayRef;
+            push_like(
+                schema.as_ref(),
+                "array_records_with_union",
+                arr,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        {
+            let uf = match schema
+                .field_with_name("union_map_or_array_int")
+                .unwrap()
+                .data_type()
+            {
+                DataType::Union(f, UnionMode::Dense) => f.clone(),
+                other => panic!("union_map_or_array_int should be union, got {other:?}"),
+            };
+            let tid_map = tid_by_dt(&uf, |dt| matches!(dt, DataType::Map(_, _)));
+            let tid_list = tid_by_dt(&uf, |dt| matches!(dt, DataType::List(_)));
+            let map_child: ArrayRef = {
+                let (entry_field, is_sorted) = match uf
+                    .iter()
+                    .find(|(tid, _)| *tid == tid_map)
+                    .unwrap()
+                    .1
+                    .data_type()
+                {
+                    DataType::Map(ef, is_sorted) => (ef.clone(), *is_sorted),
+                    _ => unreachable!(),
+                };
+                let (key_field, val_field) = match entry_field.data_type() {
+                    DataType::Struct(fs) => (fs[0].clone(), fs[1].clone()),
+                    _ => unreachable!(),
+                };
+                let keys = StringArray::from(vec!["x", "y", "only"]);
+                let vals = Int32Array::from(vec![1, 2, 10]);
+                let entries = StructArray::new(
+                    Fields::from(vec![key_field.as_ref().clone(), val_field.as_ref().clone()]),
+                    vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
+                    None,
+                );
+                let moff = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3]));
+                Arc::new(MapArray::new(entry_field, moff, entries, None, is_sorted)) as ArrayRef
+            };
+            let list_child: ArrayRef = {
+                let list_field = match uf
+                    .iter()
+                    .find(|(tid, _)| *tid == tid_list)
+                    .unwrap()
+                    .1
+                    .data_type()
+                {
+                    DataType::List(f) => f.clone(),
+                    _ => unreachable!(),
+                };
+                let values = Int32Array::from(vec![1, 2, 3, 0]);
+                let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 4]));
+                Arc::new(ListArray::try_new(list_field, offsets, Arc::new(values), None).unwrap())
+                    as ArrayRef
+            };
+            let tids = vec![tid_map, tid_list, tid_map, tid_list];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Map(_, _) => Some(map_child.clone()),
+                DataType::List(_) => Some(list_child.clone()),
+                _ => None,
+            });
+            push_like(
+                schema.as_ref(),
+                "union_map_or_array_int",
+                arr,
+                &mut fields,
+                &mut columns,
+            );
+        }
+        push_like(
+            schema.as_ref(),
+            "renamed_with_default",
+            Arc::new(Int32Array::from(vec![100, 42, 7, 42])) as ArrayRef,
+            &mut fields,
+            &mut columns,
+        );
+        {
+            let fs = match schema.field_with_name("person").unwrap().data_type() {
+                DataType::Struct(fs) => fs.clone(),
+                other => panic!("person should be Struct, got {other:?}"),
+            };
+            let name =
+                Arc::new(StringArray::from(vec!["Alice", "Bob", "Carol", "Dave"])) as ArrayRef;
+            let age = Arc::new(Int32Array::from(vec![30, 0, 25, 41])) as ArrayRef;
+            let arr = Arc::new(StructArray::new(fs, vec![name, age], None)) as ArrayRef;
+            push_like(schema.as_ref(), "person", arr, &mut fields, &mut columns);
+        }
+        let expected =
+            RecordBatch::try_new(Arc::new(Schema::new(Fields::from(fields))), columns).unwrap();
+        assert_eq!(
+            expected, batch,
+            "entire RecordBatch mismatch (schema, all columns, all rows)"
+        );
+    }
+    #[test]
+    fn comprehensive_e2e_resolution_test() {
+        use serde_json::Value;
+        use std::collections::HashMap;
+
+        // Build a reader schema that stresses Avro schema‑resolution
+        //
+        // Changes relative to writer schema:
+        // * Rename fields using writer aliases:    id -> identifier, renamed_with_default -> old_count
+        // * Promote numeric types:                 count_i32 (int) -> long, ratio_f32 (float) -> double
+        // * Reorder many union branches (reverse), incl. nested unions
+        // * Reorder array/map union item/value branches
+        // * Rename nested Address field:           street -> street_name (uses alias in writer)
+        // * Change Person type name/namespace:     com.example.Person (matches writer alias)
+        // * Reverse top‑level field order
+        //
+        // Reader‑side aliases are added wherever names change (per Avro spec).
+        fn make_comprehensive_reader_schema(path: &str) -> AvroSchema {
+            fn set_type_string(f: &mut Value, new_ty: &str) {
+                if let Some(ty) = f.get_mut("type") {
+                    match ty {
+                        Value::String(_) | Value::Object(_) => {
+                            *ty = Value::String(new_ty.to_string());
+                        }
+                        Value::Array(arr) => {
+                            for b in arr.iter_mut() {
+                                match b {
+                                    Value::String(s) if s != "null" => {
+                                        *b = Value::String(new_ty.to_string());
+                                        break;
+                                    }
+                                    Value::Object(_) => {
+                                        *b = Value::String(new_ty.to_string());
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            fn reverse_union_array(f: &mut Value) {
+                if let Some(arr) = f.get_mut("type").and_then(|t| t.as_array_mut()) {
+                    arr.reverse();
+                }
+            }
+            fn reverse_items_union(f: &mut Value) {
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
+                    if let Some(items) = obj.get_mut("items").and_then(|v| v.as_array_mut()) {
+                        items.reverse();
+                    }
+                }
+            }
+            fn reverse_map_values_union(f: &mut Value) {
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
+                    if let Some(values) = obj.get_mut("values").and_then(|v| v.as_array_mut()) {
+                        values.reverse();
+                    }
+                }
+            }
+            fn reverse_nested_union_in_record(f: &mut Value, field_name: &str) {
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
+                    if let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut()) {
+                        for ff in fields.iter_mut() {
+                            if ff.get("name").and_then(|n| n.as_str()) == Some(field_name) {
+                                if let Some(ty) = ff.get_mut("type") {
+                                    if let Some(arr) = ty.as_array_mut() {
+                                        arr.reverse();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            fn rename_nested_field_with_alias(f: &mut Value, old: &str, new: &str) {
+                if let Some(obj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
+                    if let Some(fields) = obj.get_mut("fields").and_then(|v| v.as_array_mut()) {
+                        for ff in fields.iter_mut() {
+                            if ff.get("name").and_then(|n| n.as_str()) == Some(old) {
+                                ff["name"] = Value::String(new.to_string());
+                                ff["aliases"] = Value::Array(vec![Value::String(old.to_string())]);
+                            }
+                        }
+                    }
+                }
+            }
+            let mut root = load_writer_schema_json(path);
+            assert_eq!(root["type"], "record", "writer schema must be a record");
+            let fields = root
+                .get_mut("fields")
+                .and_then(|f| f.as_array_mut())
+                .expect("record has fields");
+            for f in fields.iter_mut() {
+                let Some(name) = f.get("name").and_then(|n| n.as_str()) else {
+                    continue;
+                };
+                match name {
+                    // Field aliasing (reader‑side aliases added)
+                    "id" => {
+                        f["name"] = Value::String("identifier".into());
+                        f["aliases"] = Value::Array(vec![Value::String("id".into())]);
+                    }
+                    "renamed_with_default" => {
+                        f["name"] = Value::String("old_count".into());
+                        f["aliases"] =
+                            Value::Array(vec![Value::String("renamed_with_default".into())]);
+                    }
+                    // Promotions
+                    "count_i32" => set_type_string(f, "long"),
+                    "ratio_f32" => set_type_string(f, "double"),
+                    // Union reorder (exercise resolution)
+                    "opt_str_nullsecond" => reverse_union_array(f),
+                    "union_enum_record_array_map" => reverse_union_array(f),
+                    "union_date_or_fixed4" => reverse_union_array(f),
+                    "union_interval_or_string" => reverse_union_array(f),
+                    "union_uuid_or_fixed10" => reverse_union_array(f),
+                    "union_map_or_array_int" => reverse_union_array(f),
+                    "maybe_auth" => reverse_nested_union_in_record(f, "token"),
+                    // Array/Map unions
+                    "arr_union" => reverse_items_union(f),
+                    "map_union" => reverse_map_values_union(f),
+                    // Nested rename using reader‑side alias
+                    "address" => rename_nested_field_with_alias(f, "street", "street_name"),
+                    // Type‑name alias for nested record
+                    "person" => {
+                        if let Some(tobj) = f.get_mut("type").and_then(|t| t.as_object_mut()) {
+                            tobj.insert("name".to_string(), Value::String("Person".into()));
+                            tobj.insert(
+                                "namespace".to_string(),
+                                Value::String("com.example".into()),
+                            );
+                            tobj.insert(
+                                "aliases".into(),
+                                Value::Array(vec![
+                                    Value::String("PersonV2".into()),
+                                    Value::String("com.example.v2.PersonV2".into()),
+                                ]),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            fields.reverse();
+            AvroSchema::new(root.to_string())
+        }
+
+        let path = "test/data/comprehensive_e2e.avro";
+        let reader_schema = make_comprehensive_reader_schema(path);
+        let batch = read_alltypes_with_reader_schema(path, reader_schema.clone());
+
+        const UUID_EXT_KEY: &str = "ARROW:extension:name";
+        const UUID_LOGICAL_KEY: &str = "logicalType";
+
+        let uuid_md_top: Option<HashMap<String, String>> = batch
+            .schema()
+            .field_with_name("uuid_str")
+            .ok()
+            .and_then(|f| {
+                let md = f.metadata();
+                let has_ext = md.get(UUID_EXT_KEY).is_some();
+                let is_uuid_logical = md
+                    .get(UUID_LOGICAL_KEY)
+                    .map(|v| v.trim_matches('"') == "uuid")
+                    .unwrap_or(false);
+                if has_ext || is_uuid_logical {
+                    Some(md.clone())
+                } else {
+                    None
+                }
+            });
+
+        let uuid_md_union: Option<HashMap<String, String>> = batch
+            .schema()
+            .field_with_name("union_uuid_or_fixed10")
+            .ok()
+            .and_then(|f| match f.data_type() {
+                DataType::Union(uf, _) => uf
+                    .iter()
+                    .find(|(_, child)| child.name() == "uuid")
+                    .and_then(|(_, child)| {
+                        let md = child.metadata();
+                        let has_ext = md.get(UUID_EXT_KEY).is_some();
+                        let is_uuid_logical = md
+                            .get(UUID_LOGICAL_KEY)
+                            .map(|v| v.trim_matches('"') == "uuid")
+                            .unwrap_or(false);
+                        if has_ext || is_uuid_logical {
+                            Some(md.clone())
+                        } else {
+                            None
+                        }
+                    }),
+                _ => None,
+            });
+
+        let add_uuid_ext_top = |f: Field| -> Field {
+            if let Some(md) = &uuid_md_top {
+                f.with_metadata(md.clone())
+            } else {
+                f
+            }
+        };
+        let add_uuid_ext_union = |f: Field| -> Field {
+            if let Some(md) = &uuid_md_union {
+                f.with_metadata(md.clone())
+            } else {
+                f
+            }
+        };
+
+        #[inline]
+        fn uuid16_from_str(s: &str) -> [u8; 16] {
+            let mut out = [0u8; 16];
+            let mut idx = 0usize;
+            let mut hi: Option<u8> = None;
+            for ch in s.chars() {
+                if ch == '-' {
+                    continue;
+                }
+                let v = ch.to_digit(16).expect("invalid hex digit in UUID") as u8;
+                if let Some(h) = hi {
+                    out[idx] = (h << 4) | v;
+                    idx += 1;
+                    hi = None;
+                } else {
+                    hi = Some(v);
+                }
+            }
+            assert_eq!(idx, 16, "UUID must decode to 16 bytes");
+            out
+        }
+
+        fn mk_dense_union(
+            fields: &UnionFields,
+            type_ids: Vec<i8>,
+            offsets: Vec<i32>,
+            provide: impl Fn(&Field) -> Option<ArrayRef>,
+        ) -> ArrayRef {
+            fn empty_child_for(dt: &DataType) -> Arc<dyn Array> {
+                match dt {
+                    DataType::Null => Arc::new(NullArray::new(0)),
+                    DataType::Boolean => Arc::new(BooleanArray::from(Vec::<bool>::new())),
+                    DataType::Int32 => Arc::new(Int32Array::from(Vec::<i32>::new())),
+                    DataType::Int64 => Arc::new(Int64Array::from(Vec::<i64>::new())),
+                    DataType::Float32 => Arc::new(Float32Array::from(Vec::<f32>::new())),
+                    DataType::Float64 => Arc::new(Float64Array::from(Vec::<f64>::new())),
+                    DataType::Binary => Arc::new(BinaryArray::from(Vec::<&[u8]>::new())),
+                    DataType::Utf8 => Arc::new(StringArray::from(Vec::<&str>::new())),
+                    DataType::Date32 => Arc::new(Date32Array::from(Vec::<i32>::new())),
+                    DataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
+                        Arc::new(Time32MillisecondArray::from(Vec::<i32>::new()))
+                    }
+                    DataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
+                        Arc::new(Time64MicrosecondArray::from(Vec::<i64>::new()))
+                    }
+                    DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => {
+                        let a = TimestampMillisecondArray::from(Vec::<i64>::new());
+                        Arc::new(if let Some(tz) = tz {
+                            a.with_timezone(tz.clone())
+                        } else {
+                            a
+                        })
+                    }
+                    DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => {
+                        let a = TimestampMicrosecondArray::from(Vec::<i64>::new());
+                        Arc::new(if let Some(tz) = tz {
+                            a.with_timezone(tz.clone())
+                        } else {
+                            a
+                        })
+                    }
+                    DataType::Interval(IntervalUnit::MonthDayNano) => Arc::new(
+                        IntervalMonthDayNanoArray::from(Vec::<IntervalMonthDayNano>::new()),
+                    ),
+                    DataType::FixedSizeBinary(sz) => Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                            std::iter::empty::<Option<Vec<u8>>>(),
+                            *sz,
+                        )
+                        .unwrap(),
+                    ),
+                    DataType::Dictionary(_, _) => {
+                        let keys = Int32Array::from(Vec::<i32>::new());
+                        let values = Arc::new(StringArray::from(Vec::<&str>::new()));
+                        Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                    }
+                    DataType::Struct(fields) => {
+                        let children: Vec<ArrayRef> = fields
+                            .iter()
+                            .map(|f| empty_child_for(f.data_type()) as ArrayRef)
+                            .collect();
+                        Arc::new(StructArray::new(fields.clone(), children, None))
+                    }
+                    DataType::List(field) => {
+                        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0]));
+                        Arc::new(
+                            ListArray::try_new(
+                                field.clone(),
+                                offsets,
+                                empty_child_for(field.data_type()),
+                                None,
+                            )
+                            .unwrap(),
+                        )
+                    }
+                    DataType::Map(entry_field, is_sorted) => {
+                        let (key_field, val_field) = match entry_field.data_type() {
+                            DataType::Struct(fs) => (fs[0].clone(), fs[1].clone()),
+                            other => panic!("unexpected map entries type: {other:?}"),
+                        };
+                        let keys = StringArray::from(Vec::<&str>::new());
+                        let vals: ArrayRef = match val_field.data_type() {
+                            DataType::Null => Arc::new(NullArray::new(0)) as ArrayRef,
+                            DataType::Boolean => {
+                                Arc::new(BooleanArray::from(Vec::<bool>::new())) as ArrayRef
+                            }
+                            DataType::Int32 => {
+                                Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef
+                            }
+                            DataType::Int64 => {
+                                Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef
+                            }
+                            DataType::Float32 => {
+                                Arc::new(Float32Array::from(Vec::<f32>::new())) as ArrayRef
+                            }
+                            DataType::Float64 => {
+                                Arc::new(Float64Array::from(Vec::<f64>::new())) as ArrayRef
+                            }
+                            DataType::Utf8 => {
+                                Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef
+                            }
+                            DataType::Binary => {
+                                Arc::new(BinaryArray::from(Vec::<&[u8]>::new())) as ArrayRef
+                            }
+                            DataType::Union(uf, _) => {
+                                let children: Vec<ArrayRef> = uf
+                                    .iter()
+                                    .map(|(_, f)| empty_child_for(f.data_type()))
+                                    .collect();
+                                Arc::new(
+                                    UnionArray::try_new(
+                                        uf.clone(),
+                                        ScalarBuffer::<i8>::from(Vec::<i8>::new()),
+                                        Some(ScalarBuffer::<i32>::from(Vec::<i32>::new())),
+                                        children,
+                                    )
+                                    .unwrap(),
+                                ) as ArrayRef
+                            }
+                            other => panic!("unsupported map value type: {other:?}"),
+                        };
+                        let entries = StructArray::new(
+                            Fields::from(vec![
+                                key_field.as_ref().clone(),
+                                val_field.as_ref().clone(),
+                            ]),
+                            vec![Arc::new(keys) as ArrayRef, vals],
+                            None,
+                        );
+                        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0]));
+                        Arc::new(MapArray::new(
+                            entry_field.clone(),
+                            offsets,
+                            entries,
+                            None,
+                            *is_sorted,
+                        ))
+                    }
+                    other => panic!("empty_child_for: unhandled type {other:?}"),
+                }
+            }
+            let children: Vec<ArrayRef> = fields
+                .iter()
+                .map(|(_, f)| provide(f).unwrap_or_else(|| empty_child_for(f.data_type())))
+                .collect();
+            Arc::new(
+                UnionArray::try_new(
+                    fields.clone(),
+                    ScalarBuffer::<i8>::from(type_ids),
+                    Some(ScalarBuffer::<i32>::from(offsets)),
+                    children,
+                )
+                .unwrap(),
+            ) as ArrayRef
+        }
+        let date_a: i32 = 19_000; // 2022-01-08
+        let time_ms_a: i32 = 12 * 3_600_000 + 34 * 60_000 + 56_000 + 789;
+        let time_us_eod: i64 = 86_400_000_000 - 1;
+        let ts_ms_2024_01_01: i64 = 1_704_067_200_000; // 2024-01-01T00:00:00Z
+        let ts_us_2024_01_01: i64 = ts_ms_2024_01_01 * 1_000;
+        let dur_small = IntervalMonthDayNanoType::make_value(1, 2, 3_000_000_000);
+        let dur_zero = IntervalMonthDayNanoType::make_value(0, 0, 0);
+        let dur_large =
+            IntervalMonthDayNanoType::make_value(12, 31, ((86_400_000 - 1) as i64) * 1_000_000);
+        let dur_2years = IntervalMonthDayNanoType::make_value(24, 0, 0);
+        let uuid1 = uuid16_from_str("fe7bc30b-4ce8-4c5e-b67c-2234a2d38e66");
+        let uuid2 = uuid16_from_str("0826cc06-d2e3-4599-b4ad-af5fa6905cdb");
+        let item_name = Field::LIST_FIELD_DEFAULT_NAME;
+        let uf_tri = UnionFields::try_new(
+            vec![0, 1, 2],
+            vec![
+                Field::new("int", DataType::Int32, false),
+                Field::new("string", DataType::Utf8, false),
+                Field::new("boolean", DataType::Boolean, false),
+            ],
+        )
+        .unwrap();
+        let uf_arr_items = UnionFields::try_new(
+            vec![0, 1, 2],
+            vec![
+                Field::new("null", DataType::Null, false),
+                Field::new("string", DataType::Utf8, false),
+                Field::new("long", DataType::Int64, false),
+            ],
+        )
+        .unwrap();
+        let arr_items_field = Arc::new(Field::new(
+            item_name,
+            DataType::Union(uf_arr_items.clone(), UnionMode::Dense),
+            true,
+        ));
+        let uf_map_vals = UnionFields::try_new(
+            vec![0, 1, 2],
+            vec![
+                Field::new("string", DataType::Utf8, false),
+                Field::new("double", DataType::Float64, false),
+                Field::new("null", DataType::Null, false),
+            ],
+        )
+        .unwrap();
+        let map_entries_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new(
+                    "value",
+                    DataType::Union(uf_map_vals.clone(), UnionMode::Dense),
+                    true,
+                ),
+            ])),
+            false,
+        ));
+        // Enum metadata for Color (now includes name/namespace)
+        let mut enum_md_color = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(
+                crate::schema::AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+                serde_json::to_string(&vec!["RED", "GREEN", "BLUE"]).unwrap(),
+            );
+            m
+        };
+        enum_md_color.insert(AVRO_NAME_METADATA_KEY.to_string(), "Color".to_string());
+        enum_md_color.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "org.apache.arrow.avrotests.v1.types".to_string(),
+        );
+        let union_rec_a_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let union_rec_b_fields = Fields::from(vec![
+            Field::new("x", DataType::Int64, false),
+            Field::new("y", DataType::Binary, false),
+        ]);
+        let union_map_entries = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, false),
+            ])),
+            false,
+        ));
+        let rec_a_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "RecA".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        let rec_b_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "RecB".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        let uf_union_big = UnionFields::try_new(
+            vec![0, 1, 2, 3, 4],
+            vec![
+                Field::new(
+                    "map",
+                    DataType::Map(union_map_entries.clone(), false),
+                    false,
+                ),
+                Field::new(
+                    "array",
+                    DataType::List(Arc::new(Field::new(item_name, DataType::Int64, false))),
+                    false,
+                ),
+                Field::new(
+                    "org.apache.arrow.avrotests.v1.types.RecB",
+                    DataType::Struct(union_rec_b_fields.clone()),
+                    false,
+                )
+                .with_metadata(rec_b_md.clone()),
+                Field::new(
+                    "org.apache.arrow.avrotests.v1.types.RecA",
+                    DataType::Struct(union_rec_a_fields.clone()),
+                    false,
+                )
+                .with_metadata(rec_a_md.clone()),
+                Field::new(
+                    "org.apache.arrow.avrotests.v1.types.Color",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                    false,
+                )
+                .with_metadata(enum_md_color.clone()),
+            ],
+        )
+        .unwrap();
+        let fx4_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Fx4".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1".to_string(),
+            );
+            m
+        };
+        let uf_date_fixed4 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new(
+                    "org.apache.arrow.avrotests.v1.Fx4",
+                    DataType::FixedSizeBinary(4),
+                    false,
+                )
+                .with_metadata(fx4_md.clone()),
+                Field::new("date", DataType::Date32, false),
+            ],
+        )
+        .unwrap();
+        let dur12u_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Dur12U".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1".to_string(),
+            );
+            m
+        };
+        let uf_dur_or_str = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("string", DataType::Utf8, false),
+                Field::new(
+                    "org.apache.arrow.avrotests.v1.Dur12U",
+                    DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano),
+                    false,
+                )
+                .with_metadata(dur12u_md.clone()),
+            ],
+        )
+        .unwrap();
+        let fx10_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Fx10".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1".to_string(),
+            );
+            m
+        };
+        let uf_uuid_or_fx10 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new(
+                    "org.apache.arrow.avrotests.v1.Fx10",
+                    DataType::FixedSizeBinary(10),
+                    false,
+                )
+                .with_metadata(fx10_md.clone()),
+                add_uuid_ext_union(Field::new("uuid", DataType::FixedSizeBinary(16), false)),
+            ],
+        )
+        .unwrap();
+        let uf_kv_val = UnionFields::try_new(
+            vec![0, 1, 2],
+            vec![
+                Field::new("null", DataType::Null, false),
+                Field::new("int", DataType::Int32, false),
+                Field::new("long", DataType::Int64, false),
+            ],
+        )
+        .unwrap();
+        let kv_fields = Fields::from(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new(
+                "val",
+                DataType::Union(uf_kv_val.clone(), UnionMode::Dense),
+                true,
+            ),
+        ]);
+        let kv_item_field = Arc::new(Field::new(
+            item_name,
+            DataType::Struct(kv_fields.clone()),
+            false,
+        ));
+        let map_int_entries = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Int32, false),
+            ])),
+            false,
+        ));
+        let uf_map_or_array = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new(
+                    "array",
+                    DataType::List(Arc::new(Field::new(item_name, DataType::Int32, false))),
+                    false,
+                ),
+                Field::new("map", DataType::Map(map_int_entries.clone(), false), false),
+            ],
+        )
+        .unwrap();
+        let mut enum_md_status = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(
+                crate::schema::AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+                serde_json::to_string(&vec!["UNKNOWN", "NEW", "PROCESSING", "DONE"]).unwrap(),
+            );
+            m
+        };
+        enum_md_status.insert(AVRO_NAME_METADATA_KEY.to_string(), "Status".to_string());
+        enum_md_status.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "org.apache.arrow.avrotests.v1.types".to_string(),
+        );
+        let mut dec20_md = HashMap::<String, String>::new();
+        dec20_md.insert("precision".to_string(), "20".to_string());
+        dec20_md.insert("scale".to_string(), "4".to_string());
+        dec20_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "DecFix20".to_string());
+        dec20_md.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "org.apache.arrow.avrotests.v1.types".to_string(),
+        );
+        let mut dec10_md = HashMap::<String, String>::new();
+        dec10_md.insert("precision".to_string(), "10".to_string());
+        dec10_md.insert("scale".to_string(), "2".to_string());
+        let fx16_top_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Fx16".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        let dur12_top_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Dur12".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        #[cfg(feature = "small_decimals")]
+        let dec20_dt = DataType::Decimal128(20, 4);
+        #[cfg(not(feature = "small_decimals"))]
+        let dec20_dt = DataType::Decimal128(20, 4);
+        #[cfg(feature = "small_decimals")]
+        let dec10_dt = DataType::Decimal64(10, 2);
+        #[cfg(not(feature = "small_decimals"))]
+        let dec10_dt = DataType::Decimal128(10, 2);
+        let fields: Vec<FieldRef> = vec![
+            Arc::new(Field::new(
+                "person",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("age", DataType::Int32, false),
+                ])),
+                false,
+            )),
+            Arc::new(Field::new("old_count", DataType::Int32, false)),
+            Arc::new(Field::new(
+                "union_map_or_array_int",
+                DataType::Union(uf_map_or_array.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "array_records_with_union",
+                DataType::List(kv_item_field.clone()),
+                false,
+            )),
+            Arc::new(Field::new(
+                "union_uuid_or_fixed10",
+                DataType::Union(uf_uuid_or_fx10.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "union_interval_or_string",
+                DataType::Union(uf_dur_or_str.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "union_date_or_fixed4",
+                DataType::Union(uf_date_fixed4.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "union_enum_record_array_map",
+                DataType::Union(uf_union_big.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "maybe_auth",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("user", DataType::Utf8, false),
+                    Field::new("token", DataType::Binary, true), // [bytes,null] -> nullable bytes
+                ])),
+                false,
+            )),
+            Arc::new(Field::new(
+                "address",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("street_name", DataType::Utf8, false),
+                    Field::new("zip", DataType::Int32, false),
+                    Field::new("country", DataType::Utf8, false),
+                ])),
+                false,
+            )),
+            Arc::new(Field::new(
+                "map_union",
+                DataType::Map(map_entries_field.clone(), false),
+                false,
+            )),
+            Arc::new(Field::new(
+                "arr_union",
+                DataType::List(arr_items_field.clone()),
+                false,
+            )),
+            Arc::new(
+                Field::new(
+                    "status",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                    false,
+                )
+                .with_metadata(enum_md_status.clone()),
+            ),
+            Arc::new(
+                Field::new(
+                    "interval_mdn",
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    false,
+                )
+                .with_metadata(dur12_top_md.clone()),
+            ),
+            Arc::new(Field::new(
+                "ts_micros_local",
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+                false,
+            )),
+            Arc::new(Field::new(
+                "ts_millis_local",
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+                false,
+            )),
+            Arc::new(Field::new(
+                "ts_micros_utc",
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("+00:00".into())),
+                false,
+            )),
+            Arc::new(Field::new(
+                "ts_millis_utc",
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, Some("+00:00".into())),
+                false,
+            )),
+            Arc::new(Field::new(
+                "t_micros",
+                DataType::Time64(arrow_schema::TimeUnit::Microsecond),
+                false,
+            )),
+            Arc::new(Field::new(
+                "t_millis",
+                DataType::Time32(arrow_schema::TimeUnit::Millisecond),
+                false,
+            )),
+            Arc::new(Field::new("d_date", DataType::Date32, false)),
+            Arc::new(add_uuid_ext_top(Field::new(
+                "uuid_str",
+                DataType::FixedSizeBinary(16),
+                false,
+            ))),
+            Arc::new(Field::new("dec_fix_s20_4", dec20_dt, false).with_metadata(dec20_md.clone())),
+            Arc::new(
+                Field::new("dec_bytes_s10_2", dec10_dt, false).with_metadata(dec10_md.clone()),
+            ),
+            Arc::new(
+                Field::new("fx16_plain", DataType::FixedSizeBinary(16), false)
+                    .with_metadata(fx16_top_md.clone()),
+            ),
+            Arc::new(Field::new("raw_bytes", DataType::Binary, false)),
+            Arc::new(Field::new("str_utf8", DataType::Utf8, false)),
+            Arc::new(Field::new(
+                "tri_union_prim",
+                DataType::Union(uf_tri.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new("opt_str_nullsecond", DataType::Utf8, true)),
+            Arc::new(Field::new("opt_i32_nullfirst", DataType::Int32, true)),
+            Arc::new(Field::new("count_i64", DataType::Int64, false)),
+            Arc::new(Field::new("count_i32", DataType::Int64, false)),
+            Arc::new(Field::new("ratio_f64", DataType::Float64, false)),
+            Arc::new(Field::new("ratio_f32", DataType::Float64, false)),
+            Arc::new(Field::new("flag", DataType::Boolean, false)),
+            Arc::new(Field::new("identifier", DataType::Int64, false)),
+        ];
+        let expected_schema = Arc::new(arrow_schema::Schema::new(Fields::from(fields)));
+        let mut cols: Vec<ArrayRef> = vec![
+            Arc::new(StructArray::new(
+                match expected_schema
+                    .field_with_name("person")
+                    .unwrap()
+                    .data_type()
+                {
+                    DataType::Struct(fs) => fs.clone(),
+                    _ => unreachable!(),
+                },
+                vec![
+                    Arc::new(StringArray::from(vec!["Alice", "Bob", "Carol", "Dave"])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![30, 0, 25, 41])) as ArrayRef,
+                ],
+                None,
+            )) as ArrayRef,
+            Arc::new(Int32Array::from(vec![100, 42, 7, 42])) as ArrayRef,
+        ];
+        {
+            let map_child: ArrayRef = {
+                let keys = StringArray::from(vec!["x", "y", "only"]);
+                let vals = Int32Array::from(vec![1, 2, 10]);
+                let entries = StructArray::new(
+                    Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int32, false),
+                    ]),
+                    vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
+                    None,
+                );
+                let moff = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3]));
+                Arc::new(MapArray::new(
+                    map_int_entries.clone(),
+                    moff,
+                    entries,
+                    None,
+                    false,
+                )) as ArrayRef
+            };
+            let list_child: ArrayRef = {
+                let values = Int32Array::from(vec![1, 2, 3, 0]);
+                let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 4]));
+                Arc::new(
+                    ListArray::try_new(
+                        Arc::new(Field::new(item_name, DataType::Int32, false)),
+                        offsets,
+                        Arc::new(values),
+                        None,
+                    )
+                    .unwrap(),
+                ) as ArrayRef
+            };
+            let tids = vec![1, 0, 1, 0];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf_map_or_array, tids, offs, |f| match f.name().as_str() {
+                "array" => Some(list_child.clone()),
+                "map" => Some(map_child.clone()),
+                _ => None,
+            });
+            cols.push(arr);
+        }
+        {
+            let keys = Arc::new(StringArray::from(vec!["k1", "k2", "k", "k3", "x"])) as ArrayRef;
+            let type_ids = vec![1, 0, 2, 0, 1];
+            let offsets = vec![0, 0, 0, 1, 1];
+            let vals = mk_dense_union(&uf_kv_val, type_ids, offsets, |f| match f.data_type() {
+                DataType::Int32 => Some(Arc::new(Int32Array::from(vec![5, -5])) as ArrayRef),
+                DataType::Int64 => Some(Arc::new(Int64Array::from(vec![99i64])) as ArrayRef),
+                DataType::Null => Some(Arc::new(NullArray::new(2)) as ArrayRef),
+                _ => None,
+            });
+            let values_struct =
+                Arc::new(StructArray::new(kv_fields.clone(), vec![keys, vals], None));
+            let list_offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3, 4, 5]));
+            let arr = Arc::new(
+                ListArray::try_new(kv_item_field.clone(), list_offsets, values_struct, None)
+                    .unwrap(),
+            ) as ArrayRef;
+            cols.push(arr);
+        }
+        {
+            let type_ids = vec![1, 0, 1, 0]; // [uuid, fixed10, uuid, fixed10] but uf order = [fixed10, uuid]
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf_uuid_or_fx10, type_ids, offs, |f| match f.data_type() {
+                DataType::FixedSizeBinary(16) => {
+                    let it = [Some(uuid1), Some(uuid2)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 16).unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::FixedSizeBinary(10) => {
+                    let fx10_a = [0xAAu8; 10];
+                    let fx10_b = [0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99];
+                    let it = [Some(fx10_a), Some(fx10_b)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 10).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            cols.push(arr);
+        }
+        {
+            let type_ids = vec![1, 0, 1, 0]; // [duration, string, duration, string] but uf order = [string, duration]
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf_dur_or_str, type_ids, offs, |f| match f.data_type() {
+                DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano) => Some(Arc::new(
+                    IntervalMonthDayNanoArray::from(vec![dur_small, dur_large]),
+                )
+                    as ArrayRef),
+                DataType::Utf8 => Some(Arc::new(StringArray::from(vec![
+                    "duration-as-text",
+                    "iso-8601-period-P1Y",
+                ])) as ArrayRef),
+                _ => None,
+            });
+            cols.push(arr);
+        }
+        {
+            let type_ids = vec![1, 0, 1, 0]; // [date, fixed, date, fixed] but uf order = [fixed, date]
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf_date_fixed4, type_ids, offs, |f| match f.data_type() {
+                DataType::Date32 => Some(Arc::new(Date32Array::from(vec![date_a, 0])) as ArrayRef),
+                DataType::FixedSizeBinary(4) => {
+                    let it = [Some(*b"\x00\x11\x22\x33"), Some(*b"ABCD")].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 4).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            cols.push(arr);
+        }
+        {
+            let tids = vec![4, 3, 1, 0]; // uf order = [map(0), array(1), RecB(2), RecA(3), enum(4)]
+            let offs = vec![0, 0, 0, 0];
+            let arr = mk_dense_union(&uf_union_big, tids, offs, |f| match f.data_type() {
+                DataType::Dictionary(_, _) => {
+                    let keys = Int32Array::from(vec![0i32]);
+                    let values =
+                        Arc::new(StringArray::from(vec!["RED", "GREEN", "BLUE"])) as ArrayRef;
+                    Some(
+                        Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                            as ArrayRef,
+                    )
+                }
+                DataType::Struct(fs) if fs == &union_rec_a_fields => {
+                    let a = Int32Array::from(vec![7]);
+                    let b = StringArray::from(vec!["rec"]);
+                    Some(Arc::new(StructArray::new(
+                        fs.clone(),
+                        vec![Arc::new(a) as ArrayRef, Arc::new(b) as ArrayRef],
+                        None,
+                    )) as ArrayRef)
+                }
+                DataType::List(_) => {
+                    let values = Int64Array::from(vec![1i64, 2, 3]);
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3]));
+                    Some(Arc::new(
+                        ListArray::try_new(
+                            Arc::new(Field::new(item_name, DataType::Int64, false)),
+                            offsets,
+                            Arc::new(values),
+                            None,
+                        )
+                        .unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::Map(_, _) => {
+                    let keys = StringArray::from(vec!["k"]);
+                    let vals = StringArray::from(vec!["v"]);
+                    let entries = StructArray::new(
+                        Fields::from(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", DataType::Utf8, false),
+                        ]),
+                        vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
+                        None,
+                    );
+                    let moff = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1]));
+                    Some(Arc::new(MapArray::new(
+                        union_map_entries.clone(),
+                        moff,
+                        entries,
+                        None,
+                        false,
+                    )) as ArrayRef)
+                }
+                _ => None,
+            });
+            cols.push(arr);
+        }
+        {
+            let fs = match expected_schema
+                .field_with_name("maybe_auth")
+                .unwrap()
+                .data_type()
+            {
+                DataType::Struct(fs) => fs.clone(),
+                _ => unreachable!(),
+            };
+            let user =
+                Arc::new(StringArray::from(vec!["alice", "bob", "carol", "dave"])) as ArrayRef;
+            let token_values: Vec<Option<&[u8]>> = vec![
+                None,
+                Some(b"\x01\x02\x03".as_ref()),
+                None,
+                Some(b"".as_ref()),
+            ];
+            let token = Arc::new(BinaryArray::from(token_values)) as ArrayRef;
+            cols.push(Arc::new(StructArray::new(fs, vec![user, token], None)) as ArrayRef);
+        }
+        {
+            let fs = match expected_schema
+                .field_with_name("address")
+                .unwrap()
+                .data_type()
+            {
+                DataType::Struct(fs) => fs.clone(),
+                _ => unreachable!(),
+            };
+            let street = Arc::new(StringArray::from(vec![
+                "100 Main",
+                "",
+                "42 Galaxy Way",
+                "End Ave",
+            ])) as ArrayRef;
+            let zip = Arc::new(Int32Array::from(vec![12345, 0, 42424, 1])) as ArrayRef;
+            let country = Arc::new(StringArray::from(vec!["US", "CA", "US", "GB"])) as ArrayRef;
+            cols.push(Arc::new(StructArray::new(fs, vec![street, zip, country], None)) as ArrayRef);
+        }
+        {
+            let keys = StringArray::from(vec!["a", "b", "c", "neg", "pi", "ok"]);
+            let moff = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 4, 4, 6]));
+            let tid_s = 0; // string
+            let tid_d = 1; // double
+            let tid_n = 2; // null
+            let type_ids = vec![tid_d, tid_n, tid_s, tid_d, tid_d, tid_s];
+            let offsets = vec![0, 0, 0, 1, 2, 1];
+            let pi_5dp = (std::f64::consts::PI * 100_000.0).trunc() / 100_000.0;
+            let vals = mk_dense_union(&uf_map_vals, type_ids, offsets, |f| match f.data_type() {
+                DataType::Float64 => {
+                    Some(Arc::new(Float64Array::from(vec![1.5f64, -0.5, pi_5dp])) as ArrayRef)
+                }
+                DataType::Utf8 => {
+                    Some(Arc::new(StringArray::from(vec!["yes", "true"])) as ArrayRef)
+                }
+                DataType::Null => Some(Arc::new(NullArray::new(1)) as ArrayRef),
+                _ => None,
+            });
+            let entries = StructArray::new(
+                Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new(
+                        "value",
+                        DataType::Union(uf_map_vals.clone(), UnionMode::Dense),
+                        true,
+                    ),
+                ]),
+                vec![Arc::new(keys) as ArrayRef, vals],
+                None,
+            );
+            let map = Arc::new(MapArray::new(
+                map_entries_field.clone(),
+                moff,
+                entries,
+                None,
+                false,
+            )) as ArrayRef;
+            cols.push(map);
+        }
+        {
+            let type_ids = vec![
+                2, 1, 0, 2, 0, 1, 2, 2, 1, 0,
+                2, // long,string,null,long,null,string,long,long,string,null,long
+            ];
+            let offsets = vec![0, 0, 0, 1, 1, 1, 2, 3, 2, 2, 4];
+            let values =
+                mk_dense_union(&uf_arr_items, type_ids, offsets, |f| match f.data_type() {
+                    DataType::Int64 => {
+                        Some(Arc::new(Int64Array::from(vec![1i64, -3, 0, -1, 0])) as ArrayRef)
+                    }
+                    DataType::Utf8 => {
+                        Some(Arc::new(StringArray::from(vec!["x", "z", "end"])) as ArrayRef)
+                    }
+                    DataType::Null => Some(Arc::new(NullArray::new(3)) as ArrayRef),
+                    _ => None,
+                });
+            let list_offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 4, 7, 8, 11]));
+            let arr = Arc::new(
+                ListArray::try_new(arr_items_field.clone(), list_offsets, values, None).unwrap(),
+            ) as ArrayRef;
+            cols.push(arr);
+        }
+        {
+            let keys = Int32Array::from(vec![1, 2, 3, 0]); // NEW, PROCESSING, DONE, UNKNOWN
+            let values = Arc::new(StringArray::from(vec![
+                "UNKNOWN",
+                "NEW",
+                "PROCESSING",
+                "DONE",
+            ])) as ArrayRef;
+            let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+            cols.push(Arc::new(dict) as ArrayRef);
+        }
+        cols.push(Arc::new(IntervalMonthDayNanoArray::from(vec![
+            dur_small, dur_zero, dur_large, dur_2years,
+        ])) as ArrayRef);
+        cols.push(Arc::new(TimestampMicrosecondArray::from(vec![
+            ts_us_2024_01_01 + 123_456,
+            0,
+            ts_us_2024_01_01 + 101_112,
+            987_654_321,
+        ])) as ArrayRef);
+        cols.push(Arc::new(TimestampMillisecondArray::from(vec![
+            ts_ms_2024_01_01 + 86_400_000,
+            0,
+            ts_ms_2024_01_01 + 789,
+            123_456_789,
+        ])) as ArrayRef);
+        {
+            let a = TimestampMicrosecondArray::from(vec![
+                ts_us_2024_01_01,
+                1,
+                ts_us_2024_01_01 + 456,
+                0,
+            ])
+            .with_timezone("+00:00");
+            cols.push(Arc::new(a) as ArrayRef);
+        }
+        {
+            let a = TimestampMillisecondArray::from(vec![
+                ts_ms_2024_01_01,
+                -1,
+                ts_ms_2024_01_01 + 123,
+                0,
+            ])
+            .with_timezone("+00:00");
+            cols.push(Arc::new(a) as ArrayRef);
+        }
+        cols.push(Arc::new(Time64MicrosecondArray::from(vec![
+            time_us_eod,
+            0,
+            1,
+            1_000_000,
+        ])) as ArrayRef);
+        cols.push(Arc::new(Time32MillisecondArray::from(vec![
+            time_ms_a,
+            0,
+            1,
+            86_400_000 - 1,
+        ])) as ArrayRef);
+        cols.push(Arc::new(Date32Array::from(vec![date_a, 0, 1, 365])) as ArrayRef);
+        {
+            let it = [Some(uuid1), Some(uuid2), Some(uuid1), Some(uuid2)].into_iter();
+            cols.push(Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 16).unwrap(),
+            ) as ArrayRef);
+        }
+        {
+            #[cfg(feature = "small_decimals")]
+            let arr = Arc::new(
+                Decimal128Array::from_iter_values([1_234_567_891_234i128, -420_000i128, 0, -1i128])
+                    .with_precision_and_scale(20, 4)
+                    .unwrap(),
+            ) as ArrayRef;
+            #[cfg(not(feature = "small_decimals"))]
+            let arr = Arc::new(
+                Decimal128Array::from_iter_values([1_234_567_891_234i128, -420_000i128, 0, -1i128])
+                    .with_precision_and_scale(20, 4)
+                    .unwrap(),
+            ) as ArrayRef;
+            cols.push(arr);
+        }
+        {
+            #[cfg(feature = "small_decimals")]
+            let arr = Arc::new(
+                Decimal64Array::from_iter_values([123456i64, -1, 0, 9_999_999_999i64])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ) as ArrayRef;
+            #[cfg(not(feature = "small_decimals"))]
+            let arr = Arc::new(
+                Decimal128Array::from_iter_values([123456i128, -1, 0, 9_999_999_999i128])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ) as ArrayRef;
+            cols.push(arr);
+        }
+        {
+            let it = [
+                Some(*b"0123456789ABCDEF"),
+                Some([0u8; 16]),
+                Some(*b"ABCDEFGHIJKLMNOP"),
+                Some([0xAA; 16]),
+            ]
+            .into_iter();
+            cols.push(Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 16).unwrap(),
+            ) as ArrayRef);
+        }
+        cols.push(Arc::new(BinaryArray::from(vec![
+            b"\x00\x01".as_ref(),
+            b"".as_ref(),
+            b"\xFF\x00".as_ref(),
+            b"\x10\x20\x30\x40".as_ref(),
+        ])) as ArrayRef);
+        cols.push(Arc::new(StringArray::from(vec!["hello", "", "world", "✓ unicode"])) as ArrayRef);
+        {
+            let tids = vec![0, 1, 2, 1];
+            let offs = vec![0, 0, 0, 1];
+            let arr = mk_dense_union(&uf_tri, tids, offs, |f| match f.data_type() {
+                DataType::Int32 => Some(Arc::new(Int32Array::from(vec![0])) as ArrayRef),
+                DataType::Utf8 => Some(Arc::new(StringArray::from(vec!["hi", ""])) as ArrayRef),
+                DataType::Boolean => Some(Arc::new(BooleanArray::from(vec![true])) as ArrayRef),
+                _ => None,
+            });
+            cols.push(arr);
+        }
+        cols.push(Arc::new(StringArray::from(vec![
+            Some("alpha"),
+            None,
+            Some("s3"),
+            Some(""),
+        ])) as ArrayRef);
+        cols.push(Arc::new(Int32Array::from(vec![None, Some(42), None, Some(0)])) as ArrayRef);
+        cols.push(Arc::new(Int64Array::from(vec![
+            7_000_000_000i64,
+            -2,
+            0,
+            -9_876_543_210i64,
+        ])) as ArrayRef);
+        cols.push(Arc::new(Int64Array::from(vec![7i64, -1, 0, 123])) as ArrayRef);
+        cols.push(Arc::new(Float64Array::from(vec![2.5f64, -1.0, 7.0, -2.25])) as ArrayRef);
+        cols.push(Arc::new(Float64Array::from(vec![1.25f64, -0.0, 3.5, 9.75])) as ArrayRef);
+        cols.push(Arc::new(BooleanArray::from(vec![true, false, true, false])) as ArrayRef);
+        cols.push(Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as ArrayRef);
+        let expected = RecordBatch::try_new(expected_schema, cols).unwrap();
+        assert_eq!(
+            expected, batch,
+            "entire RecordBatch mismatch (schema, all columns, all rows)"
+        );
+    }
+
+    #[test]
+    fn test_bad_varint_bug_nullable_array_items() {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let gz_path = format!("{manifest_dir}/test/data/bad-varint-bug.avro.gz");
+        let gz_file = File::open(&gz_path).expect("test file should exist");
+        let mut decoder = GzDecoder::new(gz_file);
+        let mut avro_bytes = Vec::new();
+        decoder
+            .read_to_end(&mut avro_bytes)
+            .expect("should decompress");
+        let reader_arrow_schema = Schema::new(vec![Field::new(
+            "int_array",
+            DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+            true,
+        )])
+        .with_metadata(HashMap::from([("avro.name".into(), "table".into())]));
+        let reader_schema = AvroSchema::try_from(&reader_arrow_schema)
+            .expect("should convert Arrow schema to Avro");
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(avro_bytes))
+            .expect("should build reader");
+        let batch = reader
+            .next()
+            .expect("should have one batch")
+            .expect("reading should succeed without bad varint error");
+        assert_eq!(batch.num_rows(), 1);
+        let list_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("should be ListArray");
+        assert_eq!(list_col.len(), 1);
+        let values = list_col.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 2);
+        assert_eq!(int_values.value(0), 1);
+        assert_eq!(int_values.value(1), 2);
     }
 }

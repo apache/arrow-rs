@@ -19,13 +19,13 @@ use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow_schema::Field;
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
+use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
 use half::f16;
 use num_bigint::BigInt;
 use num_traits::FromPrimitive;
 use parquet::arrow::array_reader::{
-    make_byte_array_reader, make_byte_view_array_reader, make_fixed_len_byte_array_reader,
-    ListArrayReader,
+    ListArrayReader, make_byte_array_reader, make_byte_view_array_reader,
+    make_fixed_len_byte_array_reader,
 };
 use parquet::basic::Type;
 use parquet::data_type::{ByteArray, FixedLenByteArrayType};
@@ -38,7 +38,7 @@ use parquet::{
     schema::types::{ColumnDescPtr, SchemaDescPtr},
 };
 use rand::distr::uniform::SampleUniform;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::{collections::VecDeque, sync::Arc};
 
 fn build_test_schema() -> SchemaDescPtr {
@@ -88,6 +88,12 @@ fn build_test_schema() -> SchemaDescPtr {
             OPTIONAL INT32 optional_int16_leaf (INTEGER(16, true));
             REQUIRED INT64 mandatory_uint64_leaf (INTEGER(64, false));
             OPTIONAL INT64 optional_uint64_leaf (INTEGER(64, false));
+            REQUIRED GROUP mandatory_struct_optional_int32_leaf {
+                OPTIONAL INT32 element;
+            }
+            OPTIONAL GROUP optional_struct_optional_int32_leaf {
+                OPTIONAL INT32 element;
+            }
         }
         ";
     parse_message_type(message_type)
@@ -1174,6 +1180,98 @@ fn bench_primitive<T>(
     });
 }
 
+// Benchmark reading a struct with a single primitive field.
+// No need to bench all encodings for the data, as that should already be covered by `bench_primitive`.
+// The only performance difference should be caused by the additional definition level.
+fn bench_struct_primitive<T>(
+    group: &mut BenchmarkGroup<WallTime>,
+    mandatory_column_desc: &ColumnDescPtr,
+    optional_column_desc: &ColumnDescPtr,
+    min: usize,
+    max: usize,
+) where
+    T: parquet::data_type::DataType,
+    T::T: SampleUniform + FromPrimitive + Copy,
+{
+    let mut count: usize = 0;
+
+    let data = build_encoded_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        Encoding::PLAIN,
+        min,
+        max,
+    );
+    group.bench_function(
+        "plain encoded, mandatory struct, optional data, no NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
+
+    let data = build_encoded_primitive_page_iterator::<T>(
+        optional_column_desc.clone(),
+        0.0,
+        Encoding::PLAIN,
+        min,
+        max,
+    );
+    group.bench_function(
+        "plain encoded, optional struct, optional data, no NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
+
+    let data = build_encoded_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.5,
+        Encoding::PLAIN,
+        min,
+        max,
+    );
+    group.bench_function(
+        "plain encoded, mandatory struct, optional data, half NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
+
+    let data = build_encoded_primitive_page_iterator::<T>(
+        optional_column_desc.clone(),
+        0.5,
+        Encoding::PLAIN,
+        min,
+        max,
+    );
+    group.bench_function(
+        "plain encoded, optional struct, optional data, half NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader =
+                    create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
+}
+
 fn float16_benches(c: &mut Criterion) {
     let schema = build_test_schema();
 
@@ -1304,6 +1402,8 @@ fn add_benches(c: &mut Criterion) {
     let optional_int16_column_desc = schema.column(36);
     let mandatory_uint64_column_desc = schema.column(37);
     let optional_uint64_column_desc = schema.column(38);
+    let mandatory_struct_optional_in32_column_desc = schema.column(39);
+    let optional_struct_optional_in32_column_desc = schema.column(40);
 
     // primitive / int32 benchmarks
     // =============================
@@ -1392,6 +1492,16 @@ fn add_benches(c: &mut Criterion) {
         &mut group,
         &mandatory_uint64_column_desc,
         &optional_uint64_column_desc,
+        0,
+        1000,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/struct/Int32Array");
+    bench_struct_primitive::<Int32Type>(
+        &mut group,
+        &mandatory_struct_optional_in32_column_desc,
+        &optional_struct_optional_in32_column_desc,
         0,
         1000,
     );

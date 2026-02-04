@@ -20,7 +20,7 @@
 
 use arrow::array::Array;
 use arrow_array::types::Int32Type;
-use arrow_array::{Float32Array, Int32Array, Int8Array, ListArray};
+use arrow_array::{Float32Array, Int8Array, Int32Array, ListArray};
 
 fn main() {
     // Primitive Arrays
@@ -71,11 +71,13 @@ fn main() {
             .unwrap()
             .values()
     );
-    assert!(!list2
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .unwrap()
-        .is_valid(1));
+    assert!(
+        !list2
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .is_valid(1)
+    );
     assert_eq!(
         &[6, 7],
         list3

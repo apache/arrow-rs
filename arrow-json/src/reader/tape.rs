@@ -18,7 +18,7 @@
 use crate::reader::serializer::TapeSerializer;
 use arrow_schema::ArrowError;
 use memchr::memchr2;
-use serde::Serialize;
+use serde_core::Serialize;
 use std::fmt::Write;
 
 /// We decode JSON to a flattened tape representation,

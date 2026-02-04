@@ -31,7 +31,7 @@
 //! * mmin, mmax: (optional) the minimum and maximum linear reference values
 //!
 //! In 2D representation, where x are points:
-//! ```text      
+//! ```text
 //!  ymax +-----------------------+
 //!       |               x       |
 //!       |      x                |
@@ -46,5 +46,6 @@
 //! [parquet-geo-spec]: https://github.com/apache/parquet-format/blob/master/Geospatial.md
 //! [geo-types]: https://github.com/apache/parquet-format/blob/master/Geospatial.md#geospatial-types
 
+pub mod accumulator;
 pub mod bounding_box;
 pub mod statistics;

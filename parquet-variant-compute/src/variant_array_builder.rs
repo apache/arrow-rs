@@ -45,6 +45,7 @@ use std::sync::Arc;
 /// # use arrow::array::Array;
 /// # use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
 /// # use parquet_variant_compute::VariantArrayBuilder;
+/// # use parquet_variant::ShortString;
 /// // Create a new VariantArrayBuilder with a capacity of 100 rows
 /// let mut builder = VariantArrayBuilder::new(100);
 /// // append variant values
@@ -56,9 +57,13 @@ use std::sync::Arc;
 ///   .with_field("foo", "bar")
 ///   .finish();
 ///
+/// // bulk insert a list of values
+/// // `Option::None` is a null value
+/// builder.extend([None, Some(Variant::from("norm"))]);
+///
 /// // create the final VariantArray
 /// let variant_array = builder.build();
-/// assert_eq!(variant_array.len(), 3);
+/// assert_eq!(variant_array.len(), 5);
 /// // // Access the values
 /// // row 1 is not null and is an integer
 /// assert!(!variant_array.is_null(0));
@@ -70,6 +75,12 @@ use std::sync::Arc;
 /// let value = variant_array.value(2);
 /// let obj = value.as_object().expect("expected object");
 /// assert_eq!(obj.get("foo"), Some(Variant::from("bar")));
+/// // row 3 is null
+/// assert!(variant_array.is_null(3));
+/// // row 4 is not null and is a short string
+/// assert!(!variant_array.is_null(4));
+/// let value = variant_array.value(4);
+/// assert_eq!(value, Variant::ShortString(ShortString::try_new("norm").unwrap()));
 /// ```
 #[derive(Debug)]
 pub struct VariantArrayBuilder {
@@ -159,6 +170,17 @@ impl VariantArrayBuilder {
         };
 
         ParentState::new(&mut self.value_builder, &mut self.metadata_builder, state)
+    }
+}
+
+impl<'m, 'v> Extend<Option<Variant<'m, 'v>>> for VariantArrayBuilder {
+    fn extend<T: IntoIterator<Item = Option<Variant<'m, 'v>>>>(&mut self, iter: T) {
+        for v in iter {
+            match v {
+                Some(v) => self.append_variant(v),
+                None => self.append_null(),
+            }
+        }
     }
 }
 
@@ -438,14 +460,18 @@ fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> Binar
 mod test {
     use super::*;
     use arrow::array::Array;
-    use parquet_variant::Variant;
+    use parquet_variant::{ShortString, Variant};
 
     /// Test that both the metadata and value buffers are non nullable
     #[test]
     fn test_variant_array_builder_non_nullable() {
         let mut builder = VariantArrayBuilder::new(10);
-        builder.append_null(); // should not panic
-        builder.append_variant(Variant::from(42i32));
+
+        builder.extend([
+            None, // should not panic
+            Some(Variant::from(42_i32)),
+        ]);
+
         let variant_array = builder.build();
 
         assert_eq!(variant_array.len(), 2);
@@ -498,6 +524,22 @@ mod test {
         let variant = variant_array.value(3);
         let list = variant.as_list().expect("variant to be a list");
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_extend_variant_array_builder() {
+        let mut b = VariantArrayBuilder::new(3);
+        b.extend([None, Some(Variant::Null), Some(Variant::from("norm"))]);
+
+        let variant_array = b.build();
+
+        assert_eq!(variant_array.len(), 3);
+        assert!(variant_array.is_null(0));
+        assert_eq!(variant_array.value(1), Variant::Null);
+        assert_eq!(
+            variant_array.value(2),
+            Variant::ShortString(ShortString::try_new("norm").unwrap())
+        );
     }
 
     #[test]

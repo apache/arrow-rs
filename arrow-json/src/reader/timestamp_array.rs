@@ -37,9 +37,9 @@ pub struct TimestampArrayDecoder<P: ArrowTimestampType, Tz: TimeZone> {
 }
 
 impl<P: ArrowTimestampType, Tz: TimeZone> TimestampArrayDecoder<P, Tz> {
-    pub fn new(data_type: DataType, timezone: Tz) -> Self {
+    pub fn new(data_type: &DataType, timezone: Tz) -> Self {
         Self {
-            data_type,
+            data_type: data_type.clone(),
             timezone,
             phantom: Default::default(),
         }

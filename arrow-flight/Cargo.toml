@@ -19,7 +19,7 @@
 name = "arrow-flight"
 description = "Apache Arrow Flight"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 rust-version = { workspace = true }
 authors = { workspace = true }
 homepage = { workspace = true }

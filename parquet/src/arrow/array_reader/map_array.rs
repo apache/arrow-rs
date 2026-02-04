@@ -29,6 +29,7 @@ pub struct MapArrayReader {
 }
 
 impl MapArrayReader {
+    #[allow(rustdoc::private_intra_doc_links)]
     /// Creates a new [`MapArrayReader`] with a `def_level`, `rep_level` and `nullable`
     /// as defined on [`ParquetField`][crate::arrow::schema::ParquetField]
     pub fn new(
@@ -123,12 +124,12 @@ impl ArrayReader for MapArrayReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use arrow::datatypes::{Field, Int32Type, Schema};
+    use arrow_array::RecordBatch;
     use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
     use arrow_array::cast::*;
-    use arrow_array::RecordBatch;
     use arrow_schema::Fields;
     use bytes::Bytes;
 

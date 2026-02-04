@@ -21,9 +21,10 @@ use arrow::array::{Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use arrow_array::builder::{Int32Builder, ListBuilder};
 use bytes::Bytes;
-use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::basic::{Encoding, PageType};
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{ReaderProperties, WriterProperties};
 use parquet::file::reader::SerializedPageReader;
@@ -68,7 +69,8 @@ fn do_test(test: LayoutTest) {
     let b = Bytes::from(buf);
 
     // Re-read file to decode column index
-    let read_options = ArrowReaderOptions::new().with_page_index(true);
+    let read_options =
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
     let reader =
         ParquetRecordBatchReaderBuilder::try_new_with_options(b.clone(), read_options).unwrap();
 

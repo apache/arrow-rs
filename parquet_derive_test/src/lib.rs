@@ -19,10 +19,11 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(clippy::approx_constant)]
 
 use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
+use std::sync::Arc;
 
 #[derive(ParquetRecordWriter)]
 struct ACompleteRecord<'a> {
@@ -30,8 +31,10 @@ struct ACompleteRecord<'a> {
     pub a_str: &'a str,
     pub a_string: String,
     pub a_borrowed_string: &'a String,
+    pub a_arc_str: Arc<str>,
     pub maybe_a_str: Option<&'a str>,
     pub maybe_a_string: Option<String>,
+    pub maybe_a_arc_str: Option<Arc<str>>,
     pub i16: i16,
     pub i32: i32,
     pub u64: u64,
@@ -130,8 +133,10 @@ mod tests {
             REQUIRED BINARY          a_str (STRING);
             REQUIRED BINARY          a_string (STRING);
             REQUIRED BINARY          a_borrowed_string (STRING);
+            REQUIRED BINARY          a_arc_str (STRING);
             OPTIONAL BINARY          maybe_a_str (STRING);
             OPTIONAL BINARY          maybe_a_string (STRING);
+            OPTIONAL BINARY          maybe_a_arc_str (STRING);
             REQUIRED INT32           i16 (INTEGER(16,true));
             REQUIRED INT32           i32;
             REQUIRED INT64           u64 (INTEGER(64,false));
@@ -159,8 +164,10 @@ mod tests {
 
         let a_str = "hello mother".to_owned();
         let a_borrowed_string = "cool news".to_owned();
+        let a_arc_str: Arc<str> = "hello arc".into();
         let maybe_a_string = Some("it's true, I'm a string".to_owned());
         let maybe_a_str = Some(&a_str[..]);
+        let maybe_a_arc_str = Some(a_arc_str.clone());
         let borrowed_byte_vec = vec![0x68, 0x69, 0x70];
         let borrowed_maybe_byte_vec = Some(vec![0x71, 0x72]);
         let borrowed_maybe_borrowed_byte_vec = Some(&borrowed_byte_vec[..]);
@@ -170,8 +177,10 @@ mod tests {
             a_str: &a_str[..],
             a_string: "hello father".into(),
             a_borrowed_string: &a_borrowed_string,
+            a_arc_str,
             maybe_a_str: Some(&a_str[..]),
             maybe_a_string: Some(a_str.clone()),
+            maybe_a_arc_str,
             i16: -45,
             i32: 456,
             u64: 4563424,

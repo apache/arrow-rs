@@ -397,8 +397,8 @@ macro_rules! list_primitive_accessor {
 macro_rules! list_complex_accessor {
     ($METHOD:ident, $VARIANT:ident, $TY:ty) => {
         fn $METHOD(&self, i: usize) -> Result<&$TY> {
-            match self.elements[i] {
-                Field::$VARIANT(ref v) => Ok(v),
+            match &self.elements[i] {
+                Field::$VARIANT(v) => Ok(&v),
                 _ => Err(general_err!(
                     "Cannot access {} as {}",
                     self.elements[i].get_type_name(),
@@ -756,7 +756,7 @@ impl Field {
                     descr.type_precision(),
                     descr.type_scale(),
                 )),
-                ConvertedType::NONE if descr.logical_type() == Some(LogicalType::Float16) => {
+                ConvertedType::NONE if descr.logical_type_ref() == Some(&LogicalType::Float16) => {
                     if value.len() != 2 {
                         return Err(general_err!(
                             "Error reading FIXED_LEN_BYTE_ARRAY as FLOAT16. Length must be 2, got {}",
@@ -777,8 +777,8 @@ impl Field {
     /// Converts the Parquet field into a JSON [`Value`].
     #[cfg(any(feature = "json", test))]
     pub fn to_json_value(&self) -> Value {
-        use base64::prelude::BASE64_STANDARD;
         use base64::Engine;
+        use base64::prelude::BASE64_STANDARD;
 
         match &self {
             Field::Null => Value::Null,
@@ -1506,28 +1506,34 @@ mod tests {
         assert!(Field::Decimal(Decimal::from_i32(4, 8, 2)).is_primitive());
 
         // complex types
-        assert!(!Field::Group(Row::new(vec![
-            ("x".to_string(), Field::Null),
-            ("Y".to_string(), Field::Int(2)),
-            ("z".to_string(), Field::Float(3.1)),
-            ("a".to_string(), Field::Str("abc".to_string()))
-        ]))
-        .is_primitive());
+        assert!(
+            !Field::Group(Row::new(vec![
+                ("x".to_string(), Field::Null),
+                ("Y".to_string(), Field::Int(2)),
+                ("z".to_string(), Field::Float(3.1)),
+                ("a".to_string(), Field::Str("abc".to_string()))
+            ]))
+            .is_primitive()
+        );
 
-        assert!(!Field::ListInternal(make_list(vec![
-            Field::Int(2),
-            Field::Int(1),
-            Field::Null,
-            Field::Int(12)
-        ]))
-        .is_primitive());
+        assert!(
+            !Field::ListInternal(make_list(vec![
+                Field::Int(2),
+                Field::Int(1),
+                Field::Null,
+                Field::Int(12)
+            ]))
+            .is_primitive()
+        );
 
-        assert!(!Field::MapInternal(make_map(vec![
-            (Field::Int(1), Field::Float(1.2)),
-            (Field::Int(2), Field::Float(4.5)),
-            (Field::Int(3), Field::Float(2.3))
-        ]))
-        .is_primitive());
+        assert!(
+            !Field::MapInternal(make_map(vec![
+                (Field::Int(1), Field::Float(1.2)),
+                (Field::Int(2), Field::Float(4.5)),
+                (Field::Int(3), Field::Float(2.3))
+            ]))
+            .is_primitive()
+        );
     }
 
     #[test]
@@ -2073,7 +2079,7 @@ mod tests {
 #[cfg(test)]
 #[allow(clippy::many_single_char_names)]
 mod api_tests {
-    use super::{make_list, make_map, Row};
+    use super::{Row, make_list, make_map};
     use crate::record::Field;
 
     #[test]

@@ -14,10 +14,10 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+use crate::ShortString;
 use crate::utils::{
     array_from_slice, overflow_error, slice_from_slice_at_offset, string_from_slice,
 };
-use crate::ShortString;
 
 use arrow_schema::ArrowError;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
@@ -143,7 +143,7 @@ impl OffsetSizeBytes {
             _ => {
                 return Err(ArrowError::InvalidArgumentError(
                     "offset_size_minus_one must be 0–3".to_string(),
-                ))
+                ));
             }
         };
         Ok(result)

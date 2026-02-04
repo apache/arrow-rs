@@ -19,7 +19,10 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#json>
 
-use serde::{Deserialize, Serialize};
+use serde_core::de::{self, MapAccess, Visitor};
+use serde_core::ser::SerializeStruct;
+use serde_core::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
 use crate::{ArrowError, DataType, extension::ExtensionType};
 
@@ -42,9 +45,77 @@ use crate::{ArrowError, DataType, extension::ExtensionType};
 pub struct Json(JsonMetadata);
 
 /// Empty object
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Empty {}
+
+impl Serialize for Empty {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let state = serializer.serialize_struct("Empty", 0)?;
+        state.end()
+    }
+}
+
+struct EmptyVisitor;
+
+impl<'de> Visitor<'de> for EmptyVisitor {
+    type Value = Empty;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("struct Empty")
+    }
+
+    fn visit_seq<A>(self, mut _seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: de::SeqAccess<'de>,
+    {
+        Ok(Empty {})
+    }
+
+    fn visit_map<V>(self, mut map: V) -> Result<Empty, V::Error>
+    where
+        V: MapAccess<'de>,
+    {
+        if let Some(key) = map.next_key::<String>()? {
+            return Err(de::Error::unknown_field(&key, EMPTY_FIELDS));
+        }
+        Ok(Empty {})
+    }
+
+    fn visit_u64<E>(self, _v: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(de::Error::unknown_field("", EMPTY_FIELDS))
+    }
+
+    fn visit_str<E>(self, _v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(de::Error::unknown_field("", EMPTY_FIELDS))
+    }
+
+    fn visit_bytes<E>(self, _v: &[u8]) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(de::Error::unknown_field("", EMPTY_FIELDS))
+    }
+}
+
+static EMPTY_FIELDS: &[&str] = &[];
+
+impl<'de> Deserialize<'de> for Empty {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_struct("Empty", EMPTY_FIELDS, EmptyVisitor)
+    }
+}
 
 /// Extension type metadata for [`Json`].
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -151,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
+    #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
         let field = Field::new("", DataType::Int8, false).with_metadata(
             [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "{}".to_owned())]

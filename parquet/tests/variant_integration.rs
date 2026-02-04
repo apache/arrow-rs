@@ -26,7 +26,7 @@
 use arrow::util::test_util::parquet_test_data;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet_variant::{Variant, VariantMetadata};
-use parquet_variant_compute::VariantArray;
+use parquet_variant_compute::{VariantArray, unshred_variant};
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -34,24 +34,16 @@ use std::{fs, path::PathBuf};
 
 type Result<T> = std::result::Result<T, String>;
 
-/// Creates a test function for a given case number
+/// Creates a test function for a given case number.
+///
+/// If an error message is provided, generate an error test case that expects it.
 ///
 /// Note the index is zero-based, while the case number is one-based
 macro_rules! variant_test_case {
-    ($case_num:literal) => {
+    ($case_num:literal $(, $expected_error:literal )? ) => {
         paste::paste! {
             #[test]
-            fn [<test_variant_integration_case_ $case_num>]() {
-                all_cases()[$case_num - 1].run()
-            }
-        }
-    };
-
-    // Generates an error test case, where the expected result is an error message
-    ($case_num:literal, $expected_error:literal) => {
-        paste::paste! {
-            #[test]
-            #[should_panic(expected = $expected_error)]
+            $( #[should_panic(expected = $expected_error)] )?
             fn [<test_variant_integration_case_ $case_num>]() {
                 all_cases()[$case_num - 1].run()
             }
@@ -65,8 +57,8 @@ macro_rules! variant_test_case {
 // - cases 40, 42, 87, 127 and 128 are expected to fail always (they include invalid variants)
 // - the remaining cases are expected to (eventually) pass
 
-variant_test_case!(1, "Unsupported typed_value type: List(");
-variant_test_case!(2, "Unsupported typed_value type: List(");
+variant_test_case!(1);
+variant_test_case!(2);
 // case 3 is empty in cases.json 🤷
 // ```json
 // {
@@ -74,7 +66,6 @@ variant_test_case!(2, "Unsupported typed_value type: List(");
 // },
 // ```
 variant_test_case!(3, "parquet_file must be set");
-// https://github.com/apache/arrow-rs/issues/8329
 variant_test_case!(4);
 variant_test_case!(5);
 variant_test_case!(6);
@@ -95,36 +86,32 @@ variant_test_case!(20);
 variant_test_case!(21);
 variant_test_case!(22);
 variant_test_case!(23);
-// https://github.com/apache/arrow-rs/issues/8332
-variant_test_case!(24, "Unsupported typed_value type: Decimal128(9, 4)");
-variant_test_case!(25, "Unsupported typed_value type: Decimal128(9, 4)");
-variant_test_case!(26, "Unsupported typed_value type: Decimal128(18, 9)");
-variant_test_case!(27, "Unsupported typed_value type: Decimal128(18, 9)");
-variant_test_case!(28, "Unsupported typed_value type: Decimal128(38, 9)");
-variant_test_case!(29, "Unsupported typed_value type: Decimal128(38, 9)");
+variant_test_case!(24);
+variant_test_case!(25);
+variant_test_case!(26);
+variant_test_case!(27);
+variant_test_case!(28);
+variant_test_case!(29);
 variant_test_case!(30);
 variant_test_case!(31);
-// https://github.com/apache/arrow-rs/issues/8334
-variant_test_case!(32, "Unsupported typed_value type: Time64(µs)");
+variant_test_case!(32);
 variant_test_case!(33);
 variant_test_case!(34);
 variant_test_case!(35);
 variant_test_case!(36);
 variant_test_case!(37);
-// https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(38, "Unsupported typed_value type: Struct(");
+variant_test_case!(38);
 variant_test_case!(39);
 // Is an error case (should be failing as the expected error message indicates)
-variant_test_case!(40, "Unsupported typed_value type: List(");
-variant_test_case!(41, "Unsupported typed_value type: List(");
+variant_test_case!(40, "both value and typed_value are non-null");
+variant_test_case!(41);
 // Is an error case (should be failing as the expected error message indicates)
-variant_test_case!(42, "Invalid variant, conflicting value and typed_value");
-// https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(43, "Unsupported typed_value type: Struct(");
-variant_test_case!(44, "Unsupported typed_value type: Struct(");
-// https://github.com/apache/arrow-rs/issues/8337
-variant_test_case!(45, "Unsupported typed_value type: List(");
-variant_test_case!(46, "Unsupported typed_value type: Struct(");
+variant_test_case!(42, "both value and typed_value are non-null");
+// Is an error case (should be failing as the expected error message indicates)
+variant_test_case!(43, "Field 'b' appears in both typed_value and value");
+variant_test_case!(44);
+variant_test_case!(45);
+variant_test_case!(46);
 variant_test_case!(47);
 variant_test_case!(48);
 variant_test_case!(49);
@@ -161,16 +148,14 @@ variant_test_case!(79);
 variant_test_case!(80);
 variant_test_case!(81);
 variant_test_case!(82);
-// https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(83, "Unsupported typed_value type: Struct(");
-variant_test_case!(84, "Unsupported typed_value type: Struct(");
-// https://github.com/apache/arrow-rs/issues/8337
-variant_test_case!(85, "Unsupported typed_value type: List(");
-variant_test_case!(86, "Unsupported typed_value type: List(");
+variant_test_case!(83);
+// Invalid case, implementations can choose to read the shredded value or error out
+variant_test_case!(84);
+variant_test_case!(85);
+variant_test_case!(86);
 // Is an error case (should be failing as the expected error message indicates)
-// TODO: Once structs are supported, expect "Invalid variant, non-object value with shredded fields"
-variant_test_case!(87, "Unsupported typed_value type: Struct(");
-variant_test_case!(88, "Unsupported typed_value type: List(");
+variant_test_case!(87, "Expected object in value field");
+variant_test_case!(88);
 variant_test_case!(89);
 variant_test_case!(90);
 variant_test_case!(91);
@@ -207,23 +192,24 @@ variant_test_case!(121);
 variant_test_case!(122);
 variant_test_case!(123);
 variant_test_case!(124);
-variant_test_case!(125, "Unsupported typed_value type: Struct");
-variant_test_case!(126, "Unsupported typed_value type: List(");
+// Is an error case (should be failing as the expected error message indicates)
+variant_test_case!(125, "Field 'b' appears in both typed_value and value");
+variant_test_case!(126);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(127, "Illegal shredded value type: UInt32");
 // Is an error case (should be failing as the expected error message indicates)
-// TODO: Once structs are supported, expect "Invalid variant, non-object value with shredded fields"
-variant_test_case!(128, "Unsupported typed_value type: Struct(");
+variant_test_case!(128, "Expected object in value field");
 variant_test_case!(129);
-variant_test_case!(130, "Unsupported typed_value type: Struct(");
+variant_test_case!(130);
 variant_test_case!(131);
-variant_test_case!(132, "Unsupported typed_value type: Struct(");
-variant_test_case!(133, "Unsupported typed_value type: Struct(");
-variant_test_case!(134, "Unsupported typed_value type: Struct(");
+variant_test_case!(132);
+variant_test_case!(133);
+variant_test_case!(134);
 variant_test_case!(135);
-variant_test_case!(136, "Unsupported typed_value type: List(");
+variant_test_case!(136);
+// Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(137, "Illegal shredded value type: FixedSizeBinary(4)");
-variant_test_case!(138, "Unsupported typed_value type: Struct(");
+variant_test_case!(138);
 
 /// Test case definition structure matching the format from
 /// `parquet-testing/parquet_shredded/cases.json`
@@ -275,12 +261,13 @@ impl VariantTestCase {
         let variant_data = self.load_variants();
         let variant_array = self.load_parquet();
 
+        // `load_parquet` returns shredded variant values, but the test expectations are provided as
+        // unshredded variant values. Unshred (failing for invalid input) so we can compare them.
+        let variant_array = unshred_variant(&variant_array).unwrap();
+
         // if this is an error case, the expected error message should be set
         if let Some(expected_error) = &self.error_message {
-            // just accessing the variant_array should trigger the error
-            for i in 0..variant_array.len() {
-                let _ = variant_array.value(i);
-            }
+            // Unshredding variant array should have already triggered the error
             panic!("Expected an error '{expected_error}`, but got no error");
         }
 
@@ -306,7 +293,11 @@ impl VariantTestCase {
             let expected = expected.as_variant();
 
             // compare the variants (is this the right way to compare?)
-            assert_eq!(actual, expected, "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}", i);
+            assert_eq!(
+                actual, expected,
+                "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}",
+                i
+            );
         }
     }
 

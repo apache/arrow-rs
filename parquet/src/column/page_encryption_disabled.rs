@@ -17,7 +17,7 @@
 
 use crate::column::page::CompressedPage;
 use crate::errors::Result;
-use crate::format::PageHeader;
+use crate::file::metadata::thrift::PageHeader;
 use std::io::Write;
 
 #[derive(Debug)]

@@ -41,11 +41,14 @@ mod decimal;
 mod dictionary;
 mod list;
 mod map;
+mod run_array;
 mod string;
+
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
 use crate::cast::list::*;
 use crate::cast::map::*;
+use crate::cast::run_array::*;
 use crate::cast::string::*;
 
 use arrow_buffer::IntervalMonthDayNano;
@@ -66,6 +69,8 @@ use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
+
+pub use decimal::{DecimalCast, rescale_decimal};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -97,65 +102,37 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     }
 
     match (from_type, to_type) {
-        (
-            Null,
-            Boolean
-            | Int8
-            | UInt8
-            | Int16
-            | UInt16
-            | Int32
-            | UInt32
-            | Float32
-            | Date32
-            | Time32(_)
-            | Int64
-            | UInt64
-            | Float64
-            | Date64
-            | Timestamp(_, _)
-            | Time64(_)
-            | Duration(_)
-            | Interval(_)
-            | FixedSizeBinary(_)
-            | Binary
-            | Utf8
-            | LargeBinary
-            | LargeUtf8
-            | BinaryView
-            | Utf8View
-            | List(_)
-            | LargeList(_)
-            | FixedSizeList(_, _)
-            | Struct(_)
-            | Map(_, _)
-            | Dictionary(_, _),
-        ) => true,
+        (Null, _) => true,
         // Dictionary/List conditions should be put in front of others
         (Dictionary(_, from_value_type), Dictionary(_, to_value_type)) => {
             can_cast_types(from_value_type, to_value_type)
         }
         (Dictionary(_, value_type), _) => can_cast_types(value_type, to_type),
+        (RunEndEncoded(_, value_type), _) => can_cast_types(value_type.data_type(), to_type),
+        (_, RunEndEncoded(_, value_type)) => can_cast_types(from_type, value_type.data_type()),
         (_, Dictionary(_, value_type)) => can_cast_types(from_type, value_type),
-        (List(list_from) | LargeList(list_from), List(list_to) | LargeList(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
-        (List(list_from) | LargeList(list_from), Utf8 | LargeUtf8) => {
-            can_cast_types(list_from.data_type(), to_type)
-        }
-        (List(list_from) | LargeList(list_from), FixedSizeList(list_to, _)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
-        (List(_), _) => false,
-        (FixedSizeList(list_from, _), List(list_to))
-        | (FixedSizeList(list_from, _), LargeList(list_to)) => {
-            can_cast_types(list_from.data_type(), list_to.data_type())
-        }
+        (
+            List(list_from) | LargeList(list_from) | ListView(list_from) | LargeListView(list_from),
+            List(list_to) | LargeList(list_to) | ListView(list_to) | LargeListView(list_to),
+        ) => can_cast_types(list_from.data_type(), list_to.data_type()),
+        (
+            List(list_from) | LargeList(list_from) | ListView(list_from) | LargeListView(list_from),
+            Utf8 | LargeUtf8 | Utf8View,
+        ) => can_cast_types(list_from.data_type(), to_type),
+        (
+            FixedSizeList(list_from, _),
+            List(list_to) | LargeList(list_to) | ListView(list_to) | LargeListView(list_to),
+        ) => can_cast_types(list_from.data_type(), list_to.data_type()),
+        (
+            List(list_from) | LargeList(list_from) | ListView(list_from) | LargeListView(list_from),
+            FixedSizeList(list_to, _),
+        ) => can_cast_types(list_from.data_type(), list_to.data_type()),
         (FixedSizeList(inner, size), FixedSizeList(inner_to, size_to)) if size == size_to => {
             can_cast_types(inner.data_type(), inner_to.data_type())
         }
-        (_, List(list_to)) => can_cast_types(from_type, list_to.data_type()),
-        (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
+        (_, List(list_to) | LargeList(list_to) | ListView(list_to) | LargeListView(list_to)) => {
+            can_cast_types(from_type, list_to.data_type())
+        }
         (_, FixedSizeList(list_to, size)) if *size == 1 => {
             can_cast_types(from_type, list_to.data_type())
         }
@@ -190,7 +167,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         ) => true,
         // signed numeric to decimal
         (
-            Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+            Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         // decimal to unsigned numeric
@@ -214,29 +191,48 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         (Struct(from_fields), Struct(to_fields)) => {
-            from_fields.len() == to_fields.len()
-                && from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
+            if from_fields.len() != to_fields.len() {
+                return false;
+            }
+
+            // fast path, all field names are in the same order and same number of fields
+            if from_fields
+                .iter()
+                .zip(to_fields.iter())
+                .all(|(f1, f2)| f1.name() == f2.name())
+            {
+                return from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
                     // Assume that nullability between two structs are compatible, if not,
                     // cast kernel will return error.
                     can_cast_types(f1.data_type(), f2.data_type())
-                })
+                });
+            }
+
+            // slow path, we match the fields by name
+            if to_fields.iter().all(|to_field| {
+                from_fields
+                    .iter()
+                    .find(|from_field| from_field.name() == to_field.name())
+                    .is_some_and(|from_field| {
+                        // Assume that nullability between two structs are compatible, if not,
+                        // cast kernel will return error.
+                        can_cast_types(from_field.data_type(), to_field.data_type())
+                    })
+            }) {
+                return true;
+            }
+
+            // if we couldn't match by name, we try to see if they can be matched by position
+            from_fields
+                .iter()
+                .zip(to_fields.iter())
+                .all(|(f1, f2)| can_cast_types(f1.data_type(), f2.data_type()))
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
-        (_, Boolean) => {
-            DataType::is_integer(from_type)
-                || DataType::is_floating(from_type)
-                || from_type == &Utf8View
-                || from_type == &Utf8
-                || from_type == &LargeUtf8
-        }
-        (Boolean, _) => {
-            DataType::is_integer(to_type)
-                || DataType::is_floating(to_type)
-                || to_type == &Utf8View
-                || to_type == &Utf8
-                || to_type == &LargeUtf8
-        }
+
+        (_, Boolean) => from_type.is_integer() || from_type.is_floating() || from_type.is_string(),
+        (Boolean, _) => to_type.is_integer() || to_type.is_floating() || to_type.is_string(),
 
         (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View) => {
             true
@@ -266,7 +262,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         ) => true,
         (Utf8 | LargeUtf8, Utf8View) => true,
         (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View) => true,
-        (Utf8View | Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
+        (Utf8View | Utf8 | LargeUtf8, _) => to_type.is_numeric(),
         (_, Utf8 | Utf8View | LargeUtf8) => from_type.is_primitive(),
 
         (_, Binary | LargeBinary) => from_type.is_integer(),
@@ -283,7 +279,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // temporal casts
         (Int32, Date32 | Date64 | Time32(_)) => true,
         (Date32, Int32 | Int64) => true,
-        (Time32(_), Int32) => true,
+        (Time32(_), Int32 | Int64) => true,
         (Int64, Date64 | Date32 | Time64(_)) => true,
         (Date64, Int64 | Int32) => true,
         (Time64(_), Int64) => true,
@@ -753,40 +749,38 @@ pub fn cast_with_options(
         return Ok(make_array(array.to_data()));
     }
     match (from_type, to_type) {
-        (
-            Null,
-            Boolean
-            | Int8
-            | UInt8
-            | Int16
-            | UInt16
-            | Int32
-            | UInt32
-            | Float32
-            | Date32
-            | Time32(_)
-            | Int64
-            | UInt64
-            | Float64
-            | Date64
-            | Timestamp(_, _)
-            | Time64(_)
-            | Duration(_)
-            | Interval(_)
-            | FixedSizeBinary(_)
-            | Binary
-            | Utf8
-            | LargeBinary
-            | LargeUtf8
-            | BinaryView
-            | Utf8View
-            | List(_)
-            | LargeList(_)
-            | FixedSizeList(_, _)
-            | Struct(_)
-            | Map(_, _)
-            | Dictionary(_, _),
-        ) => Ok(new_null_array(to_type, array.len())),
+        (Null, _) => Ok(new_null_array(to_type, array.len())),
+        (RunEndEncoded(index_type, _), _) => match index_type.data_type() {
+            Int16 => run_end_encoded_cast::<Int16Type>(array, to_type, cast_options),
+            Int32 => run_end_encoded_cast::<Int32Type>(array, to_type, cast_options),
+            Int64 => run_end_encoded_cast::<Int64Type>(array, to_type, cast_options),
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from run end encoded type {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
+        (_, RunEndEncoded(index_type, value_type)) => {
+            let array_ref = make_array(array.to_data());
+            match index_type.data_type() {
+                Int16 => cast_to_run_end_encoded::<Int16Type>(
+                    &array_ref,
+                    value_type.data_type(),
+                    cast_options,
+                ),
+                Int32 => cast_to_run_end_encoded::<Int32Type>(
+                    &array_ref,
+                    value_type.data_type(),
+                    cast_options,
+                ),
+                Int64 => cast_to_run_end_encoded::<Int64Type>(
+                    &array_ref,
+                    value_type.data_type(),
+                    cast_options,
+                ),
+                _ => Err(ArrowError::CastError(format!(
+                    "Casting from type {from_type:?} to run end encoded type {to_type:?} not supported",
+                ))),
+            }
+        }
         (Dictionary(index_type, _), _) => match **index_type {
             Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
             Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
@@ -813,52 +807,16 @@ pub fn cast_with_options(
                 "Casting from type {from_type} to dictionary type {to_type} not supported",
             ))),
         },
+        // Casting between lists of same types (cast inner values)
         (List(_), List(to)) => cast_list_values::<i32>(array, to, cast_options),
         (LargeList(_), LargeList(to)) => cast_list_values::<i64>(array, to, cast_options),
-        (List(_), LargeList(list_to)) => cast_list::<i32, i64>(array, list_to, cast_options),
-        (LargeList(_), List(list_to)) => cast_list::<i64, i32>(array, list_to, cast_options),
-        (List(_), FixedSizeList(field, size)) => {
-            let array = array.as_list::<i32>();
-            cast_list_to_fixed_size_list::<i32>(array, field, *size, cast_options)
-        }
-        (LargeList(_), FixedSizeList(field, size)) => {
-            let array = array.as_list::<i64>();
-            cast_list_to_fixed_size_list::<i64>(array, field, *size, cast_options)
-        }
-        (List(_) | LargeList(_), _) => match to_type {
-            Utf8 => value_to_string::<i32>(array, cast_options),
-            LargeUtf8 => value_to_string::<i64>(array, cast_options),
-            _ => Err(ArrowError::CastError(
-                "Cannot cast list to non-list data types".to_string(),
-            )),
-        },
-        (FixedSizeList(list_from, size), List(list_to)) => {
-            if list_to.data_type() != list_from.data_type() {
-                // To transform inner type, can first cast to FSL with new inner type.
-                let fsl_to = DataType::FixedSizeList(list_to.clone(), *size);
-                let array = cast_with_options(array, &fsl_to, cast_options)?;
-                cast_fixed_size_list_to_list::<i32>(array.as_ref())
-            } else {
-                cast_fixed_size_list_to_list::<i32>(array)
-            }
-        }
-        (FixedSizeList(list_from, size), LargeList(list_to)) => {
-            if list_to.data_type() != list_from.data_type() {
-                // To transform inner type, can first cast to FSL with new inner type.
-                let fsl_to = DataType::FixedSizeList(list_to.clone(), *size);
-                let array = cast_with_options(array, &fsl_to, cast_options)?;
-                cast_fixed_size_list_to_list::<i64>(array.as_ref())
-            } else {
-                cast_fixed_size_list_to_list::<i64>(array)
-            }
-        }
         (FixedSizeList(_, size_from), FixedSizeList(list_to, size_to)) => {
             if size_from != size_to {
                 return Err(ArrowError::CastError(
                     "cannot cast fixed-size-list to fixed-size-list with different size".into(),
                 ));
             }
-            let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+            let array = array.as_fixed_size_list();
             let values = cast_with_options(array.values(), list_to.data_type(), cast_options)?;
             Ok(Arc::new(FixedSizeListArray::try_new(
                 list_to.clone(),
@@ -867,14 +825,94 @@ pub fn cast_with_options(
                 array.nulls().cloned(),
             )?))
         }
-        (_, List(to)) => cast_values_to_list::<i32>(array, to, cast_options),
-        (_, LargeList(to)) => cast_values_to_list::<i64>(array, to, cast_options),
-        (_, FixedSizeList(to, size)) if *size == 1 => {
-            cast_values_to_fixed_size_list(array, to, *size, cast_options)
+        (ListView(_), ListView(to)) => cast_list_view_values::<i32>(array, to, cast_options),
+        (LargeListView(_), LargeListView(to)) => {
+            cast_list_view_values::<i64>(array, to, cast_options)
         }
+        // Casting between different types of lists
+        // List
+        (List(_), LargeList(list_to)) => cast_list::<i32, i64>(array, list_to, cast_options),
+        (List(_), FixedSizeList(field, size)) => {
+            cast_list_to_fixed_size_list::<i32>(array, field, *size, cast_options)
+        }
+        (List(_), ListView(list_to)) => {
+            cast_list_to_list_view::<i32, i32>(array, list_to, cast_options)
+        }
+        (List(_), LargeListView(list_to)) => {
+            cast_list_to_list_view::<i32, i64>(array, list_to, cast_options)
+        }
+        // LargeList
+        (LargeList(_), List(list_to)) => cast_list::<i64, i32>(array, list_to, cast_options),
+        (LargeList(_), FixedSizeList(field, size)) => {
+            cast_list_to_fixed_size_list::<i64>(array, field, *size, cast_options)
+        }
+        (LargeList(_), ListView(list_to)) => {
+            cast_list_to_list_view::<i64, i32>(array, list_to, cast_options)
+        }
+        (LargeList(_), LargeListView(list_to)) => {
+            cast_list_to_list_view::<i64, i64>(array, list_to, cast_options)
+        }
+        // ListView
+        (ListView(_), List(list_to)) => {
+            cast_list_view_to_list::<i32, Int32Type>(array, list_to, cast_options)
+        }
+        (ListView(_), LargeList(list_to)) => {
+            cast_list_view_to_list::<i32, Int64Type>(array, list_to, cast_options)
+        }
+        (ListView(_), LargeListView(list_to)) => {
+            cast_list_view::<i32, i64>(array, list_to, cast_options)
+        }
+        (ListView(_), FixedSizeList(field, size)) => {
+            cast_list_view_to_fixed_size_list::<i32>(array, field, *size, cast_options)
+        }
+        // LargeListView
+        (LargeListView(_), LargeList(list_to)) => {
+            cast_list_view_to_list::<i64, Int64Type>(array, list_to, cast_options)
+        }
+        (LargeListView(_), List(list_to)) => {
+            cast_list_view_to_list::<i64, Int32Type>(array, list_to, cast_options)
+        }
+        (LargeListView(_), ListView(list_to)) => {
+            cast_list_view::<i64, i32>(array, list_to, cast_options)
+        }
+        (LargeListView(_), FixedSizeList(field, size)) => {
+            cast_list_view_to_fixed_size_list::<i64>(array, field, *size, cast_options)
+        }
+        // FixedSizeList
+        (FixedSizeList(_, _), List(list_to)) => {
+            cast_fixed_size_list_to_list::<i32>(array, list_to, cast_options)
+        }
+        (FixedSizeList(_, _), LargeList(list_to)) => {
+            cast_fixed_size_list_to_list::<i64>(array, list_to, cast_options)
+        }
+        (FixedSizeList(_, _), ListView(list_to)) => {
+            cast_fixed_size_list_to_list_view::<i32>(array, list_to, cast_options)
+        }
+        (FixedSizeList(_, _), LargeListView(list_to)) => {
+            cast_fixed_size_list_to_list_view::<i64>(array, list_to, cast_options)
+        }
+        // List to/from other types
         (FixedSizeList(_, size), _) if *size == 1 => {
             cast_single_element_fixed_size_list_to_values(array, to_type, cast_options)
         }
+        // NOTE: we could support FSL to string here too but might be confusing
+        //       since behaviour for size 1 would be different (see arm above)
+        (List(_) | LargeList(_) | ListView(_) | LargeListView(_), _) => match to_type {
+            Utf8 => value_to_string::<i32>(array, cast_options),
+            LargeUtf8 => value_to_string::<i64>(array, cast_options),
+            Utf8View => value_to_string_view(array, cast_options),
+            _ => Err(ArrowError::CastError(
+                "Cannot cast list to non-list data types".to_string(),
+            )),
+        },
+        (_, List(to)) => cast_values_to_list::<i32>(array, to, cast_options),
+        (_, LargeList(to)) => cast_values_to_list::<i64>(array, to, cast_options),
+        (_, ListView(to)) => cast_values_to_list_view::<i32>(array, to, cast_options),
+        (_, LargeListView(to)) => cast_values_to_list_view::<i64>(array, to, cast_options),
+        (_, FixedSizeList(to, size)) if *size == 1 => {
+            cast_values_to_fixed_size_list(array, to, *size, cast_options)
+        }
+        // Map
         (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
             cast_map_values(array.as_map(), to_type, cast_options, ordered1.to_owned())
         }
@@ -1130,17 +1168,12 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
-        (Struct(_), Struct(to_fields)) => {
-            let array = array.as_struct();
-            let fields = array
-                .columns()
-                .iter()
-                .zip(to_fields.iter())
-                .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
-                .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
-            let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
-            Ok(Arc::new(array) as ArrayRef)
-        }
+        (Struct(from_fields), Struct(to_fields)) => cast_struct_to_struct(
+            array.as_struct(),
+            from_fields.clone(),
+            to_fields.clone(),
+            cast_options,
+        ),
         (Struct(_), _) => Err(ArrowError::CastError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
@@ -1194,6 +1227,7 @@ pub fn cast_with_options(
             Int16 => parse_string::<Int16Type, i32>(array, cast_options),
             Int32 => parse_string::<Int32Type, i32>(array, cast_options),
             Int64 => parse_string::<Int64Type, i32>(array, cast_options),
+            Float16 => parse_string::<Float16Type, i32>(array, cast_options),
             Float32 => parse_string::<Float32Type, i32>(array, cast_options),
             Float64 => parse_string::<Float64Type, i32>(array, cast_options),
             Date32 => parse_string::<Date32Type, i32>(array, cast_options),
@@ -1256,6 +1290,7 @@ pub fn cast_with_options(
             Int16 => parse_string_view::<Int16Type>(array, cast_options),
             Int32 => parse_string_view::<Int32Type>(array, cast_options),
             Int64 => parse_string_view::<Int64Type>(array, cast_options),
+            Float16 => parse_string_view::<Float16Type>(array, cast_options),
             Float32 => parse_string_view::<Float32Type>(array, cast_options),
             Float64 => parse_string_view::<Float64Type>(array, cast_options),
             Date32 => parse_string_view::<Date32Type>(array, cast_options),
@@ -1307,6 +1342,7 @@ pub fn cast_with_options(
             Int16 => parse_string::<Int16Type, i64>(array, cast_options),
             Int32 => parse_string::<Int32Type, i64>(array, cast_options),
             Int64 => parse_string::<Int64Type, i64>(array, cast_options),
+            Float16 => parse_string::<Float16Type, i64>(array, cast_options),
             Float32 => parse_string::<Float32Type, i64>(array, cast_options),
             Float64 => parse_string::<Float64Type, i64>(array, cast_options),
             Date32 => parse_string::<Date32Type, i64>(array, cast_options),
@@ -1605,6 +1641,16 @@ pub fn cast_with_options(
         (Time32(TimeUnit::Millisecond), Int32) => {
             cast_reinterpret_arrays::<Time32MillisecondType, Int32Type>(array)
         }
+        (Time32(TimeUnit::Second), Int64) => cast_with_options(
+            &cast_with_options(array, &Int32, cast_options)?,
+            &Int64,
+            cast_options,
+        ),
+        (Time32(TimeUnit::Millisecond), Int64) => cast_with_options(
+            &cast_with_options(array, &Int32, cast_options)?,
+            &Int64,
+            cast_options,
+        ),
         (Int64, Date64) => cast_reinterpret_arrays::<Int64Type, Date64Type>(array),
         (Int64, Date32) => cast_with_options(
             &cast_with_options(array, &Int32, cast_options)?,
@@ -2162,6 +2208,74 @@ pub fn cast_with_options(
     }
 }
 
+fn cast_struct_to_struct(
+    array: &StructArray,
+    from_fields: Fields,
+    to_fields: Fields,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    // Fast path: if field names are in the same order, we can just zip and cast
+    let fields_match_order = from_fields.len() == to_fields.len()
+        && from_fields
+            .iter()
+            .zip(to_fields.iter())
+            .all(|(f1, f2)| f1.name() == f2.name());
+
+    let fields = if fields_match_order {
+        // Fast path: cast columns in order if their names match
+        cast_struct_fields_in_order(array, to_fields.clone(), cast_options)?
+    } else {
+        let all_fields_match_by_name = to_fields.iter().all(|to_field| {
+            from_fields
+                .iter()
+                .any(|from_field| from_field.name() == to_field.name())
+        });
+
+        if all_fields_match_by_name {
+            // Slow path: match fields by name and reorder
+            cast_struct_fields_by_name(array, from_fields.clone(), to_fields.clone(), cast_options)?
+        } else {
+            // Fallback: cast field by field in order
+            cast_struct_fields_in_order(array, to_fields.clone(), cast_options)?
+        }
+    };
+
+    let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
+    Ok(Arc::new(array) as ArrayRef)
+}
+
+fn cast_struct_fields_by_name(
+    array: &StructArray,
+    from_fields: Fields,
+    to_fields: Fields,
+    cast_options: &CastOptions,
+) -> Result<Vec<ArrayRef>, ArrowError> {
+    to_fields
+        .iter()
+        .map(|to_field| {
+            let from_field_idx = from_fields
+                .iter()
+                .position(|from_field| from_field.name() == to_field.name())
+                .unwrap(); // safe because we checked above
+            let column = array.column(from_field_idx);
+            cast_with_options(column, to_field.data_type(), cast_options)
+        })
+        .collect::<Result<Vec<ArrayRef>, ArrowError>>()
+}
+
+fn cast_struct_fields_in_order(
+    array: &StructArray,
+    to_fields: Fields,
+    cast_options: &CastOptions,
+) -> Result<Vec<ArrayRef>, ArrowError> {
+    array
+        .columns()
+        .iter()
+        .zip(to_fields.iter())
+        .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
+        .collect::<Result<Vec<ArrayRef>, ArrowError>>()
+}
+
 fn cast_from_decimal<D, F>(
     array: &dyn Array,
     base: D::Native,
@@ -2377,7 +2491,7 @@ fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_primitive::<FROM>();
     let size = std::mem::size_of::<FROM::Native>();
-    let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(size, array.len()));
+    let offsets = OffsetBuffer::from_repeated_length(size, array.len());
     Ok(Arc::new(GenericBinaryArray::<O>::try_new(
         offsets,
         array.values().inner().clone(),
@@ -2636,10 +2750,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_buffer::i256;
+    use DataType::*;
+    use arrow_array::{Int64Array, RunArray, StringArray};
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
+    use arrow_buffer::{ScalarBuffer, i256};
+    use arrow_schema::{DataType, Field};
     use chrono::NaiveDate;
     use half::f16;
+    use std::sync::Arc;
 
     #[derive(Clone)]
     struct DecimalCastTestConfig {
@@ -3083,6 +3201,32 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_decimal32_to_decimal32_large_scale_reduction() {
+        let array = vec![Some(-999999999), Some(0), Some(999999999), None];
+        let array = create_decimal32_array(array, 9, 3).unwrap();
+
+        // Divide out all digits of precision -- rounding could still produce +/- 1
+        let output_type = DataType::Decimal32(9, -6);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        generate_cast_test_case!(
+            &array,
+            Decimal32Array,
+            &output_type,
+            vec![Some(-1), Some(0), Some(1), None]
+        );
+
+        // Divide out more digits than we have precision -- all-zero result
+        let output_type = DataType::Decimal32(9, -7);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        generate_cast_test_case!(
+            &array,
+            Decimal32Array,
+            &output_type,
+            vec![Some(0), Some(0), Some(0), None]
+        );
+    }
+
+    #[test]
     fn test_cast_decimal64_to_decimal64_overflow() {
         let input_type = DataType::Decimal64(18, 3);
         let output_type = DataType::Decimal64(18, 18);
@@ -3101,6 +3245,37 @@ mod tests {
         assert_eq!(
             "Cast error: Cannot cast to Decimal64(18, 18). Overflowing on 9223372036854775807",
             result.unwrap_err().to_string()
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal64_to_decimal64_large_scale_reduction() {
+        let array = vec![
+            Some(-999999999999999999),
+            Some(0),
+            Some(999999999999999999),
+            None,
+        ];
+        let array = create_decimal64_array(array, 18, 3).unwrap();
+
+        // Divide out all digits of precision -- rounding could still produce +/- 1
+        let output_type = DataType::Decimal64(18, -15);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        generate_cast_test_case!(
+            &array,
+            Decimal64Array,
+            &output_type,
+            vec![Some(-1), Some(0), Some(1), None]
+        );
+
+        // Divide out more digits than we have precision -- all-zero result
+        let output_type = DataType::Decimal64(18, -16);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        generate_cast_test_case!(
+            &array,
+            Decimal64Array,
+            &output_type,
+            vec![Some(0), Some(0), Some(0), None]
         );
     }
 
@@ -3725,6 +3900,145 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_decimal_to_numeric_negative_scale() {
+        let value_array: Vec<Option<i256>> = vec![
+            Some(i256::from_i128(125)),
+            Some(i256::from_i128(225)),
+            Some(i256::from_i128(325)),
+            None,
+            Some(i256::from_i128(525)),
+        ];
+        let array = create_decimal256_array(value_array, 38, -1).unwrap();
+
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(1_250), Some(2_250), Some(3_250), None, Some(5_250)]
+        );
+
+        let value_array: Vec<Option<i32>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let array = create_decimal32_array(value_array, 8, -2).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(12_500), Some(22_500), Some(32_500), None, Some(52_500)]
+        );
+
+        let value_array: Vec<Option<i32>> = vec![Some(2), Some(1), None];
+        let array = create_decimal32_array(value_array, 9, -9).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(2_000_000_000), Some(1_000_000_000), None]
+        );
+
+        let value_array: Vec<Option<i64>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let array = create_decimal64_array(value_array, 18, -3).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![
+                Some(125_000),
+                Some(225_000),
+                Some(325_000),
+                None,
+                Some(525_000)
+            ]
+        );
+
+        let value_array: Vec<Option<i64>> = vec![Some(12), Some(34), None];
+        let array = create_decimal64_array(value_array, 18, -10).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(120_000_000_000), Some(340_000_000_000), None]
+        );
+
+        let value_array: Vec<Option<i128>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let array = create_decimal128_array(value_array, 38, -4).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![
+                Some(1_250_000),
+                Some(2_250_000),
+                Some(3_250_000),
+                None,
+                Some(5_250_000)
+            ]
+        );
+
+        let value_array: Vec<Option<i128>> = vec![Some(9), Some(1), None];
+        let array = create_decimal128_array(value_array, 38, -18).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![
+                Some(9_000_000_000_000_000_000),
+                Some(1_000_000_000_000_000_000),
+                None
+            ]
+        );
+
+        let array = create_decimal32_array(vec![Some(999_999_999)], 9, -1).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!(
+            "Arithmetic overflow: Overflow happened on: 999999999 * 10".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let array = create_decimal64_array(vec![Some(13)], 18, -1).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!(
+            "Cast error: value of 130 is out of range Int8".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+    }
+
+    #[test]
     fn test_cast_numeric_to_decimal128() {
         let decimal_type = DataType::Decimal128(38, 6);
         // u8, u16, u32, u64
@@ -4272,6 +4586,23 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_to_f16() {
+        let arrays = [
+            Arc::new(StringViewArray::from(vec!["3", "4.56", "seven", "8.9"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["3", "4.56", "seven", "8.9"])),
+            Arc::new(LargeStringArray::from(vec!["3", "4.56", "seven", "8.9"])),
+        ];
+        for array in arrays {
+            let b = cast(&array, &DataType::Float16).unwrap();
+            let c = b.as_primitive::<Float16Type>();
+            assert_eq!(half::f16::from_f32(3.0), c.value(0));
+            assert_eq!(half::f16::from_f32(4.56), c.value(1));
+            assert!(!c.is_valid(2));
+            assert_eq!(half::f16::from_f32(8.9), c.value(3));
+        }
+    }
+
+    #[test]
     fn test_cast_utf8view_to_decimal128() {
         let array = StringViewArray::from(vec![None, Some("4"), Some("5.6"), Some("7.89")]);
         let arr = Arc::new(array) as ArrayRef;
@@ -4552,26 +4883,16 @@ mod tests {
 
     #[test]
     fn test_cast_list_i32_to_list_u16() {
-        let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 100000000]).into_data();
+        let values = vec![
+            Some(vec![Some(0), Some(0), Some(0)]),
+            Some(vec![Some(-1), Some(-2), Some(-1)]),
+            Some(vec![Some(2), Some(100000000)]),
+        ];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(values);
 
-        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
-
-        // Construct a list array from the above two
-        // [[0,0,0], [-1, -2, -1], [2, 100000000]]
-        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        let list_array = ListArray::from(list_data);
-
-        let cast_array = cast(
-            &list_array,
-            &DataType::List(Arc::new(Field::new_list_field(DataType::UInt16, true))),
-        )
-        .unwrap();
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::UInt16, true)));
+        assert!(can_cast_types(list_array.data_type(), &target_type));
+        let cast_array = cast(&list_array, &target_type).unwrap();
 
         // For the ListArray itself, there are no null values (as there were no nulls when they went in)
         //
@@ -5385,10 +5706,7 @@ mod tests {
             vec!["4869696969", "48656c6c6f", "4869696969", "null"]
         );
         // dictionary should only have two distinct values
-        let dict_array = cast_array
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int8Type>>()
-            .unwrap();
+        let dict_array = cast_array.as_dictionary::<Int8Type>();
         assert_eq!(dict_array.values().len(), 2);
     }
 
@@ -5420,11 +5738,368 @@ mod tests {
             ]
         );
         // dictionary should only have three distinct values
-        let dict_array = cast_array
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int8Type>>()
-            .unwrap();
+        let dict_array = cast_array.as_dictionary::<Int8Type>();
         assert_eq!(dict_array.values().len(), 3);
+    }
+
+    #[test]
+    fn test_cast_string_array_to_dict_utf8_view() {
+        let array = StringArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_string_array_to_dict_utf8_view_null_vs_literal_null() {
+        let array = StringArray::from(vec![Some("one"), None, Some("null"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2);
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("null"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_string_view_array_to_dict_utf8_view() {
+        let array = StringViewArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_string_view_slice_to_dict_utf8_view() {
+        let array = StringViewArray::from(vec![
+            Some("zero"),
+            Some("one"),
+            None,
+            Some("three"),
+            Some("one"),
+        ]);
+        let view = array.slice(1, 4);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(view.data_type(), &cast_type));
+        let cast_array = cast(&view, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2);
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_binary_array_to_dict_binary_view() {
+        let mut builder = GenericBinaryBuilder::<i32>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"hiiii");
+        builder.append_value(b"hiiii"); // duplicate
+        builder.append_null();
+        builder.append_value(b"rustt");
+
+        let array = builder.finish();
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 3);
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(
+            actual,
+            vec![
+                Some(b"hello".as_slice()),
+                Some(b"hiiii".as_slice()),
+                Some(b"hiiii".as_slice()),
+                None,
+                Some(b"rustt".as_slice())
+            ]
+        );
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(3));
+        assert_eq!(keys.value(1), keys.value(2));
+        assert_ne!(keys.value(0), keys.value(1));
+    }
+
+    #[test]
+    fn test_cast_binary_view_array_to_dict_binary_view() {
+        let view = BinaryViewArray::from_iter([
+            Some(b"hello".as_slice()),
+            Some(b"hiiii".as_slice()),
+            Some(b"hiiii".as_slice()), // duplicate
+            None,
+            Some(b"rustt".as_slice()),
+        ]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(view.data_type(), &cast_type));
+        let cast_array = cast(&view, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 3);
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(
+            actual,
+            vec![
+                Some(b"hello".as_slice()),
+                Some(b"hiiii".as_slice()),
+                Some(b"hiiii".as_slice()),
+                None,
+                Some(b"rustt".as_slice())
+            ]
+        );
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(3));
+        assert_eq!(keys.value(1), keys.value(2));
+        assert_ne!(keys.value(0), keys.value(1));
+    }
+
+    #[test]
+    fn test_cast_binary_view_slice_to_dict_binary_view() {
+        let view = BinaryViewArray::from_iter([
+            Some(b"hello".as_slice()),
+            Some(b"hiiii".as_slice()),
+            Some(b"hiiii".as_slice()), // duplicate
+            None,
+            Some(b"rustt".as_slice()),
+        ]);
+        let sliced = view.slice(1, 4);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(sliced.data_type(), &cast_type));
+        let cast_array = cast(&sliced, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 2);
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(
+            actual,
+            vec![
+                Some(b"hiiii".as_slice()),
+                Some(b"hiiii".as_slice()),
+                None,
+                Some(b"rustt".as_slice())
+            ]
+        );
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(2));
+        assert_eq!(keys.value(0), keys.value(1));
+        assert_ne!(keys.value(0), keys.value(3));
+    }
+
+    #[test]
+    fn test_cast_string_array_to_dict_utf8_view_key_overflow_u8() {
+        let array = StringArray::from_iter_values((0..257).map(|i| format!("v{i}")));
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let err = cast(&array, &cast_type).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
+    }
+
+    #[test]
+    fn test_cast_large_string_array_to_dict_utf8_view() {
+        let array = LargeStringArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(1));
+        assert_eq!(keys.value(0), keys.value(3));
+        assert_ne!(keys.value(0), keys.value(2));
+    }
+
+    #[test]
+    fn test_cast_large_binary_array_to_dict_binary_view() {
+        let mut builder = GenericBinaryBuilder::<i64>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"world");
+        builder.append_value(b"hello"); // duplicate
+        builder.append_null();
+
+        let array = builder.finish();
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 2); // "hello" and "world" deduplicated
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(
+            actual,
+            vec![
+                Some(b"hello".as_slice()),
+                Some(b"world".as_slice()),
+                Some(b"hello".as_slice()),
+                None
+            ]
+        );
+
+        let keys = dict_array.keys();
+        assert!(keys.is_null(3));
+        assert_eq!(keys.value(0), keys.value(2));
+        assert_ne!(keys.value(0), keys.value(1));
+    }
+
+    #[test]
+    fn test_cast_empty_string_array_to_dict_utf8_view() {
+        let array = StringArray::from(Vec::<Option<&str>>::new());
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.len(), 0);
+    }
+
+    #[test]
+    fn test_cast_empty_binary_array_to_dict_binary_view() {
+        let array = BinaryArray::from(Vec::<Option<&[u8]>>::new());
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.len(), 0);
+    }
+
+    #[test]
+    fn test_cast_all_null_string_array_to_dict_utf8_view() {
+        let array = StringArray::from(vec![None::<&str>, None, None]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.null_count(), 3);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 0);
+        assert_eq!(dict_array.keys().null_count(), 3);
+
+        let typed = dict_array.downcast_dict::<StringViewArray>().unwrap();
+        let actual: Vec<Option<&str>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![None, None, None]);
+    }
+
+    #[test]
+    fn test_cast_all_null_binary_array_to_dict_binary_view() {
+        let array = BinaryArray::from(vec![None::<&[u8]>, None, None]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        assert!(can_cast_types(array.data_type(), &cast_type));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.null_count(), 3);
+
+        let dict_array = cast_array.as_dictionary::<UInt16Type>();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 0);
+        assert_eq!(dict_array.keys().null_count(), 3);
+
+        let typed = dict_array.downcast_dict::<BinaryViewArray>().unwrap();
+        let actual: Vec<Option<&[u8]>> = typed.into_iter().collect();
+        assert_eq!(actual, vec![None, None, None]);
     }
 
     #[test]
@@ -7733,8 +8408,6 @@ mod tests {
     #[test]
     fn test_cast_utf8_dict() {
         // FROM a dictionary with of Utf8 values
-        use DataType::*;
-
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("one").unwrap();
         builder.append_null();
@@ -7789,7 +8462,6 @@ mod tests {
 
     #[test]
     fn test_cast_dict_to_dict_bad_index_value_primitive() {
-        use DataType::*;
         // test converting from an array that has indexes of a type
         // that are out of bounds for a particular other kind of
         // index.
@@ -7817,7 +8489,6 @@ mod tests {
 
     #[test]
     fn test_cast_dict_to_dict_bad_index_value_utf8() {
-        use DataType::*;
         // Same test as test_cast_dict_to_dict_bad_index_value but use
         // string values (and encode the expected behavior here);
 
@@ -7846,8 +8517,6 @@ mod tests {
     #[test]
     fn test_cast_primitive_dict() {
         // FROM a dictionary with of INT32 values
-        use DataType::*;
-
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(1).unwrap();
         builder.append_null();
@@ -7868,8 +8537,6 @@ mod tests {
 
     #[test]
     fn test_cast_primitive_array_to_dict() {
-        use DataType::*;
-
         let mut builder = PrimitiveBuilder::<Int32Type>::new();
         builder.append_value(1);
         builder.append_null();
@@ -7979,6 +8646,7 @@ mod tests {
         typed_test!(UInt32Array, UInt32, UInt32Type);
         typed_test!(UInt64Array, UInt64, UInt64Type);
 
+        typed_test!(Float16Array, Float16, Float16Type);
         typed_test!(Float32Array, Float32, Float32Type);
         typed_test!(Float64Array, Float64, Float64Type);
 
@@ -7986,17 +8654,27 @@ mod tests {
         typed_test!(Date64Array, Date64, Date64Type);
     }
 
-    fn cast_from_null_to_other(data_type: &DataType) {
+    fn cast_from_null_to_other_base(data_type: &DataType, is_complex: bool) {
         // Cast from null to data_type
-        {
-            let array = new_null_array(&DataType::Null, 4);
-            assert_eq!(array.data_type(), &DataType::Null);
-            let cast_array = cast(&array, data_type).expect("cast failed");
-            assert_eq!(cast_array.data_type(), data_type);
-            for i in 0..4 {
+        let array = new_null_array(&DataType::Null, 4);
+        assert_eq!(array.data_type(), &DataType::Null);
+        let cast_array = cast(&array, data_type).expect("cast failed");
+        assert_eq!(cast_array.data_type(), data_type);
+        for i in 0..4 {
+            if is_complex {
+                assert!(cast_array.logical_nulls().unwrap().is_null(i));
+            } else {
                 assert!(cast_array.is_null(i));
             }
         }
+    }
+
+    fn cast_from_null_to_other(data_type: &DataType) {
+        cast_from_null_to_other_base(data_type, false);
+    }
+
+    fn cast_from_null_to_other_complex(data_type: &DataType) {
+        cast_from_null_to_other_base(data_type, true);
     }
 
     #[test]
@@ -8042,6 +8720,23 @@ mod tests {
         // Cast null from and to struct
         let data_type = DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         cast_from_null_to_other(&data_type);
+
+        let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        cast_from_null_to_other(&target_type);
+
+        let target_type =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        cast_from_null_to_other(&target_type);
+
+        let fields = UnionFields::from_fields(vec![Field::new("a", DataType::Int64, false)]);
+        let target_type = DataType::Union(fields, UnionMode::Sparse);
+        cast_from_null_to_other_complex(&target_type);
+
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            Arc::new(Field::new("item", DataType::Int32, true)),
+        );
+        cast_from_null_to_other_complex(&target_type);
     }
 
     /// Print the `DictionaryArray` `array` as a vector of strings
@@ -8157,14 +8852,14 @@ mod tests {
     #[test]
     fn test_can_cast_types_fixed_size_list_to_list() {
         // DataType::List
-        let array1 = Arc::new(make_fixed_size_list_array()) as ArrayRef;
+        let array1 = make_fixed_size_list_array();
         assert!(can_cast_types(
             array1.data_type(),
             &DataType::List(Arc::new(Field::new("", DataType::Int32, false)))
         ));
 
         // DataType::LargeList
-        let array2 = Arc::new(make_fixed_size_list_array_for_large_list()) as ArrayRef;
+        let array2 = make_fixed_size_list_array_for_large_list();
         assert!(can_cast_types(
             array2.data_type(),
             &DataType::LargeList(Arc::new(Field::new("", DataType::Int64, false)))
@@ -8175,7 +8870,7 @@ mod tests {
     fn test_cast_fixed_size_list_to_list() {
         // Important cases:
         // 1. With/without nulls
-        // 2. LargeList and List
+        // 2. List/LargeList/ListView/LargeListView
         // 3. With and without inner casts
 
         let cases = [
@@ -8223,11 +8918,51 @@ mod tests {
                     Some([Some(2), Some(2)]),
                 ])) as ArrayRef,
             ),
+            // fixed_size_list<i32, 2> => list_view<i32>
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [[1, 1].map(Some), [2, 2].map(Some)].map(Some),
+                    2,
+                )) as ArrayRef,
+                Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>([
+                    Some([Some(1), Some(1)]),
+                    Some([Some(2), Some(2)]),
+                ])) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => list_view<i32> (nullable)
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [None, Some([Some(2), Some(2)])],
+                    2,
+                )) as ArrayRef,
+                Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>([
+                    None,
+                    Some([Some(2), Some(2)]),
+                ])) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => large_list_view<i64>
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [[1, 1].map(Some), [2, 2].map(Some)].map(Some),
+                    2,
+                )) as ArrayRef,
+                Arc::new(LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(
+                    [Some([Some(1), Some(1)]), Some([Some(2), Some(2)])],
+                )) as ArrayRef,
+            ),
+            // fixed_size_list<i32, 2> => large_list_view<i64> (nullable)
+            (
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [None, Some([Some(2), Some(2)])],
+                    2,
+                )) as ArrayRef,
+                Arc::new(LargeListViewArray::from_iter_primitive::<Int64Type, _, _>(
+                    [None, Some([Some(2), Some(2)])],
+                )) as ArrayRef,
+            ),
         ];
 
         for (array, expected) in cases {
-            let array = Arc::new(array) as ArrayRef;
-
             assert!(
                 can_cast_types(array.data_type(), expected.data_type()),
                 "can_cast_types claims we cannot cast {:?} to {:?}",
@@ -8351,7 +9086,7 @@ mod tests {
     #[test]
     fn test_cast_list_containers() {
         // large-list to list
-        let array = Arc::new(make_large_list_array()) as ArrayRef;
+        let array = make_large_list_array();
         let list_array = cast(
             &array,
             &DataType::List(Arc::new(Field::new("", DataType::Int32, false))),
@@ -8365,7 +9100,7 @@ mod tests {
         assert_eq!(&expected.value(2), &actual.value(2));
 
         // list to large-list
-        let array = Arc::new(make_list_array()) as ArrayRef;
+        let array = make_list_array();
         let large_list_array = cast(
             &array,
             &DataType::LargeList(Arc::new(Field::new("", DataType::Int32, false))),
@@ -8380,6 +9115,80 @@ mod tests {
         assert_eq!(&expected.value(0), &actual.value(0));
         assert_eq!(&expected.value(1), &actual.value(1));
         assert_eq!(&expected.value(2), &actual.value(2));
+    }
+
+    #[test]
+    fn test_cast_list_view() {
+        // cast between list view and list view
+        let array = make_list_view_array();
+        let to = DataType::ListView(Field::new_list_field(DataType::Float32, true).into());
+        assert!(can_cast_types(array.data_type(), &to));
+        let actual = cast(&array, &to).unwrap();
+        let actual = actual.as_list_view::<i32>();
+
+        assert_eq!(
+            &Float32Array::from(vec![0.0, 1.0, 2.0]) as &dyn Array,
+            actual.value(0).as_ref()
+        );
+        assert_eq!(
+            &Float32Array::from(vec![3.0, 4.0, 5.0]) as &dyn Array,
+            actual.value(1).as_ref()
+        );
+        assert_eq!(
+            &Float32Array::from(vec![6.0, 7.0]) as &dyn Array,
+            actual.value(2).as_ref()
+        );
+
+        // cast between large list view and large list view
+        let array = make_large_list_view_array();
+        let to = DataType::LargeListView(Field::new_list_field(DataType::Float32, true).into());
+        assert!(can_cast_types(array.data_type(), &to));
+        let actual = cast(&array, &to).unwrap();
+        let actual = actual.as_list_view::<i64>();
+
+        assert_eq!(
+            &Float32Array::from(vec![0.0, 1.0, 2.0]) as &dyn Array,
+            actual.value(0).as_ref()
+        );
+        assert_eq!(
+            &Float32Array::from(vec![3.0, 4.0, 5.0]) as &dyn Array,
+            actual.value(1).as_ref()
+        );
+        assert_eq!(
+            &Float32Array::from(vec![6.0, 7.0]) as &dyn Array,
+            actual.value(2).as_ref()
+        );
+    }
+
+    #[test]
+    fn test_non_list_to_list_view() {
+        let input = Arc::new(Int32Array::from(vec![Some(0), None, Some(2)])) as ArrayRef;
+        let expected_primitive =
+            Arc::new(Float32Array::from(vec![Some(0.0), None, Some(2.0)])) as ArrayRef;
+
+        // [[0], [NULL], [2]]
+        let expected = ListViewArray::new(
+            Field::new_list_field(DataType::Float32, true).into(),
+            vec![0, 1, 2].into(),
+            vec![1, 1, 1].into(),
+            expected_primitive.clone(),
+            None,
+        );
+        assert!(can_cast_types(input.data_type(), expected.data_type()));
+        let actual = cast(&input, expected.data_type()).unwrap();
+        assert_eq!(actual.as_ref(), &expected);
+
+        // [[0], [NULL], [2]]
+        let expected = LargeListViewArray::new(
+            Field::new_list_field(DataType::Float32, true).into(),
+            vec![0, 1, 2].into(),
+            vec![1, 1, 1].into(),
+            expected_primitive.clone(),
+            None,
+        );
+        assert!(can_cast_types(input.data_type(), expected.data_type()));
+        let actual = cast(&input, expected.data_type()).unwrap();
+        assert_eq!(actual.as_ref(), &expected);
     }
 
     #[test]
@@ -8445,6 +9254,82 @@ mod tests {
             let array = Arc::new(ListArray::new(
                 field.clone(),
                 OffsetBuffer::from_lengths(lengths.clone()),
+                Arc::new(Int32Array::from(values.clone())),
+                Some(null_buffer.clone()),
+            )) as ArrayRef;
+            let actual = cast(array.as_ref(), &DataType::FixedSizeList(field.clone(), 3)).unwrap();
+            assert_eq!(expected.as_ref(), actual.as_ref());
+        }
+    }
+
+    #[test]
+    fn test_cast_list_view_to_fsl() {
+        // There four noteworthy cases we should handle:
+        // 1. No nulls
+        // 2. Nulls that are always empty
+        // 3. Nulls that have varying lengths
+        // 4. Nulls that are correctly sized (same as target list size)
+
+        // Non-null case
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+        ];
+        let array = Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
+        )) as ArrayRef;
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            values, 3,
+        )) as ArrayRef;
+        let actual = cast(array.as_ref(), &DataType::FixedSizeList(field.clone(), 3)).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        // Null cases
+        // Array is [[1, 2, 3], null, [4, 5, 6], null]
+        let cases = [
+            (
+                // Zero-length nulls
+                vec![1, 2, 3, 4, 5, 6],
+                vec![0, 0, 3, 0],
+                vec![3, 0, 3, 0],
+            ),
+            (
+                // Varying-length nulls
+                vec![1, 2, 3, 0, 0, 4, 5, 6, 0],
+                vec![0, 1, 5, 0],
+                vec![3, 2, 3, 1],
+            ),
+            (
+                // Correctly-sized nulls
+                vec![1, 2, 3, 0, 0, 0, 4, 5, 6, 0, 0, 0],
+                vec![0, 3, 6, 9],
+                vec![3, 3, 3, 3],
+            ),
+            (
+                // Mixed nulls
+                vec![1, 2, 3, 4, 5, 6, 0, 0, 0],
+                vec![0, 0, 3, 6],
+                vec![3, 0, 3, 3],
+            ),
+        ];
+        let null_buffer = NullBuffer::from(vec![true, false, true, false]);
+
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                None,
+                Some(vec![Some(4), Some(5), Some(6)]),
+                None,
+            ],
+            3,
+        )) as ArrayRef;
+
+        for (values, offsets, lengths) in cases.iter() {
+            let array = Arc::new(ListViewArray::new(
+                field.clone(),
+                offsets.clone().into(),
+                lengths.clone().into(),
                 Arc::new(Int32Array::from(values.clone())),
                 Some(null_buffer.clone()),
             )) as ArrayRef;
@@ -8520,19 +9405,91 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_list_view_to_fsl_safety() {
+        let values = vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5)]),
+            Some(vec![Some(6), Some(7), Some(8), Some(9)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ];
+        let array = Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
+        )) as ArrayRef;
+
+        let res = cast_with_options(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        );
+        assert!(res.is_err());
+        assert!(
+            format!("{res:?}")
+                .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2")
+        );
+
+        // When safe=true (default), the cast will fill nulls for lists that are
+        // too short and truncate lists that are too long.
+        let res = cast(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
+        )
+        .unwrap();
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                None, // Too short -> replaced with null
+                None, // Too long -> replaced with null
+                Some(vec![Some(3), Some(4), Some(5)]),
+            ],
+            3,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), res.as_ref());
+
+        // The safe option is false and the source array contains a null list.
+        // issue: https://github.com/apache/arrow-rs/issues/5642
+        let array = Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+        ])) as ArrayRef;
+        let res = cast_with_options(
+            array.as_ref(),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![Some(vec![Some(1), Some(2), Some(3)]), None],
+            3,
+        )) as ArrayRef;
+        assert_eq!(expected.as_ref(), res.as_ref());
+    }
+
+    #[test]
     fn test_cast_large_list_to_fsl() {
         let values = vec![Some(vec![Some(1), Some(2)]), Some(vec![Some(3), Some(4)])];
+        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
+            2,
+        )) as ArrayRef;
+        let target_type =
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 2);
+
         let array = Arc::new(LargeListArray::from_iter_primitive::<Int32Type, _, _>(
             values.clone(),
         )) as ArrayRef;
-        let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
-            values, 2,
+        let actual = cast(array.as_ref(), &target_type).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        let array = Arc::new(LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(
+            values.clone(),
         )) as ArrayRef;
-        let actual = cast(
-            array.as_ref(),
-            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 2),
-        )
-        .unwrap();
+        let actual = cast(array.as_ref(), &target_type).unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
     }
 
@@ -8572,97 +9529,95 @@ mod tests {
 
     #[test]
     fn test_cast_list_to_fsl_empty() {
-        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
-        let array = new_empty_array(&DataType::List(field.clone()));
-
-        let target_type = DataType::FixedSizeList(field.clone(), 3);
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let target_type = DataType::FixedSizeList(inner_field.clone(), 3);
         let expected = new_empty_array(&target_type);
 
+        // list
+        let array = new_empty_array(&DataType::List(inner_field.clone()));
+        assert!(can_cast_types(array.data_type(), &target_type));
+        let actual = cast(array.as_ref(), &target_type).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        // largelist
+        let array = new_empty_array(&DataType::LargeList(inner_field.clone()));
+        assert!(can_cast_types(array.data_type(), &target_type));
+        let actual = cast(array.as_ref(), &target_type).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        // listview
+        let array = new_empty_array(&DataType::ListView(inner_field.clone()));
+        assert!(can_cast_types(array.data_type(), &target_type));
+        let actual = cast(array.as_ref(), &target_type).unwrap();
+        assert_eq!(expected.as_ref(), actual.as_ref());
+
+        // largelistview
+        let array = new_empty_array(&DataType::LargeListView(inner_field.clone()));
+        assert!(can_cast_types(array.data_type(), &target_type));
         let actual = cast(array.as_ref(), &target_type).unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
     }
 
-    fn make_list_array() -> ListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
-
-        // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        ListArray::from(list_data)
+    fn make_list_array() -> ArrayRef {
+        // [[0, 1, 2], [3, 4, 5], [6, 7]]
+        Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::from_lengths(vec![3, 3, 2]),
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
     }
 
-    fn make_large_list_array() -> LargeListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8]);
-
-        // Construct a list array from the above two
-        let list_data_type =
-            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        LargeListArray::from(list_data)
+    fn make_large_list_array() -> ArrayRef {
+        // [[0, 1, 2], [3, 4, 5], [6, 7]]
+        Arc::new(LargeListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            OffsetBuffer::from_lengths(vec![3, 3, 2]),
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
     }
 
-    fn make_fixed_size_list_array() -> FixedSizeListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 4);
-        let list_data = ArrayData::builder(list_data_type)
-            .len(2)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        FixedSizeListArray::from(list_data)
+    fn make_list_view_array() -> ArrayRef {
+        // [[0, 1, 2], [3, 4, 5], [6, 7]]
+        Arc::new(ListViewArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            vec![0, 3, 6].into(),
+            vec![3, 3, 2].into(),
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
     }
 
-    fn make_fixed_size_list_array_for_large_list() -> FixedSizeListArray {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int64)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0i64, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
+    fn make_large_list_view_array() -> ArrayRef {
+        // [[0, 1, 2], [3, 4, 5], [6, 7]]
+        Arc::new(LargeListViewArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            vec![0, 3, 6].into(),
+            vec![3, 3, 2].into(),
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
+    }
 
-        let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, true)), 4);
-        let list_data = ArrayData::builder(list_data_type)
-            .len(2)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        FixedSizeListArray::from(list_data)
+    fn make_fixed_size_list_array() -> ArrayRef {
+        // [[0, 1, 2, 3], [4, 5, 6, 7]]
+        Arc::new(FixedSizeListArray::new(
+            Field::new_list_field(DataType::Int32, true).into(),
+            4,
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
+    }
+
+    fn make_fixed_size_list_array_for_large_list() -> ArrayRef {
+        // [[0, 1, 2, 3], [4, 5, 6, 7]]
+        Arc::new(FixedSizeListArray::new(
+            Field::new_list_field(DataType::Int64, true).into(),
+            4,
+            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
+            None,
+        ))
     }
 
     #[test]
@@ -8712,7 +9667,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map(Field { "entries": Struct("key": Utf8, "value": nullable Utf8) }, false) to Map(Field { "entries": Struct("key": Utf8, "value": Utf8) }, true) not supported"#
+            r#"Casting from Map("entries": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted) to Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Utf8), sorted) not supported"#
         );
     }
 
@@ -8763,7 +9718,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map(Field { "entries": Struct("key": Utf8, "value": nullable Interval(DayTime)) }, false) to Map(Field { "entries": Struct("key": Utf8, "value": Duration(s)) }, true) not supported"#
+            r#"Casting from Map("entries": non-null Struct("key": non-null Utf8, "value": Interval(DayTime)), unsorted) to Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Duration(s)), sorted) not supported"#
         );
     }
 
@@ -8924,7 +9879,7 @@ mod tests {
     fn test_list_cast_offsets() {
         // test if offset of the array is taken into account during cast
         let array1 = make_list_array().slice(1, 2);
-        let array2 = Arc::new(make_list_array()) as ArrayRef;
+        let array2 = make_list_array();
 
         let dt = DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let out1 = cast(&array1, &dt).unwrap();
@@ -8935,60 +9890,57 @@ mod tests {
 
     #[test]
     fn test_list_to_string() {
-        let str_array = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "g", "h"]);
-        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
-        let value_data = str_array.into_data();
+        fn assert_cast(array: &ArrayRef, expected: &[&str]) {
+            assert!(can_cast_types(array.data_type(), &DataType::Utf8));
+            let out = cast(array, &DataType::Utf8).unwrap();
+            let out = out
+                .as_string::<i32>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(out, expected);
 
-        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        let array = Arc::new(ListArray::from(list_data)) as ArrayRef;
+            assert!(can_cast_types(array.data_type(), &DataType::LargeUtf8));
+            let out = cast(array, &DataType::LargeUtf8).unwrap();
+            let out = out
+                .as_string::<i64>()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(out, expected);
 
-        let out = cast(&array, &DataType::Utf8).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&out, &vec!["[a, b, c]", "[d, e, f]", "[g, h]"]);
+            assert!(can_cast_types(array.data_type(), &DataType::Utf8View));
+            let out = cast(array, &DataType::Utf8View).unwrap();
+            let out = out
+                .as_string_view()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            assert_eq!(out, expected);
+        }
 
-        let out = cast(&array, &DataType::LargeUtf8).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&out, &vec!["[a, b, c]", "[d, e, f]", "[g, h]"]);
+        let array = Arc::new(ListArray::new(
+            Field::new_list_field(DataType::Utf8, true).into(),
+            OffsetBuffer::from_lengths(vec![3, 3, 2]),
+            Arc::new(StringArray::from(vec![
+                "a", "b", "c", "d", "e", "f", "g", "h",
+            ])),
+            None,
+        )) as ArrayRef;
 
-        let array = Arc::new(make_list_array()) as ArrayRef;
-        let out = cast(&array, &DataType::Utf8).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&out, &vec!["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+        assert_cast(&array, &["[a, b, c]", "[d, e, f]", "[g, h]"]);
 
-        let array = Arc::new(make_large_list_array()) as ArrayRef;
-        let out = cast(&array, &DataType::LargeUtf8).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&out, &vec!["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+        let array = make_list_array();
+        assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+
+        let array = make_large_list_array();
+        assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+
+        let array = make_list_view_array();
+        assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
+
+        let array = make_large_list_view_array();
+        assert_cast(&array, &["[0, 1, 2]", "[3, 4, 5]", "[6, 7]"]);
     }
 
     #[test]
@@ -10868,7 +11820,7 @@ mod tests {
         let to_type = DataType::Utf8;
         let result = cast(&struct_array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Struct("a": Boolean) to Utf8 not supported"#,
+            r#"Cast error: Casting from Struct("a": non-null Boolean) to Utf8 not supported"#,
             result.unwrap_err().to_string()
         );
     }
@@ -10879,9 +11831,168 @@ mod tests {
         let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
         let result = cast(&array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Utf8 to Struct("a": Boolean) not supported"#,
+            r#"Cast error: Casting from Utf8 to Struct("a": non-null Boolean) not supported"#,
             result.unwrap_err().to_string()
         );
+    }
+
+    #[test]
+    fn test_cast_struct_with_different_field_order() {
+        // Test slow path: fields are in different order
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+        let string = Arc::new(StringArray::from(vec!["foo", "bar", "baz", "qux"]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Utf8, false)),
+                string.clone() as ArrayRef,
+            ),
+        ]);
+
+        // Target has fields in different order: c, a, b instead of a, b, c
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("c", DataType::Utf8, false),
+                Field::new("a", DataType::Utf8, false), // Boolean to Utf8
+                Field::new("b", DataType::Utf8, false), // Int32 to Utf8
+            ]
+            .into(),
+        );
+
+        let result = cast(&struct_array, &to_type).unwrap();
+        let result_struct = result.as_struct();
+
+        assert_eq!(result_struct.data_type(), &to_type);
+        assert_eq!(result_struct.num_columns(), 3);
+
+        // Verify field "c" (originally position 2, now position 0) remains Utf8
+        let c_column = result_struct.column(0).as_string::<i32>();
+        assert_eq!(
+            c_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["foo", "bar", "baz", "qux"]
+        );
+
+        // Verify field "a" (originally position 0, now position 1) was cast from Boolean to Utf8
+        let a_column = result_struct.column(1).as_string::<i32>();
+        assert_eq!(
+            a_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["false", "false", "true", "true"]
+        );
+
+        // Verify field "b" (originally position 1, now position 2) was cast from Int32 to Utf8
+        let b_column = result_struct.column(2).as_string::<i32>();
+        assert_eq!(
+            b_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["42", "28", "19", "31"]
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_with_missing_field() {
+        // Test that casting fails when target has a field not present in source
+        let boolean = Arc::new(BooleanArray::from(vec![false, true]));
+        let struct_array = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Boolean, false)),
+            boolean.clone() as ArrayRef,
+        )]);
+
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Int32, false), // Field "b" doesn't exist in source
+            ]
+            .into(),
+        );
+
+        let result = cast(&struct_array, &to_type);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid argument error: Incorrect number of arrays for StructArray fields, expected 2 got 1"
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_with_subset_of_fields() {
+        // Test casting to a struct with fewer fields (selecting a subset)
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+        let string = Arc::new(StringArray::from(vec!["foo", "bar", "baz", "qux"]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Utf8, false)),
+                string.clone() as ArrayRef,
+            ),
+        ]);
+
+        // Target has only fields "c" and "a", omitting "b"
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("c", DataType::Utf8, false),
+                Field::new("a", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+
+        let result = cast(&struct_array, &to_type).unwrap();
+        let result_struct = result.as_struct();
+
+        assert_eq!(result_struct.data_type(), &to_type);
+        assert_eq!(result_struct.num_columns(), 2);
+
+        // Verify field "c" remains Utf8
+        let c_column = result_struct.column(0).as_string::<i32>();
+        assert_eq!(
+            c_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["foo", "bar", "baz", "qux"]
+        );
+
+        // Verify field "a" was cast from Boolean to Utf8
+        let a_column = result_struct.column(1).as_string::<i32>();
+        assert_eq!(
+            a_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["false", "false", "true", "true"]
+        );
+    }
+
+    #[test]
+    fn test_can_cast_struct_rename_field() {
+        // Test that can_cast_types returns false when target has a field not in source
+        let from_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("c", DataType::Boolean, false), // Field "c" not in source
+            ]
+            .into(),
+        );
+
+        assert!(can_cast_types(&from_type, &to_type));
     }
 
     fn run_decimal_cast_test_case_between_multiple_types(t: DecimalCastTestConfig) {
@@ -11354,5 +12465,886 @@ mod tests {
             error.to_string(),
             "Invalid argument error: -1.0 is too small to store in a Decimal32 of precision 1. Min is -0.9"
         );
+    }
+
+    #[test]
+    fn test_run_end_encoded_to_primitive() {
+        // Create a RunEndEncoded array: [1, 1, 2, 2, 2, 3]
+        let run_ends = Int32Array::from(vec![2, 5, 6]);
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(run_array) as ArrayRef;
+        // Cast to Int64
+        let cast_result = cast(&array_ref, &DataType::Int64).unwrap();
+        // Verify the result is a RunArray with Int64 values
+        let result_run_array = cast_result.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(
+            result_run_array.values(),
+            &[1i64, 1i64, 2i64, 2i64, 2i64, 3i64]
+        );
+    }
+
+    #[test]
+    fn test_sliced_run_end_encoded_to_primitive() {
+        let run_ends = Int32Array::from(vec![2, 5, 6]);
+        let values = Int32Array::from(vec![1, 2, 3]);
+        // [1, 1, 2, 2, 2, 3]
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let run_array = run_array.slice(3, 3); // [2, 2, 3]
+        let array_ref = Arc::new(run_array) as ArrayRef;
+
+        let cast_result = cast(&array_ref, &DataType::Int64).unwrap();
+        let result_run_array = cast_result.as_primitive::<Int64Type>();
+        assert_eq!(result_run_array.values(), &[2, 2, 3]);
+    }
+
+    #[test]
+    fn test_run_end_encoded_to_string() {
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let values = Int32Array::from(vec![10, 20, 30]);
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(run_array) as ArrayRef;
+
+        // Cast to String
+        let cast_result = cast(&array_ref, &DataType::Utf8).unwrap();
+
+        // Verify the result is a RunArray with String values
+        let result_array = cast_result.as_any().downcast_ref::<StringArray>().unwrap();
+        // Check that values are correct
+        assert_eq!(result_array.value(0), "10");
+        assert_eq!(result_array.value(1), "10");
+        assert_eq!(result_array.value(2), "20");
+    }
+
+    #[test]
+    fn test_primitive_to_run_end_encoded() {
+        // Create an Int32 array with repeated values: [1, 1, 2, 2, 2, 3]
+        let source_array = Int32Array::from(vec![1, 1, 2, 2, 2, 3]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+
+        // Cast to RunEndEncoded<Int32, Int32>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+
+        // Verify the result is a RunArray
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        // Check run structure: runs should end at positions [2, 5, 6]
+        assert_eq!(result_run_array.run_ends().values(), &[2, 5, 6]);
+
+        // Check values: should be [1, 2, 3]
+        let values_array = result_run_array.values().as_primitive::<Int32Type>();
+        assert_eq!(values_array.values(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_primitive_to_run_end_encoded_with_nulls() {
+        let source_array = Int32Array::from(vec![
+            Some(1),
+            Some(1),
+            None,
+            None,
+            Some(2),
+            Some(2),
+            Some(3),
+            Some(3),
+            None,
+            None,
+            Some(4),
+            Some(4),
+            Some(5),
+            Some(5),
+            None,
+            None,
+        ]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(
+            result_run_array.run_ends().values(),
+            &[2, 4, 6, 8, 10, 12, 14, 16]
+        );
+        assert_eq!(
+            result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .values(),
+            &[1, 0, 2, 3, 0, 4, 5, 0]
+        );
+        assert_eq!(result_run_array.values().null_count(), 3);
+    }
+
+    #[test]
+    fn test_primitive_to_run_end_encoded_with_nulls_consecutive() {
+        let source_array = Int64Array::from(vec![
+            Some(1),
+            Some(1),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(4),
+            Some(20),
+            Some(500),
+            Some(500),
+            None,
+            None,
+        ]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Int64, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int16Type>>()
+            .unwrap();
+        assert_eq!(
+            result_run_array.run_ends().values(),
+            &[2, 10, 11, 12, 14, 16]
+        );
+        assert_eq!(
+            result_run_array
+                .values()
+                .as_primitive::<Int64Type>()
+                .values(),
+            &[1, 0, 4, 20, 500, 0]
+        );
+        assert_eq!(result_run_array.values().null_count(), 2);
+    }
+
+    #[test]
+    fn test_string_to_run_end_encoded() {
+        // Create a String array with repeated values: ["a", "a", "b", "c", "c"]
+        let source_array = StringArray::from(vec!["a", "a", "b", "c", "c"]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+
+        // Cast to RunEndEncoded<Int32, String>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+
+        // Verify the result is a RunArray
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        // Check run structure: runs should end at positions [2, 3, 5]
+        assert_eq!(result_run_array.run_ends().values(), &[2, 3, 5]);
+
+        // Check values: should be ["a", "b", "c"]
+        let values_array = result_run_array.values().as_string::<i32>();
+        assert_eq!(values_array.value(0), "a");
+        assert_eq!(values_array.value(1), "b");
+        assert_eq!(values_array.value(2), "c");
+    }
+
+    #[test]
+    fn test_empty_array_to_run_end_encoded() {
+        // Create an empty Int32 array
+        let source_array = Int32Array::from(Vec::<i32>::new());
+        let array_ref = Arc::new(source_array) as ArrayRef;
+
+        // Cast to RunEndEncoded<Int32, Int32>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+
+        // Verify the result is an empty RunArray
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        // Check that both run_ends and values are empty
+        assert_eq!(result_run_array.run_ends().len(), 0);
+        assert_eq!(result_run_array.values().len(), 0);
+    }
+
+    #[test]
+    fn test_run_end_encoded_with_nulls() {
+        // Create a RunEndEncoded array with nulls: [1, 1, null, 2, 2]
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let values = Int32Array::from(vec![Some(1), None, Some(2)]);
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(run_array) as ArrayRef;
+
+        // Cast to String
+        let cast_result = cast(&array_ref, &DataType::Utf8).unwrap();
+
+        // Verify the result preserves nulls
+        let result_run_array = cast_result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(result_run_array.value(0), "1");
+        assert!(result_run_array.is_null(2));
+        assert_eq!(result_run_array.value(4), "2");
+    }
+
+    #[test]
+    fn test_different_index_types() {
+        // Test with Int16 index type
+        let source_array = Int32Array::from(vec![1, 1, 2, 3, 3]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+        assert_eq!(cast_result.data_type(), &target_type);
+
+        // Verify the cast worked correctly: values are [1, 2, 3]
+        // and run-ends are [2, 3, 5]
+        let run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int16Type>>()
+            .unwrap();
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(0), 1);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(1), 2);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(2), 3);
+        assert_eq!(run_array.run_ends().values(), &[2i16, 3i16, 5i16]);
+
+        // Test again with Int64 index type
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+        assert_eq!(cast_result.data_type(), &target_type);
+
+        // Verify the cast worked correctly: values are [1, 2, 3]
+        // and run-ends are [2, 3, 5]
+        let run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(0), 1);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(1), 2);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(2), 3);
+        assert_eq!(run_array.run_ends().values(), &[2i64, 3i64, 5i64]);
+    }
+
+    #[test]
+    fn test_unsupported_cast_to_run_end_encoded() {
+        // Create a Struct array - complex nested type that might not be supported
+        let field = Field::new("item", DataType::Int32, false);
+        let struct_array = StructArray::from(vec![(
+            Arc::new(field),
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )]);
+        let array_ref = Arc::new(struct_array) as ArrayRef;
+
+        // This should fail because:
+        // 1. The target type is not RunEndEncoded
+        // 2. The target type is not supported for casting from StructArray
+        let cast_result = cast(&array_ref, &DataType::FixedSizeBinary(10));
+
+        // Expect this to fail
+        assert!(cast_result.is_err());
+    }
+
+    /// Test casting RunEndEncoded<Int64, String> to RunEndEncoded<Int16, String> should fail
+    #[test]
+    fn test_cast_run_end_encoded_int64_to_int16_should_fail() {
+        // Construct a valid REE array with Int64 run-ends
+        let run_ends = Int64Array::from(vec![100_000, 400_000, 700_000]); // values too large for Int16
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int64Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int16, Utf8>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false, // This should make it fail instead of returning nulls
+            format_options: FormatOptions::default(),
+        };
+
+        // This should fail due to run-end overflow
+        let result: Result<Arc<dyn Array + 'static>, ArrowError> =
+            cast_with_options(&array_ref, &target_type, &cast_options);
+
+        let e = result.expect_err("Cast should have failed but succeeded");
+        assert!(
+            e.to_string()
+                .contains("Cast error: Can't cast value 100000 to type Int16")
+        );
+    }
+
+    #[test]
+    fn test_cast_run_end_encoded_int64_to_int16_with_safe_should_fail_with_null_invalid_error() {
+        // Construct a valid REE array with Int64 run-ends
+        let run_ends = Int64Array::from(vec![100_000, 400_000, 700_000]); // values too large for Int16
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int64Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int16, Utf8>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default(),
+        };
+
+        // This fails even though safe is true because the run_ends array has null values
+        let result: Result<Arc<dyn Array + 'static>, ArrowError> =
+            cast_with_options(&array_ref, &target_type, &cast_options);
+        let e = result.expect_err("Cast should have failed but succeeded");
+        assert!(
+            e.to_string()
+                .contains("Invalid argument error: Found null values in run_ends array. The run_ends array should not have null values.")
+        );
+    }
+
+    /// Test casting RunEndEncoded<Int16, String> to RunEndEncoded<Int64, String> should succeed
+    #[test]
+    fn test_cast_run_end_encoded_int16_to_int64_should_succeed() {
+        // Construct a valid REE array with Int16 run-ends
+        let run_ends = Int16Array::from(vec![2, 5, 8]); // values that fit in Int16
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int16Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int64, Utf8> (upcast should succeed)
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        // This should succeed due to valid upcast
+        let result: Result<Arc<dyn Array + 'static>, ArrowError> =
+            cast_with_options(&array_ref, &target_type, &cast_options);
+
+        let array_ref = result.expect("Cast should have succeeded but failed");
+        // Downcast to RunArray<Int64Type>
+        let run_array = array_ref
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+
+        // Verify the cast worked correctly
+        // Assert the values were cast correctly
+        assert_eq!(run_array.run_ends().values(), &[2i64, 5i64, 8i64]);
+        assert_eq!(run_array.values().as_string::<i32>().value(0), "a");
+        assert_eq!(run_array.values().as_string::<i32>().value(1), "b");
+        assert_eq!(run_array.values().as_string::<i32>().value(2), "c");
+    }
+
+    #[test]
+    fn test_cast_run_end_encoded_dictionary_to_run_end_encoded() {
+        // Construct a valid dictionary encoded array
+        let values = StringArray::from_iter([Some("a"), Some("b"), Some("c")]);
+        let keys = UInt64Array::from_iter(vec![1, 1, 1, 0, 0, 0, 2, 2, 2]);
+        let array_ref = Arc::new(DictionaryArray::new(keys, Arc::new(values))) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int64, Utf8>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        // This should succeed
+        let result = cast_with_options(&array_ref, &target_type, &cast_options)
+            .expect("Cast should have succeeded but failed");
+
+        // Verify the cast worked correctly
+        // Assert the values were cast correctly
+        let run_array = result
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+        assert_eq!(run_array.values().as_string::<i32>().value(0), "b");
+        assert_eq!(run_array.values().as_string::<i32>().value(1), "a");
+        assert_eq!(run_array.values().as_string::<i32>().value(2), "c");
+
+        // Verify the run-ends were cast correctly (run ends at 3, 6, 9)
+        assert_eq!(run_array.run_ends().values(), &[3i64, 6i64, 9i64]);
+    }
+
+    fn int32_list_values() -> Vec<Option<Vec<Option<i32>>>> {
+        vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+            None,
+            Some(vec![Some(7), Some(8), Some(9)]),
+            Some(vec![None, Some(10)]),
+        ]
+    }
+
+    #[test]
+    fn test_cast_list_view_to_list() {
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i32>();
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_list_view_to_large_list() {
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i64>();
+        let expected_list =
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_list_to_list_view() {
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
+
+        let got_list_view = cast_result.as_list_view::<i32>();
+        let expected_list_view =
+            ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got_list_view, &expected_list_view);
+
+        // inner types get cast
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![None, Some(3)]),
+        ]);
+        let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Float32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
+
+        let got_list_view = cast_result.as_list_view::<i32>();
+        let expected_list_view = ListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
+            Some(vec![Some(1.0), Some(2.0)]),
+            None,
+            Some(vec![None, Some(3.0)]),
+        ]);
+        assert_eq!(got_list_view, &expected_list_view);
+    }
+
+    #[test]
+    fn test_cast_list_to_large_list_view() {
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![None, Some(3)]),
+        ]);
+        let target_type =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Float32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
+
+        let got_list_view = cast_result.as_list_view::<i64>();
+        let expected_list_view =
+            LargeListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
+                Some(vec![Some(1.0), Some(2.0)]),
+                None,
+                Some(vec![None, Some(3.0)]),
+            ]);
+        assert_eq!(got_list_view, &expected_list_view);
+    }
+
+    #[test]
+    fn test_cast_large_list_view_to_large_list() {
+        let list_view =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i64>();
+
+        let expected_list =
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_large_list_view_to_list() {
+        let list_view =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i32>();
+
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_large_list_to_large_list_view() {
+        let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
+
+        let got_list_view = cast_result.as_list_view::<i64>();
+        let expected_list_view =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got_list_view, &expected_list_view);
+
+        // inner types get cast
+        let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![None, Some(3)]),
+        ]);
+        let target_type =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Float32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
+
+        let got_list_view = cast_result.as_list_view::<i64>();
+        let expected_list_view =
+            LargeListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
+                Some(vec![Some(1.0), Some(2.0)]),
+                None,
+                Some(vec![None, Some(3.0)]),
+            ]);
+        assert_eq!(got_list_view, &expected_list_view);
+    }
+
+    #[test]
+    fn test_cast_large_list_to_list_view() {
+        let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![None, Some(3)]),
+        ]);
+        let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Float32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
+
+        let got_list_view = cast_result.as_list_view::<i32>();
+        let expected_list_view = ListViewArray::from_iter_primitive::<Float32Type, _, _>(vec![
+            Some(vec![Some(1.0), Some(2.0)]),
+            None,
+            Some(vec![None, Some(3.0)]),
+        ]);
+        assert_eq!(got_list_view, &expected_list_view);
+    }
+
+    #[test]
+    fn test_cast_list_view_to_list_out_of_order() {
+        let list_view = ListViewArray::new(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            ScalarBuffer::from(vec![0, 6, 3]),
+            ScalarBuffer::from(vec![3, 3, 3]),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
+            None,
+        );
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i32>();
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(7), Some(8), Some(9)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+        ]);
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_list_view_to_list_overlapping() {
+        let list_view = ListViewArray::new(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            ScalarBuffer::from(vec![0, 0]),
+            ScalarBuffer::from(vec![1, 2]),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        );
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i32>();
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1)]),
+            Some(vec![Some(1), Some(2)]),
+        ]);
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_list_view_to_list_empty() {
+        let values: Vec<Option<Vec<Option<i32>>>> = vec![];
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(values.clone());
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i32>();
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(values);
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_list_view_to_list_different_inner_type() {
+        let values = int32_list_values();
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(values.clone());
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i32>();
+
+        let expected_list =
+            ListArray::from_iter_primitive::<Int64Type, _, _>(values.into_iter().map(|list| {
+                list.map(|list| {
+                    list.into_iter()
+                        .map(|v| v.map(|v| v as i64))
+                        .collect::<Vec<_>>()
+                })
+            }));
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_list_view_to_list_out_of_order_with_nulls() {
+        let list_view = ListViewArray::new(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            ScalarBuffer::from(vec![0, 6, 3]),
+            ScalarBuffer::from(vec![3, 3, 3]),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
+            Some(NullBuffer::from(vec![false, true, false])),
+        );
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got_list = cast_result.as_list::<i32>();
+        let expected_list = ListArray::new(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            OffsetBuffer::from_lengths([3, 3, 3]),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 7, 8, 9, 4, 5, 6])),
+            Some(NullBuffer::from(vec![false, true, false])),
+        );
+        assert_eq!(got_list, &expected_list);
+    }
+
+    #[test]
+    fn test_cast_list_view_to_large_list_view() {
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got = cast_result.as_list_view::<i64>();
+
+        let expected =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got, &expected);
+    }
+
+    #[test]
+    fn test_cast_large_list_view_to_list_view() {
+        let list_view =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
+        let got = cast_result.as_list_view::<i32>();
+
+        let expected = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got, &expected);
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_int64() {
+        let array = Time32SecondArray::from(vec![1000, 2000, 3000]);
+        let array = Arc::new(array) as Arc<dyn Array>;
+        let to_type = DataType::Int64;
+        let cast_options = CastOptions::default();
+
+        assert!(can_cast_types(array.data_type(), &to_type));
+
+        let result = cast_with_options(&array, &to_type, &cast_options);
+        assert!(
+            result.is_ok(),
+            "Failed to cast Time32(Second) to Int64: {:?}",
+            result.err()
+        );
+
+        let cast_array = result.unwrap();
+        let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        assert_eq!(cast_array.value(0), 1000);
+        assert_eq!(cast_array.value(1), 2000);
+        assert_eq!(cast_array.value(2), 3000);
+    }
+
+    #[test]
+    fn test_cast_time32_millisecond_to_int64() {
+        let array = Time32MillisecondArray::from(vec![1000, 2000, 3000]);
+        let array = Arc::new(array) as Arc<dyn Array>;
+        let to_type = DataType::Int64;
+        let cast_options = CastOptions::default();
+
+        assert!(can_cast_types(array.data_type(), &to_type));
+
+        let result = cast_with_options(&array, &to_type, &cast_options);
+        assert!(
+            result.is_ok(),
+            "Failed to cast Time32(Millisecond) to Int64: {:?}",
+            result.err()
+        );
+
+        let cast_array = result.unwrap();
+        let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        assert_eq!(cast_array.value(0), 1000);
+        assert_eq!(cast_array.value(1), 2000);
+        assert_eq!(cast_array.value(2), 3000);
+    }
+
+    #[test]
+    fn test_cast_string_to_time32_second_to_int64() {
+        // Mimic: select arrow_cast('03:12:44'::time, 'Time32(Second)')::bigint;
+        // raised in https://github.com/apache/datafusion/issues/19036
+        let array = StringArray::from(vec!["03:12:44"]);
+        let array = Arc::new(array) as Arc<dyn Array>;
+        let cast_options = CastOptions::default();
+
+        // 1. Cast String to Time32(Second)
+        let time32_type = DataType::Time32(TimeUnit::Second);
+        let time32_array = cast_with_options(&array, &time32_type, &cast_options).unwrap();
+
+        // 2. Cast Time32(Second) to Int64
+        let int64_type = DataType::Int64;
+        assert!(can_cast_types(time32_array.data_type(), &int64_type));
+
+        let result = cast_with_options(&time32_array, &int64_type, &cast_options);
+
+        assert!(
+            result.is_ok(),
+            "Failed to cast Time32(Second) to Int64: {:?}",
+            result.err()
+        );
+
+        let cast_array = result.unwrap();
+        let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // 03:12:44 = 3*3600 + 12*60 + 44 = 10800 + 720 + 44 = 11564
+        assert_eq!(cast_array.value(0), 11564);
+    }
+    #[test]
+    fn test_string_dicts_to_binary_view() {
+        let expected = BinaryViewArray::from_iter(vec![
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[0],
+            None,
+            VIEW_TEST_DATA[3],
+            None,
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[4],
+        ]);
+
+        let values_arrays: [ArrayRef; _] = [
+            Arc::new(StringArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(StringViewArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(LargeStringArray::from_iter(VIEW_TEST_DATA)),
+        ];
+        for values in values_arrays {
+            let keys =
+                Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+            let string_dict_array = DictionaryArray::<Int8Type>::try_new(keys, values).unwrap();
+
+            let casted = cast(&string_dict_array, &DataType::BinaryView).unwrap();
+            assert_eq!(casted.as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_binary_dicts_to_string_view() {
+        let expected = StringViewArray::from_iter(vec![
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[0],
+            None,
+            VIEW_TEST_DATA[3],
+            None,
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[4],
+        ]);
+
+        let values_arrays: [ArrayRef; _] = [
+            Arc::new(BinaryArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(BinaryViewArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(LargeBinaryArray::from_iter(VIEW_TEST_DATA)),
+        ];
+        for values in values_arrays {
+            let keys =
+                Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+            let string_dict_array = DictionaryArray::<Int8Type>::try_new(keys, values).unwrap();
+
+            let casted = cast(&string_dict_array, &DataType::Utf8View).unwrap();
+            assert_eq!(casted.as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_cast_between_sliced_run_end_encoded() {
+        let run_ends = Int16Array::from(vec![2, 5, 8]);
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int16Type>::try_new(&run_ends, &values).unwrap();
+        let ree_array = ree_array.slice(1, 2);
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        let result = cast_with_options(&array_ref, &target_type, &cast_options).unwrap();
+        let run_array = result.as_run::<Int64Type>();
+        let run_array = run_array.downcast::<StringArray>().unwrap();
+
+        let expected = vec!["a", "b"];
+        let actual = run_array.into_iter().flatten().collect::<Vec<_>>();
+
+        assert_eq!(expected, actual);
     }
 }

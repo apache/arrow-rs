@@ -239,7 +239,7 @@ fn visit_intervals(
         _ => {
             return Err(ArrowError::InvalidArgumentError(
                 "GeometryType not supported for dimension bounds".to_string(),
-            ))
+            ));
         }
     }
 
@@ -302,7 +302,7 @@ fn geometry_type(geom: &impl GeometryTrait<T = f64>) -> Result<i32, ArrowError> 
         Dimensions::Unknown(_) => {
             return Err(ArrowError::InvalidArgumentError(
                 "Unsupported dimensions".to_string(),
-            ))
+            ));
         }
     };
 
@@ -317,7 +317,7 @@ fn geometry_type(geom: &impl GeometryTrait<T = f64>) -> Result<i32, ArrowError> 
         _ => {
             return Err(ArrowError::InvalidArgumentError(
                 "GeometryType not supported for dimension bounds".to_string(),
-            ))
+            ));
         }
     };
 

@@ -17,9 +17,7 @@
 
 [package]
 name = "parquet-geospatial"
-# This package is still in development and thus the version does
-# not follow the versions of the rest of the crates in this repo.
-version = "0.1.0"
+version = { workspace = true }
 license = { workspace = true }
 description = "Apache Parquet Geometry and Geography implementation in Rust"
 homepage = { workspace = true }
@@ -33,7 +31,9 @@ rust-version = { workspace = true }
 [dependencies]
 arrow-schema = { workspace = true }
 geo-traits = { version = "0.3" }
-wkb = { version = "0.9" }
+serde = { version = "1.0", default-features = false, features = ["derive"]}
+serde_json = { version = "1.0", default-features = false, features = ["std"]}
+wkb = { version = "0.9.1" }
 
 [dev-dependencies]
 wkt = { version = "0.14" }

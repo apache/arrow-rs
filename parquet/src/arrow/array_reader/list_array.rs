@@ -19,12 +19,12 @@ use crate::arrow::array_reader::ArrayReader;
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use arrow_array::{
-    builder::BooleanBufferBuilder, new_empty_array, Array, ArrayRef, GenericListArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, GenericListArray, OffsetSizeTrait, builder::BooleanBufferBuilder,
+    new_empty_array,
 };
 use arrow_buffer::Buffer;
 use arrow_buffer::ToByteSlice;
-use arrow_data::{transform::MutableArrayData, ArrayData};
+use arrow_data::{ArrayData, transform::MutableArrayData};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::cmp::Ordering;
@@ -246,12 +246,12 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::array_reader::ArrayReaderBuilder;
     use crate::arrow::array_reader::list_array::ListArrayReader;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
-    use crate::arrow::array_reader::ArrayReaderBuilder;
     use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
-    use crate::arrow::{parquet_to_arrow_schema, ArrowWriter, ProjectionMask};
+    use crate::arrow::{ArrowWriter, ProjectionMask, parquet_to_arrow_schema};
     use crate::file::properties::WriterProperties;
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::schema::parser::parse_message_type;
@@ -561,6 +561,7 @@ mod tests {
             schema,
             ProjectionMask::all(),
             file_metadata.key_value_metadata(),
+            &[],
         )
         .unwrap();
 

@@ -17,8 +17,8 @@
 
 use arrow::array::StringDictionaryBuilder;
 use arrow::datatypes::Int32Type;
-use criterion::{criterion_group, criterion_main, Criterion};
-use rand::{rng, Rng};
+use criterion::{Criterion, criterion_group, criterion_main};
+use rand::{Rng, rng};
 
 /// Note: this is best effort, not all keys are necessarily present or unique
 fn build_strings(dict_size: usize, total_size: usize, key_len: usize) -> Vec<String> {

@@ -39,17 +39,17 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 [dependencies]
 arrow-array = { workspace = true, optional = true }
 arrow-buffer = { workspace = true, optional = true }
-arrow-cast = { workspace = true, optional = true }
 arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
+parquet-geospatial = { workspace = true, optional = true }
 parquet-variant = { workspace = true, optional = true }
 parquet-variant-json = { workspace = true, optional = true }
 parquet-variant-compute = { workspace = true, optional = true }
 
-object_store = { version = "0.12.0", default-features = false, optional = true }
+object_store = { version = "0.13.1", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
@@ -57,7 +57,7 @@ snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
 # To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
 flate2 = { version = "1.1", default-features = false, optional = true }
-lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
+lz4_flex = { version = "0.12", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
 chrono = { workspace = true }
 num-bigint = { version = "0.4", default-features = false }
@@ -80,20 +80,21 @@ ring = { version = "0.17", default-features = false, features = ["std"], optiona
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
-criterion = { version = "0.5", default-features = false, features = ["async_futures"]  }
+criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = "1.43.1"
 brotli = { version = "8.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
-lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"] }
+lz4_flex = { version = "0.12", default-features = false, features = ["std", "frame"] }
 zstd = { version = "0.13", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
+arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-object_store = { version = "0.12.0", default-features = false, features = ["azure", "fs"] }
-sysinfo = { version = "0.36.0", default-features = false, features = ["system"] }
+object_store = { version = "0.13.1", default-features = false, features = ["azure", "fs"] }
+sysinfo = { version = "0.37.1", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -103,7 +104,7 @@ default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64",
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
-arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
+arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable support for arrow canonical extension types
 arrow_canonical_extension_types = ["arrow-schema?/canonical_extension_types"]
 # Enable CLI tools
@@ -131,6 +132,8 @@ flate2-rust_backened = ["flate2/rust_backend"]
 flate2-zlib-rs = ["flate2/zlib-rs"]
 # Enable parquet variant support
 variant_experimental = ["arrow", "parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
+# Enable geospatial support
+geospatial = ["parquet-geospatial"]
 
 
 [[example]]
@@ -147,11 +150,6 @@ path = "./examples/read_parquet.rs"
 name = "write_parquet"
 required-features = ["cli"]
 path = "./examples/write_parquet.rs"
-
-[[example]]
-name = "async_read_parquet"
-required-features = ["arrow", "async"]
-path = "./examples/async_read_parquet.rs"
 
 [[example]]
 name = "read_with_rowgroup"
@@ -253,7 +251,22 @@ name = "metadata"
 harness = false
 
 [[bench]]
+name = "parquet_round_trip"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "row_selector"
+harness = false
+required-features = ["arrow"]
+
+[[bench]]
+name = "row_group_index_reader"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
+name = "row_selection_cursor"
 harness = false
 required-features = ["arrow"]
 

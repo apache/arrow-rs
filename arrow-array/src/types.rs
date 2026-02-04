@@ -18,7 +18,7 @@
 //! Zero-sized types used to parameterize generic array implementations
 
 use crate::delta::{
-    add_days_datetime, add_months_datetime, shift_months, sub_days_datetime, sub_months_datetime,
+    add_days_datetime, add_months_date, add_months_datetime, sub_days_datetime, sub_months_datetime,
 };
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
@@ -40,7 +40,7 @@ use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::{Add, Sub};
+use std::ops::Sub;
 
 // re-export types so that they can be used without importing arrow_buffer explicitly
 pub use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
@@ -904,9 +904,22 @@ impl Date32Type {
     /// # Arguments
     ///
     /// * `i` - The Date32Type to convert
+    #[deprecated(since = "58.0.0", note = "Use to_naive_date_opt instead.")]
     pub fn to_naive_date(i: <Date32Type as ArrowPrimitiveType>::Native) -> NaiveDate {
+        Self::to_naive_date_opt(i)
+            .unwrap_or_else(|| panic!("Date32Type::to_naive_date overflowed for date: {i}",))
+    }
+
+    /// Converts an arrow Date32Type into a chrono::NaiveDate
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The Date32Type to convert
+    ///
+    /// Returns `Some(NaiveDate)` if it fits, `None` otherwise.
+    pub fn to_naive_date_opt(i: <Date32Type as ArrowPrimitiveType>::Native) -> Option<NaiveDate> {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        epoch.add(Duration::try_days(i as i64).unwrap())
+        Duration::try_days(i as i64).and_then(|d| epoch.checked_add_signed(d))
     }
 
     /// Converts a chrono::NaiveDate into an arrow Date32Type
@@ -925,14 +938,35 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    #[deprecated(
+        since = "58.0.0",
+        note = "Use `add_year_months_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn add_year_months(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
-        let prior = Date32Type::to_naive_date(date);
+        Self::add_year_months_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date32Type::add_year_months overflowed for date: {date}, delta: {delta}",)
+        })
+    }
+
+    /// Adds the given IntervalYearMonthType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// Returns `Some(Date32Type)` if it fits, `None` otherwise.
+    pub fn add_year_months_opt(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
+        let prior = Date32Type::to_naive_date_opt(date)?;
         let months = IntervalYearMonthType::to_months(delta);
-        let posterior = shift_months(prior, months);
-        Date32Type::from_naive_date(posterior)
+        let posterior = add_months_date(prior, months)?;
+        Some(Date32Type::from_naive_date(posterior))
     }
 
     /// Adds the given IntervalDayTimeType to an arrow Date32Type
@@ -941,15 +975,36 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    #[deprecated(
+        since = "58.0.0",
+        note = "Use `add_day_time_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn add_day_time(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        Self::add_day_time_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date32Type::add_day_time overflowed for date: {date}, delta: {delta:?}",)
+        })
+    }
+
+    /// Adds the given IntervalDayTimeType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// Returns `Some(Date32Type)` if it fits, `None` otherwise.
+    pub fn add_day_time_opt(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = Date32Type::to_naive_date(date);
-        let res = res.add(Duration::try_days(days as i64).unwrap());
-        let res = res.add(Duration::try_milliseconds(ms as i64).unwrap());
-        Date32Type::from_naive_date(res)
+        let res = Date32Type::to_naive_date_opt(date)?;
+        let res = res.checked_add_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_add_signed(Duration::try_milliseconds(ms as i64)?)?;
+        Some(Date32Type::from_naive_date(res))
     }
 
     /// Adds the given IntervalMonthDayNanoType to an arrow Date32Type
@@ -958,16 +1013,37 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    #[deprecated(
+        since = "58.0.0",
+        note = "Use `add_month_day_nano_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn add_month_day_nano(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        Self::add_month_day_nano_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date32Type::add_month_day_nano overflowed for date: {date}, delta: {delta:?}",)
+        })
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// Returns `Some(Date32Type)` if it fits, `None` otherwise.
+    pub fn add_month_day_nano_opt(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = Date32Type::to_naive_date(date);
-        let res = shift_months(res, months);
-        let res = res.add(Duration::try_days(days as i64).unwrap());
-        let res = res.add(Duration::nanoseconds(nanos));
-        Date32Type::from_naive_date(res)
+        let res = Date32Type::to_naive_date_opt(date)?;
+        let res = add_months_date(res, months)?;
+        let res = res.checked_add_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_add_signed(Duration::nanoseconds(nanos))?;
+        Some(Date32Type::from_naive_date(res))
     }
 
     /// Subtract the given IntervalYearMonthType to an arrow Date32Type
@@ -976,14 +1052,35 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    #[deprecated(
+        since = "58.0.0",
+        note = "Use `subtract_year_months_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn subtract_year_months(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
-        let prior = Date32Type::to_naive_date(date);
+        Self::subtract_year_months_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date32Type::subtract_year_months overflowed for date: {date}, delta: {delta}",)
+        })
+    }
+
+    /// Subtract the given IntervalYearMonthType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// Returns `Some(Date32Type)` if it fits, `None` otherwise.
+    pub fn subtract_year_months_opt(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
+        let prior = Date32Type::to_naive_date_opt(date)?;
         let months = IntervalYearMonthType::to_months(-delta);
-        let posterior = shift_months(prior, months);
-        Date32Type::from_naive_date(posterior)
+        let posterior = add_months_date(prior, months)?;
+        Some(Date32Type::from_naive_date(posterior))
     }
 
     /// Subtract the given IntervalDayTimeType to an arrow Date32Type
@@ -992,15 +1089,36 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    #[deprecated(
+        since = "58.0.0",
+        note = "Use `subtract_day_time_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn subtract_day_time(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        Self::subtract_day_time_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date32Type::subtract_day_time overflowed for date: {date}, delta: {delta:?}",)
+        })
+    }
+
+    /// Subtract the given IntervalDayTimeType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// Returns `Some(Date32Type)` if it fits, `None` otherwise.
+    pub fn subtract_day_time_opt(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = Date32Type::to_naive_date(date);
-        let res = res.sub(Duration::try_days(days as i64).unwrap());
-        let res = res.sub(Duration::try_milliseconds(ms as i64).unwrap());
-        Date32Type::from_naive_date(res)
+        let res = Date32Type::to_naive_date_opt(date)?;
+        let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_sub_signed(Duration::try_milliseconds(ms as i64)?)?;
+        Some(Date32Type::from_naive_date(res))
     }
 
     /// Subtract the given IntervalMonthDayNanoType to an arrow Date32Type
@@ -1009,16 +1127,39 @@ impl Date32Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    #[deprecated(
+        since = "58.0.0",
+        note = "Use `subtract_month_day_nano_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn subtract_month_day_nano(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        Self::subtract_month_day_nano_opt(date, delta).unwrap_or_else(|| {
+            panic!(
+                "Date32Type::subtract_month_day_nano overflowed for date: {date}, delta: {delta:?}",
+            )
+        })
+    }
+
+    /// Subtract the given IntervalMonthDayNanoType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// Returns `Some(Date32Type)` if it fits, `None` otherwise.
+    pub fn subtract_month_day_nano_opt(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = Date32Type::to_naive_date(date);
-        let res = shift_months(res, -months);
-        let res = res.sub(Duration::try_days(days as i64).unwrap());
-        let res = res.sub(Duration::nanoseconds(nanos));
-        Date32Type::from_naive_date(res)
+        let res = Date32Type::to_naive_date_opt(date)?;
+        let res = add_months_date(res, -months)?;
+        let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
+        Some(Date32Type::from_naive_date(res))
     }
 }
 
@@ -1092,7 +1233,7 @@ impl Date64Type {
     ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let prior = Date64Type::to_naive_date_opt(date)?;
         let months = IntervalYearMonthType::to_months(delta);
-        let posterior = shift_months(prior, months);
+        let posterior = add_months_date(prior, months)?;
         Some(Date64Type::from_naive_date(posterior))
     }
 
@@ -1167,7 +1308,7 @@ impl Date64Type {
     ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date64Type::to_naive_date_opt(date)?;
-        let res = shift_months(res, months);
+        let res = add_months_date(res, months)?;
         let res = res.checked_add_signed(Duration::try_days(days as i64)?)?;
         let res = res.checked_add_signed(Duration::nanoseconds(nanos))?;
         Some(Date64Type::from_naive_date(res))
@@ -1206,7 +1347,7 @@ impl Date64Type {
     ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let prior = Date64Type::to_naive_date_opt(date)?;
         let months = IntervalYearMonthType::to_months(-delta);
-        let posterior = shift_months(prior, months);
+        let posterior = add_months_date(prior, months)?;
         Some(Date64Type::from_naive_date(posterior))
     }
 
@@ -1283,7 +1424,7 @@ impl Date64Type {
     ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date64Type::to_naive_date_opt(date)?;
-        let res = shift_months(res, -months);
+        let res = add_months_date(res, -months)?;
         let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
         let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
         Some(Date64Type::from_naive_date(res))
@@ -1323,6 +1464,8 @@ pub trait DecimalType:
     const MAX_PRECISION: u8;
     /// Maximum no of digits after the decimal point (note the scale can be negative)
     const MAX_SCALE: i8;
+    /// The maximum value for each precision in `0..=MAX_PRECISION`: [0, 9, 99, ...]
+    const MAX_FOR_EACH_PRECISION: &'static [Self::Native];
     /// fn to create its [`DataType`]
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType;
     /// Default values for [`DataType`]
@@ -1393,6 +1536,8 @@ impl DecimalType for Decimal32Type {
     const BYTE_LENGTH: usize = 4;
     const MAX_PRECISION: u8 = DECIMAL32_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL32_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &'static [i32] =
+        &arrow_data::decimal::MAX_DECIMAL32_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal32;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal32(DECIMAL32_MAX_PRECISION, DECIMAL32_DEFAULT_SCALE);
@@ -1427,6 +1572,8 @@ impl DecimalType for Decimal64Type {
     const BYTE_LENGTH: usize = 8;
     const MAX_PRECISION: u8 = DECIMAL64_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL64_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &'static [i64] =
+        &arrow_data::decimal::MAX_DECIMAL64_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal64;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal64(DECIMAL64_MAX_PRECISION, DECIMAL64_DEFAULT_SCALE);
@@ -1461,6 +1608,8 @@ impl DecimalType for Decimal128Type {
     const BYTE_LENGTH: usize = 16;
     const MAX_PRECISION: u8 = DECIMAL128_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL128_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &'static [i128] =
+        &arrow_data::decimal::MAX_DECIMAL128_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal128;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
@@ -1495,6 +1644,8 @@ impl DecimalType for Decimal256Type {
     const BYTE_LENGTH: usize = 32;
     const MAX_PRECISION: u8 = DECIMAL256_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL256_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &'static [i256] =
+        &arrow_data::decimal::MAX_DECIMAL256_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);

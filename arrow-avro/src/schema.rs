@@ -15,14 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Avro Schema representations for Arrow.
+
+#[cfg(feature = "canonical_extension_types")]
+use arrow_schema::extension::ExtensionType;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, IntervalUnit, Schema as ArrowSchema, TimeUnit,
     UnionMode,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map as JsonMap, Value};
+use serde_json::{Map as JsonMap, Value, json};
 #[cfg(feature = "sha256")]
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::cmp::PartialEq;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -38,7 +43,7 @@ pub const CONFLUENT_MAGIC: [u8; 1] = [0x00];
 /// SHA256 (32) + single-object magic (2)
 pub const MAX_PREFIX_LEN: usize = 34;
 
-/// The metadata key used for storing the JSON encoded [`Schema`]
+/// The metadata key used for storing the JSON encoded `Schema`
 pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
 
 /// Metadata key used to represent Avro enum symbols in an Arrow schema.
@@ -59,21 +64,13 @@ pub const AVRO_DOC_METADATA_KEY: &str = "avro.doc";
 /// Default name for the root record in an Avro schema.
 pub const AVRO_ROOT_RECORD_DEFAULT_NAME: &str = "topLevelRecord";
 
-/// Compare two Avro schemas for equality (identical schemas).
-/// Returns true if the schemas have the same parsing canonical form (i.e., logically identical).
-pub fn compare_schemas(writer: &Schema, reader: &Schema) -> Result<bool, ArrowError> {
-    let canon_writer = AvroSchema::generate_canonical_form(writer)?;
-    let canon_reader = AvroSchema::generate_canonical_form(reader)?;
-    Ok(canon_writer == canon_reader)
-}
-
 /// Avro types are not nullable, with nullability instead encoded as a union
 /// where one of the variants is the null type.
 ///
 /// To accommodate this, we specially case two-variant unions where one of the
 /// variants is the null type, and use this to derive arrow's notion of nullability
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
-pub enum Nullability {
+pub(crate) enum Nullability {
     /// The nulls are encoded as the first union variant
     #[default]
     NullFirst,
@@ -89,7 +86,7 @@ pub enum Nullability {
 /// A type name in an Avro schema
 ///
 /// This represents the different ways a type can be referenced in an Avro schema.
-pub enum TypeName<'a> {
+pub(crate) enum TypeName<'a> {
     /// A primitive type like null, boolean, int, etc.
     Primitive(PrimitiveType),
     /// A reference to another named type
@@ -102,7 +99,7 @@ pub enum TypeName<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr)]
 #[serde(rename_all = "camelCase")]
 #[strum(serialize_all = "lowercase")]
-pub enum PrimitiveType {
+pub(crate) enum PrimitiveType {
     /// null: no value
     Null,
     /// boolean: a binary value
@@ -121,21 +118,21 @@ pub enum PrimitiveType {
     String,
 }
 
-/// Additional attributes within a [`Schema`]
+/// Additional attributes within a `Schema`
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#schema-declaration>
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Attributes<'a> {
+pub(crate) struct Attributes<'a> {
     /// A logical type name
     ///
     /// <https://avro.apache.org/docs/1.11.1/specification/#logical-types>
     #[serde(default)]
-    pub logical_type: Option<&'a str>,
+    pub(crate) logical_type: Option<&'a str>,
 
     /// Additional JSON attributes
     #[serde(flatten)]
-    pub additional: HashMap<&'a str, Value>,
+    pub(crate) additional: HashMap<&'a str, Value>,
 }
 
 impl Attributes<'_> {
@@ -151,13 +148,13 @@ impl Attributes<'_> {
 /// A type definition that is not a variant of [`ComplexType`]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Type<'a> {
+pub(crate) struct Type<'a> {
     /// The type of this Avro data structure
     #[serde(borrow)]
-    pub r#type: TypeName<'a>,
+    pub(crate) r#type: TypeName<'a>,
     /// Additional attributes associated with this type
     #[serde(flatten)]
-    pub attributes: Attributes<'a>,
+    pub(crate) attributes: Attributes<'a>,
 }
 
 /// An Avro schema
@@ -166,7 +163,7 @@ pub struct Type<'a> {
 /// See <https://avro.apache.org/docs/1.11.1/specification/#schemas> for more details.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum Schema<'a> {
+pub(crate) enum Schema<'a> {
     /// A direct type name (primitive or reference)
     #[serde(borrow)]
     TypeName(TypeName<'a>),
@@ -186,7 +183,7 @@ pub enum Schema<'a> {
 /// <https://avro.apache.org/docs/1.11.1/specification/#complex-types>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum ComplexType<'a> {
+pub(crate) enum ComplexType<'a> {
     /// Record type: a sequence of fields with names and types
     #[serde(borrow)]
     Record(Record<'a>),
@@ -208,117 +205,134 @@ pub enum ComplexType<'a> {
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#schema-record>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Record<'a> {
+pub(crate) struct Record<'a> {
     /// Name of the record
     #[serde(borrow)]
-    pub name: &'a str,
+    pub(crate) name: &'a str,
     /// Optional namespace for the record, provides a way to organize names
     #[serde(borrow, default)]
-    pub namespace: Option<&'a str>,
+    pub(crate) namespace: Option<&'a str>,
     /// Optional documentation string for the record
     #[serde(borrow, default)]
-    pub doc: Option<&'a str>,
+    pub(crate) doc: Option<Cow<'a, str>>,
     /// Alternative names for this record
     #[serde(borrow, default)]
-    pub aliases: Vec<&'a str>,
+    pub(crate) aliases: Vec<&'a str>,
     /// The fields contained in this record
     #[serde(borrow)]
-    pub fields: Vec<Field<'a>>,
+    pub(crate) fields: Vec<Field<'a>>,
     /// Additional attributes for this record
     #[serde(flatten)]
-    pub attributes: Attributes<'a>,
+    pub(crate) attributes: Attributes<'a>,
+}
+
+fn deserialize_default<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 /// A field within a [`Record`]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Field<'a> {
+pub(crate) struct Field<'a> {
     /// Name of the field within the record
     #[serde(borrow)]
-    pub name: &'a str,
+    pub(crate) name: &'a str,
     /// Optional documentation for this field
     #[serde(borrow, default)]
-    pub doc: Option<&'a str>,
+    pub(crate) doc: Option<Cow<'a, str>>,
     /// The field's type definition
     #[serde(borrow)]
-    pub r#type: Schema<'a>,
+    pub(crate) r#type: Schema<'a>,
     /// Optional default value for this field
-    #[serde(default)]
-    pub default: Option<Value>,
+    #[serde(deserialize_with = "deserialize_default", default)]
+    pub(crate) default: Option<Value>,
+    /// Alternative names (aliases) for this field (Avro spec: field-level aliases).
+    /// Borrowed from input JSON where possible.
+    #[serde(borrow, default)]
+    pub(crate) aliases: Vec<&'a str>,
 }
 
 /// An enumeration
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#enums>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Enum<'a> {
+pub(crate) struct Enum<'a> {
     /// Name of the enum
     #[serde(borrow)]
-    pub name: &'a str,
+    pub(crate) name: &'a str,
     /// Optional namespace for the enum, provides organizational structure
     #[serde(borrow, default)]
-    pub namespace: Option<&'a str>,
+    pub(crate) namespace: Option<&'a str>,
     /// Optional documentation string describing the enum
     #[serde(borrow, default)]
-    pub doc: Option<&'a str>,
+    pub(crate) doc: Option<Cow<'a, str>>,
     /// Alternative names for this enum
     #[serde(borrow, default)]
-    pub aliases: Vec<&'a str>,
+    pub(crate) aliases: Vec<&'a str>,
     /// The symbols (values) that this enum can have
     #[serde(borrow)]
-    pub symbols: Vec<&'a str>,
+    pub(crate) symbols: Vec<&'a str>,
     /// Optional default value for this enum
     #[serde(borrow, default)]
-    pub default: Option<&'a str>,
+    pub(crate) default: Option<&'a str>,
     /// Additional attributes for this enum
     #[serde(flatten)]
-    pub attributes: Attributes<'a>,
+    pub(crate) attributes: Attributes<'a>,
 }
 
 /// An array
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#arrays>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Array<'a> {
+pub(crate) struct Array<'a> {
     /// The schema for items in this array
     #[serde(borrow)]
-    pub items: Box<Schema<'a>>,
+    pub(crate) items: Box<Schema<'a>>,
     /// Additional attributes for this array
     #[serde(flatten)]
-    pub attributes: Attributes<'a>,
+    pub(crate) attributes: Attributes<'a>,
 }
 
 /// A map
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#maps>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Map<'a> {
+pub(crate) struct Map<'a> {
     /// The schema for values in this map
     #[serde(borrow)]
-    pub values: Box<Schema<'a>>,
+    pub(crate) values: Box<Schema<'a>>,
     /// Additional attributes for this map
     #[serde(flatten)]
-    pub attributes: Attributes<'a>,
+    pub(crate) attributes: Attributes<'a>,
 }
 
 /// A fixed length binary array
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#fixed>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Fixed<'a> {
+pub(crate) struct Fixed<'a> {
     /// Name of the fixed type
     #[serde(borrow)]
-    pub name: &'a str,
+    pub(crate) name: &'a str,
     /// Optional namespace for the fixed type
     #[serde(borrow, default)]
-    pub namespace: Option<&'a str>,
+    pub(crate) namespace: Option<&'a str>,
     /// Alternative names for this fixed type
     #[serde(borrow, default)]
-    pub aliases: Vec<&'a str>,
+    pub(crate) aliases: Vec<&'a str>,
     /// The number of bytes in this fixed type
-    pub size: usize,
+    pub(crate) size: usize,
     /// Additional attributes for this fixed type
     #[serde(flatten)]
-    pub attributes: Attributes<'a>,
+    pub(crate) attributes: Attributes<'a>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
+pub(crate) struct AvroSchemaOptions {
+    pub(crate) null_order: Option<Nullability>,
+    pub(crate) strip_metadata: bool,
 }
 
 /// A wrapper for an Avro schema in its JSON string representation.
@@ -359,16 +373,16 @@ impl AvroSchema {
     /// - `Fingerprint::MD5` for `FingerprintAlgorithm::MD5`
     /// - `Fingerprint::SHA256` for `FingerprintAlgorithm::SHA256`
     ///
-    /// Note: [`FingerprintAlgorithm::None`] cannot be used to generate a fingerprint
+    /// Note: [`FingerprintAlgorithm::Id`] or [`FingerprintAlgorithm::Id64`] cannot be used to generate a fingerprint
     /// and will result in an error. If you intend to use a Schema Registry ID-based
-    /// wire format, load or set the [`Fingerprint::Id`] directly via [`Fingerprint::load_fingerprint_id`]
-    /// or [`SchemaStore::set`].
+    /// wire format, either use [`SchemaStore::set`] or load the [`Fingerprint::Id`] directly via [`Fingerprint::load_fingerprint_id`] or for
+    /// [`Fingerprint::Id64`] via [`Fingerprint::load_fingerprint_id64`].
     ///
     /// See also: <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
     ///
     /// # Errors
     /// Returns an error if deserializing the schema fails, if generating the
-    /// canonical form of the schema fails, or if `hash_type` is [`FingerprintAlgorithm::None`].
+    /// canonical form of the schema fails, or if `hash_type` is [`FingerprintAlgorithm::Id`].
     ///
     /// # Examples
     /// ```
@@ -379,6 +393,66 @@ impl AvroSchema {
     /// ```
     pub fn fingerprint(&self, hash_type: FingerprintAlgorithm) -> Result<Fingerprint, ArrowError> {
         Self::generate_fingerprint(&self.schema()?, hash_type)
+    }
+
+    pub(crate) fn project(&self, projection: &[usize]) -> Result<Self, ArrowError> {
+        let mut value: Value = serde_json::from_str(&self.json_string)
+            .map_err(|e| ArrowError::AvroError(format!("Invalid Avro schema JSON: {e}")))?;
+        let obj = value.as_object_mut().ok_or_else(|| {
+            ArrowError::AvroError(
+                "Projected schema must be a JSON object Avro record schema".to_string(),
+            )
+        })?;
+        match obj.get("type").and_then(|v| v.as_str()) {
+            Some("record") => {}
+            Some(other) => {
+                return Err(ArrowError::AvroError(format!(
+                    "Projected schema must be an Avro record, found type '{other}'"
+                )));
+            }
+            None => {
+                return Err(ArrowError::AvroError(
+                    "Projected schema missing required 'type' field".to_string(),
+                ));
+            }
+        }
+        let fields_val = obj.get_mut("fields").ok_or_else(|| {
+            ArrowError::AvroError("Avro record schema missing required 'fields'".to_string())
+        })?;
+        let projected_fields = {
+            let mut original_fields = match fields_val {
+                Value::Array(arr) => std::mem::take(arr),
+                _ => {
+                    return Err(ArrowError::AvroError(
+                        "Avro record schema 'fields' must be an array".to_string(),
+                    ));
+                }
+            };
+            let len = original_fields.len();
+            let mut seen: HashSet<usize> = HashSet::with_capacity(projection.len());
+            let mut out: Vec<Value> = Vec::with_capacity(projection.len());
+            for &i in projection {
+                if i >= len {
+                    return Err(ArrowError::AvroError(format!(
+                        "Projection index {i} out of bounds for record with {len} fields"
+                    )));
+                }
+                if !seen.insert(i) {
+                    return Err(ArrowError::AvroError(format!(
+                        "Duplicate projection index {i}"
+                    )));
+                }
+                out.push(std::mem::replace(&mut original_fields[i], Value::Null));
+            }
+            out
+        };
+        *fields_val = Value::Array(projected_fields);
+        let json_string = serde_json::to_string(&value).map_err(|e| {
+            ArrowError::AvroError(format!(
+                "Failed to serialize projected Avro schema JSON: {e}"
+            ))
+        })?;
+        Ok(Self::new(json_string))
     }
 
     pub(crate) fn generate_fingerprint(
@@ -392,8 +466,8 @@ impl AvroSchema {
             FingerprintAlgorithm::Rabin => {
                 Ok(Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)))
             }
-            FingerprintAlgorithm::None => Err(ArrowError::SchemaError(
-                "FingerprintAlgorithm of None cannot be used to generate a fingerprint; \
+            FingerprintAlgorithm::Id | FingerprintAlgorithm::Id64 => Err(ArrowError::SchemaError(
+                "FingerprintAlgorithm of Id or Id64 cannot be used to generate a fingerprint; \
                 if using Fingerprint::Id, pass the registry ID in instead using the set method."
                     .to_string(),
             )),
@@ -406,18 +480,7 @@ impl AvroSchema {
         }
     }
 
-    /// Generates the 64-bit Rabin fingerprint for the given `Schema`.
-    ///
-    /// The fingerprint is computed from the canonical form of the schema.
-    /// This is also known as `CRC-64-AVRO`.
-    ///
-    /// # Returns
-    /// A `Fingerprint::Rabin` variant containing the 64-bit fingerprint.
-    pub fn generate_fingerprint_rabin(schema: &Schema) -> Result<Fingerprint, ArrowError> {
-        Self::generate_fingerprint(schema, FingerprintAlgorithm::Rabin)
-    }
-
-    /// Generates the Parsed Canonical Form for the given [`Schema`].
+    /// Generates the Parsed Canonical Form for the given `Schema`.
     ///
     /// The canonical form is a standardized JSON representation of the schema,
     /// primarily used for generating a schema fingerprint for equality checking.
@@ -431,25 +494,29 @@ impl AvroSchema {
         build_canonical(schema, None)
     }
 
-    /// Build Avro JSON from an Arrow [`ArrowSchema`], applying the given null‑union order.
+    /// Build Avro JSON from an Arrow [`ArrowSchema`], applying the given null‑union order and optionally stripping internal Arrow metadata.
     ///
     /// If the input Arrow schema already contains Avro JSON in
     /// [`SCHEMA_METADATA_KEY`], that JSON is returned verbatim to preserve
     /// the exact header encoding alignment; otherwise, a new JSON is generated
     /// honoring `null_union_order` at **all nullable sites**.
-    pub fn from_arrow_with_options(
+    pub(crate) fn from_arrow_with_options(
         schema: &ArrowSchema,
-        null_order: Option<Nullability>,
+        options: Option<AvroSchemaOptions>,
     ) -> Result<AvroSchema, ArrowError> {
-        if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
-            return Ok(AvroSchema::new(json.clone()));
+        let opts = options.unwrap_or_default();
+        let order = opts.null_order.unwrap_or_default();
+        let strip = opts.strip_metadata;
+        if !strip {
+            if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
+                return Ok(AvroSchema::new(json.clone()));
+            }
         }
-        let order = null_order.unwrap_or_default();
         let mut name_gen = NameGenerator::default();
         let fields_json = schema
             .fields()
             .iter()
-            .map(|f| arrow_field_to_avro(f, &mut name_gen, order))
+            .map(|f| arrow_field_to_avro(f, &mut name_gen, order, strip))
             .collect::<Result<Vec<_>, _>>()?;
         let record_name = schema
             .metadata
@@ -477,7 +544,7 @@ impl AvroSchema {
 
 /// A stack-allocated, fixed-size buffer for the prefix.
 #[derive(Debug, Copy, Clone)]
-pub struct Prefix {
+pub(crate) struct Prefix {
     buf: [u8; MAX_PREFIX_LEN],
     len: u8,
 }
@@ -497,6 +564,8 @@ pub enum FingerprintStrategy {
     Rabin,
     /// Use a Confluent Schema Registry 32-bit ID.
     Id(u32),
+    /// Use an Apicurio Schema Registry 64-bit ID.
+    Id64(u64),
     #[cfg(feature = "md5")]
     /// Use the 128-bit MD5 fingerprint.
     MD5,
@@ -515,7 +584,8 @@ impl From<FingerprintAlgorithm> for FingerprintStrategy {
     fn from(f: FingerprintAlgorithm) -> Self {
         match f {
             FingerprintAlgorithm::Rabin => FingerprintStrategy::Rabin,
-            FingerprintAlgorithm::None => FingerprintStrategy::Id(0),
+            FingerprintAlgorithm::Id => FingerprintStrategy::Id(0),
+            FingerprintAlgorithm::Id64 => FingerprintStrategy::Id64(0),
             #[cfg(feature = "md5")]
             FingerprintAlgorithm::MD5 => FingerprintStrategy::MD5,
             #[cfg(feature = "sha256")]
@@ -528,7 +598,8 @@ impl From<&Fingerprint> for FingerprintStrategy {
     fn from(f: &Fingerprint) -> Self {
         match f {
             Fingerprint::Rabin(_) => FingerprintStrategy::Rabin,
-            Fingerprint::Id(id) => FingerprintStrategy::Id(*id),
+            Fingerprint::Id(_) => FingerprintStrategy::Id(0),
+            Fingerprint::Id64(_) => FingerprintStrategy::Id64(0),
             #[cfg(feature = "md5")]
             Fingerprint::MD5(_) => FingerprintStrategy::MD5,
             #[cfg(feature = "sha256")]
@@ -544,8 +615,10 @@ pub enum FingerprintAlgorithm {
     /// 64‑bit CRC‑64‑AVRO Rabin fingerprint.
     #[default]
     Rabin,
-    /// Represents a fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
-    None,
+    /// Represents a 32 bit fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
+    Id,
+    /// Represents a 64 bit fingerprint not based on a hash algorithm, (e.g., a 64-bit Schema Registry ID.)
+    Id64,
     #[cfg(feature = "md5")]
     /// 128-bit MD5 message digest.
     MD5,
@@ -559,7 +632,8 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
     fn from(fp: &Fingerprint) -> Self {
         match fp {
             Fingerprint::Rabin(_) => FingerprintAlgorithm::Rabin,
-            Fingerprint::Id(_) => FingerprintAlgorithm::None,
+            Fingerprint::Id(_) => FingerprintAlgorithm::Id,
+            Fingerprint::Id64(_) => FingerprintAlgorithm::Id64,
             #[cfg(feature = "md5")]
             Fingerprint::MD5(_) => FingerprintAlgorithm::MD5,
             #[cfg(feature = "sha256")]
@@ -578,7 +652,8 @@ impl From<&FingerprintStrategy> for FingerprintAlgorithm {
     fn from(s: &FingerprintStrategy) -> Self {
         match s {
             FingerprintStrategy::Rabin => FingerprintAlgorithm::Rabin,
-            FingerprintStrategy::Id(_) => FingerprintAlgorithm::None,
+            FingerprintStrategy::Id(_) => FingerprintAlgorithm::Id,
+            FingerprintStrategy::Id64(_) => FingerprintAlgorithm::Id64,
             #[cfg(feature = "md5")]
             FingerprintStrategy::MD5 => FingerprintAlgorithm::MD5,
             #[cfg(feature = "sha256")]
@@ -601,6 +676,8 @@ pub enum Fingerprint {
     Rabin(u64),
     /// A 32-bit Schema Registry ID.
     Id(u32),
+    /// A 64-bit Schema Registry ID.
+    Id64(u64),
     #[cfg(feature = "md5")]
     /// A 128-bit MD5 fingerprint.
     MD5([u8; 16]),
@@ -620,6 +697,7 @@ impl From<&FingerprintStrategy> for Fingerprint {
         match s {
             FingerprintStrategy::Rabin => Fingerprint::Rabin(0),
             FingerprintStrategy::Id(id) => Fingerprint::Id(*id),
+            FingerprintStrategy::Id64(id) => Fingerprint::Id64(*id),
             #[cfg(feature = "md5")]
             FingerprintStrategy::MD5 => Fingerprint::MD5([0; 16]),
             #[cfg(feature = "sha256")]
@@ -632,7 +710,8 @@ impl From<FingerprintAlgorithm> for Fingerprint {
     fn from(s: FingerprintAlgorithm) -> Self {
         match s {
             FingerprintAlgorithm::Rabin => Fingerprint::Rabin(0),
-            FingerprintAlgorithm::None => Fingerprint::Id(0),
+            FingerprintAlgorithm::Id => Fingerprint::Id(0),
+            FingerprintAlgorithm::Id64 => Fingerprint::Id64(0),
             #[cfg(feature = "md5")]
             FingerprintAlgorithm::MD5 => Fingerprint::MD5([0; 16]),
             #[cfg(feature = "sha256")]
@@ -653,11 +732,24 @@ impl Fingerprint {
         Fingerprint::Id(u32::from_be(id))
     }
 
+    /// Loads the 64-bit Schema Registry fingerprint (Apicurio Schema Registry ID).
+    ///
+    /// The provided `id` is in big-endian wire order; this converts it to host order
+    /// and returns `Fingerprint::Id64`.
+    ///
+    /// # Returns
+    /// A `Fingerprint::Id64` variant containing the 64-bit fingerprint.
+    pub fn load_fingerprint_id64(id: u64) -> Self {
+        Fingerprint::Id64(u64::from_be(id))
+    }
+
     /// Constructs a serialized prefix represented as a `Vec<u8>` based on the variant of the enum.
     ///
     /// This method serializes data in different formats depending on the variant of `self`:
     /// - **`Id(id)`**: Uses the Confluent wire format, which includes a predefined magic header (`CONFLUENT_MAGIC`)
     ///   followed by the big-endian byte representation of the `id`.
+    /// - **`Id64(id)`**: Uses the Apicurio wire format, which includes a predefined magic header (`CONFLUENT_MAGIC`)
+    ///   followed by the big-endian 8-byte representation of the `id`.
     /// - **`Rabin(val)`**: Uses the Avro single-object specification format. This includes a different magic header
     ///   (`SINGLE_OBJECT_MAGIC`) followed by the little-endian byte representation of the `val`.
     /// - **`MD5(bytes)`** (optional, `md5` feature enabled): A non-standard extension that adds the
@@ -674,10 +766,11 @@ impl Fingerprint {
     /// - You can optionally enable the `md5` feature to include the `MD5` variant.
     /// - You can optionally enable the `sha256` feature to include the `SHA256` variant.
     ///
-    pub fn make_prefix(&self) -> Prefix {
+    pub(crate) fn make_prefix(&self) -> Prefix {
         let mut buf = [0u8; MAX_PREFIX_LEN];
         let len = match self {
             Self::Id(val) => write_prefix(&mut buf, &CONFLUENT_MAGIC, &val.to_be_bytes()),
+            Self::Id64(val) => write_prefix(&mut buf, &CONFLUENT_MAGIC, &val.to_be_bytes()),
             Self::Rabin(val) => write_prefix(&mut buf, &SINGLE_OBJECT_MAGIC, &val.to_le_bytes()),
             #[cfg(feature = "md5")]
             Self::MD5(val) => write_prefix(&mut buf, &SINGLE_OBJECT_MAGIC, val),
@@ -803,7 +896,7 @@ impl SchemaStore {
     /// A fingerprint is calculated for the given schema using the store's configured
     /// hash type. If a schema with the same fingerprint does not already exist in the
     /// store, the new schema is inserted. If the fingerprint already exists, the
-    /// existing schema is not overwritten. If FingerprintAlgorithm is set to None, this
+    /// existing schema is not overwritten. If FingerprintAlgorithm is set to Id or Id64, this
     /// method will return an error. Confluent wire format implementations should leverage the
     /// set method instead.
     ///
@@ -816,7 +909,9 @@ impl SchemaStore {
     /// A `Result` containing the `Fingerprint` of the schema if successful,
     /// or an `ArrowError` on failure.
     pub fn register(&mut self, schema: AvroSchema) -> Result<Fingerprint, ArrowError> {
-        if self.fingerprint_algorithm == FingerprintAlgorithm::None {
+        if self.fingerprint_algorithm == FingerprintAlgorithm::Id
+            || self.fingerprint_algorithm == FingerprintAlgorithm::Id64
+        {
             return Err(ArrowError::SchemaError(
                 "Invalid FingerprintAlgorithm; unable to generate fingerprint. \
             Use the set method directly instead, providing a valid fingerprint"
@@ -917,6 +1012,10 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                     .fields
                     .iter()
                     .map(|f| {
+                        // PCF [STRIP] per Avro spec: keep only attributes relevant to parsing
+                        // ("name" and "type" for fields) and **strip others** such as doc,
+                        // default, order, and **aliases**. This preserves canonicalization. See:
+                        // https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas
                         let field_type =
                             build_canonical(&f.r#type, child_ns.as_deref().or(enclosing_ns))?;
                         Ok(format!(
@@ -1105,7 +1204,7 @@ impl NameGenerator {
     }
 }
 
-fn merge_extras(schema: Value, mut extras: JsonMap<String, Value>) -> Value {
+fn merge_extras(schema: Value, extras: JsonMap<String, Value>) -> Value {
     if extras.is_empty() {
         return schema;
     }
@@ -1141,7 +1240,14 @@ fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
     let null = Value::String("null".into());
     match inner {
         Value::Array(mut union) => {
-            union.retain(|v| !is_avro_json_null(v));
+            // If this site is already a union and already contains "null",
+            // preserve the branch order exactly. Reordering "null" breaks
+            // the correspondence between Arrow union child order (type_ids)
+            // and the Avro branch index written on the wire.
+            if union.iter().any(is_avro_json_null) {
+                return Value::Array(union);
+            }
+            // Otherwise, inject "null" without reordering existing branches.
             match null_order {
                 Nullability::NullFirst => union.insert(0, null),
                 Nullability::NullSecond => union.push(null),
@@ -1153,6 +1259,21 @@ fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
             Nullability::NullSecond => Value::Array(vec![other, null]),
         },
     }
+}
+
+fn min_fixed_bytes_for_precision(p: usize) -> usize {
+    // From the spec: max precision for n=1..=32 bytes:
+    // [2,4,6,9,11,14,16,18,21,23,26,28,31,33,35,38,40,43,45,47,50,52,55,57,59,62,64,67,69,71,74,76]
+    const MAX_P: [usize; 32] = [
+        2, 4, 6, 9, 11, 14, 16, 18, 21, 23, 26, 28, 31, 33, 35, 38, 40, 43, 45, 47, 50, 52, 55, 57,
+        59, 62, 64, 67, 69, 71, 74, 76,
+    ];
+    for (i, &max_p) in MAX_P.iter().enumerate() {
+        if p <= max_p {
+            return i + 1;
+        }
+    }
+    32 // saturate at Decimal256
 }
 
 fn union_branch_signature(branch: &Value) -> Result<String, ArrowError> {
@@ -1190,6 +1311,7 @@ fn datatype_to_avro(
     metadata: &HashMap<String, String>,
     name_gen: &mut NameGenerator,
     null_order: Nullability,
+    strip: bool,
 ) -> Result<(Value, JsonMap<String, Value>), ArrowError> {
     let mut extras = JsonMap::new();
     let mut handle_decimal = |precision: &u8, scale: &i8| -> Result<Value, ArrowError> {
@@ -1204,20 +1326,30 @@ fn datatype_to_avro(
                  must be <= precision ({precision})"
             )));
         }
-
         let mut meta = JsonMap::from_iter([
             ("logicalType".into(), json!("decimal")),
             ("precision".into(), json!(*precision)),
             ("scale".into(), json!(*scale)),
         ]);
-        if let Some(size) = metadata
-            .get("size")
-            .and_then(|val| val.parse::<usize>().ok())
-        {
+        let mut fixed_size = metadata.get("size").and_then(|v| v.parse::<usize>().ok());
+        let carries_name = metadata.contains_key(AVRO_NAME_METADATA_KEY)
+            || metadata.contains_key(AVRO_NAMESPACE_METADATA_KEY);
+        if fixed_size.is_none() && carries_name {
+            fixed_size = Some(min_fixed_bytes_for_precision(*precision as usize));
+        }
+        if let Some(size) = fixed_size {
             meta.insert("type".into(), json!("fixed"));
             meta.insert("size".into(), json!(size));
-            meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            meta.insert("name".into(), json!(chosen_name));
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                meta.insert("namespace".into(), json!(ns));
+            }
         } else {
+            // default to bytes-backed decimal
             meta.insert("type".into(), json!("bytes"));
         }
         Ok(Value::Object(meta))
@@ -1234,25 +1366,40 @@ fn datatype_to_avro(
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Value::String("string".into()),
         DataType::Binary | DataType::LargeBinary => Value::String("bytes".into()),
         DataType::BinaryView => {
-            extras.insert("arrowBinaryView".into(), Value::Bool(true));
+            if !strip {
+                extras.insert("arrowBinaryView".into(), Value::Bool(true));
+            }
             Value::String("bytes".into())
         }
         DataType::FixedSizeBinary(len) => {
-            let is_uuid = metadata
+            let md_is_uuid = metadata
                 .get("logicalType")
-                .is_some_and(|value| value == "uuid")
-                || (*len == 16
-                    && metadata
-                        .get("ARROW:extension:name")
-                        .is_some_and(|value| value == "uuid"));
+                .map(|s| s.trim_matches('"') == "uuid")
+                .unwrap_or(false);
+            #[cfg(feature = "canonical_extension_types")]
+            let ext_is_uuid = metadata
+                .get(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY)
+                .map(|v| v == arrow_schema::extension::Uuid::NAME || v == "uuid")
+                .unwrap_or(false);
+            #[cfg(not(feature = "canonical_extension_types"))]
+            let ext_is_uuid = false;
+            let is_uuid = (*len == 16) && (md_is_uuid || ext_is_uuid);
             if is_uuid {
                 json!({ "type": "string", "logicalType": "uuid" })
             } else {
-                json!({
-                    "type": "fixed",
-                    "name": name_gen.make_unique(field_name),
-                    "size": len
-                })
+                let chosen_name = metadata
+                    .get(AVRO_NAME_METADATA_KEY)
+                    .map(|s| sanitise_avro_name(s))
+                    .unwrap_or_else(|| name_gen.make_unique(field_name));
+                let mut obj = JsonMap::from_iter([
+                    ("type".into(), json!("fixed")),
+                    ("name".into(), json!(chosen_name)),
+                    ("size".into(), json!(len)),
+                ]);
+                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                    obj.insert("namespace".into(), json!(ns));
+                }
+                Value::Object(obj)
             }
         }
         #[cfg(feature = "small_decimals")]
@@ -1267,7 +1414,9 @@ fn datatype_to_avro(
         DataType::Time32(unit) => match unit {
             TimeUnit::Millisecond => json!({ "type": "int", "logicalType": "time-millis" }),
             TimeUnit::Second => {
-                extras.insert("arrowTimeUnit".into(), Value::String("second".into()));
+                if !strip {
+                    extras.insert("arrowTimeUnit".into(), Value::String("second".into()));
+                }
                 Value::String("int".into())
             }
             _ => Value::String("int".into()),
@@ -1275,7 +1424,9 @@ fn datatype_to_avro(
         DataType::Time64(unit) => match unit {
             TimeUnit::Microsecond => json!({ "type": "long", "logicalType": "time-micros" }),
             TimeUnit::Nanosecond => {
-                extras.insert("arrowTimeUnit".into(), Value::String("nanosecond".into()));
+                if !strip {
+                    extras.insert("arrowTimeUnit".into(), Value::String("nanosecond".into()));
+                }
                 Value::String("long".into())
             }
             _ => Value::String("long".into()),
@@ -1286,54 +1437,68 @@ fn datatype_to_avro(
                 (TimeUnit::Millisecond, false) => "local-timestamp-millis",
                 (TimeUnit::Microsecond, true) => "timestamp-micros",
                 (TimeUnit::Microsecond, false) => "local-timestamp-micros",
+                (TimeUnit::Nanosecond, true) => "timestamp-nanos",
+                (TimeUnit::Nanosecond, false) => "local-timestamp-nanos",
                 (TimeUnit::Second, _) => {
-                    extras.insert("arrowTimeUnit".into(), Value::String("second".into()));
-                    return Ok((Value::String("long".into()), extras));
-                }
-                (TimeUnit::Nanosecond, _) => {
-                    extras.insert("arrowTimeUnit".into(), Value::String("nanosecond".into()));
+                    if !strip {
+                        extras.insert("arrowTimeUnit".into(), Value::String("second".into()));
+                    }
                     return Ok((Value::String("long".into()), extras));
                 }
             };
+            if !strip && matches!(unit, TimeUnit::Nanosecond) {
+                extras.insert("arrowTimeUnit".into(), Value::String("nanosecond".into()));
+            }
             json!({ "type": "long", "logicalType": logical_type })
         }
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::Duration(_unit) => Value::String("long".into()),
+        #[cfg(feature = "avro_custom_types")]
         DataType::Duration(unit) => {
-            #[cfg(feature = "avro_custom_types")]
-            {
-                // When the feature is enabled, create an Avro schema object
-                // with the correct `logicalType` annotation.
-                let logical_type = match unit {
-                    TimeUnit::Second => "arrow.duration-seconds",
-                    TimeUnit::Millisecond => "arrow.duration-millis",
-                    TimeUnit::Microsecond => "arrow.duration-micros",
-                    TimeUnit::Nanosecond => "arrow.duration-nanos",
-                };
-                json!({ "type": "long", "logicalType": logical_type })
-            }
-            #[cfg(not(feature = "avro_custom_types"))]
-            {
-                Value::String("long".into())
-            }
+            // When the feature is enabled, create an Avro schema object
+            // with the correct `logicalType` annotation.
+            let logical_type = match unit {
+                TimeUnit::Second => "arrow.duration-seconds",
+                TimeUnit::Millisecond => "arrow.duration-millis",
+                TimeUnit::Microsecond => "arrow.duration-micros",
+                TimeUnit::Nanosecond => "arrow.duration-nanos",
+            };
+            json!({ "type": "long", "logicalType": logical_type })
         }
-        DataType::Interval(IntervalUnit::MonthDayNano) => json!({
-            "type": "fixed",
-            "name": name_gen.make_unique(&format!("{field_name}_duration")),
-            "size": 12,
-            "logicalType": "duration"
-        }),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            // Avro duration logical type: fixed(12) with months/days/millis per spec.
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(12)),
+                ("logicalType".into(), json!("duration")),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
+        }
         DataType::Interval(IntervalUnit::YearMonth) => {
-            extras.insert(
-                "arrowIntervalUnit".into(),
-                Value::String("yearmonth".into()),
-            );
+            if !strip {
+                extras.insert(
+                    "arrowIntervalUnit".into(),
+                    Value::String("yearmonth".into()),
+                );
+            }
             Value::String("long".into())
         }
         DataType::Interval(IntervalUnit::DayTime) => {
-            extras.insert("arrowIntervalUnit".into(), Value::String("daytime".into()));
+            if !strip {
+                extras.insert("arrowIntervalUnit".into(), Value::String("daytime".into()));
+            }
             Value::String("long".into())
         }
         DataType::List(child) | DataType::LargeList(child) => {
-            if matches!(dt, DataType::LargeList(_)) {
+            if matches!(dt, DataType::LargeList(_)) && !strip {
                 extras.insert("arrowLargeList".into(), Value::Bool(true));
             }
             let items_schema = process_datatype(
@@ -1343,6 +1508,7 @@ fn datatype_to_avro(
                 name_gen,
                 null_order,
                 child.is_nullable(),
+                strip,
             )?;
             json!({
                 "type": "array",
@@ -1350,10 +1516,12 @@ fn datatype_to_avro(
             })
         }
         DataType::ListView(child) | DataType::LargeListView(child) => {
-            if matches!(dt, DataType::LargeListView(_)) {
+            if matches!(dt, DataType::LargeListView(_)) && !strip {
                 extras.insert("arrowLargeList".into(), Value::Bool(true));
             }
-            extras.insert("arrowListView".into(), Value::Bool(true));
+            if !strip {
+                extras.insert("arrowListView".into(), Value::Bool(true));
+            }
             let items_schema = process_datatype(
                 child.data_type(),
                 child.name(),
@@ -1361,6 +1529,7 @@ fn datatype_to_avro(
                 name_gen,
                 null_order,
                 child.is_nullable(),
+                strip,
             )?;
             json!({
                 "type": "array",
@@ -1368,7 +1537,9 @@ fn datatype_to_avro(
             })
         }
         DataType::FixedSizeList(child, len) => {
-            extras.insert("arrowFixedSize".into(), json!(len));
+            if !strip {
+                extras.insert("arrowFixedSize".into(), json!(len));
+            }
             let items_schema = process_datatype(
                 child.data_type(),
                 child.name(),
@@ -1376,6 +1547,7 @@ fn datatype_to_avro(
                 name_gen,
                 null_order,
                 child.is_nullable(),
+                strip,
             )?;
             json!({
                 "type": "array",
@@ -1388,7 +1560,7 @@ fn datatype_to_avro(
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Map 'entries' field must be Struct(key,value)".into(),
-                    ))
+                    ));
                 }
             };
             let values_schema = process_datatype(
@@ -1398,6 +1570,7 @@ fn datatype_to_avro(
                 name_gen,
                 null_order,
                 value_field.is_nullable(),
+                strip,
             )?;
             json!({
                 "type": "map",
@@ -1407,23 +1580,41 @@ fn datatype_to_avro(
         DataType::Struct(fields) => {
             let avro_fields = fields
                 .iter()
-                .map(|field| arrow_field_to_avro(field, name_gen, null_order))
+                .map(|field| arrow_field_to_avro(field, name_gen, null_order, strip))
                 .collect::<Result<Vec<_>, _>>()?;
-            json!({
-                "type": "record",
-                "name": name_gen.make_unique(field_name),
-                "fields": avro_fields
-            })
+            // Prefer avro.name/avro.namespace when provided on the struct field metadata
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("record")),
+                ("name".into(), json!(chosen_name)),
+                ("fields".into(), Value::Array(avro_fields)),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            Value::Object(obj)
         }
         DataType::Dictionary(_, value) => {
             if let Some(j) = metadata.get(AVRO_ENUM_SYMBOLS_METADATA_KEY) {
                 let symbols: Vec<&str> =
                     serde_json::from_str(j).map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                json!({
-                    "type": "enum",
-                    "name": name_gen.make_unique(field_name),
-                    "symbols": symbols
-                })
+                // Prefer avro.name/namespace when provided for enums
+                let chosen_name = metadata
+                    .get(AVRO_NAME_METADATA_KEY)
+                    .map(|s| sanitise_avro_name(s))
+                    .unwrap_or_else(|| name_gen.make_unique(field_name));
+                let mut obj = JsonMap::from_iter([
+                    ("type".into(), json!("enum")),
+                    ("name".into(), json!(chosen_name)),
+                    ("symbols".into(), json!(symbols)),
+                ]);
+                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                    obj.insert("namespace".into(), json!(ns));
+                }
+                Value::Object(obj)
             } else {
                 process_datatype(
                     value.as_ref(),
@@ -1432,17 +1623,52 @@ fn datatype_to_avro(
                     name_gen,
                     null_order,
                     false,
+                    strip,
                 )?
             }
         }
-        DataType::RunEndEncoded(_, values) => process_datatype(
-            values.data_type(),
-            values.name(),
-            values.metadata(),
-            name_gen,
-            null_order,
-            false,
-        )?,
+        #[cfg(feature = "avro_custom_types")]
+        DataType::RunEndEncoded(run_ends, values) => {
+            let bits = match run_ends.data_type() {
+                DataType::Int16 => 16,
+                DataType::Int32 => 32,
+                DataType::Int64 => 64,
+                other => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "RunEndEncoded requires Int16/Int32/Int64 for run_ends, found: {other:?}"
+                    )));
+                }
+            };
+            // Build the value site schema, preserving its own nullability
+            let (value_schema, value_extras) = datatype_to_avro(
+                values.data_type(),
+                values.name(),
+                values.metadata(),
+                name_gen,
+                null_order,
+                strip,
+            )?;
+            let mut merged = merge_extras(value_schema, value_extras);
+            if values.is_nullable() {
+                merged = wrap_nullable(merged, null_order);
+            }
+            let mut extras = JsonMap::new();
+            extras.insert("logicalType".into(), json!("arrow.run-end-encoded"));
+            extras.insert("arrow.runEndIndexBits".into(), json!(bits));
+            return Ok((merged, extras));
+        }
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::RunEndEncoded(_run_ends, values) => {
+            let (value_schema, _extras) = datatype_to_avro(
+                values.data_type(),
+                values.name(),
+                values.metadata(),
+                name_gen,
+                null_order,
+                strip,
+            )?;
+            return Ok((value_schema, JsonMap::new()));
+        }
         DataType::Union(fields, mode) => {
             let mut branches: Vec<Value> = Vec::with_capacity(fields.len());
             let mut type_ids: Vec<i32> = Vec::with_capacity(fields.len());
@@ -1454,6 +1680,7 @@ fn datatype_to_avro(
                     field_ref.metadata(),
                     name_gen,
                     null_order,
+                    strip,
                 )?;
                 // Avro unions cannot immediately contain another union
                 if matches!(branch_schema, Value::Array(_)) {
@@ -1473,27 +1700,29 @@ fn datatype_to_avro(
                     ));
                 }
             }
-            extras.insert(
-                "arrowUnionMode".into(),
-                Value::String(
-                    match mode {
-                        UnionMode::Sparse => "sparse",
-                        UnionMode::Dense => "dense",
-                    }
-                    .to_string(),
-                ),
-            );
-            extras.insert(
-                "arrowUnionTypeIds".into(),
-                Value::Array(type_ids.into_iter().map(|id| json!(id)).collect()),
-            );
-
+            if !strip {
+                extras.insert(
+                    "arrowUnionMode".into(),
+                    Value::String(
+                        match mode {
+                            UnionMode::Sparse => "sparse",
+                            UnionMode::Dense => "dense",
+                        }
+                        .to_string(),
+                    ),
+                );
+                extras.insert(
+                    "arrowUnionTypeIds".into(),
+                    Value::Array(type_ids.into_iter().map(|id| json!(id)).collect()),
+                );
+            }
             Value::Array(branches)
         }
+        #[cfg(not(feature = "small_decimals"))]
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Arrow type {other:?} has no Avro representation"
-            )))
+            )));
         }
     };
     Ok((val, extras))
@@ -1506,8 +1735,9 @@ fn process_datatype(
     name_gen: &mut NameGenerator,
     null_order: Nullability,
     is_nullable: bool,
+    strip: bool,
 ) -> Result<Value, ArrowError> {
-    let (schema, extras) = datatype_to_avro(dt, field_name, metadata, name_gen, null_order)?;
+    let (schema, extras) = datatype_to_avro(dt, field_name, metadata, name_gen, null_order, strip)?;
     let mut merged = merge_extras(schema, extras);
     if is_nullable {
         merged = wrap_nullable(merged, null_order)
@@ -1519,6 +1749,7 @@ fn arrow_field_to_avro(
     field: &ArrowField,
     name_gen: &mut NameGenerator,
     null_order: Nullability,
+    strip: bool,
 ) -> Result<Value, ArrowError> {
     let avro_name = sanitise_avro_name(field.name());
     let schema_value = process_datatype(
@@ -1528,6 +1759,7 @@ fn arrow_field_to_avro(
         name_gen,
         null_order,
         field.is_nullable(),
+        strip,
     )?;
     // Build the field map
     let mut map = JsonMap::with_capacity(field.metadata().len() + 3);
@@ -1560,7 +1792,7 @@ fn arrow_field_to_avro(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{AvroDataType, AvroField};
+    use crate::codec::{AvroField, AvroFieldBuilder};
     use arrow_schema::{DataType, Fields, SchemaBuilder, TimeUnit, UnionFields};
     use serde_json::json;
     use std::sync::Arc;
@@ -1573,20 +1805,22 @@ mod tests {
         Schema::Complex(ComplexType::Record(Record {
             name: "record1",
             namespace: Some("test.namespace"),
-            doc: Some("A test record"),
+            doc: Some(Cow::from("A test record")),
             aliases: vec![],
             fields: vec![
                 Field {
                     name: "field1",
-                    doc: Some("An integer field"),
+                    doc: Some(Cow::from("An integer field")),
                     r#type: int_schema(),
                     default: None,
+                    aliases: vec![],
                 },
                 Field {
                     name: "field2",
                     doc: None,
                     r#type: Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
                     default: None,
+                    aliases: vec![],
                 },
             ],
             attributes: Attributes::default(),
@@ -1709,6 +1943,7 @@ mod tests {
                         Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
                     ]),
                     default: None,
+                    aliases: vec![],
                 },],
                 attributes: Default::default(),
             }))
@@ -1740,6 +1975,7 @@ mod tests {
                         doc: None,
                         r#type: Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
                         default: None,
+                        aliases: vec![],
                     },
                     Field {
                         name: "next",
@@ -1749,6 +1985,7 @@ mod tests {
                             Schema::TypeName(TypeName::Ref("LongList")),
                         ]),
                         default: None,
+                        aliases: vec![],
                     }
                 ],
                 attributes: Attributes::default(),
@@ -1802,6 +2039,7 @@ mod tests {
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
                         ]),
                         default: None,
+                        aliases: vec![],
                     },
                     Field {
                         name: "timestamp_col",
@@ -1811,27 +2049,31 @@ mod tests {
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
                         ]),
                         default: None,
+                        aliases: vec![],
                     }
                 ],
                 attributes: Default::default(),
             }))
         );
         let codec = AvroField::try_from(&schema).unwrap();
-        assert_eq!(
-            codec.field(),
-            arrow_schema::Field::new(
-                "topLevelRecord",
-                DataType::Struct(Fields::from(vec![
-                    arrow_schema::Field::new("id", DataType::Int32, true),
-                    arrow_schema::Field::new(
-                        "timestamp_col",
-                        DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
-                        true
-                    ),
-                ])),
-                false
-            )
-        );
+        let expected_arrow_field = arrow_schema::Field::new(
+            "topLevelRecord",
+            DataType::Struct(Fields::from(vec![
+                arrow_schema::Field::new("id", DataType::Int32, true),
+                arrow_schema::Field::new(
+                    "timestamp_col",
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                    true,
+                ),
+            ])),
+            false,
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            "topLevelRecord".to_string(),
+        )]));
+
+        assert_eq!(codec.field(), expected_arrow_field);
 
         let schema: Schema = serde_json::from_str(
             r#"{
@@ -1866,6 +2108,7 @@ mod tests {
                             attributes: Default::default(),
                         })),
                         default: None,
+                        aliases: vec![],
                     },
                     Field {
                         name: "clientProtocol",
@@ -1875,12 +2118,14 @@ mod tests {
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
                         ]),
                         default: None,
+                        aliases: vec![],
                     },
                     Field {
                         name: "serverHash",
                         doc: None,
                         r#type: Schema::TypeName(TypeName::Ref("MD5")),
                         default: None,
+                        aliases: vec![],
                     },
                     Field {
                         name: "meta",
@@ -1895,10 +2140,103 @@ mod tests {
                             })),
                         ]),
                         default: None,
+                        aliases: vec![],
                     }
                 ],
                 attributes: Default::default(),
             }))
+        );
+    }
+
+    #[test]
+    fn test_canonical_form_generation_comprehensive_record() {
+        // NOTE: This schema is identical to the one used in test_deserialize_comprehensive.
+        let json_str = r#"{
+          "type": "record",
+          "name": "E2eComprehensive",
+          "namespace": "org.apache.arrow.avrotests.v1",
+          "doc": "Comprehensive Avro writer schema to exercise arrow-avro Reader/Decoder paths.",
+          "fields": [
+            {"name": "id", "type": "long", "doc": "Primary row id", "aliases": ["identifier"]},
+            {"name": "flag", "type": "boolean", "default": true, "doc": "A sample boolean with default true"},
+            {"name": "ratio_f32", "type": "float", "default": 0.0, "doc": "Float32 example"},
+            {"name": "ratio_f64", "type": "double", "default": 0.0, "doc": "Float64 example"},
+            {"name": "count_i32", "type": "int", "default": 0, "doc": "Int32 example"},
+            {"name": "count_i64", "type": "long", "default": 0, "doc": "Int64 example"},
+            {"name": "opt_i32_nullfirst", "type": ["null", "int"], "default": null, "doc": "Nullable int (null-first)"},
+            {"name": "opt_str_nullsecond", "type": ["string", "null"], "default": "", "aliases": ["old_opt_str"], "doc": "Nullable string (null-second). Default is empty string."},
+            {"name": "tri_union_prim", "type": ["int", "string", "boolean"], "default": 0, "doc": "Union[int, string, boolean] with default on first branch (int=0)."},
+            {"name": "str_utf8", "type": "string", "default": "default", "doc": "Plain Utf8 string (Reader may use Utf8View)."},
+            {"name": "raw_bytes", "type": "bytes", "default": "", "doc": "Raw bytes field"},
+            {"name": "fx16_plain", "type": {"type": "fixed", "name": "Fx16", "namespace": "org.apache.arrow.avrotests.v1.types", "aliases": ["Fixed16Old"], "size": 16}, "doc": "Plain fixed(16)"},
+            {"name": "dec_bytes_s10_2", "type": {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}, "doc": "Decimal encoded on bytes, precision 10, scale 2"},
+            {"name": "dec_fix_s20_4", "type": {"type": "fixed", "name": "DecFix20", "namespace": "org.apache.arrow.avrotests.v1.types", "size": 20, "logicalType": "decimal", "precision": 20, "scale": 4}, "doc": "Decimal encoded on fixed(20), precision 20, scale 4"},
+            {"name": "uuid_str", "type": {"type": "string", "logicalType": "uuid"}, "doc": "UUID logical type on string"},
+            {"name": "d_date", "type": {"type": "int", "logicalType": "date"}, "doc": "Date32: days since 1970-01-01"},
+            {"name": "t_millis", "type": {"type": "int", "logicalType": "time-millis"}, "doc": "Time32-millis"},
+            {"name": "t_micros", "type": {"type": "long", "logicalType": "time-micros"}, "doc": "Time64-micros"},
+            {"name": "ts_millis_utc", "type": {"type": "long", "logicalType": "timestamp-millis"}, "doc": "Timestamp ms (UTC)"},
+            {"name": "ts_micros_utc", "type": {"type": "long", "logicalType": "timestamp-micros"}, "doc": "Timestamp µs (UTC)"},
+            {"name": "ts_millis_local", "type": {"type": "long", "logicalType": "local-timestamp-millis"}, "doc": "Local timestamp ms"},
+            {"name": "ts_micros_local", "type": {"type": "long", "logicalType": "local-timestamp-micros"}, "doc": "Local timestamp µs"},
+            {"name": "interval_mdn", "type": {"type": "fixed", "name": "Dur12", "namespace": "org.apache.arrow.avrotests.v1.types", "size": 12, "logicalType": "duration"}, "doc": "Duration: fixed(12) little-endian (months, days, millis)"},
+            {"name": "status", "type": {"type": "enum", "name": "Status", "namespace": "org.apache.arrow.avrotests.v1.types", "symbols": ["UNKNOWN", "NEW", "PROCESSING", "DONE"], "aliases": ["State"], "doc": "Processing status enum with default"}, "default": "UNKNOWN", "doc": "Enum field using default when resolving"},
+            {"name": "arr_union", "type": {"type": "array", "items": ["long", "string", "null"]}, "default": [], "doc": "Array whose items are a union[long,string,null]"},
+            {"name": "map_union", "type": {"type": "map", "values": ["null", "double", "string"]}, "default": {}, "doc": "Map whose values are a union[null,double,string]"},
+            {"name": "address", "type": {"type": "record", "name": "Address", "namespace": "org.apache.arrow.avrotests.v1.types", "doc": "Postal address with defaults and field alias", "fields": [
+                {"name": "street", "type": "string", "default": "", "aliases": ["street_name"], "doc": "Street (field alias = street_name)"},
+                {"name": "zip", "type": "int", "default": 0, "doc": "ZIP/postal code"},
+                {"name": "country", "type": "string", "default": "US", "doc": "Country code"}
+            ]}, "doc": "Embedded Address record"},
+            {"name": "maybe_auth", "type": {"type": "record", "name": "MaybeAuth", "namespace": "org.apache.arrow.avrotests.v1.types", "doc": "Optional auth token model", "fields": [
+                {"name": "user", "type": "string", "doc": "Username"},
+                {"name": "token", "type": ["null", "bytes"], "default": null, "doc": "Nullable auth token"}
+            ]}},
+            {"name": "union_enum_record_array_map", "type": [
+                {"type": "enum", "name": "Color", "namespace": "org.apache.arrow.avrotests.v1.types", "symbols": ["RED", "GREEN", "BLUE"], "doc": "Color enum"},
+                {"type": "record", "name": "RecA", "namespace": "org.apache.arrow.avrotests.v1.types", "fields": [{"name": "a", "type": "int"}, {"name": "b", "type": "string"}]},
+                {"type": "record", "name": "RecB", "namespace": "org.apache.arrow.avrotests.v1.types", "fields": [{"name": "x", "type": "long"}, {"name": "y", "type": "bytes"}]},
+                {"type": "array", "items": "long"},
+                {"type": "map", "values": "string"}
+            ], "doc": "Union of enum, two records, array, and map"},
+            {"name": "union_date_or_fixed4", "type": [
+                {"type": "int", "logicalType": "date"},
+                {"type": "fixed", "name": "Fx4", "size": 4}
+            ], "doc": "Union of date(int) or fixed(4)"},
+            {"name": "union_interval_or_string", "type": [
+                {"type": "fixed", "name": "Dur12U", "size": 12, "logicalType": "duration"},
+                "string"
+            ], "doc": "Union of duration(fixed12) or string"},
+            {"name": "union_uuid_or_fixed10", "type": [
+                {"type": "string", "logicalType": "uuid"},
+                {"type": "fixed", "name": "Fx10", "size": 10}
+            ], "doc": "Union of UUID string or fixed(10)"},
+            {"name": "array_records_with_union", "type": {"type": "array", "items": {
+                "type": "record", "name": "KV", "namespace": "org.apache.arrow.avrotests.v1.types",
+                "fields": [
+                    {"name": "key", "type": "string"},
+                    {"name": "val", "type": ["null", "int", "long"], "default": null}
+                ]
+            }}, "doc": "Array<record{key, val: union[null,int,long]}>", "default": []},
+            {"name": "union_map_or_array_int", "type": [
+                {"type": "map", "values": "int"},
+                {"type": "array", "items": "int"}
+            ], "doc": "Union[map<string,int>, array<int>]"},
+            {"name": "renamed_with_default", "type": "int", "default": 42, "aliases": ["old_count"], "doc": "Field with alias and default"},
+            {"name": "person", "type": {"type": "record", "name": "PersonV2", "namespace": "com.example.v2", "aliases": ["com.example.Person"], "doc": "Person record with alias pointing to previous namespace/name", "fields": [
+                {"name": "name", "type": "string"},
+                {"name": "age", "type": "int", "default": 0}
+            ]}, "doc": "Record using type alias for schema evolution tests"}
+          ]
+        }"#;
+        let avro = AvroSchema::new(json_str.to_string());
+        let parsed = avro.schema().expect("schema should deserialize");
+        let expected_canonical_form = r#"{"name":"org.apache.arrow.avrotests.v1.E2eComprehensive","type":"record","fields":[{"name":"id","type":"long"},{"name":"flag","type":"boolean"},{"name":"ratio_f32","type":"float"},{"name":"ratio_f64","type":"double"},{"name":"count_i32","type":"int"},{"name":"count_i64","type":"long"},{"name":"opt_i32_nullfirst","type":["null","int"]},{"name":"opt_str_nullsecond","type":["string","null"]},{"name":"tri_union_prim","type":["int","string","boolean"]},{"name":"str_utf8","type":"string"},{"name":"raw_bytes","type":"bytes"},{"name":"fx16_plain","type":{"name":"org.apache.arrow.avrotests.v1.types.Fx16","type":"fixed","size":16}},{"name":"dec_bytes_s10_2","type":"bytes"},{"name":"dec_fix_s20_4","type":{"name":"org.apache.arrow.avrotests.v1.types.DecFix20","type":"fixed","size":20}},{"name":"uuid_str","type":"string"},{"name":"d_date","type":"int"},{"name":"t_millis","type":"int"},{"name":"t_micros","type":"long"},{"name":"ts_millis_utc","type":"long"},{"name":"ts_micros_utc","type":"long"},{"name":"ts_millis_local","type":"long"},{"name":"ts_micros_local","type":"long"},{"name":"interval_mdn","type":{"name":"org.apache.arrow.avrotests.v1.types.Dur12","type":"fixed","size":12}},{"name":"status","type":{"name":"org.apache.arrow.avrotests.v1.types.Status","type":"enum","symbols":["UNKNOWN","NEW","PROCESSING","DONE"]}},{"name":"arr_union","type":{"type":"array","items":["long","string","null"]}},{"name":"map_union","type":{"type":"map","values":["null","double","string"]}},{"name":"address","type":{"name":"org.apache.arrow.avrotests.v1.types.Address","type":"record","fields":[{"name":"street","type":"string"},{"name":"zip","type":"int"},{"name":"country","type":"string"}]}},{"name":"maybe_auth","type":{"name":"org.apache.arrow.avrotests.v1.types.MaybeAuth","type":"record","fields":[{"name":"user","type":"string"},{"name":"token","type":["null","bytes"]}]}},{"name":"union_enum_record_array_map","type":[{"name":"org.apache.arrow.avrotests.v1.types.Color","type":"enum","symbols":["RED","GREEN","BLUE"]},{"name":"org.apache.arrow.avrotests.v1.types.RecA","type":"record","fields":[{"name":"a","type":"int"},{"name":"b","type":"string"}]},{"name":"org.apache.arrow.avrotests.v1.types.RecB","type":"record","fields":[{"name":"x","type":"long"},{"name":"y","type":"bytes"}]},{"type":"array","items":"long"},{"type":"map","values":"string"}]},{"name":"union_date_or_fixed4","type":["int",{"name":"org.apache.arrow.avrotests.v1.Fx4","type":"fixed","size":4}]},{"name":"union_interval_or_string","type":[{"name":"org.apache.arrow.avrotests.v1.Dur12U","type":"fixed","size":12},"string"]},{"name":"union_uuid_or_fixed10","type":["string",{"name":"org.apache.arrow.avrotests.v1.Fx10","type":"fixed","size":10}]},{"name":"array_records_with_union","type":{"type":"array","items":{"name":"org.apache.arrow.avrotests.v1.types.KV","type":"record","fields":[{"name":"key","type":"string"},{"name":"val","type":["null","int","long"]}]}}},{"name":"union_map_or_array_int","type":[{"type":"map","values":"int"},{"type":"array","items":"int"}]},{"name":"renamed_with_default","type":"int"},{"name":"person","type":{"name":"com.example.v2.PersonV2","type":"record","fields":[{"name":"name","type":"string"},{"name":"age","type":"int"}]}}]}"#;
+        let canonical_form =
+            AvroSchema::generate_canonical_form(&parsed).expect("canonical form should be built");
+        assert_eq!(
+            canonical_form, expected_canonical_form,
+            "Canonical form must match Avro spec PCF exactly"
         );
     }
 
@@ -1979,19 +2317,24 @@ mod tests {
                     store.lookup(&Fingerprint::Rabin(fp_val)).cloned(),
                     Some(schema.clone())
                 );
-                assert!(store
-                    .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
-                    .is_none());
+                assert!(
+                    store
+                        .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
+                        .is_none()
+                );
             }
-            Fingerprint::Id(id) => {
+            Fingerprint::Id(_id) => {
+                unreachable!("This test should only generate Rabin fingerprints")
+            }
+            Fingerprint::Id64(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
             #[cfg(feature = "md5")]
-            Fingerprint::MD5(id) => {
+            Fingerprint::MD5(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
             #[cfg(feature = "sha256")]
-            Fingerprint::SHA256(id) => {
+            Fingerprint::SHA256(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
         }
@@ -2007,6 +2350,39 @@ mod tests {
         assert_eq!(out_fp, fp);
         assert_eq!(store.lookup(&fp).cloned(), Some(schema.clone()));
         assert!(store.lookup(&Fingerprint::Id(id.wrapping_add(1))).is_none());
+    }
+
+    #[test]
+    fn test_set_and_lookup_id64() {
+        let mut store = SchemaStore::new();
+        let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let id64: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+        let fp = Fingerprint::Id64(id64);
+        let out_fp = store.set(fp, schema.clone()).unwrap();
+        assert_eq!(out_fp, fp, "set should return the same Id64 fingerprint");
+        assert_eq!(
+            store.lookup(&fp).cloned(),
+            Some(schema.clone()),
+            "lookup should find the schema by Id64"
+        );
+        assert!(
+            store
+                .lookup(&Fingerprint::Id64(id64.wrapping_add(1)))
+                .is_none(),
+            "lookup with a different Id64 must return None"
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_id64_conversions() {
+        let algo_from_fp = FingerprintAlgorithm::from(&Fingerprint::Id64(123));
+        assert_eq!(algo_from_fp, FingerprintAlgorithm::Id64);
+        let fp_from_algo = Fingerprint::from(FingerprintAlgorithm::Id64);
+        assert!(matches!(fp_from_algo, Fingerprint::Id64(0)));
+        let strategy_from_fp = FingerprintStrategy::from(Fingerprint::Id64(5));
+        assert!(matches!(strategy_from_fp, FingerprintStrategy::Id64(0)));
+        let algo_from_strategy = FingerprintAlgorithm::from(strategy_from_fp);
+        assert_eq!(algo_from_strategy, FingerprintAlgorithm::Id64);
     }
 
     #[test]
@@ -2081,8 +2457,7 @@ mod tests {
         let mut store = SchemaStore::new();
         let schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
         let canonical_form = r#"{"name":"test.namespace.record1","type":"record","fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}]}"#;
-        let expected_fingerprint =
-            Fingerprint::Rabin(super::compute_fingerprint_rabin(canonical_form));
+        let expected_fingerprint = Fingerprint::Rabin(compute_fingerprint_rabin(canonical_form));
         let fingerprint = store.register(schema.clone()).unwrap();
         assert_eq!(fingerprint, expected_fingerprint);
         let looked_up = store.lookup(&fingerprint).cloned();
@@ -2113,11 +2488,11 @@ mod tests {
         let schema_with_attrs = Schema::Complex(ComplexType::Record(Record {
             name: "record_with_attrs",
             namespace: None,
-            doc: Some("This doc should be stripped"),
+            doc: Some(Cow::from("This doc should be stripped")),
             aliases: vec!["alias1", "alias2"],
             fields: vec![Field {
                 name: "f1",
-                doc: Some("field doc"),
+                doc: Some(Cow::from("field doc")),
                 r#type: Schema::Type(Type {
                     r#type: TypeName::Primitive(PrimitiveType::Bytes),
                     attributes: Attributes {
@@ -2126,6 +2501,7 @@ mod tests {
                     },
                 }),
                 default: None,
+                aliases: vec![],
             }],
             attributes: Attributes {
                 logical_type: None,
@@ -2209,6 +2585,7 @@ mod tests {
         assert_json_contains(&avro_uuid.json_string, "\"logicalType\":\"uuid\"");
     }
 
+    #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_interval_duration() {
         let interval_field = ArrowField::new(
@@ -2223,7 +2600,6 @@ mod tests {
         let dur_field = ArrowField::new("latency", DataType::Duration(TimeUnit::Nanosecond), false);
         let s2 = single_field_schema(dur_field);
         let avro2 = AvroSchema::try_from(&s2).unwrap();
-        #[cfg(feature = "avro_custom_types")]
         assert_json_contains(
             &avro2.json_string,
             "\"logicalType\":\"arrow.duration-nanos\"",
@@ -2362,13 +2738,13 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_duration_list_extras_propagated() {
         let child = ArrowField::new("lat", DataType::Duration(TimeUnit::Microsecond), false);
         let list_dt = DataType::List(Arc::new(child));
         let arrow_schema = single_field_schema(ArrowField::new("durations", list_dt, false));
         let avro = AvroSchema::try_from(&arrow_schema).unwrap();
-        #[cfg(feature = "avro_custom_types")]
         assert_json_contains(
             &avro.json_string,
             "\"logicalType\":\"arrow.duration-micros\"",
@@ -2400,6 +2776,7 @@ mod tests {
         assert_json_contains(&avro.json_string, "\"arrowFixedSize\":3");
     }
 
+    #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_map_duration_value_extra() {
         let val_field = ArrowField::new("value", DataType::Duration(TimeUnit::Second), true);
@@ -2414,7 +2791,6 @@ mod tests {
         let map_dt = DataType::Map(Arc::new(entries_struct), false);
         let schema = single_field_schema(ArrowField::new("metrics", map_dt, false));
         let avro = AvroSchema::try_from(&schema).unwrap();
-        #[cfg(feature = "avro_custom_types")]
         assert_json_contains(
             &avro.json_string,
             "\"logicalType\":\"arrow.duration-seconds\"",
@@ -2437,7 +2813,6 @@ mod tests {
                 {"name": "u", "type": ["int", "null"], "default": 42}
             ]
         }"#;
-
         let schema: Schema = serde_json::from_str(schema_json).expect("schema should parse");
         match &schema {
             Schema::Complex(ComplexType::Record(_)) => {}
@@ -2447,7 +2822,6 @@ mod tests {
         let field = crate::codec::AvroField::try_from(&schema)
             .expect("Avro->Arrow conversion should succeed");
         let arrow_field = field.field();
-
         // Build expected Arrow field
         let expected_list_item = ArrowField::new(
             arrow_schema::Field::LIST_FIELD_DEFAULT_NAME,
@@ -2467,7 +2841,8 @@ mod tests {
         );
         let expected_c =
             ArrowField::new("c", DataType::Map(Arc::new(expected_entries), false), false);
-
+        let mut inner_md = std::collections::HashMap::new();
+        inner_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "Inner".to_string());
         let expected_inner = ArrowField::new(
             "inner",
             DataType::Struct(Fields::from(vec![
@@ -2475,8 +2850,10 @@ mod tests {
                 ArrowField::new("name", DataType::Utf8, false),
             ])),
             false,
-        );
-
+        )
+        .with_metadata(inner_md);
+        let mut root_md = std::collections::HashMap::new();
+        root_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "R".to_string());
         let expected = ArrowField::new(
             "R",
             DataType::Struct(Fields::from(vec![
@@ -2487,8 +2864,8 @@ mod tests {
                 ArrowField::new("u", DataType::Int32, true),
             ])),
             false,
-        );
-
+        )
+        .with_metadata(root_md);
         assert_eq!(arrow_field, expected);
     }
 
@@ -2520,5 +2897,846 @@ mod tests {
         assert_eq!(union_branch_signature(&en).unwrap(), "N:enum:Color");
         let fx = json!({ "type": "fixed", "name": "Bytes16", "size": 16 });
         assert_eq!(union_branch_signature(&fx).unwrap(), "N:fixed:Bytes16");
+    }
+
+    #[test]
+    fn test_record_field_alias_resolution_without_default() {
+        let writer_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[{"name":"old","type":"int"}]
+        }"#;
+        let reader_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[{"name":"new","aliases":["old"],"type":"int"}]
+        }"#;
+        let writer: Schema = serde_json::from_str(writer_json).unwrap();
+        let reader: Schema = serde_json::from_str(reader_json).unwrap();
+        let resolved = AvroFieldBuilder::new(&writer)
+            .with_reader_schema(&reader)
+            .with_utf8view(false)
+            .with_strict_mode(false)
+            .build()
+            .unwrap();
+        let expected = ArrowField::new(
+            "R",
+            DataType::Struct(Fields::from(vec![ArrowField::new(
+                "new",
+                DataType::Int32,
+                false,
+            )])),
+            false,
+        );
+        assert_eq!(resolved.field(), expected);
+    }
+
+    #[test]
+    fn test_record_field_alias_ambiguous_in_strict_mode_errors() {
+        let writer_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[
+            {"name":"a","type":"int","aliases":["old"]},
+            {"name":"b","type":"int","aliases":["old"]}
+          ]
+        }"#;
+        let reader_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[{"name":"target","type":"int","aliases":["old"]}]
+        }"#;
+        let writer: Schema = serde_json::from_str(writer_json).unwrap();
+        let reader: Schema = serde_json::from_str(reader_json).unwrap();
+        let err = AvroFieldBuilder::new(&writer)
+            .with_reader_schema(&reader)
+            .with_utf8view(false)
+            .with_strict_mode(true)
+            .build()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Ambiguous alias 'old'"),
+            "expected ambiguous-alias error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_pragmatic_writer_field_alias_mapping_non_strict() {
+        let writer_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[{"name":"before","type":"int","aliases":["now"]}]
+        }"#;
+        let reader_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[{"name":"now","type":"int"}]
+        }"#;
+        let writer: Schema = serde_json::from_str(writer_json).unwrap();
+        let reader: Schema = serde_json::from_str(reader_json).unwrap();
+        let resolved = AvroFieldBuilder::new(&writer)
+            .with_reader_schema(&reader)
+            .with_utf8view(false)
+            .with_strict_mode(false)
+            .build()
+            .unwrap();
+        let expected = ArrowField::new(
+            "R",
+            DataType::Struct(Fields::from(vec![ArrowField::new(
+                "now",
+                DataType::Int32,
+                false,
+            )])),
+            false,
+        );
+        assert_eq!(resolved.field(), expected);
+    }
+
+    #[test]
+    fn test_missing_reader_field_null_first_no_default_is_ok() {
+        let writer_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[{"name":"a","type":"int"}]
+        }"#;
+        let reader_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[
+            {"name":"a","type":"int"},
+            {"name":"b","type":["null","int"]}
+          ]
+        }"#;
+        let writer: Schema = serde_json::from_str(writer_json).unwrap();
+        let reader: Schema = serde_json::from_str(reader_json).unwrap();
+        let resolved = AvroFieldBuilder::new(&writer)
+            .with_reader_schema(&reader)
+            .with_utf8view(false)
+            .with_strict_mode(false)
+            .build()
+            .unwrap();
+        let expected = ArrowField::new(
+            "R",
+            DataType::Struct(Fields::from(vec![
+                ArrowField::new("a", DataType::Int32, false),
+                ArrowField::new("b", DataType::Int32, true).with_metadata(HashMap::from([(
+                    AVRO_FIELD_DEFAULT_METADATA_KEY.to_string(),
+                    "null".to_string(),
+                )])),
+            ])),
+            false,
+        );
+        assert_eq!(resolved.field(), expected);
+    }
+
+    #[test]
+    fn test_missing_reader_field_null_second_without_default_errors() {
+        let writer_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[{"name":"a","type":"int"}]
+        }"#;
+        let reader_json = r#"{
+          "type":"record",
+          "name":"R",
+          "fields":[
+            {"name":"a","type":"int"},
+            {"name":"b","type":["int","null"]}
+          ]
+        }"#;
+        let writer: Schema = serde_json::from_str(writer_json).unwrap();
+        let reader: Schema = serde_json::from_str(reader_json).unwrap();
+        let err = AvroFieldBuilder::new(&writer)
+            .with_reader_schema(&reader)
+            .with_utf8view(false)
+            .with_strict_mode(false)
+            .build()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("must have a default value"),
+            "expected missing-default error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_from_arrow_with_options_respects_schema_metadata_when_not_stripping() {
+        let field = ArrowField::new("x", DataType::Int32, true);
+        let injected_json =
+            r#"{"type":"record","name":"Injected","fields":[{"name":"ignored","type":"int"}]}"#
+                .to_string();
+        let mut md = HashMap::new();
+        md.insert(SCHEMA_METADATA_KEY.to_string(), injected_json.clone());
+        md.insert("custom".to_string(), "123".to_string());
+        let arrow_schema = ArrowSchema::new_with_metadata(vec![field], md);
+        let opts = AvroSchemaOptions {
+            null_order: Some(Nullability::NullSecond),
+            strip_metadata: false,
+        };
+        let out = AvroSchema::from_arrow_with_options(&arrow_schema, Some(opts)).unwrap();
+        assert_eq!(
+            out.json_string, injected_json,
+            "When strip_metadata=false and avro.schema is present, return the embedded JSON verbatim"
+        );
+        let v: Value = serde_json::from_str(&out.json_string).unwrap();
+        assert_eq!(v.get("type").and_then(|t| t.as_str()), Some("record"));
+        assert_eq!(v.get("name").and_then(|n| n.as_str()), Some("Injected"));
+    }
+
+    #[test]
+    fn test_from_arrow_with_options_ignores_schema_metadata_when_stripping_and_keeps_passthrough() {
+        let field = ArrowField::new("x", DataType::Int32, true);
+        let injected_json =
+            r#"{"type":"record","name":"Injected","fields":[{"name":"ignored","type":"int"}]}"#
+                .to_string();
+        let mut md = HashMap::new();
+        md.insert(SCHEMA_METADATA_KEY.to_string(), injected_json);
+        md.insert("custom_meta".to_string(), "7".to_string());
+        let arrow_schema = ArrowSchema::new_with_metadata(vec![field], md);
+        let opts = AvroSchemaOptions {
+            null_order: Some(Nullability::NullFirst),
+            strip_metadata: true,
+        };
+        let out = AvroSchema::from_arrow_with_options(&arrow_schema, Some(opts)).unwrap();
+        assert_json_contains(&out.json_string, "\"type\":\"record\"");
+        assert_json_contains(&out.json_string, "\"name\":\"topLevelRecord\"");
+        assert_json_contains(&out.json_string, "\"custom_meta\":7");
+    }
+
+    #[test]
+    fn test_from_arrow_with_options_null_first_for_nullable_primitive() {
+        let field = ArrowField::new("s", DataType::Utf8, true);
+        let arrow_schema = single_field_schema(field);
+        let opts = AvroSchemaOptions {
+            null_order: Some(Nullability::NullFirst),
+            strip_metadata: true,
+        };
+        let out = AvroSchema::from_arrow_with_options(&arrow_schema, Some(opts)).unwrap();
+        let v: Value = serde_json::from_str(&out.json_string).unwrap();
+        let arr = v["fields"][0]["type"]
+            .as_array()
+            .expect("nullable primitive should be Avro union array");
+        assert_eq!(arr[0], Value::String("null".into()));
+        assert_eq!(arr[1], Value::String("string".into()));
+    }
+
+    #[test]
+    fn test_from_arrow_with_options_null_second_for_nullable_primitive() {
+        let field = ArrowField::new("s", DataType::Utf8, true);
+        let arrow_schema = single_field_schema(field);
+        let opts = AvroSchemaOptions {
+            null_order: Some(Nullability::NullSecond),
+            strip_metadata: true,
+        };
+        let out = AvroSchema::from_arrow_with_options(&arrow_schema, Some(opts)).unwrap();
+        let v: Value = serde_json::from_str(&out.json_string).unwrap();
+        let arr = v["fields"][0]["type"]
+            .as_array()
+            .expect("nullable primitive should be Avro union array");
+        assert_eq!(arr[0], Value::String("string".into()));
+        assert_eq!(arr[1], Value::String("null".into()));
+    }
+
+    #[test]
+    fn test_from_arrow_with_options_union_extras_respected_by_strip_metadata() {
+        let uf: UnionFields = vec![
+            (2i8, Arc::new(ArrowField::new("a", DataType::Int32, false))),
+            (7i8, Arc::new(ArrowField::new("b", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect();
+        let union_dt = DataType::Union(uf, UnionMode::Dense);
+        let arrow_schema = single_field_schema(ArrowField::new("u", union_dt, true));
+        let with_extras = AvroSchema::from_arrow_with_options(
+            &arrow_schema,
+            Some(AvroSchemaOptions {
+                null_order: Some(Nullability::NullFirst),
+                strip_metadata: false,
+            }),
+        )
+        .unwrap();
+        let v_with: Value = serde_json::from_str(&with_extras.json_string).unwrap();
+        let union_arr = v_with["fields"][0]["type"].as_array().expect("union array");
+        let first_obj = union_arr
+            .iter()
+            .find(|b| b.is_object())
+            .expect("expected an object branch with extras");
+        let obj = first_obj.as_object().unwrap();
+        assert_eq!(obj.get("type").and_then(|t| t.as_str()), Some("int"));
+        assert_eq!(
+            obj.get("arrowUnionMode").and_then(|m| m.as_str()),
+            Some("dense")
+        );
+        let type_ids: Vec<i64> = obj["arrowUnionTypeIds"]
+            .as_array()
+            .expect("arrowUnionTypeIds array")
+            .iter()
+            .map(|n| n.as_i64().expect("i64"))
+            .collect();
+        assert_eq!(type_ids, vec![2, 7]);
+        let stripped = AvroSchema::from_arrow_with_options(
+            &arrow_schema,
+            Some(AvroSchemaOptions {
+                null_order: Some(Nullability::NullFirst),
+                strip_metadata: true,
+            }),
+        )
+        .unwrap();
+        let v_stripped: Value = serde_json::from_str(&stripped.json_string).unwrap();
+        let union_arr2 = v_stripped["fields"][0]["type"]
+            .as_array()
+            .expect("union array");
+        assert!(
+            !union_arr2.iter().any(|b| b
+                .as_object()
+                .is_some_and(|m| m.contains_key("arrowUnionMode"))),
+            "extras must be removed when strip_metadata=true"
+        );
+        assert_eq!(union_arr2[0], Value::String("null".into()));
+        assert_eq!(union_arr2[1], Value::String("int".into()));
+        assert_eq!(union_arr2[2], Value::String("string".into()));
+    }
+
+    #[test]
+    fn test_project_empty_projection() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert!(
+            fields.is_empty(),
+            "Empty projection should yield empty fields"
+        );
+    }
+
+    #[test]
+    fn test_project_single_field() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[1]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn test_project_multiple_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long"},
+                {"name": "d", "type": "boolean"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0, 2, 3]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("a"));
+        assert_eq!(fields[1].get("name").and_then(|n| n.as_str()), Some("c"));
+        assert_eq!(fields[2].get("name").and_then(|n| n.as_str()), Some("d"));
+    }
+
+    #[test]
+    fn test_project_all_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0, 1]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("a"));
+        assert_eq!(fields[1].get("name").and_then(|n| n.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn test_project_reorder_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Project in reverse order
+        let projected = schema.project(&[2, 0, 1]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("c"));
+        assert_eq!(fields[1].get("name").and_then(|n| n.as_str()), Some("a"));
+        assert_eq!(fields[2].get("name").and_then(|n| n.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn test_project_preserves_record_metadata() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "MyRecord",
+            "namespace": "com.example",
+            "doc": "A test record",
+            "aliases": ["OldRecord"],
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        assert_eq!(v.get("name").and_then(|n| n.as_str()), Some("MyRecord"));
+        assert_eq!(
+            v.get("namespace").and_then(|n| n.as_str()),
+            Some("com.example")
+        );
+        assert_eq!(v.get("doc").and_then(|n| n.as_str()), Some("A test record"));
+        assert!(v.get("aliases").is_some());
+    }
+
+    #[test]
+    fn test_project_preserves_field_metadata() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int", "doc": "Field A", "default": 0},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(
+            fields[0].get("doc").and_then(|d| d.as_str()),
+            Some("Field A")
+        );
+        assert_eq!(fields[0].get("default").and_then(|d| d.as_i64()), Some(0));
+    }
+
+    #[test]
+    fn test_project_with_nested_record() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Outer",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "inner", "type": {
+                    "type": "record",
+                    "name": "Inner",
+                    "fields": [
+                        {"name": "x", "type": "int"},
+                        {"name": "y", "type": "string"}
+                    ]
+                }},
+                {"name": "value", "type": "double"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[1]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].get("name").and_then(|n| n.as_str()),
+            Some("inner")
+        );
+        // Verify nested record structure is preserved
+        let inner_type = fields[0].get("type").unwrap();
+        assert_eq!(
+            inner_type.get("type").and_then(|t| t.as_str()),
+            Some("record")
+        );
+        assert_eq!(
+            inner_type.get("name").and_then(|n| n.as_str()),
+            Some("Inner")
+        );
+    }
+
+    #[test]
+    fn test_project_with_complex_field_types() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "arr", "type": {"type": "array", "items": "int"}},
+                {"name": "map", "type": {"type": "map", "values": "string"}},
+                {"name": "union", "type": ["null", "int"]}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0, 2]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 2);
+        // Verify array type is preserved
+        let arr_type = fields[0].get("type").unwrap();
+        assert_eq!(arr_type.get("type").and_then(|t| t.as_str()), Some("array"));
+        // Verify union type is preserved
+        let union_type = fields[1].get("type").unwrap();
+        assert!(union_type.is_array());
+    }
+
+    #[test]
+    fn test_project_error_invalid_json() {
+        let schema = AvroSchema::new("not valid json".to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Invalid Avro schema JSON"),
+            "Expected parse error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_not_object() {
+        // Primitive type schema (not a JSON object)
+        let schema = AvroSchema::new(r#""string""#.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be a JSON object"),
+            "Expected object error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_array_schema() {
+        // Array (list) is a valid JSON but not a record
+        let schema = AvroSchema::new(r#"["null", "int"]"#.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be a JSON object"),
+            "Expected object error for array schema, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_type_not_record() {
+        let schema_json = r#"{
+            "type": "enum",
+            "name": "Color",
+            "symbols": ["RED", "GREEN", "BLUE"]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be an Avro record") && msg.contains("'enum'"),
+            "Expected type mismatch error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_type_array() {
+        let schema_json = r#"{
+            "type": "array",
+            "items": "int"
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be an Avro record") && msg.contains("'array'"),
+            "Expected type mismatch error for array type, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_type_fixed() {
+        let schema_json = r#"{
+            "type": "fixed",
+            "name": "MD5",
+            "size": 16
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be an Avro record") && msg.contains("'fixed'"),
+            "Expected type mismatch error for fixed type, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_type_map() {
+        let schema_json = r#"{
+            "type": "map",
+            "values": "string"
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be an Avro record") && msg.contains("'map'"),
+            "Expected type mismatch error for map type, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_missing_type_field() {
+        let schema_json = r#"{
+            "name": "Test",
+            "fields": [{"name": "a", "type": "int"}]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing required 'type' field"),
+            "Expected missing type error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_missing_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test"
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing required 'fields'"),
+            "Expected missing fields error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_fields_not_array() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": "not an array"
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("'fields' must be an array"),
+            "Expected fields array error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_index_out_of_bounds() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[5]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("out of bounds") && msg.contains("5") && msg.contains("2"),
+            "Expected out of bounds error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_index_out_of_bounds_edge() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Index 1 is just out of bounds for a 1-element array
+        let err = schema.project(&[1]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("out of bounds") && msg.contains("1"),
+            "Expected out of bounds error for edge case, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_duplicate_index() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0, 1, 0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Duplicate projection index") && msg.contains("0"),
+            "Expected duplicate index error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_duplicate_index_consecutive() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[1, 1]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Duplicate projection index") && msg.contains("1"),
+            "Expected duplicate index error for consecutive duplicates, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_with_empty_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "EmptyRecord",
+            "fields": []
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Projecting empty from empty should succeed
+        let projected = schema.project(&[]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn test_project_empty_fields_index_out_of_bounds() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "EmptyRecord",
+            "fields": []
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("out of bounds") && msg.contains("0 fields"),
+            "Expected out of bounds error for empty record, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_result_is_valid_avro_schema() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "id", "type": "long"},
+                {"name": "name", "type": "string"},
+                {"name": "active", "type": "boolean"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0, 2]).unwrap();
+        // Verify the projected schema can be parsed as a valid Avro schema
+        let parsed = projected.schema();
+        assert!(parsed.is_ok(), "Projected schema should be valid Avro");
+        match parsed.unwrap() {
+            Schema::Complex(ComplexType::Record(r)) => {
+                assert_eq!(r.name, "Test");
+                assert_eq!(r.namespace, Some("com.example"));
+                assert_eq!(r.fields.len(), 2);
+                assert_eq!(r.fields[0].name, "id");
+                assert_eq!(r.fields[1].name, "active");
+            }
+            _ => panic!("Expected Record schema"),
+        }
+    }
+
+    #[test]
+    fn test_project_non_contiguous_indices() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "f0", "type": "int"},
+                {"name": "f1", "type": "int"},
+                {"name": "f2", "type": "int"},
+                {"name": "f3", "type": "int"},
+                {"name": "f4", "type": "int"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Select every other field
+        let projected = schema.project(&[0, 2, 4]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("f0"));
+        assert_eq!(fields[1].get("name").and_then(|n| n.as_str()), Some("f2"));
+        assert_eq!(fields[2].get("name").and_then(|n| n.as_str()), Some("f4"));
+    }
+
+    #[test]
+    fn test_project_single_field_from_many() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "BigRecord",
+            "fields": [
+                {"name": "f0", "type": "int"},
+                {"name": "f1", "type": "int"},
+                {"name": "f2", "type": "int"},
+                {"name": "f3", "type": "int"},
+                {"name": "f4", "type": "int"},
+                {"name": "f5", "type": "int"},
+                {"name": "f6", "type": "int"},
+                {"name": "f7", "type": "int"},
+                {"name": "f8", "type": "int"},
+                {"name": "f9", "type": "int"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Select only the last field
+        let projected = schema.project(&[9]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("f9"));
     }
 }

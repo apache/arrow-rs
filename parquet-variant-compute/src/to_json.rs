@@ -49,7 +49,7 @@ pub fn variant_to_json(input: &ArrayRef) -> Result<StringArray, ArrowError> {
         _ => {
             return Err(ArrowError::CastError(
                 "Expected StructArray with known fields".into(),
-            ))
+            ));
         }
     }
 

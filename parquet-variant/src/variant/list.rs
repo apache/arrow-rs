@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
+use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
 };
@@ -117,7 +117,7 @@ impl VariantListHeader {
 ///
 /// [valid]: VariantMetadata#Validation
 /// [Variant spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#value-data-for-array-basic_type3
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct VariantList<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
@@ -299,6 +299,20 @@ impl<'m, 'v> VariantList<'m, 'v> {
         let byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let offset_bytes = slice_from_slice(self.value, byte_range)?;
         self.header.offset_size.unpack_u32(offset_bytes, index)
+    }
+}
+
+// Custom implementation of PartialEq for variant arrays
+//
+// Instead of comparing the raw bytes of 2 variant lists, this implementation recursively
+// checks whether their elements are equal.
+impl<'m, 'v> PartialEq for VariantList<'m, 'v> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.num_elements != other.num_elements {
+            return false;
+        }
+
+        self.iter().zip(other.iter()).all(|(a, b)| a == b)
     }
 }
 
@@ -713,9 +727,7 @@ mod tests {
     fn make_listi32(range: Range<i32>) -> (Vec<u8>, Vec<u8>) {
         let mut variant_builder = VariantBuilder::new();
         let mut list_builder = variant_builder.new_list();
-        for i in range {
-            list_builder.append_value(i);
-        }
+        list_builder.extend(range);
         list_builder.finish();
         variant_builder.finish()
     }
@@ -724,9 +736,7 @@ mod tests {
     fn make_listi64(range: Range<i64>) -> (Vec<u8>, Vec<u8>) {
         let mut variant_builder = VariantBuilder::new();
         let mut list_builder = variant_builder.new_list();
-        for i in range {
-            list_builder.append_value(i);
-        }
+        list_builder.extend(range);
         list_builder.finish();
         variant_builder.finish()
     }

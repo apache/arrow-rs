@@ -57,11 +57,11 @@ use arrow::compute::and;
 use arrow::compute::kernels::cmp::{eq, gt, lt, neq};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
 use arrow_array::StringViewArray;
+use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
 use arrow_cast::pretty::pretty_format_batches;
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use parquet::arrow::arrow_reader::{
@@ -72,7 +72,7 @@ use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMas
 use parquet::basic::Compression;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::ops::Range;
 use std::sync::Arc;
 

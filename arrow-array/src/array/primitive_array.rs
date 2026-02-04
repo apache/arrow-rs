@@ -25,7 +25,9 @@ use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer, i256};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder, ScalarBuffer, i256,
+};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -493,12 +495,42 @@ pub use crate::types::ArrowPrimitiveType;
 ///
 /// # Example: From a Vec
 ///
+/// *Note*: Converting a `Vec` to a `PrimitiveArray` does not copy the data.
+/// The new `PrimitiveArray` uses the same underlying allocation from the `Vec`.
+///
 /// ```
 /// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
 /// let arr: PrimitiveArray<Int32Type> = vec![1, 2, 3, 4].into();
 /// assert_eq!(4, arr.len());
 /// assert_eq!(0, arr.null_count());
 /// assert_eq!(arr.values(), &[1, 2, 3, 4])
+/// ```
+///
+/// # Example: To a `Vec<T>`
+///
+/// *Note*: In some cases, converting `PrimitiveArray` to a `Vec` is zero-copy
+/// and does not copy the data (see [`Buffer::into_vec`] for conditions). In
+/// such cases, the `Vec` will use the same underlying memory allocation from
+/// the `PrimitiveArray`.
+///
+/// The Rust compiler generates highly optimized code for operations on
+/// Vec, so using a Vec can often be faster than using a PrimitiveArray directly.
+///
+/// ```
+/// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
+/// let arr = PrimitiveArray::<Int32Type>::from(vec![1, 2, 3, 4]);
+/// let starting_ptr = arr.values().as_ptr();
+/// // split into its parts
+/// let (datatype, buffer, nulls) = arr.into_parts();
+/// // Convert the buffer to a Vec<i32> (zero copy)
+/// // (note this requires that there are no other references)
+/// let mut vec: Vec<i32> = buffer.into();
+/// vec[2] = 300;
+/// // put the parts back together
+/// let arr = PrimitiveArray::<Int32Type>::try_new(vec.into(), nulls).unwrap();
+/// assert_eq!(arr.values(), &[1, 2, 300, 4]);
+/// // The same allocation was used
+/// assert_eq!(starting_ptr, arr.values().as_ptr());
 /// ```
 ///
 /// # Example: From an optional Vec
@@ -829,11 +861,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     where
         K: ArrowPrimitiveType<Native = T::Native>,
     {
-        let d = self.to_data().into_builder().data_type(K::DATA_TYPE);
-
-        // SAFETY:
-        // Native type is the same
-        PrimitiveArray::from(unsafe { d.build_unchecked() })
+        PrimitiveArray::new(self.values.clone(), self.nulls.clone())
     }
 
     /// Applies a unary infallible function to a primitive array, producing a
@@ -1160,7 +1188,8 @@ impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
     }
 }
 
-impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -1422,15 +1451,15 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr> for P
         let iter = iter.into_iter();
         let (lower, _) = iter.size_hint();
 
-        let mut null_builder = BooleanBufferBuilder::new(lower);
+        let mut null_builder = NullBufferBuilder::new(lower);
 
         let buffer: Buffer = iter
             .map(|item| {
                 if let Some(a) = item.into().native {
-                    null_builder.append(true);
+                    null_builder.append_non_null();
                     a
                 } else {
-                    null_builder.append(false);
+                    null_builder.append_null();
                     // this ensures that null items on the buffer are not arbitrary.
                     // This is important because fallible operations can use null values (e.g. a vectorized "add")
                     // which may panic (e.g. overflow if the number on the slots happen to be very large).
@@ -1439,20 +1468,8 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr> for P
             })
             .collect();
 
-        let len = null_builder.len();
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                T::DATA_TYPE,
-                len,
-                None,
-                Some(null_builder.into()),
-                0,
-                vec![buffer],
-                vec![],
-            )
-        };
-        PrimitiveArray::from(data)
+        let maybe_nulls = null_builder.finish();
+        PrimitiveArray::new(ScalarBuffer::from(buffer), maybe_nulls)
     }
 }
 
@@ -1473,10 +1490,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         let (null, buffer) = unsafe { trusted_len_unzip(iterator) };
 
-        let data = unsafe {
-            ArrayData::new_unchecked(T::DATA_TYPE, len, None, Some(null), 0, vec![buffer], vec![])
-        };
-        PrimitiveArray::from(data)
+        let nulls =
+            Some(NullBuffer::new(BooleanBuffer::new(null, 0, len))).filter(|n| n.null_count() > 0);
+        PrimitiveArray::new(ScalarBuffer::from(buffer), nulls)
     }
 }
 
@@ -1487,11 +1503,9 @@ macro_rules! def_numeric_from_vec {
     ( $ty:ident ) => {
         impl From<Vec<<$ty as ArrowPrimitiveType>::Native>> for PrimitiveArray<$ty> {
             fn from(data: Vec<<$ty as ArrowPrimitiveType>::Native>) -> Self {
-                let array_data = ArrayData::builder($ty::DATA_TYPE)
-                    .len(data.len())
-                    .add_buffer(Buffer::from_vec(data));
-                let array_data = unsafe { array_data.build_unchecked() };
-                PrimitiveArray::from(array_data)
+                let buffer = ScalarBuffer::from(Buffer::from_vec(data));
+                let nulls = None;
+                PrimitiveArray::new(buffer, nulls)
             }
         }
 
@@ -1569,18 +1583,21 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
 /// Constructs a `PrimitiveArray` from an array data reference.
 impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
     fn from(data: ArrayData) -> Self {
-        Self::assert_compatible(data.data_type());
+        let (data_type, len, nulls, offset, mut buffers, _child_data) = data.into_parts();
+
+        Self::assert_compatible(&data_type);
         assert_eq!(
-            data.buffers().len(),
+            buffers.len(),
             1,
             "PrimitiveArray data should contain a single buffer only (values buffer)"
         );
+        let buffer = buffers.pop().expect("checked above");
 
-        let values = ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
+        let values = ScalarBuffer::new(buffer, offset, len);
         Self {
-            data_type: data.data_type().clone(),
+            data_type,
             values,
-            nulls: data.nulls().cloned(),
+            nulls,
         }
     }
 }

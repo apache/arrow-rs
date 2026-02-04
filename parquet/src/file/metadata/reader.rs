@@ -18,16 +18,21 @@
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{FooterTail, ParquetMetaData, ParquetMetaDataPushDecoder};
-use crate::file::reader::ChunkReader;
 use crate::file::FOOTER_SIZE;
+use crate::file::metadata::parser::decode_metadata;
+use crate::file::metadata::thrift::parquet_schema_from_bytes;
+use crate::file::metadata::{
+    FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
+};
+use crate::file::reader::ChunkReader;
+use crate::schema::types::SchemaDescriptor;
 use bytes::Bytes;
+use std::sync::Arc;
 use std::{io::Read, ops::Range};
 
+use crate::DecodeResult;
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
-use crate::file::metadata::parser::decode_metadata;
-use crate::DecodeResult;
 
 /// Reads [`ParquetMetaData`] from a byte stream, with either synchronous or
 /// asynchronous I/O.
@@ -68,11 +73,12 @@ pub struct ParquetMetaDataReader {
     column_index: PageIndexPolicy,
     offset_index: PageIndexPolicy,
     prefetch_hint: Option<usize>,
+    metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
     #[cfg(feature = "encryption")]
-    file_decryption_properties: Option<std::sync::Arc<FileDecryptionProperties>>,
+    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
 /// Describes the policy for reading page indexes
@@ -117,9 +123,7 @@ impl ParquetMetaDataReader {
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     #[deprecated(since = "56.1.0", note = "Use `with_page_index_policy` instead")]
     pub fn with_page_indexes(self, val: bool) -> Self {
-        let policy = PageIndexPolicy::from(val);
-        self.with_column_index_policy(policy)
-            .with_offset_index_policy(policy)
+        self.with_page_index_policy(PageIndexPolicy::from(val))
     }
 
     /// Enable or disable reading the Parquet [ColumnIndex] structure.
@@ -158,6 +162,12 @@ impl ParquetMetaDataReader {
         self
     }
 
+    /// Sets the [`ParquetMetaDataOptions`] to use when decoding
+    pub fn with_metadata_options(mut self, options: Option<ParquetMetaDataOptions>) -> Self {
+        self.metadata_options = options.map(Arc::new);
+        self
+    }
+
     /// Provide a hint as to the number of bytes needed to fully parse the [`ParquetMetaData`].
     /// Only used for the asynchronous [`Self::try_load()`] method.
     ///
@@ -180,9 +190,9 @@ impl ParquetMetaDataReader {
     #[cfg(feature = "encryption")]
     pub fn with_decryption_properties(
         mut self,
-        properties: Option<&FileDecryptionProperties>,
+        properties: Option<std::sync::Arc<FileDecryptionProperties>>,
     ) -> Self {
-        self.file_decryption_properties = properties.cloned().map(std::sync::Arc::new);
+        self.file_decryption_properties = properties;
         self
     }
 
@@ -355,7 +365,8 @@ impl ParquetMetaDataReader {
 
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
-            .with_column_index_policy(self.column_index);
+            .with_column_index_policy(self.column_index)
+            .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
         // Get bounds needed for page indexes (if any are present in the file).
@@ -390,7 +401,7 @@ impl ParquetMetaDataReader {
             let metadata_range = file_size.saturating_sub(metadata_size as u64)..file_size;
             if range.end > metadata_range.start {
                 return Err(eof_err!(
-                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}" ,
+                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}",
                 ));
             }
         }
@@ -501,7 +512,8 @@ impl ParquetMetaDataReader {
         let file_size = u64::MAX;
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
-            .with_column_index_policy(self.column_index);
+            .with_column_index_policy(self.column_index)
+            .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
         // Get bounds needed for page indexes (if any are present in the file).
@@ -542,9 +554,9 @@ impl ParquetMetaDataReader {
             return Err(ParquetError::NeedMoreData(FOOTER_SIZE));
         }
 
-        let mut footer = [0_u8; 8];
+        let mut footer = [0_u8; FOOTER_SIZE];
         chunk_reader
-            .get_read(file_size - 8)?
+            .get_read(file_size - FOOTER_SIZE as u64)?
             .read_exact(&mut footer)?;
 
         let footer = FooterTail::try_new(&footer)?;
@@ -559,6 +571,12 @@ impl ParquetMetaDataReader {
         let start = file_size - footer_metadata_len as u64;
         let bytes = chunk_reader.get_bytes(start, metadata_len)?;
         self.decode_footer_metadata(bytes, file_size, footer)
+    }
+
+    /// Size of the serialized thrift metadata plus the 8 byte footer. Only set if
+    /// `self.parse_metadata` is called.
+    pub fn metadata_size(&self) -> Option<usize> {
+        self.metadata_size
     }
 
     /// Return the number of bytes to read in the initial pass. If `prefetch_size` has
@@ -745,7 +763,8 @@ impl ParquetMetaDataReader {
         let push_decoder =
             ParquetMetaDataPushDecoder::try_new_with_footer_tail(file_size, footer_tail)?
                 // NOTE: DO NOT enable page indexes here, they are handled separately
-                .with_page_index_policy(PageIndexPolicy::Skip);
+                .with_page_index_policy(PageIndexPolicy::Skip)
+                .with_metadata_options(self.metadata_options.clone());
 
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
         push_decoder.push_range(range, buf)?;
@@ -789,8 +808,24 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        // Note this API does not support encryption.
-        decode_metadata(buf)
+        decode_metadata(buf, None)
+    }
+
+    /// Decodes [`ParquetMetaData`] from the provided bytes.
+    ///
+    /// Like [`Self::decode_metadata`] but this also accepts
+    /// metadata parsing options.
+    pub fn decode_metadata_with_options(
+        buf: &[u8],
+        options: Option<&ParquetMetaDataOptions>,
+    ) -> Result<ParquetMetaData> {
+        decode_metadata(buf, options)
+    }
+
+    /// Decodes the schema from the Parquet footer in `buf`. Returned as
+    /// a [`SchemaDescriptor`].
+    pub fn decode_schema(buf: &[u8]) -> Result<Arc<SchemaDescriptor>> {
+        Ok(Arc::new(parquet_schema_from_bytes(buf)?))
     }
 }
 
@@ -845,7 +880,7 @@ mod tests {
         let err = ParquetMetaDataReader::new()
             .parse_metadata(&test_file)
             .unwrap_err();
-        assert!(matches!(err, ParquetError::NeedMoreData(8)));
+        assert!(matches!(err, ParquetError::NeedMoreData(FOOTER_SIZE)));
     }
 
     #[test]
@@ -991,14 +1026,14 @@ mod async_tests {
     use arrow_array::RecordBatch;
     use arrow_schema::{Field, Schema};
     use bytes::Bytes;
-    use futures::future::BoxFuture;
     use futures::FutureExt;
+    use futures::future::BoxFuture;
     use std::fs::File;
     use std::future::Future;
     use std::io::{Read, Seek, SeekFrom};
     use std::ops::Range;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::NamedTempFile;
 
     use crate::arrow::ArrowWriter;
@@ -1246,7 +1281,7 @@ mod async_tests {
 
         // just make sure the metadata is properly decrypted and read
         let expected = ParquetMetaDataReader::new()
-            .with_decryption_properties(Some(&decryption_properties))
+            .with_decryption_properties(Some(decryption_properties))
             .load_via_suffix_and_finish(input)
             .await
             .unwrap();

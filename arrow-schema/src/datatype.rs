@@ -591,6 +591,16 @@ impl DataType {
         matches!(self, UInt8 | UInt16 | UInt32 | UInt64)
     }
 
+    /// Returns true if this type is decimal: (Decimal*).
+    #[inline]
+    pub fn is_decimal(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self,
+            Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..)
+        )
+    }
+
     /// Returns true if this type is valid as a dictionary key
     #[inline]
     pub fn is_dictionary_key_type(&self) -> bool {
@@ -629,6 +639,34 @@ impl DataType {
     pub fn is_null(&self) -> bool {
         use DataType::*;
         matches!(self, Null)
+    }
+
+    /// Returns true if this type is a String type
+    #[inline]
+    pub fn is_string(&self) -> bool {
+        use DataType::*;
+        matches!(self, Utf8 | LargeUtf8 | Utf8View)
+    }
+
+    /// Returns true if this type is a List type.
+    ///
+    /// List types include List, LargeList, FixedSizeList, ListView, and LargeListView.
+    #[inline]
+    pub fn is_list(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self,
+            List(_) | LargeList(_) | FixedSizeList(_, _) | ListView(_) | LargeListView(_)
+        )
+    }
+
+    /// Returns true if this type is a Binary type.
+    ///
+    /// Binary types include Binary, LargeBinary, FixedSizeBinary and BinaryView.
+    #[inline]
+    pub fn is_binary(&self) -> bool {
+        use DataType::*;
+        matches!(self, Binary | LargeBinary | FixedSizeBinary(_) | BinaryView)
     }
 
     /// Compares the datatype with another, ignoring nested field names
@@ -994,53 +1032,58 @@ mod tests {
         assert!(!list_s.equals_datatype(&list_v));
 
         let union_a = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![1, 2],
                 vec![
                     Field::new("f1", DataType::Utf8, false),
                     Field::new("f2", DataType::UInt8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
         let union_b = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![1, 2],
                 vec![
                     Field::new("ff1", DataType::Utf8, false),
                     Field::new("ff2", DataType::UInt8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
         let union_c = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![2, 1],
                 vec![
                     Field::new("fff2", DataType::UInt8, false),
                     Field::new("fff1", DataType::Utf8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
         let union_d = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![2, 1],
                 vec![
                     Field::new("fff1", DataType::Int8, false),
                     Field::new("fff2", DataType::UInt8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
         let union_e = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![1, 2],
                 vec![
                     Field::new("f1", DataType::Utf8, true),
                     Field::new("f2", DataType::UInt8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
 
@@ -1143,15 +1186,64 @@ mod tests {
     }
 
     #[test]
+    fn test_string() {
+        assert!(DataType::is_string(&DataType::Utf8));
+        assert!(DataType::is_string(&DataType::LargeUtf8));
+        assert!(DataType::is_string(&DataType::Utf8View));
+        assert!(!DataType::is_string(&DataType::Int32));
+    }
+
+    #[test]
     fn test_floating() {
         assert!(DataType::is_floating(&DataType::Float16));
         assert!(!DataType::is_floating(&DataType::Int32));
     }
 
     #[test]
+    fn test_decimal() {
+        assert!(DataType::is_decimal(&DataType::Decimal32(4, 2)));
+        assert!(DataType::is_decimal(&DataType::Decimal64(4, 2)));
+        assert!(DataType::is_decimal(&DataType::Decimal128(4, 2)));
+        assert!(DataType::is_decimal(&DataType::Decimal256(4, 2)));
+        assert!(!DataType::is_decimal(&DataType::Float16));
+    }
+
+    #[test]
     fn test_datatype_is_null() {
         assert!(DataType::is_null(&DataType::Null));
         assert!(!DataType::is_null(&DataType::Int32));
+    }
+
+    #[test]
+    fn test_is_list() {
+        assert!(DataType::is_list(&DataType::new_list(
+            DataType::Int16,
+            true
+        )));
+        assert!(DataType::is_list(&DataType::new_large_list(
+            DataType::Int16,
+            true
+        )));
+        assert!(DataType::is_list(&DataType::new_fixed_size_list(
+            DataType::Int16,
+            5,
+            true
+        )));
+        assert!(DataType::is_list(&DataType::ListView(Arc::new(
+            Field::new("f", DataType::Int16, true)
+        ))));
+        assert!(DataType::is_list(&DataType::LargeListView(Arc::new(
+            Field::new("f", DataType::Int16, true)
+        ))));
+        assert!(!DataType::is_list(&DataType::Binary));
+    }
+
+    #[test]
+    fn test_is_binary() {
+        assert!(DataType::is_binary(&DataType::Binary));
+        assert!(DataType::is_binary(&DataType::LargeBinary));
+        assert!(DataType::is_binary(&DataType::BinaryView));
+        assert!(!DataType::is_list(&DataType::Utf8View));
     }
 
     #[test]
@@ -1164,13 +1256,14 @@ mod tests {
     fn test_union_with_duplicated_type_id() {
         let type_ids = vec![1, 1];
         let _union = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 type_ids,
                 vec![
                     Field::new("f1", DataType::Int32, false),
                     Field::new("f2", DataType::Utf8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         );
     }

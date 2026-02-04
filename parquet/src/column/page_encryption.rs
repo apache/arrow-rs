@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::basic::PageType;
 use crate::column::page::CompressedPage;
 use crate::encryption::ciphers::BlockEncryptor;
-use crate::encryption::encrypt::{encrypt_object, FileEncryptor};
-use crate::encryption::modules::{create_module_aad, ModuleType};
+use crate::encryption::encrypt::{FileEncryptor, encrypt_thrift_object};
+use crate::encryption::modules::{ModuleType, create_module_aad};
 use crate::errors::ParquetError;
 use crate::errors::Result;
-use crate::format::PageHeader;
-use crate::format::PageType;
+use crate::file::metadata::thrift::PageHeader;
 use bytes::Bytes;
 use std::io::Write;
 use std::sync::Arc;
@@ -95,15 +95,15 @@ impl PageEncryptor {
         page_header: &PageHeader,
         sink: &mut W,
     ) -> Result<()> {
-        let module_type = match page_header.type_ {
+        let module_type = match page_header.r#type {
             PageType::DATA_PAGE => ModuleType::DataPageHeader,
             PageType::DATA_PAGE_V2 => ModuleType::DataPageHeader,
             PageType::DICTIONARY_PAGE => ModuleType::DictionaryPageHeader,
             _ => {
                 return Err(general_err!(
                     "Unsupported page type for page header encryption: {:?}",
-                    page_header.type_
-                ))
+                    page_header.r#type
+                ));
             }
         };
         let aad = create_module_aad(
@@ -114,6 +114,6 @@ impl PageEncryptor {
             Some(self.page_index),
         )?;
 
-        encrypt_object(page_header, &mut self.block_encryptor, sink, &aad)
+        encrypt_thrift_object(page_header, &mut self.block_encryptor, sink, &aad)
     }
 }

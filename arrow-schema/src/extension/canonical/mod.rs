@@ -33,6 +33,8 @@ mod json;
 pub use json::{Json, JsonMetadata};
 mod opaque;
 pub use opaque::{Opaque, OpaqueMetadata};
+mod timestamp_with_offset;
+pub use timestamp_with_offset::TimestampWithOffset;
 mod uuid;
 pub use uuid::Uuid;
 mod variable_shape_tensor;
@@ -77,6 +79,11 @@ pub enum CanonicalExtensionType {
     ///
     /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#bit-boolean>
     Bool8(Bool8),
+
+    /// The extension type for `TimestampWithOffset`.
+    ///
+    /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#timestamp-with-offset>
+    TimestampWithOffset(TimestampWithOffset),
 }
 
 impl TryFrom<&Field> for CanonicalExtensionType {
@@ -97,6 +104,9 @@ impl TryFrom<&Field> for CanonicalExtensionType {
                 Uuid::NAME => value.try_extension_type::<Uuid>().map(Into::into),
                 Opaque::NAME => value.try_extension_type::<Opaque>().map(Into::into),
                 Bool8::NAME => value.try_extension_type::<Bool8>().map(Into::into),
+                TimestampWithOffset::NAME => value
+                    .try_extension_type::<TimestampWithOffset>()
+                    .map(Into::into),
                 _ => Err(ArrowError::InvalidArgumentError(format!(
                     "Unsupported canonical extension type: {name}"
                 ))),
@@ -146,5 +156,11 @@ impl From<Opaque> for CanonicalExtensionType {
 impl From<Bool8> for CanonicalExtensionType {
     fn from(value: Bool8) -> Self {
         CanonicalExtensionType::Bool8(value)
+    }
+}
+
+impl From<TimestampWithOffset> for CanonicalExtensionType {
+    fn from(value: TimestampWithOffset) -> Self {
+        CanonicalExtensionType::TimestampWithOffset(value)
     }
 }

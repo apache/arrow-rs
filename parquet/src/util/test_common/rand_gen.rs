@@ -19,8 +19,9 @@ use crate::basic::Encoding;
 use crate::column::page::Page;
 use bytes::Bytes;
 use rand::{
-    distr::{uniform::SampleUniform, Distribution, StandardUniform},
-    rng, Rng,
+    Rng,
+    distr::{Distribution, StandardUniform, uniform::SampleUniform},
+    rng,
 };
 use std::collections::VecDeque;
 
@@ -31,37 +32,37 @@ use crate::util::{DataPageBuilder, DataPageBuilderImpl};
 
 /// Random generator of data type `T` values and sequences.
 pub trait RandGen<T: DataType> {
-    fn gen(len: i32) -> T::T;
+    fn r#gen(len: i32) -> T::T;
 
     fn gen_vec(len: i32, total: usize) -> Vec<T::T> {
         let mut result = vec![];
         for _ in 0..total {
-            result.push(Self::gen(len))
+            result.push(Self::r#gen(len))
         }
         result
     }
 }
 
 impl RandGen<BoolType> for BoolType {
-    fn gen(_: i32) -> bool {
+    fn r#gen(_: i32) -> bool {
         rng().random::<bool>()
     }
 }
 
 impl RandGen<Int32Type> for Int32Type {
-    fn gen(_: i32) -> i32 {
+    fn r#gen(_: i32) -> i32 {
         rng().random::<i32>()
     }
 }
 
 impl RandGen<Int64Type> for Int64Type {
-    fn gen(_: i32) -> i64 {
+    fn r#gen(_: i32) -> i64 {
         rng().random::<i64>()
     }
 }
 
 impl RandGen<Int96Type> for Int96Type {
-    fn gen(_: i32) -> Int96 {
+    fn r#gen(_: i32) -> Int96 {
         let mut rng = rng();
         let mut result = Int96::new();
         result.set_data(
@@ -74,19 +75,19 @@ impl RandGen<Int96Type> for Int96Type {
 }
 
 impl RandGen<FloatType> for FloatType {
-    fn gen(_: i32) -> f32 {
+    fn r#gen(_: i32) -> f32 {
         rng().random::<f32>()
     }
 }
 
 impl RandGen<DoubleType> for DoubleType {
-    fn gen(_: i32) -> f64 {
+    fn r#gen(_: i32) -> f64 {
         rng().random::<f64>()
     }
 }
 
 impl RandGen<ByteArrayType> for ByteArrayType {
-    fn gen(_: i32) -> ByteArray {
+    fn r#gen(_: i32) -> ByteArray {
         let mut rng = rng();
         let mut result = ByteArray::new();
         let mut value = vec![];
@@ -100,7 +101,7 @@ impl RandGen<ByteArrayType> for ByteArrayType {
 }
 
 impl RandGen<FixedLenByteArrayType> for FixedLenByteArrayType {
-    fn gen(len: i32) -> FixedLenByteArray {
+    fn r#gen(len: i32) -> FixedLenByteArray {
         assert!(len >= 0);
         let value = random_bytes(len as usize);
         ByteArray::from(value).into()

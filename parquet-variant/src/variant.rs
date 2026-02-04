@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
+pub use self::decimal::{VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType};
 pub use self::list::VariantList;
-pub use self::metadata::{VariantMetadata, EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES};
+pub use self::metadata::{EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VariantMetadata};
 pub use self::object::VariantObject;
 
 // Publically export types used in the API
@@ -25,7 +25,7 @@ pub use half::f16;
 pub use uuid::Uuid;
 
 use crate::decoder::{
-    self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
+    self, VariantBasicType, VariantPrimitiveType, get_basic_type, get_primitive_type,
 };
 use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, fits_precision, slice_from_slice};
@@ -533,8 +533,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `DateTime<Utc>` if possible.
     ///
-    /// Returns `Some(DateTime<Utc>)` for timestamp variants,
-    /// `None` for non-timestamp variants.
+    /// Returns `Some(DateTime<Utc>)` for [`Variant::TimestampMicros`] variants,
+    /// `None` for other variants.
     ///
     /// # Examples
     ///
@@ -543,28 +543,34 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use chrono::NaiveDate;
     ///
     /// // you can extract a DateTime<Utc> from a UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap().and_utc();
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 34, 56, 780)
+    ///     .unwrap()
+    ///     .and_utc();
     /// let v1 = Variant::from(datetime);
-    /// assert_eq!(v1.as_datetime_utc(), Some(datetime));
-    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap().and_utc();
-    /// let v2 = Variant::from(datetime_nanos);
-    /// assert_eq!(v2.as_datetime_utc(), Some(datetime_nanos));
+    /// assert_eq!(v1.as_timestamp_micros(), Some(datetime));
     ///
-    /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_datetime_utc(), None);
+    /// // but not for other variants.
+    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 33, 54, 123456789)
+    ///     .unwrap()
+    ///     .and_utc();
+    /// let v2 = Variant::from(datetime_nanos);
+    /// assert_eq!(v2.as_timestamp_micros(), None);
     /// ```
-    pub fn as_datetime_utc(&self) -> Option<DateTime<Utc>> {
+    pub fn as_timestamp_micros(&self) -> Option<DateTime<Utc>> {
         match *self {
-            Variant::TimestampMicros(d) | Variant::TimestampNanos(d) => Some(d),
+            Variant::TimestampMicros(d) => Some(d),
             _ => None,
         }
     }
 
     /// Converts this variant to a `NaiveDateTime` if possible.
     ///
-    /// Returns `Some(NaiveDateTime)` for timestamp variants,
-    /// `None` for non-timestamp variants.
+    /// Returns `Some(NaiveDateTime)` for [`Variant::TimestampNtzMicros`] variants,
+    /// `None` for other variants.
     ///
     /// # Examples
     ///
@@ -573,22 +579,104 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use chrono::NaiveDate;
     ///
     /// // you can extract a NaiveDateTime from a non-UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap();
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 34, 56, 780)
+    ///     .unwrap();
     /// let v1 = Variant::from(datetime);
-    /// assert_eq!(v1.as_naive_datetime(), Some(datetime));
+    /// assert_eq!(v1.as_timestamp_ntz_micros(), Some(datetime));
     ///
-    /// // or a UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_nano_opt(12, 34, 56, 123456789).unwrap();
-    /// let v2 = Variant::from(datetime);
-    /// assert_eq!(v2.as_naive_datetime(), Some(datetime));
-    ///
-    /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_naive_datetime(), None);
+    /// // but not for other variants.
+    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 33, 54, 123456789)
+    ///     .unwrap();
+    /// let v2 = Variant::from(datetime_nanos);
+    /// assert_eq!(v2.as_timestamp_micros(), None);
     /// ```
-    pub fn as_naive_datetime(&self) -> Option<NaiveDateTime> {
+    pub fn as_timestamp_ntz_micros(&self) -> Option<NaiveDateTime> {
         match *self {
-            Variant::TimestampNtzMicros(d) | Variant::TimestampNtzNanos(d) => Some(d),
+            Variant::TimestampNtzMicros(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `DateTime<Utc>` if possible.
+    ///
+    /// Returns `Some(DateTime<Utc>)` for timestamp variants,
+    /// `None` for other variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use chrono::NaiveDate;
+    ///
+    /// // you can extract a DateTime<Utc> from a UTC-adjusted nanosecond-precision variant
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 789123456)
+    ///     .unwrap()
+    ///     .and_utc();
+    /// let v1 = Variant::from(datetime);
+    /// assert_eq!(v1.as_timestamp_nanos(), Some(datetime));
+    ///
+    /// // or from UTC-adjusted microsecond-precision variant
+    /// let datetime_micros = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 33, 54, 123)
+    ///     .unwrap()
+    ///     .and_utc();
+    /// // this will convert to `Variant::TimestampMicros`.
+    /// let v2 = Variant::from(datetime_micros);
+    /// assert_eq!(v2.as_timestamp_nanos(), Some(datetime_micros));
+    ///
+    /// // but not for other variants.
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_timestamp_nanos(), None);
+    /// ```
+    pub fn as_timestamp_nanos(&self) -> Option<DateTime<Utc>> {
+        match *self {
+            Variant::TimestampNanos(d) | Variant::TimestampMicros(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `NaiveDateTime` if possible.
+    ///
+    /// Returns `Some(NaiveDateTime)` for timestamp variants,
+    /// `None` for other variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use chrono::NaiveDate;
+    ///
+    /// // you can extract a NaiveDateTime from a non-UTC-adjusted variant
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 789123456)
+    ///     .unwrap();
+    /// let v1 = Variant::from(datetime);
+    /// assert_eq!(v1.as_timestamp_ntz_nanos(), Some(datetime));
+    ///
+    /// // or from a microsecond-precision non-UTC-adjusted variant
+    /// let datetime_micros = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 33, 54, 123)
+    ///     .unwrap();
+    /// // this will convert to `Variant::TimestampMicros`.
+    /// let v2 = Variant::from(datetime_micros);
+    /// assert_eq!(v2.as_timestamp_ntz_nanos(), Some(datetime_micros));
+    ///
+    /// // but not for other variants.
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_timestamp_ntz_nanos(), None);
+    /// ```
+    pub fn as_timestamp_ntz_nanos(&self) -> Option<NaiveDateTime> {
+        match *self {
+            Variant::TimestampNtzNanos(d) | Variant::TimestampNtzMicros(d) => Some(d),
             _ => None,
         }
     }

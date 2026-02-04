@@ -22,21 +22,22 @@ extern crate criterion;
 extern crate once_cell;
 
 use arrow_array::{
+    ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
+    Float32Array, Float64Array, ListArray, PrimitiveArray, RecordBatch, StringArray, StructArray,
     builder::{ListBuilder, StringBuilder},
     types::{Int32Type, Int64Type, IntervalMonthDayNanoType, TimestampMicrosecondType},
-    ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array,
-    Decimal64Array, FixedSizeBinaryArray, Float32Array, Float64Array, ListArray, PrimitiveArray,
-    RecordBatch, StringArray, StructArray,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_avro::writer::AvroWriter;
-use arrow_buffer::i256;
-use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use arrow_buffer::{Buffer, i256};
+use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use once_cell::sync::Lazy;
 use rand::{
+    Rng, SeedableRng,
     distr::uniform::{SampleRange, SampleUniform},
     rngs::StdRng,
-    Rng, SeedableRng,
 };
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -177,11 +178,13 @@ fn make_ts_micros_array_with_tag(n: usize, tag: u64) -> PrimitiveArray<Timestamp
 // === Decimal helpers & generators ===
 
 #[inline]
+#[cfg(feature = "small_decimals")]
 fn pow10_i32(p: u8) -> i32 {
     (0..p).fold(1i32, |acc, _| acc.saturating_mul(10))
 }
 
 #[inline]
+#[cfg(feature = "small_decimals")]
 fn pow10_i64(p: u8) -> i64 {
     (0..p).fold(1i64, |acc, _| acc.saturating_mul(10))
 }
@@ -192,6 +195,7 @@ fn pow10_i128(p: u8) -> i128 {
 }
 
 #[inline]
+#[cfg(feature = "small_decimals")]
 fn make_decimal32_array_with_tag(n: usize, tag: u64, precision: u8, scale: i8) -> Decimal32Array {
     let mut rng = rng_for(tag, n);
     let max = pow10_i32(precision).saturating_sub(1);
@@ -202,6 +206,7 @@ fn make_decimal32_array_with_tag(n: usize, tag: u64, precision: u8, scale: i8) -
 }
 
 #[inline]
+#[cfg(feature = "small_decimals")]
 fn make_decimal64_array_with_tag(n: usize, tag: u64, precision: u8, scale: i8) -> Decimal64Array {
     let mut rng = rng_for(tag, n);
     let max = pow10_i64(precision).saturating_sub(1);
@@ -539,6 +544,7 @@ static STRUCT_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
+#[cfg(feature = "small_decimals")]
 static DECIMAL32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
     // Choose a representative precision/scale within Decimal32 limits
     let precision: u8 = 7;
@@ -554,6 +560,7 @@ static DECIMAL32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
+#[cfg(feature = "small_decimals")]
 static DECIMAL64_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
     let precision: u8 = 13;
     let scale: i8 = 3;
@@ -679,6 +686,79 @@ static ENUM_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
+static UNION_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
+    // Basic Dense Union of three types: Utf8, Int32, Float64
+    let union_fields = UnionFields::try_new(
+        vec![0, 1, 2],
+        vec![
+            Field::new("u_str", DataType::Utf8, true),
+            Field::new("u_int", DataType::Int32, true),
+            Field::new("u_f64", DataType::Float64, true),
+        ],
+    )
+    .expect("UnionFields should be valid");
+    let union_dt = DataType::Union(union_fields.clone(), UnionMode::Dense);
+    let schema = schema_single("field1", union_dt);
+
+    SIZES
+        .iter()
+        .map(|&n| {
+            // Cycle type ids 0 -> 1 -> 2 ... for determinism
+            let mut type_ids: Vec<i8> = Vec::with_capacity(n);
+            let mut offsets: Vec<i32> = Vec::with_capacity(n);
+            let (mut c0, mut c1, mut c2) = (0i32, 0i32, 0i32);
+            for i in 0..n {
+                let tid = (i % 3) as i8;
+                type_ids.push(tid);
+                match tid {
+                    0 => {
+                        offsets.push(c0);
+                        c0 += 1;
+                    }
+                    1 => {
+                        offsets.push(c1);
+                        c1 += 1;
+                    }
+                    _ => {
+                        offsets.push(c2);
+                        c2 += 1;
+                    }
+                }
+            }
+
+            // Build children arrays with lengths equal to counts per type id
+            let mut rng = rng_for(0xDEAD_0003, n);
+            let strings: Vec<String> = (0..c0)
+                .map(|_| rand_ascii_string(&mut rng, 3, 12))
+                .collect();
+            let ints = 0..c1;
+            let floats = (0..c2).map(|_| rng.random::<f64>());
+
+            let str_arr = StringArray::from_iter_values(strings);
+            let int_arr: PrimitiveArray<Int32Type> = PrimitiveArray::from_iter_values(ints);
+            let f_arr = Float64Array::from_iter_values(floats);
+
+            let type_ids_buf = Buffer::from_slice_ref(type_ids.as_slice());
+            let offsets_buf = Buffer::from_slice_ref(offsets.as_slice());
+
+            let union_array = arrow_array::UnionArray::try_new(
+                union_fields.clone(),
+                type_ids_buf.into(),
+                Some(offsets_buf.into()),
+                vec![
+                    Arc::new(str_arr) as ArrayRef,
+                    Arc::new(int_arr) as ArrayRef,
+                    Arc::new(f_arr) as ArrayRef,
+                ],
+            )
+            .unwrap();
+
+            let col: ArrayRef = Arc::new(union_array);
+            RecordBatch::try_new(schema.clone(), vec![col]).unwrap()
+        })
+        .collect()
+});
+
 fn ocf_size_for_batch(batch: &RecordBatch) -> usize {
     let schema_owned: Schema = (*batch.schema()).clone();
     let cursor = Cursor::new(Vec::<u8>::with_capacity(1024));
@@ -749,13 +829,16 @@ fn criterion_benches(c: &mut Criterion) {
     bench_writer_scenario(c, "write-FixedSizeBinary16", &FIXED16_DATA);
     bench_writer_scenario(c, "write-UUID(logicalType)", &UUID16_DATA);
     bench_writer_scenario(c, "write-IntervalMonthDayNanoDuration", &INTERVAL_MDN_DATA);
+    #[cfg(feature = "small_decimals")]
     bench_writer_scenario(c, "write-Decimal32(bytes)", &DECIMAL32_DATA);
+    #[cfg(feature = "small_decimals")]
     bench_writer_scenario(c, "write-Decimal64(bytes)", &DECIMAL64_DATA);
     bench_writer_scenario(c, "write-Decimal128(bytes)", &DECIMAL128_BYTES_DATA);
     bench_writer_scenario(c, "write-Decimal128(fixed16)", &DECIMAL128_FIXED16_DATA);
     bench_writer_scenario(c, "write-Decimal256(bytes)", &DECIMAL256_DATA);
     bench_writer_scenario(c, "write-Map", &MAP_DATA);
     bench_writer_scenario(c, "write-Enum", &ENUM_DATA);
+    bench_writer_scenario(c, "write-Union", &UNION_DATA);
 }
 
 criterion_group! {

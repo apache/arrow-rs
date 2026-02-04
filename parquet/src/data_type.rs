@@ -678,7 +678,7 @@ pub(crate) mod private {
     use bytes::Bytes;
 
     use crate::encodings::decoding::PlainDecoderDetails;
-    use crate::util::bit_util::{read_num_bytes, BitReader, BitWriter};
+    use crate::util::bit_util::{BitReader, BitWriter, read_num_bytes};
 
     use super::{ParquetError, Result, SliceAsBytes};
     use crate::basic::Type;

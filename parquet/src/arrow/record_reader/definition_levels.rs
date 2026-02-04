@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::Buffer;
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use bytes::Bytes;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
@@ -131,11 +131,12 @@ impl DefinitionLevelBufferDecoder {
 impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
     type Buffer = DefinitionLevelBuffer;
 
-    fn set_data(&mut self, encoding: Encoding, data: Bytes) {
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
         match &mut self.decoder {
             MaybePacked::Packed(d) => d.set_data(encoding, data),
-            MaybePacked::Fallback(d) => d.set_data(encoding, data),
-        }
+            MaybePacked::Fallback(d) => d.set_data(encoding, data)?,
+        };
+        Ok(())
     }
 }
 
@@ -159,9 +160,10 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 let start = levels.len();
                 let (values_read, levels_read) = decoder.read_def_levels(levels, num_levels)?;
 
-                nulls.reserve(levels_read);
-                for i in &levels[start..] {
-                    nulls.append(i == max_level);
+                // Safety: slice iterator has a trusted length
+                unsafe {
+                    nulls
+                        .extend_trusted_len(levels[start..].iter().map(|level| level == max_level));
                 }
 
                 Ok((values_read, levels_read))
@@ -351,7 +353,7 @@ mod tests {
     use super::*;
 
     use crate::encodings::rle::RleEncoder;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_packed_decoder() {

@@ -17,8 +17,8 @@
 
 use arrow::array::{Int32RunArray, StringArray, StringRunBuilder};
 use arrow::datatypes::Int32Type;
-use criterion::{criterion_group, criterion_main, Criterion};
-use rand::{rng, Rng};
+use criterion::{Criterion, criterion_group, criterion_main};
+use rand::{Rng, rng};
 
 fn build_strings_runs(
     physical_array_len: usize,

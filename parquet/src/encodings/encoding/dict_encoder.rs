@@ -21,8 +21,8 @@
 use bytes::Bytes;
 
 use crate::basic::{Encoding, Type};
-use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
+use crate::data_type::private::ParquetValueType;
 use crate::encodings::encoding::{Encoder, PlainEncoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::Result;

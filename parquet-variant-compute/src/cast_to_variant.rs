@@ -16,8 +16,9 @@
 // under the License.
 
 use crate::arrow_to_variant::make_arrow_to_variant_row_builder;
-use crate::{CastOptions, VariantArray, VariantArrayBuilder};
+use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::Array;
+use arrow::compute::CastOptions;
 use arrow_schema::ArrowError;
 
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
@@ -34,7 +35,7 @@ use arrow_schema::ArrowError;
 /// ```
 /// # use arrow::array::{Array, ArrayRef, Int64Array};
 /// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::cast_to_variant::cast_to_variant;
+/// # use parquet_variant_compute::cast_to_variant;
 /// // input is an Int64Array, which will be cast to a VariantArray
 /// let input = Int64Array::from(vec![Some(1), None, Some(3)]);
 /// let result = cast_to_variant(&input).unwrap();
@@ -75,45 +76,49 @@ pub fn cast_to_variant_with_options(
 /// failures).
 ///
 /// This function provides backward compatibility. For non-strict behavior,
-/// use [`cast_to_variant_with_options`] with `CastOptions { strict: false }`.
+/// use [`cast_to_variant_with_options`] with `CastOptions { safe: true, ..Default::default() }`.
 pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
-    cast_to_variant_with_options(input, &CastOptions::default())
+    cast_to_variant_with_options(
+        input,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )
 }
-
-// TODO do we need a cast_with_options to allow specifying conversion behavior,
-// e.g. how to handle overflows, whether to convert to Variant::Null or return
-// an error, etc. ?
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, DurationMicrosecondArray,
-        DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray,
-        FixedSizeBinaryBuilder, FixedSizeListBuilder, Float16Array, Float32Array, Float64Array,
-        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
-        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListArray,
-        LargeListViewBuilder, LargeStringArray, ListArray, ListViewBuilder, MapArray, NullArray,
-        StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray,
-        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal32Array,
+        Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray,
+        DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+        DurationSecondArray, FixedSizeBinaryBuilder, FixedSizeListBuilder, Float16Array,
+        Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder, Int8Array,
+        Int16Array, Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+        IntervalYearMonthArray, LargeListArray, LargeListViewBuilder, LargeStringArray, ListArray,
+        ListViewBuilder, MapArray, NullArray, StringArray, StringRunBuilder, StringViewArray,
+        StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+        UInt64Array, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{
-        i256, BinaryType, BinaryViewType, Date32Type, Date64Type, Int32Type, Int64Type, Int8Type,
-        IntervalDayTime, IntervalMonthDayNano, LargeBinaryType,
+        BinaryType, BinaryViewType, Date32Type, Date64Type, Int8Type, Int32Type, Int64Type,
+        IntervalDayTime, IntervalMonthDayNano, LargeBinaryType, i256,
+    };
+    use arrow::temporal_conversions::timestamp_s_to_datetime;
+    use arrow_schema::{
+        DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
     };
     use arrow_schema::{DataType, Field, Fields, UnionFields};
-    use arrow_schema::{
-        DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
-    };
     use chrono::{DateTime, NaiveDate, NaiveTime};
     use half::f16;
     use parquet_variant::{
-        Variant, VariantBuilder, VariantBuilderExt, VariantDecimal16, VariantDecimal4,
-        VariantDecimal8,
+        Variant, VariantBuilder, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+        VariantDecimal16,
     };
     use std::{sync::Arc, vec};
 
@@ -466,6 +471,20 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_to_variant_decimal32_overflow_strict_mode() {
+        run_test_in_strict_mode(
+            Arc::new(
+                Decimal32Array::from(vec![Some(i32::MIN)])
+                    .with_precision_and_scale(DECIMAL32_MAX_PRECISION, 3)
+                    .unwrap(),
+            ),
+            Err(ArrowError::ComputeError(
+                "Failed to convert value at index 0: conversion failed".to_string(),
+            )),
+        );
+    }
+
+    #[test]
     fn test_cast_to_variant_decimal64() {
         run_test(
             Arc::new(
@@ -553,6 +572,20 @@ mod tests {
                 Some(Variant::Null),
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal64_overflow_strict_mode() {
+        run_test_in_strict_mode(
+            Arc::new(
+                Decimal64Array::from(vec![Some(i64::MAX)])
+                    .with_precision_and_scale(DECIMAL64_MAX_PRECISION, 3)
+                    .unwrap(),
+            ),
+            Err(ArrowError::ComputeError(
+                "Failed to convert value at index 0: conversion failed".to_string(),
+            )),
+        );
     }
 
     #[test]
@@ -649,6 +682,22 @@ mod tests {
                 Some(Variant::Null),
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal128_overflow_strict_mode() {
+        run_test_in_strict_mode(
+            Arc::new(
+                Decimal128Array::from(vec![Some(
+                    -max_unscaled_value!(128, DECIMAL128_MAX_PRECISION) - 1,
+                )])
+                .with_precision_and_scale(DECIMAL128_MAX_PRECISION, 3)
+                .unwrap(),
+            ),
+            Err(ArrowError::ComputeError(
+                "Failed to convert value at index 0: conversion failed".to_string(),
+            )),
+        );
     }
 
     #[test]
@@ -768,6 +817,22 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_to_variant_decimal256_overflow_strict_mode() {
+        run_test_in_strict_mode(
+            Arc::new(
+                Decimal256Array::from(vec![Some(i256::from_i128(
+                    max_unscaled_value!(128, DECIMAL128_MAX_PRECISION) + 1,
+                ))])
+                .with_precision_and_scale(DECIMAL128_MAX_PRECISION, 3)
+                .unwrap(),
+            ),
+            Err(ArrowError::ComputeError(
+                "Failed to convert value at index 0: conversion failed".to_string(),
+            )),
+        );
+    }
+
+    #[test]
     fn test_cast_to_variant_timestamp() {
         let run_array_tests =
             |microseconds: i64, array_ntz: Arc<dyn Array>, array_tz: Arc<dyn Array>| {
@@ -827,6 +892,40 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_to_variant_timestamp_overflow_strict_mode() {
+        let ts_array = TimestampSecondArray::from(vec![Some(i64::MAX), Some(0), Some(1609459200)])
+            .with_timezone_opt(None::<&str>);
+
+        let values = Arc::new(ts_array);
+        run_test_in_strict_mode(
+            values,
+            Err(ArrowError::ComputeError(
+                "Failed to convert value at index 0: conversion failed".to_string(),
+            )),
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_timestamp_overflow_non_strict_mode() {
+        let ts_array = TimestampSecondArray::from(vec![Some(i64::MAX), Some(0), Some(1609459200)])
+            .with_timezone_opt(None::<&str>);
+
+        let values = Arc::new(ts_array);
+        run_test(
+            values,
+            vec![
+                Some(Variant::Null), // Invalid timestamp becomes null
+                Some(Variant::TimestampNtzMicros(
+                    timestamp_s_to_datetime(0).unwrap(),
+                )),
+                Some(Variant::TimestampNtzMicros(
+                    timestamp_s_to_datetime(1609459200).unwrap(),
+                )),
+            ],
+        );
+    }
+
+    #[test]
     fn test_cast_to_variant_date() {
         // Date32Array
         run_test(
@@ -861,6 +960,34 @@ mod tests {
                 None,
                 Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
                 Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_date64_strict_mode() {
+        let date64_values = Date64Array::from(vec![Some(i64::MAX), Some(0), Some(i64::MIN)]);
+
+        let values = Arc::new(date64_values);
+        run_test_in_strict_mode(
+            values,
+            Err(ArrowError::ComputeError(
+                "Failed to convert value at index 0: conversion failed".to_string(),
+            )),
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_date64_non_strict_mode() {
+        let date64_values = Date64Array::from(vec![Some(i64::MAX), Some(0), Some(i64::MIN)]);
+
+        let values = Arc::new(date64_values);
+        run_test(
+            values,
+            vec![
+                Some(Variant::Null),
+                Some(Variant::Date(Date64Type::to_naive_date_opt(0).unwrap())),
+                Some(Variant::Null),
             ],
         );
     }
@@ -939,6 +1066,36 @@ mod tests {
                 None,
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_time32_strict_mode() {
+        let time32_array = Time32SecondArray::from(vec![Some(90000), Some(3600), Some(-1)]);
+
+        let values = Arc::new(time32_array);
+        run_test_in_strict_mode(
+            values,
+            Err(ArrowError::ComputeError(
+                "Failed to convert value at index 0: conversion failed".to_string(),
+            )),
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_time32_non_strict_mode() {
+        let time32_array = Time32SecondArray::from(vec![Some(90000), Some(3600), Some(-1)]);
+
+        let values = Arc::new(time32_array);
+        run_test(
+            values,
+            vec![
+                Some(Variant::Null),
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(3600, 0).unwrap(),
+                )),
+                Some(Variant::Null),
+            ],
+        );
     }
 
     #[test]
@@ -1915,14 +2072,11 @@ mod tests {
         let string_array = StringArray::from(vec![None, None, Some("hello"), None, None, None]);
         let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),
@@ -1962,14 +2116,11 @@ mod tests {
             .into_iter()
             .collect::<ScalarBuffer<i32>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),
@@ -2090,8 +2241,11 @@ mod tests {
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
     /// against the expected values. It also tests the handling of nulls by
     /// setting one element to null and verifying the output.
-    fn run_test_with_options(values: ArrayRef, expected: Vec<Option<Variant>>, strict: bool) {
-        let options = CastOptions { strict };
+    fn run_test_with_options(
+        values: ArrayRef,
+        expected: Vec<Option<Variant>>,
+        options: CastOptions,
+    ) {
         let variant_array = cast_to_variant_with_options(&values, &options).unwrap();
         assert_eq!(variant_array.len(), expected.len());
         for (i, expected_value) in expected.iter().enumerate() {
@@ -2108,64 +2262,27 @@ mod tests {
     }
 
     fn run_test(values: ArrayRef, expected: Vec<Option<Variant>>) {
-        run_test_with_options(values, expected, true);
+        run_test_with_options(values, expected, CastOptions::default());
     }
 
-    fn run_test_non_strict(values: ArrayRef, expected: Vec<Option<Variant>>) {
-        run_test_with_options(values, expected, false);
-    }
-
-    #[test]
-    fn test_cast_to_variant_non_strict_mode_date64() {
-        let date64_values = Date64Array::from(vec![Some(i64::MAX), Some(0), Some(i64::MIN)]);
-
-        let values = Arc::new(date64_values);
-        run_test_non_strict(
-            values,
-            vec![
-                None,
-                Some(Variant::Date(Date64Type::to_naive_date_opt(0).unwrap())),
-                None,
-            ],
-        );
-    }
-
-    #[test]
-    fn test_cast_to_variant_non_strict_mode_time32() {
-        let time32_array = Time32SecondArray::from(vec![Some(90000), Some(3600), Some(-1)]);
-
-        let values = Arc::new(time32_array);
-        run_test_non_strict(
-            values,
-            vec![
-                None,
-                Some(Variant::Time(
-                    NaiveTime::from_num_seconds_from_midnight_opt(3600, 0).unwrap(),
-                )),
-                None,
-            ],
-        );
-    }
-
-    #[test]
-    fn test_cast_to_variant_non_strict_mode_timestamp() {
-        use arrow::temporal_conversions::timestamp_s_to_datetime;
-
-        let ts_array = TimestampSecondArray::from(vec![Some(i64::MAX), Some(0), Some(1609459200)])
-            .with_timezone_opt(None::<&str>);
-
-        let values = Arc::new(ts_array);
-        run_test_non_strict(
-            values,
-            vec![
-                None, // Invalid timestamp becomes null
-                Some(Variant::TimestampNtzMicros(
-                    timestamp_s_to_datetime(0).unwrap(),
-                )),
-                Some(Variant::TimestampNtzMicros(
-                    timestamp_s_to_datetime(1609459200).unwrap(),
-                )),
-            ],
-        );
+    fn run_test_in_strict_mode(
+        values: ArrayRef,
+        expected: Result<Vec<Option<Variant>>, ArrowError>,
+    ) {
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        match expected {
+            Ok(expected) => run_test_with_options(values, expected, options),
+            Err(_) => {
+                let result = cast_to_variant_with_options(values.as_ref(), &options);
+                assert!(result.is_err());
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    expected.unwrap_err().to_string()
+                );
+            }
+        }
     }
 }

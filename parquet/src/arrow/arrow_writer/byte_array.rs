@@ -23,6 +23,8 @@ use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
+use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
@@ -149,7 +151,7 @@ impl FallbackEncoder {
                 return Err(general_err!(
                     "unsupported encoding {} for byte array",
                     encoding
-                ))
+                ));
             }
         };
 
@@ -421,6 +423,7 @@ pub struct ByteArrayEncoder {
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
     bloom_filter: Option<Sbbf>,
+    geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
 
 impl ColumnValueEncoder for ByteArrayEncoder {
@@ -447,6 +450,8 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
+        let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
+
         Ok(Self {
             fallback,
             statistics_enabled,
@@ -454,6 +459,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             dict_encoder: dictionary,
             min_value: None,
             max_value: None,
+            geo_stats_accumulator,
         })
     }
 
@@ -536,6 +542,10 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             _ => self.fallback.flush_data_page(min_value, max_value),
         }
     }
+
+    fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {
+        self.geo_stats_accumulator.as_mut().map(|a| a.finish())?
+    }
 }
 
 /// Encodes the provided `values` and `indices` to `encoder`
@@ -547,7 +557,9 @@ where
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
     if encoder.statistics_enabled != EnabledStatistics::None {
-        if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
+        if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
+            update_geo_stats_accumulator(accumulator.as_mut(), values, indices.iter().cloned());
+        } else if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
             if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
                 encoder.min_value = Some(min);
             }
@@ -594,4 +606,21 @@ where
         max = max.max(val);
     }
     Some((min.as_ref().to_vec().into(), max.as_ref().to_vec().into()))
+}
+
+/// Updates geospatial statistics for the provided array and indices
+fn update_geo_stats_accumulator<T>(
+    bounder: &mut dyn GeoStatsAccumulator,
+    array: T,
+    valid: impl Iterator<Item = usize>,
+) where
+    T: ArrayAccessor,
+    T::Item: Copy + Ord + AsRef<[u8]>,
+{
+    if bounder.is_valid() {
+        for idx in valid {
+            let val = array.value(idx);
+            bounder.update_wkb(val.as_ref());
+        }
+    }
 }

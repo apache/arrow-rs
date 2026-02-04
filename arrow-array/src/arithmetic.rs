@@ -288,7 +288,7 @@ native_type_op!(u8);
 native_type_op!(u16);
 native_type_op!(u32);
 native_type_op!(u64);
-native_type_op!(i256, i256::ZERO, i256::ONE, i256::MIN, i256::MAX);
+native_type_op!(i256, i256::ZERO, i256::ONE);
 
 native_type_op!(IntervalDayTime, IntervalDayTime::ZERO, IntervalDayTime::ONE);
 native_type_op!(

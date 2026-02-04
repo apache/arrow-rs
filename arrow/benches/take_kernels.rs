@@ -23,7 +23,7 @@ use rand::Rng;
 
 extern crate arrow;
 
-use arrow::compute::{take, TakeOptions};
+use arrow::compute::{TakeOptions, take};
 use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};

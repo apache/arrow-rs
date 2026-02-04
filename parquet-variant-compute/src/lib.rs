@@ -20,10 +20,14 @@
 //! ## Main APIs
 //! - [`VariantArray`] : Represents an array of `Variant` values.
 //! - [`VariantArrayBuilder`]: For building [`VariantArray`]
-//! - [`json_to_variant`]: Function to convert a batch of JSON strings to a `VariantArray`.
-//! - [`variant_to_json`]: Function to convert a `VariantArray` to a batch of JSON strings.
-//! - [`mod@cast_to_variant`]: Module to cast other Arrow arrays to `VariantArray`.
-//! - [`variant_get`]: Module to get values from a `VariantArray` using a specified [`VariantPath`]
+//!
+//! # Compute Kernels
+//! - [`json_to_variant()`]: Function to convert Arrays of JSON strings to a `VariantArray`.
+//! - [`variant_to_json()`]: Function to convert a `VariantArray` to arrays of JSON strings.
+//! - [`cast_to_variant()`]: Cast Arrow arrays to `VariantArray`.
+//! - [`variant_get()`]: Convert `VariantArray` (or an inner path) to a strongly-typed Arrow array.
+//! - [`shred_variant()`]: Shred a `VariantArray` according to the provided shredding schema
+//! - [`unshred_variant()`]: Unshred a `VariantArray` to pure binary variant.
 //!
 //! ## 🚧 Work In Progress
 //!
@@ -36,14 +40,15 @@
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
 mod arrow_to_variant;
-pub mod cast_to_variant;
+mod cast_to_variant;
 mod from_json;
 mod shred_variant;
 mod to_json;
 mod type_conversion;
+mod unshred_variant;
 mod variant_array;
 mod variant_array_builder;
-pub mod variant_get;
+mod variant_get;
 mod variant_to_arrow;
 
 pub use variant_array::{BorrowedShreddingState, ShreddingState, VariantArray, VariantType};
@@ -51,6 +56,7 @@ pub use variant_array_builder::{VariantArrayBuilder, VariantValueArrayBuilder};
 
 pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options};
 pub use from_json::json_to_variant;
-pub use shred_variant::shred_variant;
+pub use shred_variant::{IntoShreddingField, ShreddedSchemaBuilder, shred_variant};
 pub use to_json::variant_to_json;
-pub use type_conversion::CastOptions;
+pub use unshred_variant::unshred_variant;
+pub use variant_get::{GetOptions, variant_get};

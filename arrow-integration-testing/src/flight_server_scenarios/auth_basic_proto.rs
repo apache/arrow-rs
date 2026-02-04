@@ -21,13 +21,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer, Action,
-    ActionType, BasicAuth, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
+    Action, ActionType, BasicAuth, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
 };
-use futures::{channel::mpsc, sink::SinkExt, Stream, StreamExt};
+use futures::{Stream, StreamExt, channel::mpsc, sink::SinkExt};
 use tokio::sync::Mutex;
-use tonic::{metadata::MetadataMap, transport::Server, Request, Response, Status, Streaming};
+use tonic::{Request, Response, Status, Streaming, metadata::MetadataMap, transport::Server};
 type TonicStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync + 'static>>;
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;

@@ -17,9 +17,7 @@
 
 [package]
 name = "parquet-variant-json"
-# This package is still in development and thus the version does
-# not follow the versions of the rest of the crates in this repo.
-version = "0.2.0"
+version = { workspace = true }
 license = { workspace = true }
 description = "Apache Parquet Variant to/from JSON"
 homepage = { workspace = true }

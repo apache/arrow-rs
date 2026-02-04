@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use crate::arrow::async_writer::AsyncFileWriter;
 use crate::errors::{ParquetError, Result};
+use object_store::ObjectStore;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
-use object_store::ObjectStore;
 use tokio::io::AsyncWriteExt;
 
 /// [`ParquetObjectWriter`] for writing to parquet to [`ObjectStore`]
@@ -32,7 +32,7 @@ use tokio::io::AsyncWriteExt;
 /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 /// # use object_store::memory::InMemory;
 /// # use object_store::path::Path;
-/// # use object_store::ObjectStore;
+/// # use object_store::{ObjectStore, ObjectStoreExt};
 /// # use std::sync::Arc;
 ///
 /// # use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -123,8 +123,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::arrow::AsyncArrowWriter;
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use object_store::ObjectStoreExt;
 
     #[tokio::test]
     async fn test_async_writer() {

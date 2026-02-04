@@ -196,10 +196,7 @@ static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
         ),
     ];
 
-    // create "type ids", one for each type, assume they go from 0 .. num_fields
-    let type_ids: Vec<i8> = (0..fields.len()).map(|v| v as i8).collect();
-
-    DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
+    DataType::Union(UnionFields::from_fields(fields), UnionMode::Dense)
 });
 
 impl SqlInfoUnionBuilder {

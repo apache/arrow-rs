@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder, Int64Array,
-    StringArray, StructBuilder, UInt64Array,
+    Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder, Int64Array, StringArray,
+    StructBuilder, UInt64Array, make_array,
 };
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
@@ -825,13 +825,14 @@ fn test_validate_union_different_types() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true), // data is int32
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         2,
@@ -858,13 +859,14 @@ fn test_validate_union_sparse_different_child_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         2,
@@ -887,13 +889,14 @@ fn test_validate_union_dense_without_offsets() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         2,
@@ -917,13 +920,14 @@ fn test_validate_union_dense_with_bad_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         2,
@@ -1106,5 +1110,8 @@ fn test_sliced_array_child() {
     };
 
     let err = data.validate_values().unwrap_err();
-    assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    assert_eq!(
+        err.to_string(),
+        "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2"
+    );
 }

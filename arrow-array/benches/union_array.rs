@@ -54,10 +54,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 |b| {
                     let type_ids = 0..with_nulls+without_nulls;
 
-                    let fields = UnionFields::new(
+                    let fields = UnionFields::try_new(
                         type_ids.clone(),
                         type_ids.clone().map(|i| Field::new(format!("f{i}"), DataType::Int32, true)),
-                    );
+                    ).unwrap();
 
                     let array = UnionArray::try_new(
                         fields,

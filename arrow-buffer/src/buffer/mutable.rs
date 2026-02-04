@@ -33,27 +33,67 @@ use std::sync::Mutex;
 
 use super::Buffer;
 
-/// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
+/// A [`MutableBuffer`] is a wrapper over memory regions, used to build
+/// [`Buffer`]s out of items or slices of items.
 ///
-/// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to have its pointer aligned
-/// along cache lines and in multiple of 64 bytes.
+/// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to be
+/// aligned along cache lines and in multiples of 64 bytes.
 ///
 /// Use [MutableBuffer::push] to insert an item, [MutableBuffer::extend_from_slice]
-/// to insert many items, and `into` to convert it to [`Buffer`].
+/// to insert many items, and `into` to convert it to [`Buffer`]. For typed data,
+/// it is often more efficient to use [`Vec`] and convert it to [`Buffer`] rather
+/// than using [`MutableBuffer`] (see examples below).
 ///
-/// For a safe, strongly typed API consider using [`Vec`] and [`ScalarBuffer`](crate::ScalarBuffer)
+/// # See Also
+/// * For a safe, strongly typed API consider using [`Vec`] and [`ScalarBuffer`](crate::ScalarBuffer)
+/// * To apply bitwise operations, see [`apply_bitwise_binary_op`] and [`apply_bitwise_unary_op`]
 ///
-/// Note: this may be deprecated in a future release ([#1176](https://github.com/apache/arrow-rs/issues/1176))
+/// [`apply_bitwise_binary_op`]: crate::bit_util::apply_bitwise_binary_op
+/// [`apply_bitwise_unary_op`]: crate::bit_util::apply_bitwise_unary_op
 ///
-/// # Example
-///
+/// # Example: Creating a [`Buffer`] from a [`MutableBuffer`]
 /// ```
 /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
 /// let mut buffer = MutableBuffer::new(0);
 /// buffer.push(256u32);
 /// buffer.extend_from_slice(&[1u32]);
-/// let buffer: Buffer = buffer.into();
+/// let buffer = Buffer::from(buffer);
 /// assert_eq!(buffer.as_slice(), &[0u8, 1, 0, 0, 1, 0, 0, 0])
+/// ```
+///
+/// The same can be achieved more efficiently by using a `Vec<u32>`
+/// ```
+/// # use arrow_buffer::buffer::Buffer;
+/// let mut vec = Vec::new();
+/// vec.push(256u32);
+/// vec.extend_from_slice(&[1u32]);
+/// let buffer = Buffer::from(vec);
+/// assert_eq!(buffer.as_slice(), &[0u8, 1, 0, 0, 1, 0, 0, 0]);
+/// ```
+///
+/// # Example: Creating a [`MutableBuffer`] from a `Vec<T>`
+/// ```
+/// # use arrow_buffer::buffer::MutableBuffer;
+/// let vec = vec![1u32, 2, 3];
+/// let mutable_buffer = MutableBuffer::from(vec); // reuses the allocation from vec
+/// assert_eq!(mutable_buffer.len(), 12); // 3 * 4 bytes
+/// ```
+///
+/// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
+/// ```
+/// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
+/// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
+/// // Only possible to convert a Buffer into a MutableBuffer if uniquely owned
+/// // (i.e., there are no other references to it).
+/// let mut mutable_buffer = match buffer.into_mutable() {
+///    Ok(mutable) => mutable,
+///    Err(orig_buffer) => {
+///      panic!("buffer was not uniquely owned");
+///    }
+/// };
+/// mutable_buffer.push(5u8);
+/// let buffer = Buffer::from(mutable_buffer);
+/// assert_eq!(buffer.as_slice(), &[1u8, 2, 3, 4, 5])
 /// ```
 #[derive(Debug)]
 pub struct MutableBuffer {
@@ -219,6 +259,75 @@ impl MutableBuffer {
             let new_capacity = bit_util::round_upto_multiple_of_64(required_cap);
             let new_capacity = std::cmp::max(new_capacity, self.layout.size() * 2);
             self.reallocate(new_capacity)
+        }
+    }
+
+    /// Adding to this mutable buffer `slice_to_repeat` repeated `repeat_count` times.
+    ///
+    /// # Example
+    ///
+    /// ## Repeat the same string bytes multiple times
+    /// ```
+    /// # use arrow_buffer::buffer::MutableBuffer;
+    /// let mut buffer = MutableBuffer::new(0);
+    /// let bytes_to_repeat = b"ab";
+    /// buffer.repeat_slice_n_times(bytes_to_repeat, 3);
+    /// assert_eq!(buffer.as_slice(), b"ababab");
+    /// ```
+    pub fn repeat_slice_n_times<T: ArrowNativeType>(
+        &mut self,
+        slice_to_repeat: &[T],
+        repeat_count: usize,
+    ) {
+        if repeat_count == 0 || slice_to_repeat.is_empty() {
+            return;
+        }
+
+        let bytes_to_repeat = size_of_val(slice_to_repeat);
+
+        // Ensure capacity
+        self.reserve(repeat_count * bytes_to_repeat);
+
+        // Save the length before we do all the copies to know where to start from
+        let length_before = self.len;
+
+        // Copy the initial slice once so we can use doubling strategy on it
+        self.extend_from_slice(slice_to_repeat);
+
+        // This tracks how much bytes we have added by repeating so far
+        let added_repeats_length = bytes_to_repeat;
+        assert_eq!(
+            self.len - length_before,
+            added_repeats_length,
+            "should copy exactly the same number of bytes"
+        );
+
+        // Number of times the slice was repeated
+        let mut already_repeated_times = 1;
+
+        // We will use doubling strategy to fill the buffer in log(repeat_count) steps
+        while already_repeated_times < repeat_count {
+            // How many slices can we copy in this iteration
+            // (either double what we have, or just the remaining ones)
+            let number_of_slices_to_copy =
+                already_repeated_times.min(repeat_count - already_repeated_times);
+            let number_of_bytes_to_copy = number_of_slices_to_copy * bytes_to_repeat;
+
+            unsafe {
+                // Get to the start of the data before we started copying anything
+                let src = self.data.as_ptr().add(length_before) as *const u8;
+
+                // Go to the current location to copy to (end of current data)
+                let dst = self.data.as_ptr().add(self.len);
+
+                // SAFETY: the pointers are not overlapping as there is `number_of_bytes_to_copy` or less between them
+                std::ptr::copy_nonoverlapping(src, dst, number_of_bytes_to_copy)
+            }
+
+            // Advance the length by the amount of data we just copied (doubled)
+            self.len += number_of_bytes_to_copy;
+
+            already_repeated_times += number_of_slices_to_copy;
         }
     }
 
@@ -485,20 +594,19 @@ impl MutableBuffer {
     /// as it eliminates the conditional `Iterator::next`
     #[inline]
     pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
-        let mut buffer = Self::new(bit_util::ceil(len, 64) * 8);
+        let mut buffer: Vec<u64> = Vec::with_capacity(bit_util::ceil(len, 64));
 
         let chunks = len / 64;
         let remainder = len % 64;
-        for chunk in 0..chunks {
+        buffer.extend((0..chunks).map(|chunk| {
             let mut packed = 0;
             for bit_idx in 0..64 {
                 let i = bit_idx + chunk * 64;
                 packed |= (f(i) as u64) << bit_idx;
             }
 
-            // SAFETY: Already allocated sufficient capacity
-            unsafe { buffer.push_unchecked(packed) }
-        }
+            packed
+        }));
 
         if remainder != 0 {
             let mut packed = 0;
@@ -507,12 +615,140 @@ impl MutableBuffer {
                 packed |= (f(i) as u64) << bit_idx;
             }
 
-            // SAFETY: Already allocated sufficient capacity
-            unsafe { buffer.push_unchecked(packed) }
+            buffer.push(packed)
         }
 
+        let mut buffer: MutableBuffer = buffer.into();
         buffer.truncate(bit_util::ceil(len, 8));
         buffer
+    }
+
+    /// Extends this buffer with boolean values.
+    ///
+    /// This requires `iter` to report an exact size via `size_hint`.
+    /// `offset` indicates the starting offset in bits in this buffer to begin writing to
+    /// and must be less than or equal to the current length of this buffer.
+    /// All bits not written to (but readable due to byte alignment) will be zeroed out.
+    /// # Safety
+    /// Callers must ensure that `iter` reports an exact size via `size_hint`.
+    #[inline]
+    pub unsafe fn extend_bool_trusted_len<I: Iterator<Item = bool>>(
+        &mut self,
+        mut iter: I,
+        offset: usize,
+    ) {
+        let (lower, upper) = iter.size_hint();
+        let len = upper.expect("Iterator must have exact size_hint");
+        assert_eq!(lower, len, "Iterator must have exact size_hint");
+        debug_assert!(
+            offset <= self.len * 8,
+            "offset must be <= buffer length in bits"
+        );
+
+        if len == 0 {
+            return;
+        }
+
+        let start_len = offset;
+        let end_bit = start_len + len;
+
+        // SAFETY: we will initialize all newly exposed bytes before they are read
+        let new_len_bytes = bit_util::ceil(end_bit, 8);
+        if new_len_bytes > self.len {
+            self.reserve(new_len_bytes - self.len);
+            // SAFETY: caller will initialize all newly exposed bytes before they are read
+            unsafe { self.set_len(new_len_bytes) };
+        }
+
+        let slice = self.as_slice_mut();
+
+        let mut bit_idx = start_len;
+
+        // ---- Unaligned prefix: advance to the next 64-bit boundary ----
+        let misalignment = bit_idx & 63;
+        let prefix_bits = if misalignment == 0 {
+            0
+        } else {
+            (64 - misalignment).min(end_bit - bit_idx)
+        };
+
+        if prefix_bits != 0 {
+            let byte_start = bit_idx / 8;
+            let byte_end = bit_util::ceil(bit_idx + prefix_bits, 8);
+            let bit_offset = bit_idx % 8;
+
+            // Clear any newly-visible bits in the existing partial byte
+            if bit_offset != 0 {
+                let keep_mask = (1u8 << bit_offset).wrapping_sub(1);
+                slice[byte_start] &= keep_mask;
+            }
+
+            // Zero any new bytes we will partially fill in this prefix
+            let zero_from = if bit_offset == 0 {
+                byte_start
+            } else {
+                byte_start + 1
+            };
+            if byte_end > zero_from {
+                slice[zero_from..byte_end].fill(0);
+            }
+
+            for _ in 0..prefix_bits {
+                let v = iter.next().unwrap();
+                if v {
+                    let byte_idx = bit_idx / 8;
+                    let bit = bit_idx % 8;
+                    slice[byte_idx] |= 1 << bit;
+                }
+                bit_idx += 1;
+            }
+        }
+
+        if bit_idx < end_bit {
+            // ---- Aligned middle: write u64 chunks ----
+            debug_assert_eq!(bit_idx & 63, 0);
+            let remaining_bits = end_bit - bit_idx;
+            let chunks = remaining_bits / 64;
+
+            let words_start = bit_idx / 8;
+            let words_end = words_start + chunks * 8;
+            for dst in slice[words_start..words_end].chunks_exact_mut(8) {
+                let mut packed: u64 = 0;
+                for i in 0..64 {
+                    packed |= (iter.next().unwrap() as u64) << i;
+                }
+                dst.copy_from_slice(&packed.to_le_bytes());
+                bit_idx += 64;
+            }
+
+            // ---- Unaligned suffix: remaining < 64 bits ----
+            let suffix_bits = end_bit - bit_idx;
+            if suffix_bits != 0 {
+                debug_assert_eq!(bit_idx % 8, 0);
+                let byte_start = bit_idx / 8;
+                let byte_end = bit_util::ceil(end_bit, 8);
+                slice[byte_start..byte_end].fill(0);
+
+                for _ in 0..suffix_bits {
+                    let v = iter.next().unwrap();
+                    if v {
+                        let byte_idx = bit_idx / 8;
+                        let bit = bit_idx % 8;
+                        slice[byte_idx] |= 1 << bit;
+                    }
+                    bit_idx += 1;
+                }
+            }
+        }
+
+        // Clear any unused bits in the last byte
+        let remainder = end_bit % 8;
+        if remainder != 0 {
+            let mask = (1u8 << remainder).wrapping_sub(1);
+            slice[bit_util::ceil(end_bit, 8) - 1] &= mask;
+        }
+
+        debug_assert_eq!(bit_idx, end_bit);
     }
 
     /// Register this [`MutableBuffer`] with the provided [`MemoryPool`]
@@ -740,6 +976,12 @@ impl std::ops::Deref for MutableBuffer {
 impl std::ops::DerefMut for MutableBuffer {
     fn deref_mut(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
+    }
+}
+
+impl AsRef<[u8]> for &MutableBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
     }
 }
 
@@ -1183,5 +1425,126 @@ mod tests {
             drop(buffer);
             assert_eq!(pool.used(), 0);
         }
+    }
+
+    fn create_expected_repeated_slice<T: ArrowNativeType>(
+        slice_to_repeat: &[T],
+        repeat_count: usize,
+    ) -> Buffer {
+        let mut expected = MutableBuffer::new(size_of_val(slice_to_repeat) * repeat_count);
+        for _ in 0..repeat_count {
+            // Not using push_slice_repeated as this is the function under test
+            expected.extend_from_slice(slice_to_repeat);
+        }
+        expected.into()
+    }
+
+    // Helper to test a specific repeat count with various slice sizes
+    fn test_repeat_count<T: ArrowNativeType + PartialEq + std::fmt::Debug>(
+        repeat_count: usize,
+        test_data: &[T],
+    ) {
+        let mut buffer = MutableBuffer::new(0);
+        buffer.repeat_slice_n_times(test_data, repeat_count);
+
+        let expected = create_expected_repeated_slice(test_data, repeat_count);
+        let result: Buffer = buffer.into();
+
+        assert_eq!(
+            result,
+            expected,
+            "Failed for repeat_count={}, slice_len={}",
+            repeat_count,
+            test_data.len()
+        );
+    }
+
+    #[test]
+    fn test_repeat_slice_count_edge_cases() {
+        // Empty slice
+        test_repeat_count(100, &[] as &[i32]);
+
+        // Zero repeats
+        test_repeat_count(0, &[1i32, 2, 3]);
+    }
+
+    #[test]
+    fn test_small_repeats_counts() {
+        // test any special implementation for small repeat counts
+        let data = &[1u8, 2, 3, 4, 5];
+
+        for _ in 1..=10 {
+            test_repeat_count(2, data);
+        }
+    }
+
+    #[test]
+    fn test_different_size_of_i32_repeat_slice() {
+        let data: &[i32] = &[1, 2, 3];
+        let data_with_single_item: &[i32] = &[42];
+
+        for data in &[data, data_with_single_item] {
+            for item in 1..=9 {
+                let base_repeat_count = 2_usize.pow(item);
+                test_repeat_count(base_repeat_count - 1, data);
+                test_repeat_count(base_repeat_count, data);
+                test_repeat_count(base_repeat_count + 1, data);
+            }
+        }
+    }
+
+    #[test]
+    fn test_different_size_of_u8_repeat_slice() {
+        let data: &[u8] = &[1, 2, 3];
+        let data_with_single_item: &[u8] = &[10];
+
+        for data in &[data, data_with_single_item] {
+            for item in 1..=9 {
+                let base_repeat_count = 2_usize.pow(item);
+                test_repeat_count(base_repeat_count - 1, data);
+                test_repeat_count(base_repeat_count, data);
+                test_repeat_count(base_repeat_count + 1, data);
+            }
+        }
+    }
+
+    #[test]
+    fn test_different_size_of_u16_repeat_slice() {
+        let data: &[u16] = &[1, 2, 3];
+        let data_with_single_item: &[u16] = &[10];
+
+        for data in &[data, data_with_single_item] {
+            for item in 1..=9 {
+                let base_repeat_count = 2_usize.pow(item);
+                test_repeat_count(base_repeat_count - 1, data);
+                test_repeat_count(base_repeat_count, data);
+                test_repeat_count(base_repeat_count + 1, data);
+            }
+        }
+    }
+
+    #[test]
+    fn test_various_slice_lengths() {
+        // Test different slice lengths with same repeat pattern
+        let repeat_count = 37; // Arbitrary non-power-of-2
+
+        // Single element
+        test_repeat_count(repeat_count, &[42i32]);
+
+        // Small slices
+        test_repeat_count(repeat_count, &[1i32, 2]);
+        test_repeat_count(repeat_count, &[1i32, 2, 3]);
+        test_repeat_count(repeat_count, &[1i32, 2, 3, 4]);
+        test_repeat_count(repeat_count, &[1i32, 2, 3, 4, 5]);
+
+        // Larger slices
+        let data_10: Vec<i32> = (0..10).collect();
+        test_repeat_count(repeat_count, &data_10);
+
+        let data_100: Vec<i32> = (0..100).collect();
+        test_repeat_count(repeat_count, &data_100);
+
+        let data_1000: Vec<i32> = (0..1000).collect();
+        test_repeat_count(repeat_count, &data_1000);
     }
 }

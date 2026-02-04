@@ -22,7 +22,7 @@ use criterion::{Criterion, Throughput};
 
 extern crate arrow;
 
-use arrow::buffer::{buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer};
+use arrow::buffer::{Buffer, MutableBuffer, buffer_bin_and, buffer_bin_or, buffer_unary_not};
 use std::hint;
 
 ///  Helper function to create arrays

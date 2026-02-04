@@ -35,13 +35,16 @@ use arrow::compute::{like, nlike, or};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 use arrow_array::{ArrayRef, ArrowPrimitiveType, BooleanArray, PrimitiveArray, StringViewArray};
 use arrow_schema::{ArrowError, DataType, Schema};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
+use object_store::local::LocalFileSystem;
 use parquet::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
     ParquetRecordBatchReaderBuilder, RowFilter,
 };
+use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::schema::types::SchemaDescriptor;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -64,6 +67,23 @@ fn async_reader(c: &mut Criterion) {
     }
 }
 
+fn async_reader_object_store(c: &mut Criterion) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let mut async_group = c.benchmark_group("arrow_reader_clickbench/async_object_store");
+    let handle = rt.handle();
+    for query in all_queries() {
+        let query_name = query.to_string();
+        let read_test = ReadTest::new(query);
+        async_group.bench_function(query_name, |b| {
+            b.iter(|| handle.block_on(async { read_test.run_async_object_store().await }))
+        });
+    }
+}
+
 fn sync_reader(c: &mut Criterion) {
     let mut sync_group = c.benchmark_group("arrow_reader_clickbench/sync");
     for query in all_queries() {
@@ -73,7 +93,12 @@ fn sync_reader(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, sync_reader, async_reader);
+criterion_group!(
+    benches,
+    sync_reader,
+    async_reader,
+    async_reader_object_store
+);
 criterion_main!(benches);
 
 /// Predicate Function.
@@ -766,6 +791,37 @@ impl ReadTest {
         self.check_row_count(row_count);
     }
 
+    /// Run the filter and projection using the async `ObjectStore` reader
+    async fn run_async_object_store(&self) {
+        let hits_path = hits_1();
+        let parent = hits_path.parent().unwrap();
+        let file_name = hits_path.file_name().unwrap().to_str().unwrap();
+        let store = Arc::new(LocalFileSystem::new_with_prefix(parent).unwrap());
+        let location = object_store::path::Path::from(file_name);
+
+        let reader = ParquetObjectReader::new(store, location);
+
+        // setup the reader
+        let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
+            reader,
+            self.arrow_reader_metadata.clone(),
+        )
+        .with_batch_size(8192)
+        .with_projection(self.projection_mask.clone())
+        .with_row_filter(self.row_filter())
+        .build()
+        .unwrap();
+
+        // run the stream to its end
+        let mut row_count = 0;
+        while let Some(b) = stream.next().await {
+            let b = b.unwrap();
+            let num_rows = b.num_rows();
+            row_count += num_rows;
+        }
+        self.check_row_count(row_count);
+    }
+
     /// Like [`Self::run_async`] but for the sync parquet reader
     fn run_sync(&self) {
         let Ok(parquet_file) = std::fs::File::open(hits_1()) else {
@@ -847,7 +903,7 @@ fn column_indices(schema: &SchemaDescriptor, column_names: &Vec<&str>) -> Vec<us
 /// Loads Parquet metadata from the given path, including page indexes
 fn load_metadata(path: &Path) -> ArrowReaderMetadata {
     let file = std::fs::File::open(path).unwrap();
-    let options = ArrowReaderOptions::new().with_page_index(true);
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
     let orig_metadata =
         ArrowReaderMetadata::load(&file, options.clone()).expect("parquet-metadata loading failed");
 

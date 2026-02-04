@@ -279,6 +279,36 @@ impl WriterBuilder {
         self
     }
 
+    /// Set the JSON file's date format
+    pub fn with_date_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_date_format(format);
+        self
+    }
+
+    /// Set the JSON file's datetime format
+    pub fn with_datetime_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_datetime_format(format);
+        self
+    }
+
+    /// Set the JSON file's time format
+    pub fn with_time_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_time_format(format);
+        self
+    }
+
+    /// Set the JSON file's timestamp format
+    pub fn with_timestamp_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_timestamp_format(format);
+        self
+    }
+
+    /// Set the JSON file's timestamp tz format
+    pub fn with_timestamp_tz_format(mut self, tz_format: String) -> Self {
+        self.0 = self.0.with_timestamp_tz_format(tz_format);
+        self
+    }
+
     /// Create a new `Writer` with specified `JsonFormat` and builder options.
     pub fn build<W, F>(self, writer: W) -> Writer<W, F>
     where
@@ -726,6 +756,21 @@ mod tests {
 {"name":"b"}
 "#,
         );
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_timestamp_format("%m-%d-%Y".to_string())
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"nanos":"11-13-2018","micros":"11-13-2018","millis":"11-13-2018","secs":"11-13-2018","name":"a"}
+{"name":"b"}
+"#,
+        );
     }
 
     #[test]
@@ -787,6 +832,21 @@ mod tests {
 {"name":"b"}
 "#,
         );
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_timestamp_tz_format("%m-%d-%Y %Z".to_string())
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"nanos":"11-13-2018 +00:00","micros":"11-13-2018 +00:00","millis":"11-13-2018 +00:00","secs":"11-13-2018 +00:00","name":"a"}
+{"name":"b"}
+"#,
+        );
     }
 
     #[test]
@@ -834,6 +894,22 @@ mod tests {
 {"name":"b"}
 "#,
         );
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_date_format("%m-%d-%Y".to_string())
+                .with_datetime_format("%m-%d-%Y %Mmin %Ssec %Hhour".to_string())
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"date32":"11-13-2018","date64":"11-13-2018 11min 10sec 17hour","name":"a"}
+{"name":"b"}
+"#,
+        );
     }
 
     #[test]
@@ -874,6 +950,21 @@ mod tests {
         assert_json_eq(
             &buf,
             r#"{"time32sec":"00:02:00","time32msec":"00:00:00.120","time64usec":"00:00:00.000120","time64nsec":"00:00:00.000000120","name":"a"}
+{"name":"b"}
+"#,
+        );
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_time_format("%H-%M-%S %f".to_string())
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"time32sec":"00-02-00 000000000","time32msec":"00-00-00 120000000","time64usec":"00-00-00 000120000","time64nsec":"00-00-00 000000120","name":"a"}
 {"name":"b"}
 "#,
         );
@@ -1298,16 +1389,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn json_writer_map() {
-        let keys_array = super::StringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+    fn run_json_writer_map_with_keys(keys_array: ArrayRef) {
         let values_array = super::Int64Array::from(vec![10, 20, 30, 40, 50]);
 
-        let keys = Arc::new(Field::new("keys", DataType::Utf8, false));
-        let values = Arc::new(Field::new("values", DataType::Int64, false));
+        let keys_field = Arc::new(Field::new("keys", keys_array.data_type().clone(), false));
+        let values_field = Arc::new(Field::new("values", DataType::Int64, false));
         let entry_struct = StructArray::from(vec![
-            (keys, Arc::new(keys_array) as ArrayRef),
-            (values, Arc::new(values_array) as ArrayRef),
+            (keys_field, keys_array.clone()),
+            (values_field, Arc::new(values_array) as ArrayRef),
         ]);
 
         let map_data_type = DataType::Map(
@@ -1354,6 +1443,21 @@ mod tests {
 {"map":{}}
 "#,
         );
+    }
+
+    #[test]
+    fn json_writer_map() {
+        // Utf8 (StringArray)
+        let keys_utf8 = super::StringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+        run_json_writer_map_with_keys(Arc::new(keys_utf8) as ArrayRef);
+
+        // LargeUtf8 (LargeStringArray)
+        let keys_large = super::LargeStringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+        run_json_writer_map_with_keys(Arc::new(keys_large) as ArrayRef);
+
+        // Utf8View (StringViewArray)
+        let keys_view = super::StringViewArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+        run_json_writer_map_with_keys(Arc::new(keys_view) as ArrayRef);
     }
 
     #[test]
@@ -1660,17 +1764,13 @@ mod tests {
         Ok(())
     }
 
-    fn binary_encoding_test<O: OffsetSizeTrait>() {
-        // set up schema
+    fn build_array_binary<O: OffsetSizeTrait>(values: &[Option<&[u8]>]) -> RecordBatch {
         let schema = SchemaRef::new(Schema::new(vec![Field::new(
             "bytes",
             GenericBinaryType::<O>::DATA_TYPE,
             true,
         )]));
-
-        // build record batch:
         let mut builder = GenericByteBuilder::<GenericBinaryType<O>>::new();
-        let values = [Some(b"Ned Flanders"), None, Some(b"Troy McClure")];
         for value in values {
             match value {
                 Some(v) => builder.append_value(v),
@@ -1678,8 +1778,27 @@ mod tests {
             }
         }
         let array = Arc::new(builder.finish()) as ArrayRef;
-        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+        RecordBatch::try_new(schema, vec![array]).unwrap()
+    }
 
+    fn build_array_binary_view(values: &[Option<&[u8]>]) -> RecordBatch {
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "bytes",
+            DataType::BinaryView,
+            true,
+        )]));
+        let mut builder = BinaryViewBuilder::new();
+        for value in values {
+            match value {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(),
+            }
+        }
+        let array = Arc::new(builder.finish()) as ArrayRef;
+        RecordBatch::try_new(schema, vec![array]).unwrap()
+    }
+
+    fn assert_binary_json(batch: &RecordBatch) {
         // encode and check JSON with explicit nulls:
         {
             let mut buf = Vec::new();
@@ -1687,7 +1806,7 @@ mod tests {
                 let mut writer = WriterBuilder::new()
                     .with_explicit_nulls(true)
                     .build::<_, JsonArray>(&mut buf);
-                writer.write(&batch).unwrap();
+                writer.write(batch).unwrap();
                 writer.close().unwrap();
                 serde_json::from_slice(&buf).unwrap()
             };
@@ -1715,20 +1834,16 @@ mod tests {
                 // explicit nulls are off by default, so we don't need
                 // to set that when creating the writer:
                 let mut writer = ArrayWriter::new(&mut buf);
-                writer.write(&batch).unwrap();
+                writer.write(batch).unwrap();
                 writer.close().unwrap();
                 serde_json::from_slice(&buf).unwrap()
             };
 
             assert_eq!(
                 json!([
-                    {
-                        "bytes": "4e656420466c616e64657273"
-                    },
-                    {}, // empty because nulls are omitted
-                    {
-                        "bytes": "54726f79204d63436c757265"
-                    }
+                    { "bytes": "4e656420466c616e64657273" },
+                    {},
+                    { "bytes": "54726f79204d63436c757265" }
                 ]),
                 json_value
             );
@@ -1737,10 +1852,25 @@ mod tests {
 
     #[test]
     fn test_writer_binary() {
+        let values: [Option<&[u8]>; 3] = [
+            Some(b"Ned Flanders" as &[u8]),
+            None,
+            Some(b"Troy McClure" as &[u8]),
+        ];
         // Binary:
-        binary_encoding_test::<i32>();
+        {
+            let batch = build_array_binary::<i32>(&values);
+            assert_binary_json(&batch);
+        }
         // LargeBinary:
-        binary_encoding_test::<i64>();
+        {
+            let batch = build_array_binary::<i64>(&values);
+            assert_binary_json(&batch);
+        }
+        {
+            let batch = build_array_binary_view(&values);
+            assert_binary_json(&batch);
+        }
     }
 
     #[test]
