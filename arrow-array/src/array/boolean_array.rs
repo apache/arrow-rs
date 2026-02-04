@@ -520,8 +520,10 @@ impl BooleanArray {
         let data = val_builder.as_slice_mut();
 
         let null_slice = null_builder.as_slice_mut();
+        let mut non_nulls = 0usize;
         iter.enumerate().for_each(|(i, item)| {
             if let Some(a) = item.into().native {
+                non_nulls += 1;
                 unsafe {
                     // SAFETY: There will be enough space in the buffers due to the trusted len size
                     // hint
@@ -534,12 +536,8 @@ impl BooleanArray {
         });
 
         let values = BooleanBuffer::new(val_builder.into(), 0, data_len);
-        let nulls = Some(NullBuffer::new(BooleanBuffer::new(
-            null_builder.into(),
-            0,
-            data_len,
-        )))
-        .filter(|n| n.null_count() > 0);
+        let nulls = (non_nulls != data_len)
+            .then(|| NullBuffer::new(BooleanBuffer::new(null_builder.into(), 0, data_len)));
         BooleanArray::new(values, nulls)
     }
 }
