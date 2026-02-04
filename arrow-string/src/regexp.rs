@@ -200,7 +200,11 @@ where
     }
 
     let values = BooleanBuffer::from(result);
-    let nulls = array.nulls().cloned().filter(|n| n.null_count() > 0);
+    let nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
+        .filter(|n| n.null_count() > 0);
     Ok(BooleanArray::new(values, nulls))
 }
 

@@ -22,7 +22,7 @@
 use arrow_array::builder::BufferBuilder;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::Zero;
 use std::cmp::Ordering;
@@ -213,7 +213,11 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
     });
     let offsets = OffsetBuffer::new(new_offsets.finish().into());
     let values = vals.finish();
-    let nulls = array.nulls().cloned().filter(|n| n.null_count() > 0);
+    let nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
+        .filter(|n| n.null_count() > 0);
     Ok(GenericStringArray::<OffsetSize>::new(
         offsets, values, nulls,
     ))
@@ -311,7 +315,11 @@ where
 
     let offsets = OffsetBuffer::new(new_offsets.into());
     let values = new_values.into();
-    let nulls = array.nulls().cloned().filter(|n| n.null_count() > 0);
+    let nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
+        .filter(|n| n.null_count() > 0);
     Ok(Arc::new(GenericByteArray::<T>::new(offsets, values, nulls)))
 }
 
@@ -345,18 +353,18 @@ fn fixed_size_binary_substring(
         })
         .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
 
-    let nulls = if new_len == 0 {
+    let mut nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, num_of_elements)))
+        .filter(|n| n.null_count() > 0);
+    if new_len == 0 && nulls.is_none() {
         // FixedSizeBinaryArray::new takes length from the values buffer, except when size == 0.
         // In that case it uses the null buffer length, so preserve the original length here.
         // Example: ["", "", ""] -> substring(..., 1, Some(2)) should keep len=3;
         // otherwise it collapses to an empty array (len=0).
-        array
-            .nulls()
-            .cloned()
-            .or_else(|| Some(NullBuffer::new_valid(num_of_elements)))
-    } else {
-        array.nulls().cloned().filter(|n| n.null_count() > 0)
-    };
+        nulls = Some(NullBuffer::new_valid(num_of_elements));
+    }
     Ok(Arc::new(FixedSizeBinaryArray::new(
         new_len,
         new_values.into(),
@@ -367,7 +375,7 @@ fn fixed_size_binary_substring(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_buffer::{BooleanBuffer, Buffer};
+    use arrow_buffer::Buffer;
 
     /// A helper macro to generate test cases.
     /// # Arguments
