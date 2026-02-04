@@ -29,9 +29,9 @@ use crate::arrow::array_reader::row_group_cache::RowGroupCache;
 use crate::arrow::array_reader::row_group_index::RowGroupIndexReader;
 use crate::arrow::array_reader::row_number::RowNumberReader;
 use crate::arrow::array_reader::{
-    ArrayReader, FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
-    PrimitiveArrayReader, RowGroups, StructArrayReader, make_byte_array_dictionary_reader,
-    make_byte_array_reader,
+    ArrayReader, FixedSizeListArrayReader, ListArrayReader, ListViewArrayReader, MapArrayReader,
+    NullArrayReader, PrimitiveArrayReader, RowGroups, StructArrayReader,
+    make_byte_array_dictionary_reader, make_byte_array_reader,
 };
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::schema::{ParquetField, ParquetFieldType, VirtualColumnType};
@@ -181,6 +181,8 @@ impl<'a> ArrayReaderBuilder<'a> {
                 DataType::List(_) => self.build_list_reader(field, mask, false),
                 DataType::LargeList(_) => self.build_list_reader(field, mask, true),
                 DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(field, mask),
+                DataType::ListView(_) => self.build_list_view_reader(field, mask, false),
+                DataType::LargeListView(_) => self.build_list_view_reader(field, mask, true),
                 d => unimplemented!("reading group type {} not implemented", d),
             },
         }
@@ -337,6 +339,53 @@ impl<'a> ArrayReaderBuilder<'a> {
                         )) as _
                     }
                     _ => unimplemented!(),
+                };
+                Some(reader)
+            }
+            None => None,
+        };
+        Ok(reader)
+    }
+
+    /// Build array reader for list view type.
+    fn build_list_view_reader(
+        &self,
+        field: &ParquetField,
+        mask: &ProjectionMask,
+        is_large: bool,
+    ) -> Result<Option<Box<dyn ArrayReader>>> {
+        let children = field.children().unwrap();
+        assert_eq!(children.len(), 1);
+
+        let reader = match self.build_reader(&children[0], mask)? {
+            Some(item_reader) => {
+                // Need to retrieve underlying data type to handle projection
+                let item_type = item_reader.get_data_type().clone();
+                let data_type = match &field.arrow_type {
+                    DataType::ListView(f) => {
+                        DataType::ListView(Arc::new(f.as_ref().clone().with_data_type(item_type)))
+                    }
+                    DataType::LargeListView(f) => DataType::LargeListView(Arc::new(
+                        f.as_ref().clone().with_data_type(item_type),
+                    )),
+                    _ => unreachable!(),
+                };
+
+                let reader = match is_large {
+                    false => Box::new(ListViewArrayReader::<i32>::new(
+                        item_reader,
+                        data_type,
+                        field.def_level,
+                        field.rep_level,
+                        field.nullable,
+                    )) as _,
+                    true => Box::new(ListViewArrayReader::<i64>::new(
+                        item_reader,
+                        data_type,
+                        field.def_level,
+                        field.rep_level,
+                        field.nullable,
+                    )) as _,
                 };
                 Some(reader)
             }
