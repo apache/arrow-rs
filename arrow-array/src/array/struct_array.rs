@@ -541,7 +541,10 @@ impl Index<&str> for StructArray {
 mod tests {
     use super::*;
 
-    use crate::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray};
+    use crate::{
+        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+        cast::AsArray, types::Int32Type,
+    };
     use arrow_buffer::ToByteSlice;
 
     #[test]
@@ -852,6 +855,67 @@ mod tests {
         assert_eq!(42, sliced_c1.value(0));
         assert!(sliced_c1.is_null(1));
         assert!(sliced_c1.is_null(2));
+    }
+
+    #[test]
+    fn test_struct_array_data_slice() {
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(x.clone())],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        )
+        .into_data();
+        let sliced = struct_array.slice(1, 4);
+
+        let arr = make_array(sliced);
+        assert_eq!(
+            arr.as_struct().column(0).as_primitive::<Int32Type>(),
+            &x.slice(1, 4)
+        );
+
+        // This next test case is a regression test of a bug detected when converting a sliced
+        // struct from C++
+        //
+        // In arrow-rs struct slicing is done by setting the offset and length of
+        // child arrays.
+        //
+        // In the C++ implementation of Arrow struct slicing is done by setting the offset
+        // and length of the struct array.
+        //
+        // arrow-rs should be able to parse data received from C++ correctly.
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let y = Int32Array::from(vec![Some(5), Some(6), None, Some(8), Some(9), Some(10)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("y", DataType::Int32, true),
+            ]),
+            vec![Arc::new(x), Arc::new(y)],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        );
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new(
+                "inner",
+                struct_array.data_type().clone(),
+                true,
+            )]),
+            vec![Arc::new(struct_array)],
+            Some(NullBuffer::from(vec![true, false, true, true, true, true])),
+        );
+
+        let cpp_sliced_array = make_array(
+            struct_array
+                .to_data()
+                .into_builder()
+                .offset(1)
+                .len(4)
+                .nulls(Some(NullBuffer::from(vec![false, true, true, true])))
+                .build()
+                .unwrap(),
+        );
+
+        assert_eq!(cpp_sliced_array.as_struct(), &struct_array.slice(1, 4));
     }
 
     #[test]
