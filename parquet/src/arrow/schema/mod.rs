@@ -790,8 +790,25 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 .with_id(id)
                 .build()
         }
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
+        DataType::ListView(f) | DataType::LargeListView(f) => {
+            let field_ref = if coerce_types && f.name() != PARQUET_LIST_ELEMENT_NAME {
+                let ff = f.as_ref().clone().with_name(PARQUET_LIST_ELEMENT_NAME);
+                Arc::new(arrow_to_parquet_type(&ff, coerce_types)?)
+            } else {
+                Arc::new(arrow_to_parquet_type(f, coerce_types)?)
+            };
+
+            Type::group_type_builder(name)
+                .with_fields(vec![Arc::new(
+                    Type::group_type_builder("list")
+                        .with_fields(vec![field_ref])
+                        .with_repetition(Repetition::REPEATED)
+                        .build()?,
+                )])
+                .with_logical_type(Some(LogicalType::List))
+                .with_repetition(repetition)
+                .with_id(id)
+                .build()
         }
         DataType::Struct(fields) => {
             if fields.is_empty() {
