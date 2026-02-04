@@ -178,11 +178,11 @@ impl<'a> ArrayReaderBuilder<'a> {
             ParquetFieldType::Group { .. } => match &field.arrow_type {
                 DataType::Map(_, _) => self.build_map_reader(field, mask),
                 DataType::Struct(_) => self.build_struct_reader(field, mask),
-                DataType::List(_) => self.build_list_reader(field, mask, false),
-                DataType::LargeList(_) => self.build_list_reader(field, mask, true),
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_) => self.build_list_reader(field, mask),
                 DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(field, mask),
-                DataType::ListView(_) => self.build_list_view_reader(field, mask, false),
-                DataType::LargeListView(_) => self.build_list_view_reader(field, mask, true),
                 d => unimplemented!("reading group type {} not implemented", d),
             },
         }
@@ -268,7 +268,6 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
-        is_large: bool,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
@@ -277,31 +276,56 @@ impl<'a> ArrayReaderBuilder<'a> {
             Some(item_reader) => {
                 // Need to retrieve underlying data type to handle projection
                 let item_type = item_reader.get_data_type().clone();
-                let data_type = match &field.arrow_type {
+                let reader: Box<dyn ArrayReader> = match &field.arrow_type {
                     DataType::List(f) => {
-                        DataType::List(Arc::new(f.as_ref().clone().with_data_type(item_type)))
+                        let data_type = DataType::List(Arc::new(
+                            f.as_ref().clone().with_data_type(item_type),
+                        ));
+                        Box::new(ListArrayReader::<i32>::new(
+                            item_reader,
+                            data_type,
+                            field.def_level,
+                            field.rep_level,
+                            field.nullable,
+                        ))
                     }
                     DataType::LargeList(f) => {
-                        DataType::LargeList(Arc::new(f.as_ref().clone().with_data_type(item_type)))
+                        let data_type = DataType::LargeList(Arc::new(
+                            f.as_ref().clone().with_data_type(item_type),
+                        ));
+                        Box::new(ListArrayReader::<i64>::new(
+                            item_reader,
+                            data_type,
+                            field.def_level,
+                            field.rep_level,
+                            field.nullable,
+                        ))
+                    }
+                    DataType::ListView(f) => {
+                        let data_type = DataType::ListView(Arc::new(
+                            f.as_ref().clone().with_data_type(item_type),
+                        ));
+                        Box::new(ListViewArrayReader::<i32>::new(
+                            item_reader,
+                            data_type,
+                            field.def_level,
+                            field.rep_level,
+                            field.nullable,
+                        ))
+                    }
+                    DataType::LargeListView(f) => {
+                        let data_type = DataType::LargeListView(Arc::new(
+                            f.as_ref().clone().with_data_type(item_type),
+                        ));
+                        Box::new(ListViewArrayReader::<i64>::new(
+                            item_reader,
+                            data_type,
+                            field.def_level,
+                            field.rep_level,
+                            field.nullable,
+                        ))
                     }
                     _ => unreachable!(),
-                };
-
-                let reader = match is_large {
-                    false => Box::new(ListArrayReader::<i32>::new(
-                        item_reader,
-                        data_type,
-                        field.def_level,
-                        field.rep_level,
-                        field.nullable,
-                    )) as _,
-                    true => Box::new(ListArrayReader::<i64>::new(
-                        item_reader,
-                        data_type,
-                        field.def_level,
-                        field.rep_level,
-                        field.nullable,
-                    )) as _,
                 };
                 Some(reader)
             }
@@ -339,53 +363,6 @@ impl<'a> ArrayReaderBuilder<'a> {
                         )) as _
                     }
                     _ => unimplemented!(),
-                };
-                Some(reader)
-            }
-            None => None,
-        };
-        Ok(reader)
-    }
-
-    /// Build array reader for list view type.
-    fn build_list_view_reader(
-        &self,
-        field: &ParquetField,
-        mask: &ProjectionMask,
-        is_large: bool,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
-        let children = field.children().unwrap();
-        assert_eq!(children.len(), 1);
-
-        let reader = match self.build_reader(&children[0], mask)? {
-            Some(item_reader) => {
-                // Need to retrieve underlying data type to handle projection
-                let item_type = item_reader.get_data_type().clone();
-                let data_type = match &field.arrow_type {
-                    DataType::ListView(f) => {
-                        DataType::ListView(Arc::new(f.as_ref().clone().with_data_type(item_type)))
-                    }
-                    DataType::LargeListView(f) => DataType::LargeListView(Arc::new(
-                        f.as_ref().clone().with_data_type(item_type),
-                    )),
-                    _ => unreachable!(),
-                };
-
-                let reader = match is_large {
-                    false => Box::new(ListViewArrayReader::<i32>::new(
-                        item_reader,
-                        data_type,
-                        field.def_level,
-                        field.rep_level,
-                        field.nullable,
-                    )) as _,
-                    true => Box::new(ListViewArrayReader::<i64>::new(
-                        item_reader,
-                        data_type,
-                        field.def_level,
-                        field.rep_level,
-                        field.nullable,
-                    )) as _,
                 };
                 Some(reader)
             }
