@@ -107,16 +107,6 @@ impl TestReader {
     pub(crate) fn requests(&self) -> Arc<Mutex<Vec<Range<usize>>>> {
         Arc::clone(&self.requests)
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn requests_snapshot(&self) -> Vec<Range<usize>> {
-        self.requests.lock().unwrap().clone()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn clear_requests(&self) {
-        self.requests.lock().unwrap().clear();
-    }
 }
 
 #[cfg(feature = "async")]
