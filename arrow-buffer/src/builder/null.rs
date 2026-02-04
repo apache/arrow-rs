@@ -147,6 +147,13 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Sets a bit in the builder at `index`
+    #[inline]
+    pub fn set_bit(&mut self, index: usize, v: bool) {
+        self.materialize_if_needed();
+        self.bitmap_builder.as_mut().unwrap().set_bit(index, v);
+    }
+
     /// Gets a bit in the buffer at `index`
     #[inline]
     pub fn is_valid(&self, index: usize) -> bool {

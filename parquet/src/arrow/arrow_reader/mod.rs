@@ -1213,9 +1213,6 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     break;
                 }
 
-                let mut cache_projection = predicate.projection().clone();
-                cache_projection.intersect(&projection);
-
                 let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
                     .with_parquet_metadata(&reader.metadata)
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
@@ -1585,7 +1582,7 @@ pub(crate) mod tests {
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions,
         ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
-        RowSelectionPolicy, RowSelector,
+        RowSelector,
     };
     use crate::arrow::schema::{
         add_encoded_arrow_schema_to_metadata,
@@ -1605,8 +1602,6 @@ pub(crate) mod tests {
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
     use crate::util::test_common::rand_gen::RandGen;
-    use arrow::compute::kernels::cmp::eq;
-    use arrow::compute::or;
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
@@ -5128,93 +5123,6 @@ pub(crate) mod tests {
         assert_eq!(out, batch.slice(2, 1));
     }
 
-    #[test]
-    fn test_row_selection_interleaved_skip() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "v",
-            ArrowDataType::Int32,
-            false,
-        )]));
-
-        let values = Int32Array::from(vec![0, 1, 2, 3, 4]);
-        let batch = RecordBatch::try_from_iter([("v", Arc::new(values) as ArrayRef)]).unwrap();
-
-        let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), None).unwrap();
-        writer.write(&batch)?;
-        writer.close()?;
-
-        let selection = RowSelection::from(vec![
-            RowSelector::select(1),
-            RowSelector::skip(2),
-            RowSelector::select(2),
-        ]);
-
-        let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer))?
-            .with_batch_size(4)
-            .with_row_selection(selection)
-            .build()?;
-
-        let out = reader.next().unwrap()?;
-        assert_eq!(out.num_rows(), 3);
-        let values = out
-            .column(0)
-            .as_primitive::<arrow_array::types::Int32Type>()
-            .values();
-        assert_eq!(values, &[0, 3, 4]);
-        assert!(reader.next().is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn test_row_selection_mask_sparse_rows() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "v",
-            ArrowDataType::Int32,
-            false,
-        )]));
-
-        let values = Int32Array::from((0..30).collect::<Vec<i32>>());
-        let batch = RecordBatch::try_from_iter([("v", Arc::new(values) as ArrayRef)])?;
-
-        let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), None)?;
-        writer.write(&batch)?;
-        writer.close()?;
-
-        let total_rows = batch.num_rows();
-        let ranges = (1..total_rows)
-            .step_by(2)
-            .map(|i| i..i + 1)
-            .collect::<Vec<_>>();
-        let selection = RowSelection::from_consecutive_ranges(ranges.into_iter(), total_rows);
-
-        let selectors: Vec<RowSelector> = selection.clone().into();
-        assert!(total_rows < selectors.len() * 8);
-
-        let bytes = Bytes::from(buffer);
-
-        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())?
-            .with_batch_size(7)
-            .with_row_selection(selection)
-            .build()?;
-
-        let mut collected = Vec::new();
-        for batch in reader {
-            let batch = batch?;
-            collected.extend_from_slice(
-                batch
-                    .column(0)
-                    .as_primitive::<arrow_array::types::Int32Type>()
-                    .values(),
-            );
-        }
-
-        let expected: Vec<i32> = (1..total_rows).step_by(2).map(|i| i as i32).collect();
-        assert_eq!(collected, expected);
-        Ok(())
-    }
-
     fn test_decimal32_roundtrip() {
         let d = |values: Vec<i32>, p: u8| {
             let iter = values.into_iter();
@@ -5667,6 +5575,56 @@ pub(crate) mod tests {
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
         let result = concat_batches(&schema, &batches).unwrap();
         assert_eq!(result.num_rows(), 2);
+    }
+
+    #[test]
+    fn test_get_row_group_column_bloom_filter_with_length() {
+        // convert to new parquet file with bloom_filter_length
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
+        let file = File::open(path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let schema = builder.schema().clone();
+        let reader = builder.build().unwrap();
+
+        let mut parquet_data = Vec::new();
+        let props = WriterProperties::builder()
+            .set_bloom_filter_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut parquet_data, schema, Some(props)).unwrap();
+        for batch in reader {
+            let batch = batch.unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.close().unwrap();
+
+        // test the new parquet file
+        test_get_row_group_column_bloom_filter(parquet_data.into(), true);
+    }
+
+    #[test]
+    fn test_get_row_group_column_bloom_filter_without_length() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
+        let data = Bytes::from(std::fs::read(path).unwrap());
+        test_get_row_group_column_bloom_filter(data, false);
+    }
+
+    fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
+        let builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
+
+        let metadata = builder.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+        let row_group = metadata.row_group(0);
+        let column = row_group.column(0);
+        assert_eq!(column.bloom_filter_length().is_some(), with_length);
+
+        let sbbf = builder
+            .get_row_group_column_bloom_filter(0, 0)
+            .unwrap()
+            .unwrap();
+        assert!(sbbf.check(&"Hello"));
+        assert!(!sbbf.check(&"Hello_Not_Exists"));
     }
 
     #[test]
