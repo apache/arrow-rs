@@ -329,6 +329,9 @@ impl Visitor {
                 rep_level,
                 def_level,
                 data_type,
+
+                // We set this to true to reset because children of a struct should
+                // independently use their arrow hints for repeated fields.
                 treat_repeated_as_list_arrow_hint: true,
             };
 
@@ -1096,6 +1099,97 @@ mod tests {
                 ),
             ]),
         )
+    }
+
+
+
+    /// Test that arrow hints are respected for nested repeated primitives inside backward-compatible
+    /// LIST struct elements.
+    ///
+    /// This tests that when we have:
+    /// - A backward-compatible LIST (rule 4) containing a struct
+    /// - That struct contains a repeated primitive
+    /// - An arrow schema hint specifies the inner repeated primitive should be a LargeList
+    ///
+    /// The conversion should respect the LargeList hint for the inner repeated primitive.
+    #[test]
+    fn backward_compat_list_struct_with_nested_repeated_primitive_respects_arrow_hint(
+    ) -> crate::errors::Result<()> {
+        // This is a backward-compatible LIST (rule 4) where the struct element contains
+        // a repeated primitive. The arrow hint specifies that the inner repeated primitive
+        // should be LargeList<Int32>.
+        let message_type = "
+            message schema {
+                optional group my_list (LIST) {
+                    repeated group my_list_tuple {
+                        required binary str (STRING);
+                        repeated int32 values;
+                    }
+                }
+            }
+        ";
+
+        test_roundtrip(message_type)?;
+
+        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
+        let schema = SchemaDescriptor::new(parsed_input_schema);
+
+        // First, convert without hints to get the default schema
+        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
+
+        let DataType::Struct(schema_fields) = &converted.arrow_type else {
+            panic!("Expected struct from convert_schema");
+        };
+
+        let expected_default = Fields::from(vec![Field::new(
+            "my_list",
+            DataType::List(Arc::new(Field::new(
+                "my_list_tuple",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("str", DataType::Utf8, false),
+                    Field::new(
+                        "values",
+                        DataType::List(Arc::new(Field::new("values", DataType::Int32, false))),
+                        false,
+                    ),
+                ])),
+                false,
+            ))),
+            true,
+        )]);
+
+        assert_eq!(schema_fields, &expected_default);
+
+        let modified_schema = Fields::from(vec![Field::new(
+            "my_list",
+            DataType::List(Arc::new(Field::new(
+                "my_list_tuple",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("str", DataType::Utf8, false),
+                    Field::new(
+                        "values",
+                        // Arrow hint says this should be LargeList instead of List
+                        DataType::LargeList(Arc::new(Field::new("values", DataType::Int32, false))),
+                        false,
+                    ),
+                ])),
+                false,
+            ))),
+            true,
+        )]);
+
+        // Convert with the modified schema hint
+        let converted_with_hint =
+          convert_schema(&schema, ProjectionMask::all(), Some(&modified_schema))?.unwrap();
+
+        // The conversion should respect the LargeList hint
+        assert_eq!(
+            converted_with_hint.arrow_type,
+            DataType::Struct(modified_schema),
+            "The inner repeated primitive should respect the LargeList arrow hint"
+        );
+
+        Ok(())
     }
 
     #[test]
