@@ -29,6 +29,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
+use futures::TryStreamExt;
 use parquet::{
     arrow::{
         ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask,
@@ -141,7 +142,7 @@ async fn test_row_filter() {
     let parquet_schema = metadata.file_metadata().schema_descr_ptr();
 
     let test = TestReader::new(data);
-    let requests = test.requests.clone();
+    let requests = test.requests();
 
     let a_scalar = StringArray::from_iter_values(["b"]);
     let a_filter = ArrowPredicateFn::new(
@@ -207,7 +208,7 @@ async fn test_two_row_filters() {
     let parquet_schema = metadata.file_metadata().schema_descr_ptr();
 
     let test = TestReader::new(data);
-    let requests = test.requests.clone();
+    let requests = test.requests();
 
     let a_scalar = StringArray::from_iter_values(["b"]);
     let a_filter = ArrowPredicateFn::new(
@@ -335,7 +336,7 @@ async fn test_row_filter_nested() {
     let parquet_schema = metadata.file_metadata().schema_descr_ptr();
 
     let test = TestReader::new(data);
-    let requests = test.requests.clone();
+    let requests = test.requests();
 
     let a_scalar = StringArray::from_iter_values(["b"]);
     let a_filter = ArrowPredicateFn::new(

@@ -104,8 +104,12 @@ impl TestReader {
         }
     }
 
+    pub(crate) fn requests(&self) -> Arc<Mutex<Vec<Range<usize>>>> {
+        Arc::clone(&self.requests)
+    }
+
     #[allow(dead_code)]
-    pub(crate) fn requests(&self) -> Vec<Range<usize>> {
+    pub(crate) fn requests_snapshot(&self) -> Vec<Range<usize>> {
         self.requests.lock().unwrap().clone()
     }
 
