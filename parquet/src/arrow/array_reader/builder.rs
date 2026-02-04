@@ -278,9 +278,8 @@ impl<'a> ArrayReaderBuilder<'a> {
                 let item_type = item_reader.get_data_type().clone();
                 let reader: Box<dyn ArrayReader> = match &field.arrow_type {
                     DataType::List(f) => {
-                        let data_type = DataType::List(Arc::new(
-                            f.as_ref().clone().with_data_type(item_type),
-                        ));
+                        let data_type =
+                            DataType::List(Arc::new(f.as_ref().clone().with_data_type(item_type)));
                         Box::new(ListArrayReader::<i32>::new(
                             item_reader,
                             data_type,
