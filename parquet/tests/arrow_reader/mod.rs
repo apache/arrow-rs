@@ -39,6 +39,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod bad_data;
+mod bloom_filter;
 #[cfg(feature = "crc")]
 mod checksum;
 mod int96_stats_roundtrip;
