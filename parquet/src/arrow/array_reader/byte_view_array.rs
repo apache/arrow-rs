@@ -663,7 +663,7 @@ impl ByteViewArrayDecoderDelta {
         Ok(Self {
             decoder: DeltaByteArrayDecoder::new(data)?,
             validate_utf8,
-            utf8_validation_buffer: Vec::new(),
+            utf8_validation_buffer: Vec::with_capacity(4096),
         })
     }
 
@@ -704,15 +704,7 @@ impl ByteViewArrayDecoderDelta {
             // Reuse the UTF-8 validation buffer - clear it but keep capacity.
             // Short strings (≤12 bytes) are inlined into views but copied here
             // for batch validation to accelerate UTF-8 checking.
-            //
-            // Apply a soft cap to prevent unbounded memory retention if a
-            // pathological batch caused excessive growth. 64KB is generous
-            // for short string validation while preventing memory pinning.
-            if self.utf8_validation_buffer.capacity() > 64 * 1024 {
-                self.utf8_validation_buffer = Vec::new();
-            } else {
-                self.utf8_validation_buffer.clear();
-            }
+            self.utf8_validation_buffer.clear();
 
             let v = self.decoder.read(len, |bytes| {
                 let offset = array_buffer.len();
