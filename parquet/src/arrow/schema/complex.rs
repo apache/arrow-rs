@@ -88,9 +88,11 @@ impl ParquetField {
             Some(DataType::List(field_hint))
             | Some(DataType::LargeList(field_hint))
             | Some(DataType::FixedSizeList(field_hint, _)) => Some(field_hint.as_ref()),
-            Some(_) => return Err(general_err!(
-                "Internal error: should be validated earlier that list_data_type is only a type of list"
-            )),
+            Some(_) => {
+                return Err(general_err!(
+                    "Internal error: should be validated earlier that list_data_type is only a type of list"
+                ));
+            }
             None => None,
         };
 
@@ -218,10 +220,12 @@ impl Visitor {
                     Some(DataType::List(f)) => Some(f.as_ref()),
                     Some(DataType::LargeList(f)) => Some(f.as_ref()),
                     Some(DataType::FixedSizeList(f, _)) => Some(f.as_ref()),
-                    Some(d) => return Err(arrow_err!(
-                        "incompatible arrow schema, expected list got {} for repeated primitive field",
-                        d
-                    )),
+                    Some(d) => {
+                        return Err(arrow_err!(
+                            "incompatible arrow schema, expected list got {} for repeated primitive field",
+                            d
+                        ));
+                    }
                     None => None,
                 };
 
@@ -272,9 +276,9 @@ impl Visitor {
                     Some(DataType::FixedSizeList(f, _)) => Some(f.as_ref()),
                     Some(d) => {
                         return Err(arrow_err!(
-                        "incompatible arrow schema, expected list got {} for repeated struct field",
-                        d
-                    ))
+                            "incompatible arrow schema, expected list got {} for repeated struct field",
+                            d
+                        ));
                     }
                     None => None,
                 };
@@ -806,7 +810,7 @@ pub fn convert_type(parquet_type: &TypePtr) -> Result<ParquetField> {
 #[cfg(test)]
 mod tests {
     use crate::arrow::schema::complex::convert_schema;
-    use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
+    use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
     use arrow_schema::{DataType, Field, Fields};
@@ -1101,8 +1105,6 @@ mod tests {
         )
     }
 
-
-
     /// Test that arrow hints are respected for nested repeated primitives inside backward-compatible
     /// LIST struct elements.
     ///
@@ -1113,8 +1115,8 @@ mod tests {
     ///
     /// The conversion should respect the LargeList hint for the inner repeated primitive.
     #[test]
-    fn backward_compat_list_struct_with_nested_repeated_primitive_respects_arrow_hint(
-    ) -> crate::errors::Result<()> {
+    fn backward_compat_list_struct_with_nested_repeated_primitive_respects_arrow_hint()
+    -> crate::errors::Result<()> {
         // This is a backward-compatible LIST (rule 4) where the struct element contains
         // a repeated primitive. The arrow hint specifies that the inner repeated primitive
         // should be LargeList<Int32>.
@@ -1180,7 +1182,7 @@ mod tests {
 
         // Convert with the modified schema hint
         let converted_with_hint =
-          convert_schema(&schema, ProjectionMask::all(), Some(&modified_schema))?.unwrap();
+            convert_schema(&schema, ProjectionMask::all(), Some(&modified_schema))?.unwrap();
 
         // The conversion should respect the LargeList hint
         assert_eq!(
@@ -1245,8 +1247,8 @@ mod tests {
     }
 
     #[test]
-    fn convert_schema_with_repeated_primitive_should_use_inferred_schema(
-    ) -> crate::errors::Result<()> {
+    fn convert_schema_with_repeated_primitive_should_use_inferred_schema()
+    -> crate::errors::Result<()> {
         let message_type = "
     message schema {
       repeated BYTE_ARRAY col_1 = 1;
@@ -1310,8 +1312,8 @@ mod tests {
     }
 
     #[test]
-    fn convert_schema_with_repeated_primitive_should_use_inferred_schema_for_list_as_well(
-    ) -> crate::errors::Result<()> {
+    fn convert_schema_with_repeated_primitive_should_use_inferred_schema_for_list_as_well()
+    -> crate::errors::Result<()> {
         let message_type = "
     message schema {
       repeated BYTE_ARRAY col_1 = 1;
@@ -1394,8 +1396,8 @@ mod tests {
     }
 
     #[test]
-    fn convert_schema_with_repeated_struct_and_inferred_schema_and_field_id(
-    ) -> crate::errors::Result<()> {
+    fn convert_schema_with_repeated_struct_and_inferred_schema_and_field_id()
+    -> crate::errors::Result<()> {
         let message_type = "
     message schema {
         repeated group my_col_1 = 1 {
