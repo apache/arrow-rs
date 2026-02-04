@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow::array_reader::{ArrayReader, ListArrayReader};
-use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 use arrow_array::{
     Array, ArrayRef, GenericListArray, GenericListViewArray, OffsetSizeTrait, new_empty_array,
 };
@@ -79,13 +79,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListViewArrayReader<OffsetSize
         let list_array = array
             .as_any()
             .downcast_ref::<GenericListArray<OffsetSize>>()
-            .ok_or_else(|| {
-                general_err!(
-                    "Expected ListArray<{}>, got {:?}",
-                    if OffsetSize::IS_LARGE { "i64" } else { "i32" },
-                    array.data_type()
-                )
-            })?;
+            .expect("ListViewArrayReader: inner reader must return GenericListArray");
 
         let list_view_array =
             Arc::new(GenericListViewArray::<OffsetSize>::from(list_array.clone()));
