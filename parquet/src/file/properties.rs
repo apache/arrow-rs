@@ -45,6 +45,8 @@ pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Pag
 pub const DEFAULT_WRITE_PAGE_HEADER_STATISTICS: bool = false;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
+/// Default value for [`WriterProperties::max_row_group_bytes`] (128 MB, same as parquet-mr's parquet.block.size)
+pub const DEFAULT_MAX_ROW_GROUP_BYTES: usize = 128 * 1024 * 1024;
 /// Default value for [`WriterProperties::bloom_filter_position`]
 pub const DEFAULT_BLOOM_FILTER_POSITION: BloomFilterPosition = BloomFilterPosition::AfterRowGroup;
 /// Default value for [`WriterProperties::created_by`]
@@ -156,7 +158,8 @@ pub struct WriterProperties {
     data_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
-    max_row_group_size: usize,
+    max_row_group_row_count: Option<usize>,
+    max_row_group_bytes: Option<usize>,
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
@@ -247,11 +250,25 @@ impl WriterProperties {
         self.write_batch_size
     }
 
-    /// Returns maximum number of rows in a row group.
+    /// Returns maximum number of rows in a row group, or `usize::MAX` if unlimited.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_max_row_group_size`]
     pub fn max_row_group_size(&self) -> usize {
-        self.max_row_group_size
+        self.max_row_group_row_count.unwrap_or(usize::MAX)
+    }
+
+    /// Returns maximum number of rows in a row group, or `None` if unlimited.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_size`]
+    pub fn max_row_group_row_count(&self) -> Option<usize> {
+        self.max_row_group_row_count
+    }
+
+    /// Returns maximum size of a row group in bytes, or `None` if unlimited.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_bytes`]
+    pub fn max_row_group_bytes(&self) -> Option<usize> {
+        self.max_row_group_bytes
     }
 
     /// Returns bloom filter position.
@@ -445,7 +462,8 @@ pub struct WriterPropertiesBuilder {
     data_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
-    max_row_group_size: usize,
+    max_row_group_row_count: Option<usize>,
+    max_row_group_bytes: Option<usize>,
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
@@ -468,7 +486,8 @@ impl Default for WriterPropertiesBuilder {
             data_page_size_limit: DEFAULT_PAGE_SIZE,
             data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
-            max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
+            max_row_group_row_count: Some(DEFAULT_MAX_ROW_GROUP_SIZE),
+            max_row_group_bytes: None,
             bloom_filter_position: DEFAULT_BLOOM_FILTER_POSITION,
             writer_version: DEFAULT_WRITER_VERSION,
             created_by: DEFAULT_CREATED_BY.to_string(),
@@ -493,7 +512,8 @@ impl WriterPropertiesBuilder {
             data_page_size_limit: self.data_page_size_limit,
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
-            max_row_group_size: self.max_row_group_size,
+            max_row_group_row_count: self.max_row_group_row_count,
+            max_row_group_bytes: self.max_row_group_bytes,
             bloom_filter_position: self.bloom_filter_position,
             writer_version: self.writer_version,
             created_by: self.created_by,
@@ -575,7 +595,34 @@ impl WriterPropertiesBuilder {
     /// If the value is set to 0.
     pub fn set_max_row_group_size(mut self, value: usize) -> Self {
         assert!(value > 0, "Cannot have a 0 max row group size");
-        self.max_row_group_size = value;
+        self.max_row_group_row_count = Some(value);
+        self
+    }
+
+    /// Sets maximum number of rows in a row group, or `None` for unlimited.
+    ///
+    /// # Panics
+    /// If the value is `Some(0)`.
+    pub fn set_max_row_group_row_count(mut self, value: Option<usize>) -> Self {
+        if let Some(v) = value {
+            assert!(v > 0, "Cannot have a 0 max row group size");
+        }
+        self.max_row_group_row_count = value;
+        self
+    }
+
+    /// Sets maximum size of a row group in bytes, or `None` for unlimited.
+    ///
+    /// Row groups are flushed when their estimated encoded size exceeds this threshold.
+    /// This is similar to parquet-mr's `parquet.block.size` behavior.
+    ///
+    /// # Panics
+    /// If the value is `Some(0)`.
+    pub fn set_max_row_group_bytes(mut self, value: Option<usize>) -> Self {
+        if let Some(v) = value {
+            assert!(v > 0, "Cannot have a 0 max row group bytes");
+        }
+        self.max_row_group_bytes = value;
         self
     }
 
@@ -952,7 +999,8 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             data_page_size_limit: props.data_page_size_limit,
             data_page_row_count_limit: props.data_page_row_count_limit,
             write_batch_size: props.write_batch_size,
-            max_row_group_size: props.max_row_group_size,
+            max_row_group_row_count: props.max_row_group_row_count,
+            max_row_group_bytes: props.max_row_group_bytes,
             bloom_filter_position: props.bloom_filter_position,
             writer_version: props.writer_version,
             created_by: props.created_by,
@@ -1334,6 +1382,7 @@ mod tests {
         );
         assert_eq!(props.write_batch_size(), DEFAULT_WRITE_BATCH_SIZE);
         assert_eq!(props.max_row_group_size(), DEFAULT_MAX_ROW_GROUP_SIZE);
+        assert_eq!(props.max_row_group_bytes(), None);
         assert_eq!(props.bloom_filter_position(), DEFAULT_BLOOM_FILTER_POSITION);
         assert_eq!(props.writer_version(), DEFAULT_WRITER_VERSION);
         assert_eq!(props.created_by(), DEFAULT_CREATED_BY);

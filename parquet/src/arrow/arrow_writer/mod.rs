@@ -187,8 +187,11 @@ pub struct ArrowWriter<W: Write> {
     /// Creates new [`ArrowRowGroupWriter`] instances as required
     row_group_writer_factory: ArrowRowGroupWriterFactory,
 
-    /// The length of arrays to write to each row group
-    max_row_group_size: usize,
+    /// The maximum number of rows to write to each row group, or None for unlimited
+    max_row_group_row_count: Option<usize>,
+
+    /// The maximum size in bytes for a row group, or None for unlimited
+    max_row_group_bytes: Option<usize>,
 }
 
 impl<W: Write + Send> std::fmt::Debug for ArrowWriter<W> {
@@ -199,7 +202,8 @@ impl<W: Write + Send> std::fmt::Debug for ArrowWriter<W> {
             .field("in_progress_size", &format_args!("{buffered_memory} bytes"))
             .field("in_progress_rows", &self.in_progress_rows())
             .field("arrow_schema", &self.arrow_schema)
-            .field("max_row_group_size", &self.max_row_group_size)
+            .field("max_row_group_row_count", &self.max_row_group_row_count)
+            .field("max_row_group_bytes", &self.max_row_group_bytes)
             .finish()
     }
 }
@@ -247,7 +251,8 @@ impl<W: Write + Send> ArrowWriter<W> {
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
         }
 
-        let max_row_group_size = props.max_row_group_size();
+        let max_row_group_row_count = props.max_row_group_row_count();
+        let max_row_group_bytes = props.max_row_group_bytes();
 
         let props_ptr = Arc::new(props);
         let file_writer =
@@ -261,7 +266,8 @@ impl<W: Write + Send> ArrowWriter<W> {
             in_progress: None,
             arrow_schema,
             row_group_writer_factory,
-            max_row_group_size,
+            max_row_group_row_count,
+            max_row_group_bytes,
         })
     }
 
@@ -314,8 +320,12 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// Encodes the provided [`RecordBatch`]
     ///
     /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_size`]
-    /// rows, the contents of `batch` will be written to one or more row groups such that all but
-    /// the final row group in the file contain [`WriterProperties::max_row_group_size`] rows.
+    /// rows or [`WriterProperties::max_row_group_bytes`] bytes, the contents of `batch` will be
+    /// written to one or more row groups such that limits are respected.
+    ///
+    /// If both limits are `None`, all data is written to a single row group.
+    /// If one limit is set, that limit is respected.
+    /// If both limits are set, the lower bound (whichever triggers first) is respected.
     ///
     /// This will fail if the `batch`'s schema does not match the writer's schema.
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -331,18 +341,57 @@ impl<W: Write + Send> ArrowWriter<W> {
             ),
         };
 
-        // If would exceed max_row_group_size, split batch
-        if in_progress.buffered_rows + batch.num_rows() > self.max_row_group_size {
-            let to_write = self.max_row_group_size - in_progress.buffered_rows;
-            let a = batch.slice(0, to_write);
-            let b = batch.slice(to_write, batch.num_rows() - to_write);
-            self.write(&a)?;
-            return self.write(&b);
+        if let Some(max_rows) = self.max_row_group_row_count {
+            if in_progress.buffered_rows + batch.num_rows() > max_rows {
+                let to_write = max_rows - in_progress.buffered_rows;
+                let a = batch.slice(0, to_write);
+                let b = batch.slice(to_write, batch.num_rows() - to_write);
+                self.write(&a)?;
+                return self.write(&b);
+            }
+        }
+
+        // Check byte limit: if we have buffered data, use measured average row size
+        // to split batch proactively before exceeding byte limit
+        if let Some(max_bytes) = self.max_row_group_bytes {
+            if in_progress.buffered_rows > 0 {
+                let current_bytes = in_progress.get_estimated_total_bytes();
+
+                if current_bytes >= max_bytes {
+                    self.flush()?;
+                    return self.write(batch);
+                }
+
+                let avg_row_bytes = current_bytes / in_progress.buffered_rows;
+                if avg_row_bytes > 0 {
+                    let remaining_bytes = max_bytes - current_bytes;
+                    let rows_that_fit = remaining_bytes / avg_row_bytes;
+
+                    if batch.num_rows() > rows_that_fit {
+                        if rows_that_fit > 0 {
+                            let a = batch.slice(0, rows_that_fit);
+                            let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
+                            self.write(&a)?;
+                            return self.write(&b);
+                        } else {
+                            self.flush()?;
+                            return self.write(batch);
+                        }
+                    }
+                }
+            }
         }
 
         in_progress.write(batch)?;
 
-        if in_progress.buffered_rows >= self.max_row_group_size {
+        let should_flush = self
+            .max_row_group_row_count
+            .is_some_and(|max| in_progress.buffered_rows >= max)
+            || self
+                .max_row_group_bytes
+                .is_some_and(|max| in_progress.get_estimated_total_bytes() >= max);
+
+        if should_flush {
             self.flush()?
         }
         Ok(())
@@ -912,6 +961,14 @@ impl ArrowRowGroupWriter {
             }
         }
         Ok(())
+    }
+
+    /// Returns the estimated total encoded bytes for this row group
+    fn get_estimated_total_bytes(&self) -> usize {
+        self.writers
+            .iter()
+            .map(|x| x.get_estimated_total_bytes())
+            .sum()
     }
 
     fn close(self) -> Result<Vec<ArrowColumnChunk>> {
@@ -4517,5 +4574,186 @@ mod tests {
 
         assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
         assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
+    }
+
+    /// Helper to create a test batch with the given number of rows.
+    /// Each row is approximately 4 bytes (one i32).
+    fn create_test_batch(num_rows: usize) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "int",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let array = Int32Array::from((0..num_rows as i32).collect::<Vec<_>>());
+        RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
+    }
+
+    #[test]
+    fn test_row_group_limit_none_writes_single_row_group() {
+        // When both limits are None, all data should go into a single row group
+        let batch = create_test_batch(1000);
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(None)
+            .build();
+
+        let file = tempfile::tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props)).unwrap();
+
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(
+            &row_group_sizes(builder.metadata()),
+            &[1000],
+            "With no limits, all rows should be in a single row group"
+        );
+    }
+
+    #[test]
+    fn test_row_group_limit_rows_only() {
+        // When only max_row_group_size is set, respect the row limit
+        let batch = create_test_batch(1000);
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(300)
+            .set_max_row_group_bytes(None)
+            .build();
+
+        let file = tempfile::tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props)).unwrap();
+
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(
+            &row_group_sizes(builder.metadata()),
+            &[300, 300, 300, 100],
+            "Row groups should be split by row count"
+        );
+    }
+
+    #[test]
+    fn test_row_group_limit_bytes_only() {
+        // When only max_row_group_bytes is set, respect the byte limit
+        // Create batches with string data for more predictable byte sizes
+        // Write in multiple small batches so byte-based splitting can work
+        // (first batch establishes the avg row size, subsequent batches are split)
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "str",
+            ArrowDataType::Utf8,
+            false,
+        )]));
+
+        // Set byte limit to approximately fit ~30 rows worth of data (~100 bytes each)
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(3500))
+            .build();
+
+        let file = tempfile::tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+
+        // Write 10 batches of 10 rows each (100 rows total)
+        // Each string is ~100 bytes
+        for batch_idx in 0..10 {
+            let strings: Vec<String> = (0..10)
+                .map(|i| format!("{:0>100}", batch_idx * 10 + i))
+                .collect();
+            let array = StringArray::from(strings);
+            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let sizes = row_group_sizes(builder.metadata());
+
+        assert!(
+            sizes.len() > 1,
+            "Should have multiple row groups due to byte limit, got {sizes:?}",
+        );
+
+        let total_rows: i64 = sizes.iter().sum();
+        assert_eq!(total_rows, 100, "Total rows should be preserved");
+    }
+
+    #[test]
+    fn test_row_group_limit_both_row_wins() {
+        // When both limits are set, the row limit triggers first
+        let batch = create_test_batch(1000);
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(200) // Will trigger at 200 rows
+            .set_max_row_group_bytes(Some(1024 * 1024)) // 1MB - won't trigger for small int data
+            .build();
+
+        let file = tempfile::tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props)).unwrap();
+
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(
+            &row_group_sizes(builder.metadata()),
+            &[200, 200, 200, 200, 200],
+            "Row limit should trigger before byte limit"
+        );
+    }
+
+    #[test]
+    fn test_row_group_limit_both_bytes_wins() {
+        // When both limits are set, the byte limit triggers first
+        // Write in multiple small batches so byte-based splitting can work
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "str",
+            ArrowDataType::Utf8,
+            false,
+        )]));
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(1000) // Won't trigger for 100 rows
+            .set_max_row_group_bytes(Some(3500)) // Will trigger at ~30-35 rows
+            .build();
+
+        let file = tempfile::tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+
+        // Write 10 batches of 10 rows each (100 rows total)
+        // Each string is ~100 bytes
+        for batch_idx in 0..10 {
+            let strings: Vec<String> = (0..10)
+                .map(|i| format!("{:0>100}", batch_idx * 10 + i))
+                .collect();
+            let array = StringArray::from(strings);
+            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let sizes = row_group_sizes(builder.metadata());
+
+        assert!(
+            sizes.len() > 1,
+            "Byte limit should trigger before row limit, got {sizes:?}",
+        );
+
+        assert!(
+            sizes.iter().all(|&s| s < 1000),
+            "No row group should hit the row limit"
+        );
+
+        let total_rows: i64 = sizes.iter().sum();
+        assert_eq!(total_rows, 100, "Total rows should be preserved");
     }
 }
