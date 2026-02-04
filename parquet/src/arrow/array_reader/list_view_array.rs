@@ -87,8 +87,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListViewArrayReader<OffsetSize
                 )
             })?;
 
-        let list_view_array = Arc::new(GenericListViewArray::<OffsetSize>::from(list_array.clone()));
-        
+        let list_view_array =
+            Arc::new(GenericListViewArray::<OffsetSize>::from(list_array.clone()));
+
         // Ensure the data type is correct
         assert_eq!(
             list_view_array.data_type(),
