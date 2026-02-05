@@ -142,7 +142,7 @@ impl BooleanBuffer {
     /// input buffer.
     ///
     /// # Notes:
-    /// * The new `BooleanBuffer` keeps the non-zero offset if not aligned by byte
+    /// * The new `BooleanBuffer` keeps the non-zero offset if not aligned by byte and may have padding
     ///
     /// # Example: Create a new [`BooleanBuffer`] copying a bit slice from in input slice
     /// ```
@@ -150,7 +150,7 @@ impl BooleanBuffer {
     /// let input = [0b11001100u8, 0b10111010u8];
     /// // // Copy bits 4..16 from input
     /// let result = BooleanBuffer::from_bits(&input, 4, 12);
-    /// assert_eq!(result.values(), &[0b11001100u8, 0b10111010]);
+    /// assert_eq!(result.values(), &[0b11001100u8, 0b10111010, 0, 0, 0, 0, 0, 0]);
     pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
         Self::from_bitwise_unary_op(src, offset_in_bits, len_in_bits, |a| a)
     }
