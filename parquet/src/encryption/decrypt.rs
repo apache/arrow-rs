@@ -510,6 +510,7 @@ impl DecryptionPropertiesBuilder {
         Ok(self)
     }
 
+    /// The AEAD decryption algorithm to be used.
     pub fn with_algorithm(mut self, algorithm: &'static Algorithm) -> Self {
         self.algorithm = algorithm;
         self
@@ -564,6 +565,7 @@ impl DecryptionPropertiesBuilderWithRetriever {
         self
     }
 
+    /// Specify the AEAD decryption algorithm to be used for decryption.
     pub fn with_algorithm(mut self, algorithm: &'static Algorithm) -> Self {
         self.algorithm = algorithm;
         self

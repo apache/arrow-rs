@@ -45,6 +45,7 @@ impl RingGcmBlockDecryptor {
         Self::new_with_algorithm(&AES_128_GCM, key_bytes)
     }
 
+    /// Create a new `RingGcmBlockDecryptor` with an AEAD algorithm and a given key.
     pub(crate) fn new_with_algorithm(
         algorithm: &'static Algorithm,
         key_bytes: &[u8],
@@ -146,14 +147,14 @@ pub(crate) struct RingGcmBlockEncryptor {
 }
 
 impl RingGcmBlockEncryptor {
-    /// Create a new `RingGcmBlockEncryptor` with a given key and random nonce.
-    /// The nonce will advance appropriately with each block encryption and
-    /// return an error if it wraps around.
     #[allow(dead_code)]
     pub(crate) fn new(key_bytes: &[u8]) -> Result<Self> {
         Self::new_with_algorithm(&AES_128_GCM, key_bytes)
     }
 
+    /// Create a new `RingGcmBlockEncryptor` with an AEAD algorithm, a given key and random nonce.
+    /// The nonce will advance appropriately with each block encryption and
+    /// return an error if it wraps around.
     pub(crate) fn new_with_algorithm(
         algorithm: &'static Algorithm,
         key_bytes: &[u8],

@@ -278,6 +278,7 @@ impl EncryptionPropertiesBuilder {
         self
     }
 
+    /// The AEAD encryption algorithm to be used
     pub fn with_algorithm(mut self, algorithm: &'static Algorithm) -> Self {
         self.algorithm = algorithm;
         self
