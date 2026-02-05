@@ -260,7 +260,7 @@ impl WriterProperties {
 
     /// Returns maximum number of rows in a row group, or `None` if unlimited.
     ///
-    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_size`]
+    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_row_count`]
     pub fn max_row_group_row_count(&self) -> Option<usize> {
         self.max_row_group_row_count
     }
