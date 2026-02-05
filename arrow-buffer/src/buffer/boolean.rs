@@ -181,8 +181,7 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_unary_op(
     ///  &input, 0, 12, |a| !a
     /// );
-    /// // Note, values are padded
-    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8, 255, 255, 255, 255, 255, 255]);
+    /// assert_eq!(result.values(), &[0b00110011u8, 0b01000101u8]);
     /// ```
     pub fn from_bitwise_unary_op<F>(
         src: impl AsRef<[u8]>,
@@ -221,11 +220,13 @@ impl BooleanBuffer {
             iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
         };
 
+        let mut buf = MutableBuffer::from(vec_u64s);
+        
         // TODO - this is not ideal as it removes the u64 aligment without reducing the allocated size
         // but various operations expect the output buffer to be the number of output bits
-        vec_u64s.truncate(ceil(len_in_bits, 8));
+        buf.truncate(ceil(len_in_bits, 8));
 
-        BooleanBuffer::new(Buffer::from(vec_u64s), start_bit, len_in_bits)
+        BooleanBuffer::new(buf.into_buffer(), start_bit, len_in_bits)
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
