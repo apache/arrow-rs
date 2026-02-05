@@ -313,12 +313,10 @@ pub enum DataType {
     /// A single List array can store up to [`i32::MAX`] elements in total.
     List(FieldRef),
 
-    /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length.
+    /// A list of some logical data type with variable length.
     ///
     /// Logically the same as [`List`], but the internal representation differs in how child
     /// data is referenced, allowing flexibility in how data is layed out.
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
     ///
     /// [`List`]: Self::List
     ListView(FieldRef),
@@ -329,12 +327,10 @@ pub enum DataType {
     /// A single LargeList array can store up to [`i64::MAX`] elements in total.
     LargeList(FieldRef),
 
-    /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length and 64-bit offsets.
+    /// A list of some logical data type with variable length and 64-bit offsets.
     ///
     /// Logically the same as [`LargeList`], but the internal representation differs in how child
     /// data is referenced, allowing flexibility in how data is layed out.
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
     ///
     /// [`LargeList`]: Self::LargeList
     LargeListView(FieldRef),
