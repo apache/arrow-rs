@@ -17,7 +17,7 @@
 
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
-use crate::bit_util::read_u64;
+use crate::bit_util::{ceil, read_u64};
 use crate::{
     BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
     buffer_bin_xor, buffer_unary_not,
@@ -215,11 +215,13 @@ impl BooleanBuffer {
         let chunks = aligned.chunks_exact(8);
         let remainder = chunks.remainder();
         let iter = chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
-        let vec_u64s: Vec<u64> = if remainder.is_empty() {
+        let mut vec_u64s: Vec<u64> = if remainder.is_empty() {
             iter.map(&mut op).collect()
         } else {
             iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
         };
+
+        vec_u64s.truncate(ceil(len_in_bits, 8));
 
         BooleanBuffer::new(Buffer::from(vec_u64s), start_bit, len_in_bits)
     }
