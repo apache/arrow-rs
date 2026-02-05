@@ -292,17 +292,20 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
             Box::new(values.data_type().clone()),
         );
 
-        let zero = K::Native::usize_as(0);
-        let values_len = values.len();
+        // // we can skip the validating the keys if they are all null
+        let all_null = keys.null_count() == keys.len();
 
-        if let Some((idx, v)) =
-            keys.values().iter().enumerate().find(|(idx, v)| {
+        if !all_null {
+            let zero = K::Native::usize_as(0);
+            let values_len = values.len();
+
+            if let Some((idx, v)) = keys.values().iter().enumerate().find(|(idx, v)| {
                 (v.is_lt(zero) || v.as_usize() >= values_len) && keys.is_valid(*idx)
-            })
-        {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Invalid dictionary key {v:?} at index {idx}, expected 0 <= key < {values_len}",
-            )));
+            }) {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Invalid dictionary key {v:?} at index {idx}, expected 0 <= key < {values_len}",
+                )));
+            }
         }
 
         Ok(Self {
@@ -692,9 +695,8 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<&'a str> for DictionaryArray<T>
     }
 }
 
-impl<T: ArrowDictionaryKeyType> super::private::Sealed for DictionaryArray<T> {}
-
-impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -853,9 +855,7 @@ impl<'a, K: ArrowDictionaryKeyType, V> TypedDictionaryArray<'a, K, V> {
     }
 }
 
-impl<K: ArrowDictionaryKeyType, V: Sync> super::private::Sealed for TypedDictionaryArray<'_, K, V> {}
-
-impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V> {
+unsafe impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V> {
     fn as_any(&self) -> &dyn Any {
         self.dictionary
     }
@@ -1050,7 +1050,7 @@ impl<K: ArrowDictionaryKeyType> AnyDictionaryArray for DictionaryArray<K> {
 mod tests {
     use super::*;
     use crate::cast::as_dictionary_array;
-    use crate::{Int8Array, Int16Array, Int32Array, RunArray};
+    use crate::{Int8Array, Int16Array, Int32Array, RunArray, UInt8Array};
     use arrow_buffer::{Buffer, ToByteSlice};
 
     #[test]
@@ -1530,5 +1530,14 @@ mod tests {
         let keys = Int32Array::new(values, Some(nulls));
         let dictionary = DictionaryArray::new(keys, Arc::new(Int32Array::new_null(2)));
         assert_eq!(&dictionary.normalized_keys(), &[1, 0, 1])
+    }
+
+    #[test]
+    fn test_all_null_dict() {
+        let all_null_dict_arr = DictionaryArray::try_new(
+            UInt8Array::new_null(10),
+            Arc::new(StringArray::from_iter_values(["a"])),
+        );
+        assert!(all_null_dict_arr.is_ok())
     }
 }

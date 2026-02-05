@@ -297,9 +297,9 @@ async fn get_encrypted_meta_store() -> (
     object_store::ObjectMeta,
     std::sync::Arc<dyn object_store::ObjectStore>,
 ) {
-    use object_store::ObjectStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt};
 
     use std::sync::Arc;
     let test_data = arrow::util::test_util::parquet_test_data();
