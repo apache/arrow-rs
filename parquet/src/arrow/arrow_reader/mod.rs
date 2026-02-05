@@ -4633,7 +4633,7 @@ pub(crate) mod tests {
             schema.clone(),
             Some(
                 WriterProperties::builder()
-                    .set_max_row_group_size(row_group_size)
+                    .set_max_row_group_row_count(Some(row_group_size))
                     .build(),
             ),
         )
@@ -5629,7 +5629,7 @@ pub(crate) mod tests {
         let batch = RecordBatch::try_from_iter([("col", Arc::new(array) as ArrayRef)])?;
         let mut buffer = Vec::new();
         let options = WriterProperties::builder()
-            .set_max_row_group_size(50)
+            .set_max_row_group_row_count(Some(50))
             .build();
         let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema().clone(), Some(options))?;
         // write in 10 row batches as the size limits are enforced after each batch
@@ -5795,7 +5795,7 @@ pub(crate) mod tests {
 
         let mut buffer = Vec::new();
         let options = WriterProperties::builder()
-            .set_max_row_group_size(2)
+            .set_max_row_group_row_count(Some(2))
             .build();
         let mut writer = ArrowWriter::try_new(&mut buffer, batch1.schema(), Some(options)).unwrap();
         writer.write(&batch1).unwrap();
@@ -5854,7 +5854,7 @@ pub(crate) mod tests {
 
         let mut buffer = Vec::new();
         let options = WriterProperties::builder()
-            .set_max_row_group_size(3)
+            .set_max_row_group_row_count(Some(3))
             .build();
         let mut writer = ArrowWriter::try_new(&mut buffer, batch1.schema(), Some(options)).unwrap();
         writer.write(&batch1).unwrap();
@@ -5903,7 +5903,7 @@ pub(crate) mod tests {
     fn test_read_row_group_indices_with_selection() -> Result<()> {
         let mut buffer = Vec::new();
         let options = WriterProperties::builder()
-            .set_max_row_group_size(10)
+            .set_max_row_group_row_count(Some(10))
             .build();
 
         let schema = Arc::new(Schema::new(vec![Field::new(

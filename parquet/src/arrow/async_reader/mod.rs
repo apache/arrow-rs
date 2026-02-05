@@ -1448,7 +1448,7 @@ mod tests {
 
         let mut buf = Vec::with_capacity(1024);
         let props = WriterProperties::builder()
-            .set_max_row_group_size(3)
+            .set_max_row_group_row_count(Some(3))
             .build();
         let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), Some(props)).unwrap();
         writer.write(&data).unwrap();
@@ -1728,7 +1728,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_data_page_row_count_limit(256)
             .set_write_batch_size(256)
-            .set_max_row_group_size(1024);
+            .set_max_row_group_row_count(Some(1024));
 
         // Write data
         let mut file = tempfile().unwrap();
@@ -2055,7 +2055,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_data_page_row_count_limit(1)
             .set_write_batch_size(1)
-            .set_max_row_group_size(10)
+            .set_max_row_group_row_count(Some(10))
             .set_write_page_header_statistics(true)
             .build();
         let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), Some(props)).unwrap();
@@ -2284,7 +2284,7 @@ mod tests {
         ]));
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(300)
+            .set_max_row_group_row_count(Some(300))
             .set_data_page_row_count_limit(33)
             .build();
 

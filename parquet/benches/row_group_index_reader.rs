@@ -87,7 +87,7 @@ fn create_test_file(num_row_groups: usize, rows_per_group: usize) -> Bytes {
     let mut buffer = Vec::new();
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
-        .set_max_row_group_size(rows_per_group)
+        .set_max_row_group_row_count(Some(rows_per_group))
         .build();
 
     let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();

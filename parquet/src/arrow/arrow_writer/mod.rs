@@ -2411,7 +2411,7 @@ mod tests {
             let mut props = WriterProperties::builder().set_writer_version(version);
 
             if let Some(size) = max_row_group_size {
-                props = props.set_max_row_group_size(size)
+                props = props.set_max_row_group_row_count(Some(size))
             }
 
             let props = props.build();
@@ -2542,7 +2542,7 @@ mod tests {
                     for row_group_size in row_group_sizes {
                         let props = WriterProperties::builder()
                             .set_writer_version(version)
-                            .set_max_row_group_size(row_group_size)
+                            .set_max_row_group_row_count(Some(row_group_size))
                             .set_dictionary_enabled(dictionary_size != 0)
                             .set_dictionary_page_size_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
@@ -3204,7 +3204,7 @@ mod tests {
             for row_group_size in row_group_sizes {
                 let props = WriterProperties::builder()
                     .set_writer_version(WriterVersion::PARQUET_2_0)
-                    .set_max_row_group_size(row_group_size)
+                    .set_max_row_group_row_count(Some(row_group_size))
                     .set_dictionary_enabled(false)
                     .set_encoding(*encoding)
                     .set_data_page_size_limit(data_page_size_limit)
@@ -3832,7 +3832,7 @@ mod tests {
         let file = tempfile::tempfile().unwrap();
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(200)
+            .set_max_row_group_row_count(Some(200))
             .build();
 
         let mut writer =
@@ -3974,7 +3974,7 @@ mod tests {
         // Write data
         let file = tempfile::tempfile().unwrap();
         let props = WriterProperties::builder()
-            .set_max_row_group_size(6)
+            .set_max_row_group_row_count(Some(6))
             .build();
 
         let mut writer =
@@ -4619,7 +4619,7 @@ mod tests {
         let batch = create_test_batch(1000);
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(300)
+            .set_max_row_group_row_count(Some(300))
             .set_max_row_group_bytes(None)
             .build();
 
@@ -4690,7 +4690,7 @@ mod tests {
         let batch = create_test_batch(1000);
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(200) // Will trigger at 200 rows
+            .set_max_row_group_row_count(Some(200)) // Will trigger at 200 rows
             .set_max_row_group_bytes(Some(1024 * 1024)) // 1MB - won't trigger for small int data
             .build();
 
@@ -4720,7 +4720,7 @@ mod tests {
         )]));
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(1000) // Won't trigger for 100 rows
+            .set_max_row_group_row_count(Some(1000)) // Won't trigger for 100 rows
             .set_max_row_group_bytes(Some(3500)) // Will trigger at ~30-35 rows
             .build();
 

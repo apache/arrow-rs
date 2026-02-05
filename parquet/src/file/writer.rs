@@ -2198,7 +2198,7 @@ mod tests {
         let props = Arc::new(
             WriterProperties::builder()
                 .set_statistics_enabled(EnabledStatistics::None)
-                .set_max_row_group_size(1)
+                .set_max_row_group_row_count(Some(1))
                 .build(),
         );
         let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();

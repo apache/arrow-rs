@@ -352,7 +352,7 @@ fn main() {
     }
 
     if let Some(value) = args.max_row_group_size {
-        writer_properties_builder = writer_properties_builder.set_max_row_group_size(value);
+        writer_properties_builder = writer_properties_builder.set_max_row_group_row_count(Some(value));
     }
     if let Some(value) = args.data_page_row_count_limit {
         writer_properties_builder = writer_properties_builder.set_data_page_row_count_limit(value);

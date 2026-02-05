@@ -225,7 +225,7 @@ static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
     let mut output = Vec::new();
 
     let writer_options = WriterProperties::builder()
-        .set_max_row_group_size(200)
+        .set_max_row_group_row_count(Some(200))
         .set_data_page_row_count_limit(100)
         .build();
     let mut writer =

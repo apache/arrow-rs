@@ -594,6 +594,10 @@ impl WriterPropertiesBuilder {
     ///
     /// # Panics
     /// If the value is set to 0.
+    #[deprecated(
+        since = "57.3.0",
+        note = "Use `set_max_row_group_row_count` instead",
+    )]
     pub fn set_max_row_group_size(mut self, value: usize) -> Self {
         assert!(value > 0, "Cannot have a 0 max row group size");
         self.max_row_group_row_count = Some(value);
@@ -1470,7 +1474,7 @@ mod tests {
             .set_data_page_size_limit(10)
             .set_dictionary_page_size_limit(20)
             .set_write_batch_size(30)
-            .set_max_row_group_size(40)
+            .set_max_row_group_row_count(Some(40))
             .set_created_by("default".to_owned())
             .set_key_value_metadata(Some(vec![KeyValue::new(
                 "key".to_string(),
