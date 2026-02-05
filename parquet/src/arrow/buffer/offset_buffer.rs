@@ -60,6 +60,12 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     /// UTF-8. This should be done by calling [`Self::check_valid_utf8`] after
     /// all data has been written
     pub fn try_push(&mut self, data: &[u8], validate_utf8: bool) -> Result<()> {
+        // Calculate next offset BEFORE mutating buffers
+        let next_len = self.values.len() + data.len();
+
+        let index_offset = I::from_usize(next_len)
+            .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
+
         if validate_utf8 {
             if let Some(&b) = data.first() {
                 // A valid code-point iff it does not start with 0b10xxxxxx
@@ -72,12 +78,10 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             }
         }
 
+        // Safe to mutate only AFTER offset check
         self.values.extend_from_slice(data);
-
-        let index_offset = I::from_usize(self.values.len())
-            .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
-
         self.offsets.push(index_offset);
+
         Ok(())
     }
 
