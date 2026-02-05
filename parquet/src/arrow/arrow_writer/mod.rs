@@ -4674,7 +4674,7 @@ mod tests {
 
     #[test]
     // When both limits are set, the row limit triggers first
-    fn test_row_group_limit_both_row_wins() {
+    fn test_row_group_limit_both_row_wins_single_batch() {
         let props = WriterProperties::builder()
             .set_max_row_group_row_count(Some(200)) // Will trigger at 200 rows
             .set_max_row_group_bytes(Some(1024 * 1024)) // 1MB - won't trigger for small int data
@@ -4689,6 +4689,30 @@ mod tests {
         assert_eq!(
             &row_group_sizes(builder.metadata()),
             &[200, 200, 200, 200, 200],
+            "Row limit should trigger before byte limit"
+        );
+    }
+
+
+    #[test]
+    // When both limits are set, the row limit triggers first
+    fn test_row_group_limit_both_row_wins_multiple_batches() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(5)) // Will trigger every 5 rows
+            .set_max_row_group_bytes(Some(9999)) // Won't trigger
+            .build();
+
+        let builder = write_batches(WriteBatchesShape {
+            num_batches: 10,
+            rows_per_batch: 10,
+            row_size: 100
+        }, props);
+
+        let sizes = row_group_sizes(builder.metadata());
+
+        assert_eq!(
+            &row_group_sizes(builder.metadata()),
+            &[5; 20],
             "Row limit should trigger before byte limit"
         );
     }
