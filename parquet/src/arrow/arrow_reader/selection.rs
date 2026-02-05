@@ -1111,7 +1111,7 @@ mod tests {
         let mask = boolean_mask_from_selectors(&selectors);
         let mut cursor = MaskCursor { mask, position: 0 };
 
-        let pages = vec![
+        let pages = [
             PageLocation {
                 offset: 0,
                 compressed_page_size: 1,

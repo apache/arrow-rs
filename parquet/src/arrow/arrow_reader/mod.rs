@@ -1576,7 +1576,7 @@ pub(crate) mod tests {
     use std::fs::File;
     use std::io::Seek;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{Arc, OnceLock};
 
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng, random, rng};
