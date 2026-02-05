@@ -221,6 +221,8 @@ impl BooleanBuffer {
             iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
         };
 
+        // TODO - this is not ideal as it removes the u64 aligment without reducing the allocated size
+        // but various operations expect the output buffer to be the number of output bits
         vec_u64s.truncate(ceil(len_in_bits, 8));
 
         BooleanBuffer::new(Buffer::from(vec_u64s), start_bit, len_in_bits)
