@@ -30,24 +30,19 @@ const VALUE_SIZE: usize = 5_068_563; // ~5MB per row → triggers >2GB total
 
 fn make_large_binary_array() -> ArrayRef {
     let value = vec![b'a'; VALUE_SIZE];
-    let values: Vec<Vec<u8>> = std::iter::repeat(value)
-        .take(ROWS)
-        .collect();
+    let values: Vec<Vec<u8>> = std::iter::repeat(value).take(ROWS).collect();
 
     Arc::new(BinaryArray::from(values)) as ArrayRef
 }
 
-fn write_parquet_with_encoding(
-    array: ArrayRef,
-    encoding: Encoding,
-) -> std::fs::File {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("col", DataType::Binary, false),
-    ]));
+fn write_parquet_with_encoding(array: ArrayRef, encoding: Encoding) -> std::fs::File {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        DataType::Binary,
+        false,
+    )]));
 
-    let batch =
-        RecordBatch::try_new(schema.clone(), vec![array])
-            .unwrap();
+    let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
 
     let file = tempfile().unwrap();
 
@@ -56,9 +51,7 @@ fn write_parquet_with_encoding(
         .set_encoding(encoding)
         .build();
 
-    let mut writer =
-        ArrowWriter::try_new(file.try_clone().unwrap(), schema, Some(props))
-            .unwrap();
+    let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema, Some(props)).unwrap();
 
     writer.write(&batch).unwrap();
     writer.close().unwrap();
@@ -72,11 +65,10 @@ fn large_binary_plain_encoding_overflow() {
     let array = make_large_binary_array();
     let file = write_parquet_with_encoding(array, Encoding::PLAIN);
 
-    let mut reader =
-        ParquetRecordBatchReaderBuilder::try_new(file)
-            .unwrap()
-            .build()
-            .unwrap();
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .unwrap()
+        .build()
+        .unwrap();
 
     assert!(matches!(reader.next(), Some(Ok(_))));
 }
@@ -85,16 +77,12 @@ fn large_binary_plain_encoding_overflow() {
 #[ignore = "regression test for >2GB binary offset overflow"]
 fn large_binary_delta_length_encoding_overflow() {
     let array = make_large_binary_array();
-    let file = write_parquet_with_encoding(
-        array,
-        Encoding::DELTA_LENGTH_BYTE_ARRAY,
-    );
+    let file = write_parquet_with_encoding(array, Encoding::DELTA_LENGTH_BYTE_ARRAY);
 
-    let mut reader =
-        ParquetRecordBatchReaderBuilder::try_new(file)
-            .unwrap()
-            .build()
-            .unwrap();
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .unwrap()
+        .build()
+        .unwrap();
 
     assert!(matches!(reader.next(), Some(Ok(_))));
 }
@@ -103,14 +91,12 @@ fn large_binary_delta_length_encoding_overflow() {
 #[ignore = "regression test for >2GB binary offset overflow"]
 fn large_binary_delta_byte_array_encoding_overflow() {
     let array = make_large_binary_array();
-    let file =
-        write_parquet_with_encoding(array, Encoding::DELTA_BYTE_ARRAY);
+    let file = write_parquet_with_encoding(array, Encoding::DELTA_BYTE_ARRAY);
 
-    let mut reader =
-        ParquetRecordBatchReaderBuilder::try_new(file)
-            .unwrap()
-            .build()
-            .unwrap();
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .unwrap()
+        .build()
+        .unwrap();
 
     assert!(matches!(reader.next(), Some(Ok(_))));
 }
@@ -119,14 +105,12 @@ fn large_binary_delta_byte_array_encoding_overflow() {
 #[ignore = "regression test for >2GB binary offset overflow"]
 fn large_binary_rle_dictionary_encoding_overflow() {
     let array = make_large_binary_array();
-    let file =
-        write_parquet_with_encoding(array, Encoding::RLE_DICTIONARY);
+    let file = write_parquet_with_encoding(array, Encoding::RLE_DICTIONARY);
 
-    let mut reader =
-        ParquetRecordBatchReaderBuilder::try_new(file)
-            .unwrap()
-            .build()
-            .unwrap();
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .unwrap()
+        .build()
+        .unwrap();
 
     assert!(matches!(reader.next(), Some(Ok(_))));
 }
