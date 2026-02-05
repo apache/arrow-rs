@@ -17,10 +17,10 @@
 
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
-use crate::bit_util::{ceil, read_u64};
+use crate::bit_util::read_u64;
 use crate::{
     BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
-    buffer_bin_xor, buffer_unary_not,
+    buffer_bin_xor,
 };
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
@@ -142,7 +142,7 @@ impl BooleanBuffer {
     /// input buffer.
     ///
     /// # Notes:
-    /// * The new `BooleanBuffer` has zero offset, even if `offset_in_bits` is non-zero
+    /// * The new `BooleanBuffer` keeps the non-zero offset if any (aligned by byte)
     ///
     /// # Example: Create a new [`BooleanBuffer`] copying a bit slice from in input slice
     /// ```
@@ -208,7 +208,6 @@ impl BooleanBuffer {
 
         let aligned = &src.as_ref()[offset_in_bits / 8..bit_util::ceil(end, 8)];
 
-        let start_bit = offset_in_bits % 8;
         // align to byte boundaries
         // Use unaligned code path, handle remainder bytes
         let chunks = aligned.chunks_exact(8);
@@ -220,14 +219,7 @@ impl BooleanBuffer {
             iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
         };
 
-        let mut buf = MutableBuffer::from(vec_u64s);
-        
-        // TODO - this is not ideal as it removes the u64 aligment without reducing the allocated size
-        // but various operations expect the output buffer to be the number of output bytes
-        // instead of using the `BooleanBuffer`
-        buf.truncate(ceil(len_in_bits, 8));
-
-        BooleanBuffer::new(buf.into_buffer(), start_bit, len_in_bits)
+        BooleanBuffer::new(vec_u64s.into(), offset_in_bits, len_in_bits)
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
@@ -482,11 +474,7 @@ impl Not for &BooleanBuffer {
     type Output = BooleanBuffer;
 
     fn not(self) -> Self::Output {
-        BooleanBuffer {
-            buffer: buffer_unary_not(&self.buffer, self.bit_offset, self.bit_len),
-            bit_offset: 0,
-            bit_len: self.bit_len,
-        }
+        BooleanBuffer::from_bitwise_unary_op(&self.buffer, self.bit_offset, self.bit_len, |a| !a)
     }
 }
 

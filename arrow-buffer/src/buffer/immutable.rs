@@ -343,7 +343,14 @@ impl Buffer {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
-        let mut buffer = BooleanBuffer::from_bits(self.as_slice(), offset, len).into_inner();
+        let chunks = self.bit_chunks(offset, len);
+
+        let buffer: Vec<u64> = if chunks.remainder_len() > 0 {
+            chunks.iter().chain(Some(chunks.remainder_bits())).collect()
+        } else {
+            chunks.iter().collect()
+        };
+        let mut buffer = Buffer::from_vec(buffer);
         // Update length to be byte-aligned
         buffer.length = bit_util::ceil(len, 8);
         buffer
