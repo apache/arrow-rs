@@ -214,7 +214,7 @@ impl BooleanBuffer {
         let chunks = aligned.chunks_exact(8);
         let remainder = chunks.remainder();
         let iter = chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
-        let mut vec_u64s: Vec<u64> = if remainder.is_empty() {
+        let vec_u64s: Vec<u64> = if remainder.is_empty() {
             iter.map(&mut op).collect()
         } else {
             iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
@@ -223,7 +223,8 @@ impl BooleanBuffer {
         let mut buf = MutableBuffer::from(vec_u64s);
         
         // TODO - this is not ideal as it removes the u64 aligment without reducing the allocated size
-        // but various operations expect the output buffer to be the number of output bits
+        // but various operations expect the output buffer to be the number of output bytes
+        // instead of using the `BooleanBuffer`
         buf.truncate(ceil(len_in_bits, 8));
 
         BooleanBuffer::new(buf.into_buffer(), start_bit, len_in_bits)
