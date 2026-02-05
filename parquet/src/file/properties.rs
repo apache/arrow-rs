@@ -614,7 +614,7 @@ impl WriterPropertiesBuilder {
     /// Sets maximum size of a row group in bytes, or `None` for unlimited.
     ///
     /// Row groups are flushed when their estimated encoded size exceeds this threshold.
-    /// This is similar to parquet-mr's `parquet.block.size` behavior.
+    /// This is similar to the official `parquet.block.size` behavior.
     ///
     /// # Panics
     /// If the value is `Some(0)`.
