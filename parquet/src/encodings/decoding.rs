@@ -380,6 +380,9 @@ impl<T: DataType> DictDecoder<T> {
 
 impl<T: DataType> Decoder<T> for DictDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+        if data.is_empty() {
+            return Err(general_err!("Cannot use empty data to determine the bit width"));
+        }
         // First byte in `data` is bit width
         if data.is_empty() {
             return Err(eof_err!("Not enough bytes to decode bit_width"));
@@ -1478,6 +1481,13 @@ mod tests {
         assert_eq!(num_values + num_nulls, result.unwrap());
         assert_eq!(decoder.values_left(), 0);
         assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_dict_decode_doesnt_panic_on_empty() {
+        let mut decoder = DictDecoder::<Int32Type>::new();
+        let result = decoder.set_data(Bytes::from(vec![]), 0);
+        assert!(!result.is_ok());
     }
 
     #[test]

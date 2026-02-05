@@ -208,9 +208,10 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         }
 
         let decoder = if encoding == Encoding::RLE_DICTIONARY {
-            self.decoders[encoding as usize]
-                .as_mut()
-                .expect("Decoder for dict should have been set")
+            match self.decoders[encoding as usize].as_mut() {
+                Some(decoder) => decoder,
+                None => return Err(general_err!("Decoder for dict should have been set")),
+            }
         } else {
             let slot = encoding as usize;
             if self.decoders[slot].is_none() {
