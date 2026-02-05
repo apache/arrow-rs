@@ -4577,20 +4577,20 @@ mod tests {
     }
 
     /// Helper to create a test batch with the given number of rows.
-    /// Each row is approximately 4 bytes (one i32).
+    /// Each row is 4 bytes (one `i32`).
     fn create_test_batch(num_rows: usize) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "int",
             ArrowDataType::Int32,
             false,
         )]));
-        let array = Int32Array::from((0..num_rows as i32).collect::<Vec<_>>());
+        let array = Int32Array::from_iter(0..num_rows as i32);
         RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
     }
 
     #[test]
+    // When both limits are None, all data should go into a single row group
     fn test_row_group_limit_none_writes_single_row_group() {
-        // When both limits are None, all data should go into a single row group
         let batch = create_test_batch(1000);
 
         let props = WriterProperties::builder()
@@ -4614,8 +4614,8 @@ mod tests {
     }
 
     #[test]
+    // When only max_row_group_size is set, respect the row limit
     fn test_row_group_limit_rows_only() {
-        // When only max_row_group_size is set, respect the row limit
         let batch = create_test_batch(1000);
 
         let props = WriterProperties::builder()
@@ -4639,8 +4639,8 @@ mod tests {
     }
 
     #[test]
+    // When only max_row_group_bytes is set, respect the byte limit
     fn test_row_group_limit_bytes_only() {
-        // When only max_row_group_bytes is set, respect the byte limit
         // Create batches with string data for more predictable byte sizes
         // Write in multiple small batches so byte-based splitting can work
         // (first batch establishes the avg row size, subsequent batches are split)
@@ -4650,9 +4650,9 @@ mod tests {
             false,
         )]));
 
-        // Set byte limit to approximately fit ~30 rows worth of data (~100 bytes each)
         let props = WriterProperties::builder()
             .set_max_row_group_row_count(None)
+            // Set byte limit to approximately fit ~30 rows worth of data (~100 bytes each)
             .set_max_row_group_bytes(Some(3500))
             .build();
 
@@ -4685,8 +4685,8 @@ mod tests {
     }
 
     #[test]
+    // When both limits are set, the row limit triggers first
     fn test_row_group_limit_both_row_wins() {
-        // When both limits are set, the row limit triggers first
         let batch = create_test_batch(1000);
 
         let props = WriterProperties::builder()
@@ -4710,8 +4710,8 @@ mod tests {
     }
 
     #[test]
+    // When both limits are set, the byte limit triggers first
     fn test_row_group_limit_both_bytes_wins() {
-        // When both limits are set, the byte limit triggers first
         // Write in multiple small batches so byte-based splitting can work
         let schema = Arc::new(Schema::new(vec![Field::new(
             "str",

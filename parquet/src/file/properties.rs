@@ -45,7 +45,8 @@ pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Pag
 pub const DEFAULT_WRITE_PAGE_HEADER_STATISTICS: bool = false;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
-/// Default value for [`WriterProperties::max_row_group_bytes`] (128 MB, same as parquet-mr's parquet.block.size)
+/// Default value for [`WriterProperties::max_row_group_bytes`] (128 MB, same as the official Java
+/// implementation for `parquet.block.size`)
 pub const DEFAULT_MAX_ROW_GROUP_BYTES: usize = 128 * 1024 * 1024;
 /// Default value for [`WriterProperties::bloom_filter_position`]
 pub const DEFAULT_BLOOM_FILTER_POSITION: BloomFilterPosition = BloomFilterPosition::AfterRowGroup;
@@ -601,12 +602,13 @@ impl WriterPropertiesBuilder {
 
     /// Sets maximum number of rows in a row group, or `None` for unlimited.
     ///
+    /// If both `max_row_group_row_count` and `max_row_group_bytes` are set,
+    /// the row group with the smallest limit will be applied.
+    ///
     /// # Panics
     /// If the value is `Some(0)`.
     pub fn set_max_row_group_row_count(mut self, value: Option<usize>) -> Self {
-        if let Some(v) = value {
-            assert!(v > 0, "Cannot have a 0 max row group size");
-        }
+        assert_ne!(value, Some(0), "Cannot have a 0 max row group bytes");
         self.max_row_group_row_count = value;
         self
     }
@@ -614,14 +616,15 @@ impl WriterPropertiesBuilder {
     /// Sets maximum size of a row group in bytes, or `None` for unlimited.
     ///
     /// Row groups are flushed when their estimated encoded size exceeds this threshold.
-    /// This is similar to the official `parquet.block.size` behavior.
+    /// This is similar to the official Java implementation for `parquet.block.size`'s behavior.
+    ///
+    /// If both `max_row_group_row_count` and `max_row_group_bytes` are set,
+    /// the row group with the smallest limit will be applied.
     ///
     /// # Panics
     /// If the value is `Some(0)`.
     pub fn set_max_row_group_bytes(mut self, value: Option<usize>) -> Self {
-        if let Some(v) = value {
-            assert!(v > 0, "Cannot have a 0 max row group bytes");
-        }
+        assert_ne!(value, Some(0), "Cannot have a 0 max row group bytes");
         self.max_row_group_bytes = value;
         self
     }
