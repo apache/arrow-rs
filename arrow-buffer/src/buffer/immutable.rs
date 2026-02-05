@@ -20,9 +20,9 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::{BooleanBuffer, BufferBuilder};
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
 #[cfg(feature = "pool")]
