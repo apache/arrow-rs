@@ -219,7 +219,7 @@ impl BooleanBuffer {
             iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
         };
 
-        BooleanBuffer::new(vec_u64s.into(), offset_in_bits, len_in_bits)
+        BooleanBuffer::new(vec_u64s.into(), offset_in_bits % 8, len_in_bits)
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
