@@ -19,7 +19,7 @@ use crate::errors::ParquetError;
 use crate::errors::ParquetError::General;
 use crate::errors::Result;
 use crate::file::metadata::HeapSize;
-use ring::aead::{AES_128_GCM, Aad, LessSafeKey, NonceSequence, UnboundKey, Algorithm};
+use ring::aead::{AES_128_GCM, Aad, Algorithm, LessSafeKey, NonceSequence, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt::Debug;
 
@@ -40,11 +40,15 @@ pub(crate) struct RingGcmBlockDecryptor {
 }
 
 impl RingGcmBlockDecryptor {
+    #[allow(dead_code)]
     pub(crate) fn new(key_bytes: &[u8]) -> Result<Self> {
         Self::new_with_algorithm(&AES_128_GCM, key_bytes)
     }
 
-    pub(crate) fn new_with_algorithm(algorithm: &'static Algorithm, key_bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn new_with_algorithm(
+        algorithm: &'static Algorithm,
+        key_bytes: &[u8],
+    ) -> Result<Self> {
         let key = UnboundKey::new(algorithm, key_bytes)
             .map_err(|_| general_err!("Failed to create {:?} key", algorithm))?;
 
@@ -145,13 +149,17 @@ impl RingGcmBlockEncryptor {
     /// Create a new `RingGcmBlockEncryptor` with a given key and random nonce.
     /// The nonce will advance appropriately with each block encryption and
     /// return an error if it wraps around.
+    #[allow(dead_code)]
     pub(crate) fn new(key_bytes: &[u8]) -> Result<Self> {
         Self::new_with_algorithm(&AES_128_GCM, key_bytes)
     }
 
-    pub(crate) fn new_with_algorithm(algorithm: &'static Algorithm, key_bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn new_with_algorithm(
+        algorithm: &'static Algorithm,
+        key_bytes: &[u8],
+    ) -> Result<Self> {
         let rng = SystemRandom::new();
-        let key = UnboundKey::new(&algorithm, key_bytes)
+        let key = UnboundKey::new(algorithm, key_bytes)
             .map_err(|e| general_err!("Error creating {:?} key: {}", algorithm, e))?;
         let nonce = CounterNonce::new(&rng)?;
 
@@ -193,8 +201,8 @@ impl BlockEncryptor for RingGcmBlockEncryptor {
 
 #[cfg(test)]
 mod tests {
-    use ring::aead::{AES_256_GCM, CHACHA20_POLY1305};
     use super::*;
+    use ring::aead::{AES_256_GCM, CHACHA20_POLY1305};
 
     #[test]
     fn test_round_trip() {

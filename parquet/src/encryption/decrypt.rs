@@ -22,12 +22,12 @@ use crate::encryption::modules::{ModuleType, create_footer_aad, create_module_aa
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 use crate::file::metadata::HeapSize;
+use ring::aead::{AES_128_GCM, Algorithm};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::io::Read;
 use std::sync::Arc;
-use ring::aead::{Algorithm, AES_128_GCM};
 
 /// Trait for retrieving an encryption key using the key's metadata
 ///
@@ -353,7 +353,7 @@ pub struct FileDecryptionProperties {
     keys: DecryptionKeys,
     aad_prefix: Option<Vec<u8>>,
     footer_signature_verification: bool,
-    algorithm: &'static Algorithm
+    algorithm: &'static Algorithm,
 }
 
 impl HeapSize for FileDecryptionProperties {
@@ -450,7 +450,7 @@ pub struct DecryptionPropertiesBuilder {
     column_keys: HashMap<String, Vec<u8>>,
     aad_prefix: Option<Vec<u8>>,
     footer_signature_verification: bool,
-    algorithm: &'static Algorithm
+    algorithm: &'static Algorithm,
 }
 
 impl DecryptionPropertiesBuilder {
@@ -462,7 +462,7 @@ impl DecryptionPropertiesBuilder {
             column_keys: HashMap::default(),
             aad_prefix: None,
             footer_signature_verification: true,
-            algorithm: &AES_128_GCM
+            algorithm: &AES_128_GCM,
         }
     }
 
@@ -476,7 +476,7 @@ impl DecryptionPropertiesBuilder {
             keys,
             aad_prefix: self.aad_prefix,
             footer_signature_verification: self.footer_signature_verification,
-            algorithm: self.algorithm
+            algorithm: self.algorithm,
         }))
     }
 
@@ -530,7 +530,7 @@ pub struct DecryptionPropertiesBuilderWithRetriever {
     key_retriever: Arc<dyn KeyRetriever>,
     aad_prefix: Option<Vec<u8>>,
     footer_signature_verification: bool,
-    algorithm: &'static Algorithm
+    algorithm: &'static Algorithm,
 }
 
 impl DecryptionPropertiesBuilderWithRetriever {
@@ -541,7 +541,7 @@ impl DecryptionPropertiesBuilderWithRetriever {
             key_retriever,
             aad_prefix: None,
             footer_signature_verification: true,
-            algorithm: &AES_128_GCM
+            algorithm: &AES_128_GCM,
         }
     }
 
@@ -552,7 +552,7 @@ impl DecryptionPropertiesBuilderWithRetriever {
             keys,
             aad_prefix: self.aad_prefix,
             footer_signature_verification: self.footer_signature_verification,
-            algorithm: self.algorithm
+            algorithm: self.algorithm,
         }))
     }
 
@@ -615,12 +615,13 @@ impl FileDecryptor {
         let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
         let footer_key = decryption_properties.footer_key(footer_key_metadata)?;
         let algorithm = decryption_properties.algorithm;
-        let footer_decryptor = RingGcmBlockDecryptor::new_with_algorithm(algorithm, &footer_key).map_err(|e| {
-            general_err!(
-                "Invalid footer key. {}",
-                e.to_string().replace("Parquet error: ", "")
-            )
-        })?;
+        let footer_decryptor = RingGcmBlockDecryptor::new_with_algorithm(algorithm, &footer_key)
+            .map_err(|e| {
+                general_err!(
+                    "Invalid footer key. {}",
+                    e.to_string().replace("Parquet error: ", "")
+                )
+            })?;
 
         Ok(Self {
             footer_decryptor: Arc::new(footer_decryptor),
@@ -661,7 +662,10 @@ impl FileDecryptor {
             .decryption_properties
             .column_key(column_name, key_metadata)?;
         let algorithm = self.decryption_properties.algorithm;
-        Ok(Arc::new(RingGcmBlockDecryptor::new_with_algorithm(algorithm, &column_key)?))
+        Ok(Arc::new(RingGcmBlockDecryptor::new_with_algorithm(
+            algorithm,
+            &column_key,
+        )?))
     }
 
     pub(crate) fn get_column_metadata_decryptor(

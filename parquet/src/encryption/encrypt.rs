@@ -24,11 +24,11 @@ use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
+use ring::aead::{AES_128_GCM, Algorithm};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
-use ring::aead::{Algorithm, AES_128_GCM};
 
 #[derive(Debug, Clone, PartialEq)]
 struct EncryptionKey {
@@ -97,7 +97,7 @@ pub struct FileEncryptionProperties {
     column_keys: HashMap<String, EncryptionKey>,
     aad_prefix: Option<Vec<u8>>,
     store_aad_prefix: bool,
-    algorithm: &'static Algorithm
+    algorithm: &'static Algorithm,
 }
 
 impl FileEncryptionProperties {
@@ -188,7 +188,7 @@ pub struct EncryptionPropertiesBuilder {
     column_keys: HashMap<String, EncryptionKey>,
     aad_prefix: Option<Vec<u8>>,
     store_aad_prefix: bool,
-    algorithm: &'static Algorithm
+    algorithm: &'static Algorithm,
 }
 
 impl EncryptionPropertiesBuilder {
@@ -200,7 +200,7 @@ impl EncryptionPropertiesBuilder {
             aad_prefix: None,
             encrypt_footer: true,
             store_aad_prefix: false,
-            algorithm: &AES_128_GCM
+            algorithm: &AES_128_GCM,
         }
     }
 
@@ -291,7 +291,7 @@ impl EncryptionPropertiesBuilder {
             column_keys: self.column_keys,
             aad_prefix: self.aad_prefix,
             store_aad_prefix: self.store_aad_prefix,
-            algorithm: self.algorithm
+            algorithm: self.algorithm,
         }))
     }
 }
@@ -354,7 +354,8 @@ impl FileEncryptor {
     /// Get the BlockEncryptor for the footer
     pub(crate) fn get_footer_encryptor(&self) -> Result<Box<dyn BlockEncryptor>> {
         Ok(Box::new(RingGcmBlockEncryptor::new_with_algorithm(
-            &self.properties.algorithm, &self.properties.footer_key.key,
+            self.properties.algorithm,
+            &self.properties.footer_key.key,
         )?))
     }
 
@@ -369,7 +370,10 @@ impl FileEncryptor {
         }
         match self.properties.column_keys.get(column_path) {
             None => Err(general_err!("Column '{}' is not encrypted", column_path)),
-            Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new_with_algorithm(&self.properties.algorithm, column_key.key())?)),
+            Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new_with_algorithm(
+                self.properties.algorithm,
+                column_key.key(),
+            )?)),
         }
     }
 }
