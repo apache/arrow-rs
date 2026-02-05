@@ -4576,36 +4576,48 @@ mod tests {
         assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
     }
 
-    /// Helper to create a test batch with the given number of rows.
-    /// Each row is 4 bytes (one `i32`).
-    fn create_test_batch(num_rows: usize) -> RecordBatch {
+    struct WriteBatchesShape {
+        num_batches: usize,
+        rows_per_batch: usize,
+        row_size: usize,
+    }
+
+    /// Helper function to write batches with the provided `WriteBatchesShape` into an `ArrowWriter`
+    fn write_batches(WriteBatchesShape {num_batches, rows_per_batch, row_size}: WriteBatchesShape, props: WriterProperties) -> ParquetRecordBatchReaderBuilder<File> {
         let schema = Arc::new(Schema::new(vec![Field::new(
-            "int",
-            ArrowDataType::Int32,
+            "str",
+            ArrowDataType::Utf8,
             false,
         )]));
-        let array = Int32Array::from_iter(0..num_rows as i32);
-        RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
+        let file = tempfile::tempfile().unwrap();
+        let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+
+        for batch_idx in 0..num_batches {
+            let strings: Vec<String> = (0..rows_per_batch)
+                .map(|i| format!("{:0>width$}", batch_idx * 10 + i, width = row_size))
+                .collect();
+            let array = StringArray::from(strings);
+            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.close().unwrap();
+        ParquetRecordBatchReaderBuilder::try_new(file).unwrap()
     }
 
     #[test]
     // When both limits are None, all data should go into a single row group
     fn test_row_group_limit_none_writes_single_row_group() {
-        let batch = create_test_batch(1000);
-
         let props = WriterProperties::builder()
             .set_max_row_group_row_count(None)
             .set_max_row_group_bytes(None)
             .build();
 
-        let file = tempfile::tempfile().unwrap();
-        let mut writer =
-            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props)).unwrap();
+        let builder = write_batches(WriteBatchesShape {
+            num_batches: 1,
+            rows_per_batch: 1000,
+            row_size: 4
+        }, props);
 
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         assert_eq!(
             &row_group_sizes(builder.metadata()),
             &[1000],
@@ -4616,21 +4628,17 @@ mod tests {
     #[test]
     // When only max_row_group_size is set, respect the row limit
     fn test_row_group_limit_rows_only() {
-        let batch = create_test_batch(1000);
-
         let props = WriterProperties::builder()
             .set_max_row_group_row_count(Some(300))
             .set_max_row_group_bytes(None)
             .build();
 
-        let file = tempfile::tempfile().unwrap();
-        let mut writer =
-            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props)).unwrap();
+        let builder = write_batches(WriteBatchesShape {
+            num_batches: 1,
+            rows_per_batch: 1000,
+            row_size: 4
+        }, props);
 
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         assert_eq!(
             &row_group_sizes(builder.metadata()),
             &[300, 300, 300, 100],
@@ -4641,38 +4649,18 @@ mod tests {
     #[test]
     // When only max_row_group_bytes is set, respect the byte limit
     fn test_row_group_limit_bytes_only() {
-        // Create batches with string data for more predictable byte sizes
-        // Write in multiple small batches so byte-based splitting can work
-        // (first batch establishes the avg row size, subsequent batches are split)
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "str",
-            ArrowDataType::Utf8,
-            false,
-        )]));
-
         let props = WriterProperties::builder()
             .set_max_row_group_row_count(None)
             // Set byte limit to approximately fit ~30 rows worth of data (~100 bytes each)
             .set_max_row_group_bytes(Some(3500))
             .build();
 
-        let file = tempfile::tempfile().unwrap();
-        let mut writer =
-            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+        let builder = write_batches(WriteBatchesShape {
+            num_batches: 10,
+            rows_per_batch: 10,
+            row_size: 100
+        }, props);
 
-        // Write 10 batches of 10 rows each (100 rows total)
-        // Each string is ~100 bytes
-        for batch_idx in 0..10 {
-            let strings: Vec<String> = (0..10)
-                .map(|i| format!("{:0>100}", batch_idx * 10 + i))
-                .collect();
-            let array = StringArray::from(strings);
-            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
-            writer.write(&batch).unwrap();
-        }
-        writer.close().unwrap();
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let sizes = row_group_sizes(builder.metadata());
 
         assert!(
@@ -4687,21 +4675,17 @@ mod tests {
     #[test]
     // When both limits are set, the row limit triggers first
     fn test_row_group_limit_both_row_wins() {
-        let batch = create_test_batch(1000);
-
         let props = WriterProperties::builder()
             .set_max_row_group_row_count(Some(200)) // Will trigger at 200 rows
             .set_max_row_group_bytes(Some(1024 * 1024)) // 1MB - won't trigger for small int data
             .build();
 
-        let file = tempfile::tempfile().unwrap();
-        let mut writer =
-            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props)).unwrap();
+        let builder = write_batches(WriteBatchesShape {
+            num_batches: 1,
+            row_size: 4,
+            rows_per_batch: 1000
+        }, props);
 
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         assert_eq!(
             &row_group_sizes(builder.metadata()),
             &[200, 200, 200, 200, 200],
@@ -4712,35 +4696,17 @@ mod tests {
     #[test]
     // When both limits are set, the byte limit triggers first
     fn test_row_group_limit_both_bytes_wins() {
-        // Write in multiple small batches so byte-based splitting can work
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "str",
-            ArrowDataType::Utf8,
-            false,
-        )]));
-
         let props = WriterProperties::builder()
             .set_max_row_group_row_count(Some(1000)) // Won't trigger for 100 rows
             .set_max_row_group_bytes(Some(3500)) // Will trigger at ~30-35 rows
             .build();
 
-        let file = tempfile::tempfile().unwrap();
-        let mut writer =
-            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+        let builder = write_batches(WriteBatchesShape {
+            num_batches: 10,
+            rows_per_batch: 10,
+            row_size: 100
+        }, props);
 
-        // Write 10 batches of 10 rows each (100 rows total)
-        // Each string is ~100 bytes
-        for batch_idx in 0..10 {
-            let strings: Vec<String> = (0..10)
-                .map(|i| format!("{:0>100}", batch_idx * 10 + i))
-                .collect();
-            let array = StringArray::from(strings);
-            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
-            writer.write(&batch).unwrap();
-        }
-        writer.close().unwrap();
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let sizes = row_group_sizes(builder.metadata());
 
         assert!(
