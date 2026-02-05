@@ -49,8 +49,8 @@ fn bit_length_impl<P: ArrowPrimitiveType>(
 /// For list array, length is the number of elements in each list.
 /// For string array and binary array, length is the number of bytes of each value.
 ///
-/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray/StringViewArray, BinaryArray/LargeBinaryArray, and FixedSizeListArray,
-///   or DictionaryArray with above Arrays as values
+/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray/StringViewArray, BinaryArray/LargeBinaryArray, FixedSizeListArray,
+///   and ListViewArray/LargeListViewArray, or DictionaryArray with above Arrays as values
 /// * length of null is null.
 pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     if let Some(d) = array.as_any_dictionary_opt() {
@@ -66,6 +66,20 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::LargeList(_) => {
             let list = array.as_list::<i64>();
             Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
+        }
+        DataType::ListView(_) => {
+            let list = array.as_list_view::<i32>();
+            Ok(Arc::new(Int32Array::new(
+                list.sizes().clone(),
+                list.nulls().cloned(),
+            )))
+        }
+        DataType::LargeListView(_) => {
+            let list = array.as_list_view::<i64>();
+            Ok(Arc::new(Int64Array::new(
+                list.sizes().clone(),
+                list.nulls().cloned(),
+            )))
         }
         DataType::Utf8 => {
             let list = array.as_string::<i32>();
@@ -170,7 +184,7 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_buffer::Buffer;
+    use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ArrayData;
     use arrow_schema::Field;
 
@@ -396,6 +410,69 @@ mod tests {
         ];
         let result: Vec<Option<i64>> = vec![Some(0), None, Some(3), Some(1)];
         length_list_helper!(i64, Int64Array, Float32Type, value, result)
+    }
+
+    #[test]
+    fn length_test_list_view() {
+        // Create a ListViewArray with values [0, 1, 2], [3, 4, 5], [6, 7]
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        let offsets = ScalarBuffer::from(vec![0i32, 3, 6]);
+        let sizes = ScalarBuffer::from(vec![3i32, 3, 2]);
+        let list_array = ListViewArray::new(field, offsets, sizes, Arc::new(values), None);
+
+        let result = length(&list_array).unwrap();
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected: Int32Array = vec![3, 3, 2].into();
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn length_test_large_list_view() {
+        // Create a LargeListViewArray with values [0, 1, 2], [3, 4, 5], [6, 7]
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        let offsets = ScalarBuffer::from(vec![0i64, 3, 6]);
+        let sizes = ScalarBuffer::from(vec![3i64, 3, 2]);
+        let list_array = LargeListViewArray::new(field, offsets, sizes, Arc::new(values), None);
+
+        let result = length(&list_array).unwrap();
+        let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+        let expected: Int64Array = vec![3i64, 3, 2].into();
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn length_null_list_view() {
+        // Create a ListViewArray with nulls: [], null, [1, 2, 3, 4], [0]
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = Int32Array::from(vec![1, 2, 3, 4, 0]);
+        let offsets = ScalarBuffer::from(vec![0i32, 0, 0, 4]);
+        let sizes = ScalarBuffer::from(vec![0i32, 0, 4, 1]);
+        let nulls = NullBuffer::from(vec![true, false, true, true]);
+        let list_array = ListViewArray::new(field, offsets, sizes, Arc::new(values), Some(nulls));
+
+        let result = length(&list_array).unwrap();
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected: Int32Array = vec![Some(0), None, Some(4), Some(1)].into();
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn length_null_large_list_view() {
+        // Create a LargeListViewArray with nulls: [], null, [1.0, 2.0, 3.0], [0.1]
+        let field = Arc::new(Field::new_list_field(DataType::Float32, true));
+        let values = Float32Array::from(vec![1.0, 2.0, 3.0, 0.1]);
+        let offsets = ScalarBuffer::from(vec![0i64, 0, 0, 3]);
+        let sizes = ScalarBuffer::from(vec![0i64, 0, 3, 1]);
+        let nulls = NullBuffer::from(vec![true, false, true, true]);
+        let list_array =
+            LargeListViewArray::new(field, offsets, sizes, Arc::new(values), Some(nulls));
+
+        let result = length(&list_array).unwrap();
+        let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+        let expected: Int64Array = vec![Some(0i64), None, Some(3), Some(1)].into();
+        assert_eq!(&expected, result);
     }
 
     /// Tests that length is not valid for u64.
