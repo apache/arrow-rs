@@ -17,9 +17,8 @@
 
 use crate::arrow::array_reader::{ArrayReader, ListArrayReader};
 use crate::errors::Result;
-use arrow_array::{
-    Array, ArrayRef, GenericListArray, GenericListViewArray, OffsetSizeTrait, new_empty_array,
-};
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, ArrayRef, GenericListViewArray, OffsetSizeTrait, new_empty_array};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
@@ -76,10 +75,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListViewArrayReader<OffsetSize
         }
 
         // Convert ListArray to ListViewArray
-        let list_array = array
-            .as_any()
-            .downcast_ref::<GenericListArray<OffsetSize>>()
-            .expect("ListViewArrayReader: inner reader must return GenericListArray");
+        let list_array = array.as_list::<OffsetSize>();
 
         let list_view_array =
             Arc::new(GenericListViewArray::<OffsetSize>::from(list_array.clone()));

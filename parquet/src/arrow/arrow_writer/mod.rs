@@ -1787,6 +1787,29 @@ mod tests {
     }
 
     #[test]
+    fn arrow_writer_list_view_out_of_order() {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::ListView(list_field.clone()),
+            false,
+        )]);
+
+        // [[1], [2, 3], [], [7, 8, 9, 10], [4, 5, 6]] - out of order offsets
+        let a = ListViewArray::new(
+            list_field,
+            vec![0, 1, 0, 6, 3].into(),
+            vec![1, 2, 0, 4, 3].into(),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+            None,
+        );
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        roundtrip(batch, None);
+    }
+
+    #[test]
     fn arrow_writer_large_list_view() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
