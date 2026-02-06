@@ -190,9 +190,14 @@ impl BooleanBuffer {
         F: FnMut(u64) -> u64,
     {
         let end = offset_in_bits + len_in_bits;
+        // Align start and end to 64 bit (8 byte) boundaries if possible to allow using the
+        // optimized code path as much as possible.
         let aligned_offset = offset_in_bits & !63;
+        let aligned_end_bytes = bit_util::ceil(end, 64) * 8;
+        let src_len = src.as_ref().len();
+        let slice_end = aligned_end_bytes.min(src_len);
 
-        let aligned_start = &src.as_ref()[aligned_offset / 8..bit_util::ceil(end, 8)];
+        let aligned_start = &src.as_ref()[aligned_offset / 8..slice_end];
 
         let (prefix, aligned_u64s, suffix) = unsafe { aligned_start.as_ref().align_to::<u64>() };
         match (prefix, suffix) {
