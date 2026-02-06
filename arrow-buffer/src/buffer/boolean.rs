@@ -190,14 +190,16 @@ impl BooleanBuffer {
         F: FnMut(u64) -> u64,
     {
         let end = offset_in_bits + len_in_bits;
-        let aligned_start = &src.as_ref()[offset_in_bits / 64..bit_util::ceil(end, 8)];
+        let aligned_offset = offset_in_bits & !63;
+
+        let aligned_start = &src.as_ref()[aligned_offset / 8..bit_util::ceil(end, 8)];
 
         let (prefix, aligned_u64s, suffix) = unsafe { aligned_start.as_ref().align_to::<u64>() };
         match (prefix, suffix) {
             ([], []) => {
                 // the buffer is word (64 bit) aligned, so use optimized Vec code.
                 let result_u64s: Vec<u64> = aligned_u64s.iter().map(|l| op(*l)).collect();
-                return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 8, len_in_bits);
+                return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 64, len_in_bits);
             }
             ([], suffix) => {
                 let suffix = read_u64(suffix);
