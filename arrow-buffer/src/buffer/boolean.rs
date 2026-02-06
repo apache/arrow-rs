@@ -18,10 +18,7 @@
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::bit_util::read_u64;
-use crate::{
-    BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
-    buffer_bin_xor,
-};
+use crate::{BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_or, buffer_bin_xor};
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
@@ -192,25 +189,33 @@ impl BooleanBuffer {
     where
         F: FnMut(u64) -> u64,
     {
-        let aligned_start = &src.as_ref()[offset_in_bits / 8..];
+        let end = offset_in_bits + len_in_bits;
+        let aligned_start = &src.as_ref()[offset_in_bits / 8..bit_util::ceil(end, 8)];
 
-        if offset_in_bits & 0x7 == 0 {
-            let (prefix, aligned_u64s, suffix) =
-                unsafe { aligned_start.as_ref().align_to::<u64>() };
-            if prefix.is_empty() && suffix.is_empty() {
+        let (prefix, aligned_u64s, suffix) = unsafe { aligned_start.as_ref().align_to::<u64>() };
+        match (prefix, suffix) {
+            ([], []) => {
                 // the buffer is word (64 bit) aligned, so use optimized Vec code.
                 let result_u64s: Vec<u64> = aligned_u64s.iter().map(|l| op(*l)).collect();
-                let buffer = Buffer::from(result_u64s);
-                return BooleanBuffer::new(buffer, 0, len_in_bits);
+                return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 8, len_in_bits);
             }
+            ([], suffix) => {
+                // the buffer is only aligned at the end, so we can still use optimized Vec code for the aligned part
+                let suffix = read_u64(suffix);
+                let result_u64s: Vec<u64> = aligned_u64s
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(suffix))
+                    .map(|l| op(l))
+                    .collect();
+                return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 8, len_in_bits);
+            }
+            _ => {}
         }
-        let end = offset_in_bits + len_in_bits;
-
-        let aligned = &src.as_ref()[offset_in_bits / 8..bit_util::ceil(end, 8)];
 
         // align to byte boundaries
         // Use unaligned code path, handle remainder bytes
-        let chunks = aligned.chunks_exact(8);
+        let chunks = aligned_start.chunks_exact(8);
         let remainder = chunks.remainder();
         let iter = chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
         let vec_u64s: Vec<u64> = if remainder.is_empty() {
@@ -483,17 +488,14 @@ impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
 
     fn bitand(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.bit_len, rhs.bit_len);
-        BooleanBuffer {
-            buffer: buffer_bin_and(
-                &self.buffer,
-                self.bit_offset,
-                &rhs.buffer,
-                rhs.bit_offset,
-                self.bit_len,
-            ),
-            bit_offset: 0,
-            bit_len: self.bit_len,
-        }
+        BooleanBuffer::from_bitwise_binary_op(
+            &self.buffer,
+            self.bit_offset,
+            &rhs.buffer,
+            rhs.bit_offset,
+            self.bit_len,
+            |a, b| a & b,
+        )
     }
 }
 
