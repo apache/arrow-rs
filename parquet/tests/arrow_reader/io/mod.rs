@@ -41,13 +41,21 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringViewArray};
 use bytes::Bytes;
+#[cfg(feature = "async")]
+use futures::FutureExt;
+#[cfg(feature = "async")]
+use futures::future::BoxFuture;
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter,
 };
+#[cfg(feature = "async")]
+use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
 use parquet::file::FOOTER_SIZE;
 use parquet::file::metadata::PageIndexPolicy;
+#[cfg(feature = "async")]
+use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::file::metadata::{FooterTail, ParquetMetaData, ParquetOffsetIndex};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
@@ -75,6 +83,62 @@ fn test_file() -> TestParquetFile {
 /// Note these tests use the PageIndex to reduce IO
 fn test_options() -> ArrowReaderOptions {
     ArrowReaderOptions::default().with_page_index_policy(PageIndexPolicy::from(true))
+}
+
+/// In-memory [`AsyncFileReader`] implementation for tests.
+#[cfg(feature = "async")]
+#[derive(Clone)]
+pub(crate) struct TestReader {
+    data: Bytes,
+    metadata: Option<Arc<ParquetMetaData>>,
+    requests: Arc<Mutex<Vec<Range<usize>>>>,
+}
+
+#[cfg(feature = "async")]
+impl TestReader {
+    pub(crate) fn new(data: Bytes) -> Self {
+        Self {
+            data,
+            metadata: Default::default(),
+            requests: Default::default(),
+        }
+    }
+
+    pub(crate) fn requests(&self) -> Arc<Mutex<Vec<Range<usize>>>> {
+        Arc::clone(&self.requests)
+    }
+}
+
+#[cfg(feature = "async")]
+impl AsyncFileReader for TestReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(range.start as usize..range.end as usize);
+        futures::future::ready(Ok(self
+            .data
+            .slice(range.start as usize..range.end as usize)))
+        .boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        let mut metadata_reader = ParquetMetaDataReader::new();
+
+        if let Some(options) = options {
+            metadata_reader = metadata_reader
+                .with_column_index_policy(options.column_index_policy())
+                .with_offset_index_policy(options.offset_index_policy());
+        }
+
+        self.metadata = Some(Arc::new(
+            metadata_reader.parse_and_finish(&self.data).unwrap(),
+        ));
+        futures::future::ready(Ok(self.metadata.clone().unwrap())).boxed()
+    }
 }
 
 /// Return a row filter that evaluates "b > 575" AND "b < 625"
