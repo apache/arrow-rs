@@ -193,7 +193,7 @@ where
         let mask = self
             .def_levels
             .as_mut()
-            .map(|levels| levels.consume_bitmask());
+            .and_then(|levels| levels.consume_bitmask());
 
         // While we always consume the bitmask here, we only want to return
         // the bitmask for nullable arrays. (Marking nulls on a non-nullable

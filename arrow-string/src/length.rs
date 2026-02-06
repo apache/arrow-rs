@@ -135,14 +135,6 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     }
 
     match array.data_type() {
-        DataType::List(_) => {
-            let list = array.as_list::<i32>();
-            Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
-        }
-        DataType::LargeList(_) => {
-            let list = array.as_list::<i64>();
-            Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
-        }
         DataType::Utf8 => {
             let list = array.as_string::<i32>();
             Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
