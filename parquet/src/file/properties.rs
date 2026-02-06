@@ -168,7 +168,6 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
-    zstd_window_log_override: Option<u32>,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -379,9 +378,12 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_COMPRESSION)
     }
 
-    /// Returns the optional zstd window log size.
-    pub(crate) fn zstd_window_log_override(&self) -> Option<u32> {
-        self.zstd_window_log_override
+    /// Returns the optional zstd window log override for a column.
+    pub(crate) fn zstd_window_log_override(&self, col: &ColumnPath) -> Option<u32> {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.zstd_window_log_override())
+            .or_else(|| self.default_column_properties.zstd_window_log_override())
     }
 
     /// Returns `true` if dictionary encoding is enabled for a column.
@@ -463,7 +465,6 @@ pub struct WriterPropertiesBuilder {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
-    zstd_window_log_override: Option<u32>,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -487,7 +488,6 @@ impl Default for WriterPropertiesBuilder {
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
-            zstd_window_log_override: None,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -513,7 +513,6 @@ impl WriterPropertiesBuilder {
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
-            zstd_window_log_override: self.zstd_window_log_override,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -751,11 +750,13 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Overrides the zstd window log size that would normally be derived from
-    /// the compression level (e.g. 27 = 128MB window).
+    /// Overrides the zstd window log size for all columns. The window log is
+    /// normally derived from the compression level by the zstd library
+    /// (e.g. 21 = 2MB at levels 3-8, up to 27 = 128MB at level 22).
     /// Only applies when using [`Compression::ZSTD`].
     pub fn set_zstd_window_log_override(mut self, value: u32) -> Self {
-        self.zstd_window_log_override = Some(value);
+        self.default_column_properties
+            .set_zstd_window_log_override(value);
         self
     }
 
@@ -890,6 +891,14 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Overrides the zstd window log size for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_zstd_window_log_override`].
+    pub fn set_column_zstd_window_log_override(mut self, col: ColumnPath, value: u32) -> Self {
+        self.get_mut_props(col).set_zstd_window_log_override(value);
+        self
+    }
+
     /// Sets compression codec for a specific column.
     ///
     /// Takes precedence over [`Self::set_compression`].
@@ -981,7 +990,6 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             column_index_truncate_length: props.column_index_truncate_length,
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
-            zstd_window_log_override: props.zstd_window_log_override,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }
@@ -1089,6 +1097,7 @@ struct ColumnProperties {
     write_page_header_statistics: Option<bool>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
+    zstd_window_log_override: Option<u32>,
 }
 
 impl ColumnProperties {
@@ -1111,6 +1120,11 @@ impl ColumnProperties {
     /// Sets compression codec for this column.
     fn set_compression(&mut self, value: Compression) {
         self.codec = Some(value);
+    }
+
+    /// Sets the zstd window log override for this column.
+    fn set_zstd_window_log_override(&mut self, value: u32) {
+        self.zstd_window_log_override = Some(value);
     }
 
     /// Sets whether dictionary encoding is enabled for this column.
@@ -1208,6 +1222,11 @@ impl ColumnProperties {
     /// Returns the bloom filter properties, or `None` if not enabled
     fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
         self.bloom_filter_properties.as_ref()
+    }
+
+    /// Returns the optional zstd window log override for this column.
+    fn zstd_window_log_override(&self) -> Option<u32> {
+        self.zstd_window_log_override
     }
 }
 

@@ -367,7 +367,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     ) -> Self {
         let codec = props.compression(descr.path());
         let codec_options = CodecOptionsBuilder::default()
-            .set_zstd_window_log_override(props.zstd_window_log_override())
+            .set_zstd_window_log_override(props.zstd_window_log_override(descr.path()))
             .build();
         let compressor = create_codec(codec, &codec_options).unwrap();
         let encoder = E::try_new(&descr, props.as_ref()).unwrap();
