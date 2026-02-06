@@ -1954,7 +1954,7 @@ mod tests {
             .len(3)
             .build()
             .unwrap();
-        let array9: ArrayRef = Arc::new(StructArray::from(array9));
+        let array9 = StructArray::from(array9);
 
         let array10_input = vec![Some(1_i32), None, None];
         let mut array10_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
@@ -2995,7 +2995,7 @@ mod tests {
             )
         };
         expect_ipc_validation_error(
-            Arc::new(invalid_struct_arr),
+            invalid_struct_arr,
             "Invalid argument error: Invalid UTF8 sequence at string index 3 (3..18): invalid utf-8 sequence of 1 bytes from index 11",
         );
     }

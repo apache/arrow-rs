@@ -592,7 +592,7 @@ fn get_all_types() -> Vec<DataType> {
 fn test_timestamp_cast_utf8() {
     let array: PrimitiveArray<TimestampMicrosecondType> =
         vec![Some(37800000000), None, Some(86339000000)].into();
-    let out = cast(&(Arc::new(array) as ArrayRef), &DataType::Utf8).unwrap();
+    let out = cast(&array, &DataType::Utf8).unwrap();
 
     let expected = StringArray::from(vec![
         Some("1970-01-01T10:30:00"),
@@ -608,7 +608,7 @@ fn test_timestamp_cast_utf8() {
     let array: PrimitiveArray<TimestampMicrosecondType> =
         vec![Some(37800000000), None, Some(86339000000)].into();
     let array = array.with_timezone("Australia/Sydney".to_string());
-    let out = cast(&(Arc::new(array) as ArrayRef), &DataType::Utf8).unwrap();
+    let out = cast(&array, &DataType::Utf8).unwrap();
 
     let expected = StringArray::from(vec![
         Some("1970-01-01T20:30:00+10:00"),

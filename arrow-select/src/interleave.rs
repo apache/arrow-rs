@@ -37,7 +37,7 @@ macro_rules! primitive_helper {
 
 macro_rules! dict_helper {
     ($t:ty, $values:expr, $indices:expr) => {
-        Ok(Arc::new(interleave_dictionaries::<$t>($values, $indices)?) as _)
+        interleave_dictionaries::<$t>($values, $indices)
     };
 }
 

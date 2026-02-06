@@ -8963,8 +8963,6 @@ mod tests {
         ];
 
         for (array, expected) in cases {
-            let array = Arc::new(array) as ArrayRef;
-
             assert!(
                 can_cast_types(array.data_type(), expected.data_type()),
                 "can_cast_types claims we cannot cast {:?} to {:?}",
@@ -13288,8 +13286,7 @@ mod tests {
         for values in values_arrays {
             let keys =
                 Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
-            let string_dict_array =
-                DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+            let string_dict_array = DictionaryArray::<Int8Type>::try_new(keys, values).unwrap();
 
             let casted = cast(&string_dict_array, &DataType::BinaryView).unwrap();
             assert_eq!(casted.as_ref(), &expected);
@@ -13316,8 +13313,7 @@ mod tests {
         for values in values_arrays {
             let keys =
                 Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
-            let string_dict_array =
-                DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+            let string_dict_array = DictionaryArray::<Int8Type>::try_new(keys, values).unwrap();
 
             let casted = cast(&string_dict_array, &DataType::Utf8View).unwrap();
             assert_eq!(casted.as_ref(), &expected);

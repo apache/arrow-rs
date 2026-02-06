@@ -39,7 +39,7 @@ use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 /// The current row group being read and the read plan
 #[derive(Debug)]
@@ -329,7 +329,7 @@ impl RowGroupReaderBuilder {
 
                 let cache_info = CacheInfo::new(
                     cache_projection,
-                    Arc::new(Mutex::new(RowGroupCache::new(
+                    Arc::new(RwLock::new(RowGroupCache::new(
                         self.batch_size,
                         self.max_predicate_cache_size,
                     ))),
