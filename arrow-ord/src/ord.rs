@@ -24,6 +24,28 @@ use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_schema::{ArrowError, DataType, SortOptions};
 use std::{cmp::Ordering, collections::HashMap};
 
+fn compare_run_end_encoded<R: RunEndIndexType>(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let left = left.as_any().downcast_ref::<RunArray<R>>().unwrap();
+    let right = right.as_any().downcast_ref::<RunArray<R>>().unwrap();
+
+    let c_opts = child_opts(opts);
+    let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
+
+    let l_run_ends = left.run_ends().clone();
+    let r_run_ends = right.run_ends().clone();
+
+    let f = compare(left, right, opts, move |i, j| {
+        let l_physical = l_run_ends.get_physical_index(i);
+        let r_physical = r_run_ends.get_physical_index(j);
+        cmp(l_physical, r_physical)
+    });
+    Ok(f)
+}
+
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
 
@@ -479,6 +501,28 @@ pub fn make_comparator(
     opts: SortOptions,
 ) -> Result<DynComparator, ArrowError> {
     use arrow_schema::DataType::*;
+
+    // Handle RunEndEncoded arrays first
+    if let (RunEndEncoded(l_run_ends, _), RunEndEncoded(r_run_ends, _)) =
+        (left.data_type(), right.data_type())
+    {
+        return match (l_run_ends.data_type(), r_run_ends.data_type()) {
+            (DataType::Int16, DataType::Int16) => {
+                compare_run_end_encoded::<Int16Type>(left, right, opts)
+            }
+            (DataType::Int32, DataType::Int32) => {
+                compare_run_end_encoded::<Int32Type>(left, right, opts)
+            }
+            (DataType::Int64, DataType::Int64) => {
+                compare_run_end_encoded::<Int64Type>(left, right, opts)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(format!(
+                "Cannot compare RunEndEncoded arrays with different run ends types: left={:?}, right={:?}",
+                l_run_ends.data_type(),
+                r_run_ends.data_type()
+            ))),
+        };
+    }
 
     macro_rules! primitive_helper {
         ($t:ty, $left:expr, $right:expr, $nulls_first:expr) => {
@@ -1689,5 +1733,126 @@ mod tests {
         assert_eq!(cmp(0, 0), Ordering::Equal);
         assert_eq!(cmp(0, 1), Ordering::Equal);
         assert_eq!(cmp(2, 0), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_run_end_encoded_int32() {
+        // Create RunEndEncoded arrays:
+        // array1: [1, 1, 2, 2, 2, 3]
+        // run_ends1: [2, 5, 6], values1: [1, 2, 3]
+        let run_ends1 = Int32Array::from(vec![2, 5, 6]);
+        let values1 = Int32Array::from(vec![1, 2, 3]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        // array2: [1, 2, 2, 3, 3, 3]
+        // run_ends2: [1, 3, 6], values2: [1, 2, 3]
+        let run_ends2 = Int32Array::from(vec![1, 3, 6]);
+        let values2 = Int32Array::from(vec![1, 2, 3]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
+
+        // array1[0] = 1, array2[0] = 1
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        // array1[0] = 1, array2[1] = 2
+        assert_eq!(cmp(0, 1), Ordering::Less);
+        // array1[2] = 2, array2[1] = 2
+        assert_eq!(cmp(2, 1), Ordering::Equal);
+        // array1[5] = 3, array2[5] = 3
+        assert_eq!(cmp(5, 5), Ordering::Equal);
+        // array1[1] = 1, array2[2] = 2
+        assert_eq!(cmp(1, 2), Ordering::Less);
+        // array1[4] = 2, array2[4] = 3
+        assert_eq!(cmp(4, 4), Ordering::Less);
+    }
+
+    #[test]
+    fn test_run_end_encoded_with_nulls() {
+        // Create RunEndEncoded arrays with nulls:
+        // array1: [1, 1, null, null, 2]
+        // run_ends1: [2, 4, 5], values1: [1, null, 2]
+        let run_ends1 = Int32Array::from(vec![2, 4, 5]);
+        let values1 = Int32Array::from(vec![Some(1), None, Some(2)]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        // array2: [null, 1, 1, 2, null]
+        // run_ends2: [1, 3, 4, 5], values2: [null, 1, 2, null]
+        let run_ends2 = Int32Array::from(vec![1, 3, 4, 5]);
+        let values2 = Int32Array::from(vec![None, Some(1), Some(2), None]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let opts = SortOptions::default();
+        let cmp = make_comparator(&array1, &array2, opts).unwrap();
+
+        // array1[0] = 1, array2[1] = 1
+        assert_eq!(cmp(0, 1), Ordering::Equal);
+        // array1[2] = null, array2[0] = null
+        assert_eq!(cmp(2, 0), Ordering::Equal);
+        // array1[0] = 1, array2[0] = null (nulls first by default)
+        assert_eq!(cmp(0, 0), Ordering::Greater);
+        // array1[2] = null, array2[1] = 1
+        assert_eq!(cmp(2, 1), Ordering::Less);
+    }
+
+    #[test]
+    fn test_run_end_encoded_int16() {
+        // Test with Int16 run ends
+        let run_ends1 = Int16Array::from(vec![3_i16, 5, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int16Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int16Array::from(vec![2_i16, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "c"]);
+        let array2 = RunArray::<Int16Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
+
+        // array1: [a, a, a, b, b, c]
+        // array2: [a, a, b, b, c, c]
+        assert_eq!(cmp(0, 0), Ordering::Equal); // a vs a
+        assert_eq!(cmp(2, 2), Ordering::Less); // a vs b
+        assert_eq!(cmp(3, 2), Ordering::Equal); // b vs b
+        assert_eq!(cmp(5, 4), Ordering::Equal); // c vs c
+    }
+
+    #[test]
+    fn test_run_end_encoded_int64() {
+        // Test with Int64 run ends
+        let run_ends1 = Int64Array::from(vec![2_i64, 4, 6]);
+        let values1 = Int64Array::from(vec![10_i64, 20, 30]);
+        let array1 = RunArray::<Int64Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int64Array::from(vec![3_i64, 5, 6]);
+        let values2 = Int64Array::from(vec![10_i64, 20, 30]);
+        let array2 = RunArray::<Int64Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
+
+        // array1: [10, 10, 20, 20, 30, 30]
+        // array2: [10, 10, 10, 20, 20, 30]
+        assert_eq!(cmp(0, 0), Ordering::Equal); // 10 vs 10
+        assert_eq!(cmp(1, 2), Ordering::Equal); // 10 vs 10
+        assert_eq!(cmp(2, 3), Ordering::Equal); // 20 vs 20
+        assert_eq!(cmp(4, 4), Ordering::Greater); // 30 vs 20
+    }
+
+    #[test]
+    fn test_run_end_encoded_different_types() {
+        // Test with different run end types - should fail
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = Int32Array::from(vec![1, 2, 3]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int64Array::from(vec![2_i64, 4, 6]);
+        let values2 = Int64Array::from(vec![1_i64, 2, 3]);
+        let array2 = RunArray::<Int64Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let result = make_comparator(&array1, &array2, SortOptions::default());
+        assert!(result.is_err());
+        let err = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("Expected error"),
+        };
+        assert!(err.contains("Cannot compare RunEndEncoded arrays"));
     }
 }
