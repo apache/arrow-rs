@@ -206,7 +206,7 @@ impl BooleanBuffer {
                     .iter()
                     .cloned()
                     .chain(std::iter::once(suffix))
-                    .map(|l| op(l))
+                    .map(&mut op)
                     .collect();
                 return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 8, len_in_bits);
             }
