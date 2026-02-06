@@ -197,7 +197,10 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
         }
         CodecType::ZSTD(level) => {
             #[cfg(any(feature = "zstd", test))]
-            return Ok(Some(Box::new(ZSTDCodec::new(level, _options.zstd_window_log_override))));
+            return Ok(Some(Box::new(ZSTDCodec::new(
+                level,
+                _options.zstd_window_log_override,
+            ))));
             Err(ParquetError::General(
                 "Disabled feature at compile time: zstd".into(),
             ))
