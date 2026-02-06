@@ -296,6 +296,30 @@ impl IpcDataGenerator {
                     compression_context,
                 )?;
             }
+            DataType::ListView(field) => {
+                let list = column.as_list_view::<i32>();
+                self.encode_dictionaries(
+                    field,
+                    list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                    dict_id,
+                    compression_context,
+                )?;
+            }
+            DataType::LargeListView(field) => {
+                let list = column.as_list_view::<i64>();
+                self.encode_dictionaries(
+                    field,
+                    list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                    dict_id,
+                    compression_context,
+                )?;
+            }
             DataType::FixedSizeList(field, _) => {
                 let list = column
                     .as_any()
@@ -771,9 +795,10 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 }
 
 /// Controls how dictionaries are handled in Arrow IPC messages
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DictionaryHandling {
     /// Send the entire dictionary every time it is encountered (default)
+    #[default]
     Resend,
     /// Send only new dictionary values since the last batch (delta encoding)
     ///
@@ -781,12 +806,6 @@ pub enum DictionaryHandling {
     /// For subsequent batches, only values that are new (not previously sent)
     /// are transmitted with the `isDelta` flag set to true.
     Delta,
-}
-
-impl Default for DictionaryHandling {
-    fn default() -> Self {
-        Self::Resend
-    }
 }
 
 /// Describes what kind of update took place after a call to [`DictionaryTracker::insert`].
@@ -810,6 +829,7 @@ pub enum DictionaryUpdate {
 /// isn't allowed in the `FileWriter`.
 #[derive(Debug)]
 pub struct DictionaryTracker {
+    // NOTE: When adding fields, update the clear() method accordingly.
     written: HashMap<i64, ArrayData>,
     dict_ids: Vec<i64>,
     error_on_replacement: bool,
@@ -966,6 +986,16 @@ impl DictionaryTracker {
             },
             DictionaryComparison::Equal => unreachable!("Already checked equal case"),
         }
+    }
+
+    /// Clears the state of the dictionary tracker.
+    ///
+    /// This allows the dictionary tracker to be reused for a new IPC stream while avoiding the
+    /// allocation cost of creating a new instance. This method should not be called if
+    /// the dictionary tracker will be used to continue writing to an existing IPC stream.
+    pub fn clear(&mut self) {
+        self.dict_ids.clear();
+        self.written.clear();
     }
 }
 
@@ -1173,9 +1203,11 @@ impl<W: Write> FileWriter<W> {
         let mut fbb = FlatBufferBuilder::new();
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
-        let mut dictionary_tracker = DictionaryTracker::new(true);
+
+        // dictionaries are already written, so we can reset dictionary tracker to reuse for schema
+        self.dictionary_tracker.clear();
         let schema = IpcSchemaEncoder::new()
-            .with_dictionary_tracker(&mut dictionary_tracker)
+            .with_dictionary_tracker(&mut self.dictionary_tracker)
             .schema_to_fb_offset(&mut fbb, &self.schema);
         let fb_custom_metadata = (!self.custom_metadata.is_empty())
             .then(|| crate::convert::metadata_to_fb(&mut fbb, &self.custom_metadata));
@@ -1710,6 +1742,58 @@ fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Arra
     (offsets, child_data)
 }
 
+/// Returns the offsets, sizes, and child data buffers for a ListView array.
+///
+/// Unlike List arrays, ListView arrays store both offsets and sizes explicitly,
+/// and offsets can be non-monotonic. When slicing, we simply pass through the
+/// offsets and sizes without re-encoding, and do not slice the child data.
+fn get_list_view_array_buffers<O: OffsetSizeTrait>(
+    data: &ArrayData,
+) -> (Buffer, Buffer, ArrayData) {
+    if data.is_empty() {
+        return (
+            MutableBuffer::new(0).into(),
+            MutableBuffer::new(0).into(),
+            data.child_data()[0].slice(0, 0),
+        );
+    }
+
+    let offsets = &data.buffers()[0];
+    let sizes = &data.buffers()[1];
+
+    let element_size = std::mem::size_of::<O>();
+    let offsets_slice =
+        offsets.slice_with_length(data.offset() * element_size, data.len() * element_size);
+    let sizes_slice =
+        sizes.slice_with_length(data.offset() * element_size, data.len() * element_size);
+
+    let child_data = data.child_data()[0].clone();
+
+    (offsets_slice, sizes_slice, child_data)
+}
+
+/// Returns the sliced views [`Buffer`] for a BinaryView/Utf8View array.
+///
+/// The views buffer is sliced to only include views in the valid range based on
+/// the array's offset and length. This helps reduce the encoded size of sliced
+/// arrays
+///
+fn get_or_truncate_buffer(array_data: &ArrayData) -> &[u8] {
+    let buffer = &array_data.buffers()[0];
+    let layout = layout(array_data.data_type());
+    let spec = &layout.buffers[0];
+
+    let byte_width = get_buffer_element_width(spec);
+    let min_length = array_data.len() * byte_width;
+    if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
+        let byte_offset = array_data.offset() * byte_width;
+        let buffer_length = min(min_length, buffer.len() - byte_offset);
+        &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)]
+    } else {
+        buffer.as_slice()
+    }
+}
+
 /// Write array data to a vector of bytes
 #[allow(clippy::too_many_arguments)]
 fn write_array_data(
@@ -1777,7 +1861,18 @@ fn write_array_data(
         // Current implementation just serialize the raw arrays as given and not try to optimize anything.
         // If users wants to "compact" the arrays prior to sending them over IPC,
         // they should consider the gc API suggested in #5513
-        for buffer in array_data.buffers() {
+        let views = get_or_truncate_buffer(array_data);
+        offset = write_buffer(
+            views,
+            buffers,
+            arrow_data,
+            offset,
+            compression_codec,
+            compression_context,
+            write_options.alignment,
+        )?;
+
+        for buffer in array_data.buffers().iter().skip(1) {
             offset = write_buffer(
                 buffer.as_slice(),
                 buffers,
@@ -1811,21 +1906,9 @@ fn write_array_data(
         // Truncate values
         assert_eq!(array_data.buffers().len(), 1);
 
-        let buffer = &array_data.buffers()[0];
-        let layout = layout(data_type);
-        let spec = &layout.buffers[0];
-
-        let byte_width = get_buffer_element_width(spec);
-        let min_length = array_data.len() * byte_width;
-        let buffer_slice = if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
-            let byte_offset = array_data.offset() * byte_width;
-            let buffer_length = min(min_length, buffer.len() - byte_offset);
-            &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)]
-        } else {
-            buffer.as_slice()
-        };
+        let buffer = get_or_truncate_buffer(array_data);
         offset = write_buffer(
-            buffer_slice,
+            buffer,
             buffers,
             arrow_data,
             offset,
@@ -1880,6 +1963,52 @@ fn write_array_data(
             offset,
             sliced_child_data.len(),
             sliced_child_data.null_count(),
+            compression_codec,
+            compression_context,
+            write_options,
+        )?;
+        return Ok(offset);
+    } else if matches!(
+        data_type,
+        DataType::ListView(_) | DataType::LargeListView(_)
+    ) {
+        assert_eq!(array_data.buffers().len(), 2); // offsets + sizes
+        assert_eq!(array_data.child_data().len(), 1);
+
+        let (offsets, sizes, child_data) = match data_type {
+            DataType::ListView(_) => get_list_view_array_buffers::<i32>(array_data),
+            DataType::LargeListView(_) => get_list_view_array_buffers::<i64>(array_data),
+            _ => unreachable!(),
+        };
+
+        offset = write_buffer(
+            offsets.as_slice(),
+            buffers,
+            arrow_data,
+            offset,
+            compression_codec,
+            compression_context,
+            write_options.alignment,
+        )?;
+
+        offset = write_buffer(
+            sizes.as_slice(),
+            buffers,
+            arrow_data,
+            offset,
+            compression_codec,
+            compression_context,
+            write_options.alignment,
+        )?;
+
+        offset = write_array_data(
+            &child_data,
+            buffers,
+            arrow_data,
+            nodes,
+            offset,
+            child_data.len(),
+            child_data.null_count(),
             compression_codec,
             compression_context,
             write_options,
@@ -2025,8 +2154,11 @@ mod tests {
     use arrow_array::builder::Float32Builder;
     use arrow_array::builder::Int64Builder;
     use arrow_array::builder::MapBuilder;
+    use arrow_array::builder::StringViewBuilder;
     use arrow_array::builder::UnionBuilder;
-    use arrow_array::builder::{GenericListBuilder, ListBuilder, StringBuilder};
+    use arrow_array::builder::{
+        GenericListBuilder, GenericListViewBuilder, ListBuilder, StringBuilder,
+    };
     use arrow_array::builder::{PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
     use arrow_buffer::ScalarBuffer;
@@ -2920,6 +3052,40 @@ mod tests {
         ls.finish()
     }
 
+    fn generate_utf8view_list_data<O: OffsetSizeTrait>() -> GenericListArray<O> {
+        let mut ls = GenericListBuilder::<O, _>::new(StringViewBuilder::new());
+
+        for i in 0..100_000 {
+            for value in [
+                format!("value{}", i),
+                format!("value{}", i),
+                format!("value{}", i),
+            ] {
+                ls.values().append_value(&value);
+            }
+            ls.append(true)
+        }
+
+        ls.finish()
+    }
+
+    fn generate_string_list_data<O: OffsetSizeTrait>() -> GenericListArray<O> {
+        let mut ls = GenericListBuilder::<O, _>::new(StringBuilder::new());
+
+        for i in 0..100_000 {
+            for value in [
+                format!("value{}", i),
+                format!("value{}", i),
+                format!("value{}", i),
+            ] {
+                ls.values().append_value(&value);
+            }
+            ls.append(true)
+        }
+
+        ls.finish()
+    }
+
     fn generate_nested_list_data<O: OffsetSizeTrait>() -> GenericListArray<O> {
         let mut ls =
             GenericListBuilder::<O, _>::new(GenericListBuilder::<O, _>::new(UInt32Builder::new()));
@@ -3080,6 +3246,49 @@ mod tests {
     }
 
     #[test]
+    fn encode_large_lists_non_zero_offset() {
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
+        let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
+        let schema = Arc::new(Schema::new(vec![val_list_field]));
+
+        let values = Arc::new(generate_list_data::<i64>());
+
+        check_sliced_list_array(schema, values);
+    }
+
+    #[test]
+    fn encode_large_lists_string_non_zero_offset() {
+        let val_inner = Field::new_list_field(DataType::Utf8, true);
+        let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
+        let schema = Arc::new(Schema::new(vec![val_list_field]));
+
+        let values = Arc::new(generate_string_list_data::<i64>());
+
+        check_sliced_list_array(schema, values);
+    }
+
+    #[test]
+    fn encode_large_list_string_view_non_zero_offset() {
+        let val_inner = Field::new_list_field(DataType::Utf8View, true);
+        let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
+        let schema = Arc::new(Schema::new(vec![val_list_field]));
+
+        let values = Arc::new(generate_utf8view_list_data::<i64>());
+
+        check_sliced_list_array(schema, values);
+    }
+
+    fn check_sliced_list_array(schema: Arc<Schema>, values: Arc<GenericListArray<i64>>) {
+        for (offset, len) in [(999, 1), (0, 13), (47, 12), (values.len() - 13, 13)] {
+            let in_batch = RecordBatch::try_new(schema.clone(), vec![values.clone()])
+                .unwrap()
+                .slice(offset, len);
+            let out_batch = deserialize_file(serialize_file(&in_batch));
+            assert_eq!(in_batch, out_batch);
+        }
+    }
+
+    #[test]
     fn encode_nested_lists() {
         let inner_int = Arc::new(Field::new_list_field(DataType::UInt32, true));
         let inner_list_field = Arc::new(Field::new_list_field(DataType::List(inner_int), true));
@@ -3116,6 +3325,453 @@ mod tests {
 
         let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
         roundtrip_ensure_sliced_smaller(in_batch, 1000);
+    }
+
+    fn generate_list_view_data<O: OffsetSizeTrait>() -> GenericListViewArray<O> {
+        let mut builder = GenericListViewBuilder::<O, _>::new(UInt32Builder::new());
+
+        for i in 0u32..100_000 {
+            if i.is_multiple_of(10_000) {
+                builder.append(false);
+                continue;
+            }
+            for value in [i, i, i] {
+                builder.values().append_value(value);
+            }
+            builder.append(true);
+        }
+
+        builder.finish()
+    }
+
+    #[test]
+    fn encode_list_view_arrays() {
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
+        let val_field = Field::new("val", DataType::ListView(Arc::new(val_inner)), true);
+        let schema = Arc::new(Schema::new(vec![val_field]));
+
+        let values = Arc::new(generate_list_view_data::<i32>());
+
+        let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+        let out_batch = deserialize_file(serialize_file(&in_batch));
+        assert_eq!(in_batch, out_batch);
+    }
+
+    #[test]
+    fn encode_large_list_view_arrays() {
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
+        let val_field = Field::new("val", DataType::LargeListView(Arc::new(val_inner)), true);
+        let schema = Arc::new(Schema::new(vec![val_field]));
+
+        let values = Arc::new(generate_list_view_data::<i64>());
+
+        let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+        let out_batch = deserialize_file(serialize_file(&in_batch));
+        assert_eq!(in_batch, out_batch);
+    }
+
+    #[test]
+    fn check_sliced_list_view_array() {
+        let inner = Field::new_list_field(DataType::UInt32, true);
+        let field = Field::new("val", DataType::ListView(Arc::new(inner)), true);
+        let schema = Arc::new(Schema::new(vec![field]));
+        let values = Arc::new(generate_list_view_data::<i32>());
+
+        for (offset, len) in [(999, 1), (0, 13), (47, 12), (values.len() - 13, 13)] {
+            let in_batch = RecordBatch::try_new(schema.clone(), vec![values.clone()])
+                .unwrap()
+                .slice(offset, len);
+            let out_batch = deserialize_file(serialize_file(&in_batch));
+            assert_eq!(in_batch, out_batch);
+        }
+    }
+
+    #[test]
+    fn check_sliced_large_list_view_array() {
+        let inner = Field::new_list_field(DataType::UInt32, true);
+        let field = Field::new("val", DataType::LargeListView(Arc::new(inner)), true);
+        let schema = Arc::new(Schema::new(vec![field]));
+        let values = Arc::new(generate_list_view_data::<i64>());
+
+        for (offset, len) in [(999, 1), (0, 13), (47, 12), (values.len() - 13, 13)] {
+            let in_batch = RecordBatch::try_new(schema.clone(), vec![values.clone()])
+                .unwrap()
+                .slice(offset, len);
+            let out_batch = deserialize_file(serialize_file(&in_batch));
+            assert_eq!(in_batch, out_batch);
+        }
+    }
+
+    fn generate_nested_list_view_data<O: OffsetSizeTrait>() -> GenericListViewArray<O> {
+        let inner_builder = UInt32Builder::new();
+        let middle_builder = GenericListViewBuilder::<O, _>::new(inner_builder);
+        let mut outer_builder = GenericListViewBuilder::<O, _>::new(middle_builder);
+
+        for i in 0u32..10_000 {
+            if i.is_multiple_of(1_000) {
+                outer_builder.append(false);
+                continue;
+            }
+
+            for _ in 0..3 {
+                for value in [i, i + 1, i + 2] {
+                    outer_builder.values().values().append_value(value);
+                }
+                outer_builder.values().append(true);
+            }
+            outer_builder.append(true);
+        }
+
+        outer_builder.finish()
+    }
+
+    #[test]
+    fn encode_nested_list_views() {
+        let inner_int = Arc::new(Field::new_list_field(DataType::UInt32, true));
+        let inner_list_field = Arc::new(Field::new_list_field(DataType::ListView(inner_int), true));
+        let list_field = Field::new("val", DataType::ListView(inner_list_field), true);
+        let schema = Arc::new(Schema::new(vec![list_field]));
+
+        let values = Arc::new(generate_nested_list_view_data::<i32>());
+
+        let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+        let out_batch = deserialize_file(serialize_file(&in_batch));
+        assert_eq!(in_batch, out_batch);
+    }
+
+    fn test_roundtrip_list_view_of_dict_impl<OffsetSize: OffsetSizeTrait, U: ArrowNativeType>(
+        list_data_type: DataType,
+        offsets: &[U; 5],
+        sizes: &[U; 4],
+    ) {
+        let values = StringArray::from(vec![Some("alpha"), None, Some("beta"), Some("gamma")]);
+        let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+        let dict_data = dict_array.to_data();
+
+        let value_offsets = Buffer::from_slice_ref(offsets);
+        let value_sizes = Buffer::from_slice_ref(sizes);
+
+        let list_data = ArrayData::builder(list_data_type)
+            .len(4)
+            .add_buffer(value_offsets)
+            .add_buffer(value_sizes)
+            .add_child_data(dict_data)
+            .build()
+            .unwrap();
+        let list_view_array = GenericListViewArray::<OffsetSize>::from(list_data);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f1",
+            list_view_array.data_type().clone(),
+            false,
+        )]));
+        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(list_view_array)]).unwrap();
+
+        let output_batch = deserialize_file(serialize_file(&input_batch));
+        assert_eq!(input_batch, output_batch);
+
+        let output_batch = deserialize_stream(serialize_stream(&input_batch));
+        assert_eq!(input_batch, output_batch);
+    }
+
+    #[test]
+    fn test_roundtrip_list_view_of_dict() {
+        #[allow(deprecated)]
+        let list_data_type = DataType::ListView(Arc::new(Field::new_dict(
+            "item",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+            1,
+            false,
+        )));
+        let offsets: &[i32; 5] = &[0, 2, 4, 4, 7];
+        let sizes: &[i32; 4] = &[2, 2, 0, 3];
+        test_roundtrip_list_view_of_dict_impl::<i32, i32>(list_data_type, offsets, sizes);
+    }
+
+    #[test]
+    fn test_roundtrip_large_list_view_of_dict() {
+        #[allow(deprecated)]
+        let list_data_type = DataType::LargeListView(Arc::new(Field::new_dict(
+            "item",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+            2,
+            false,
+        )));
+        let offsets: &[i64; 5] = &[0, 2, 4, 4, 7];
+        let sizes: &[i64; 4] = &[2, 2, 0, 3];
+        test_roundtrip_list_view_of_dict_impl::<i64, i64>(list_data_type, offsets, sizes);
+    }
+
+    #[test]
+    fn test_roundtrip_sliced_list_view_of_dict() {
+        #[allow(deprecated)]
+        let list_data_type = DataType::ListView(Arc::new(Field::new_dict(
+            "item",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+            3,
+            false,
+        )));
+
+        let values = StringArray::from(vec![Some("alpha"), None, Some("beta"), Some("gamma")]);
+        let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2, 1, 0, 3, 2, 1]);
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+        let dict_data = dict_array.to_data();
+
+        let offsets: &[i32; 7] = &[0, 2, 4, 4, 7, 9, 12];
+        let sizes: &[i32; 6] = &[2, 2, 0, 3, 2, 3];
+        let value_offsets = Buffer::from_slice_ref(offsets);
+        let value_sizes = Buffer::from_slice_ref(sizes);
+
+        let list_data = ArrayData::builder(list_data_type)
+            .len(6)
+            .add_buffer(value_offsets)
+            .add_buffer(value_sizes)
+            .add_child_data(dict_data)
+            .build()
+            .unwrap();
+        let list_view_array = GenericListViewArray::<i32>::from(list_data);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f1",
+            list_view_array.data_type().clone(),
+            false,
+        )]));
+        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(list_view_array)]).unwrap();
+
+        let sliced_batch = input_batch.slice(1, 4);
+
+        let output_batch = deserialize_file(serialize_file(&sliced_batch));
+        assert_eq!(sliced_batch, output_batch);
+
+        let output_batch = deserialize_stream(serialize_stream(&sliced_batch));
+        assert_eq!(sliced_batch, output_batch);
+    }
+
+    #[test]
+    fn test_roundtrip_dense_union_of_dict() {
+        let values = StringArray::from(vec![Some("alpha"), None, Some("beta"), Some("gamma")]);
+        let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+
+        #[allow(deprecated)]
+        let dict_field = Arc::new(Field::new_dict(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+            1,
+            false,
+        ));
+        let int_field = Arc::new(Field::new("int", DataType::Int32, false));
+        let union_fields = UnionFields::try_new(vec![0, 1], vec![dict_field, int_field]).unwrap();
+
+        let types = ScalarBuffer::from(vec![0i8, 0, 1, 0, 1, 0, 0]);
+        let offsets = ScalarBuffer::from(vec![0i32, 1, 0, 2, 1, 3, 4]);
+
+        let int_array = Int32Array::from(vec![100, 200]);
+
+        let union = UnionArray::try_new(
+            union_fields.clone(),
+            types,
+            Some(offsets),
+            vec![Arc::new(dict_array), Arc::new(int_array)],
+        )
+        .unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "union",
+            DataType::Union(union_fields, UnionMode::Dense),
+            false,
+        )]));
+        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
+
+        let output_batch = deserialize_file(serialize_file(&input_batch));
+        assert_eq!(input_batch, output_batch);
+
+        let output_batch = deserialize_stream(serialize_stream(&input_batch));
+        assert_eq!(input_batch, output_batch);
+    }
+
+    #[test]
+    fn test_roundtrip_sparse_union_of_dict() {
+        let values = StringArray::from(vec![Some("alpha"), None, Some("beta"), Some("gamma")]);
+        let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
+        let dict_array = DictionaryArray::new(keys, Arc::new(values));
+
+        #[allow(deprecated)]
+        let dict_field = Arc::new(Field::new_dict(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+            2,
+            false,
+        ));
+        let int_field = Arc::new(Field::new("int", DataType::Int32, false));
+        let union_fields = UnionFields::try_new(vec![0, 1], vec![dict_field, int_field]).unwrap();
+
+        let types = ScalarBuffer::from(vec![0i8, 0, 1, 0, 1, 0, 0]);
+
+        let int_array = Int32Array::from(vec![0, 0, 100, 0, 200, 0, 0]);
+
+        let union = UnionArray::try_new(
+            union_fields.clone(),
+            types,
+            None,
+            vec![Arc::new(dict_array), Arc::new(int_array)],
+        )
+        .unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "union",
+            DataType::Union(union_fields, UnionMode::Sparse),
+            false,
+        )]));
+        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
+
+        let output_batch = deserialize_file(serialize_file(&input_batch));
+        assert_eq!(input_batch, output_batch);
+
+        let output_batch = deserialize_stream(serialize_stream(&input_batch));
+        assert_eq!(input_batch, output_batch);
+    }
+
+    #[test]
+    fn test_roundtrip_map_with_dict_keys() {
+        // Building a map array is a bit involved. We first build a struct arary that has a key and
+        // value field and then use that to build the actual map array.
+        let key_values = StringArray::from(vec!["key_a", "key_b", "key_c"]);
+        let keys = Int32Array::from_iter_values([0, 1, 2, 0, 1, 0]);
+        let dict_keys = DictionaryArray::new(keys, Arc::new(key_values));
+
+        let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+
+        #[allow(deprecated)]
+        let entries_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new_dict(
+                        "key",
+                        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                        false,
+                        1,
+                        false,
+                    ),
+                    Field::new("value", DataType::Int32, true),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+
+        let entries = StructArray::from(vec![
+            (
+                Arc::new(Field::new(
+                    "key",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                    false,
+                )),
+                Arc::new(dict_keys) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("value", DataType::Int32, true)),
+                Arc::new(values) as ArrayRef,
+            ),
+        ]);
+
+        let offsets = Buffer::from_slice_ref([0i32, 2, 4, 6]);
+
+        let map_data = ArrayData::builder(DataType::Map(entries_field, false))
+            .len(3)
+            .add_buffer(offsets)
+            .add_child_data(entries.into_data())
+            .build()
+            .unwrap();
+        let map_array = MapArray::from(map_data);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "map",
+            map_array.data_type().clone(),
+            false,
+        )]));
+        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(map_array)]).unwrap();
+
+        let output_batch = deserialize_file(serialize_file(&input_batch));
+        assert_eq!(input_batch, output_batch);
+
+        let output_batch = deserialize_stream(serialize_stream(&input_batch));
+        assert_eq!(input_batch, output_batch);
+    }
+
+    #[test]
+    fn test_roundtrip_map_with_dict_values() {
+        // Building a map array is a bit involved. We first build a struct arary that has a key and
+        // value field and then use that to build the actual map array.
+        let keys = StringArray::from(vec!["a", "b", "c", "d", "e", "f"]);
+
+        let value_values = StringArray::from(vec!["val_x", "val_y", "val_z"]);
+        let value_keys = Int32Array::from_iter_values([0, 1, 2, 0, 1, 0]);
+        let dict_values = DictionaryArray::new(value_keys, Arc::new(value_values));
+
+        #[allow(deprecated)]
+        let entries_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new_dict(
+                        "value",
+                        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                        true,
+                        2,
+                        false,
+                    ),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+
+        let entries = StructArray::from(vec![
+            (
+                Arc::new(Field::new("key", DataType::Utf8, false)),
+                Arc::new(keys) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new(
+                    "value",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                    true,
+                )),
+                Arc::new(dict_values) as ArrayRef,
+            ),
+        ]);
+
+        let offsets = Buffer::from_slice_ref([0i32, 2, 4, 6]);
+
+        let map_data = ArrayData::builder(DataType::Map(entries_field, false))
+            .len(3)
+            .add_buffer(offsets)
+            .add_child_data(entries.into_data())
+            .build()
+            .unwrap();
+        let map_array = MapArray::from(map_data);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "map",
+            map_array.data_type().clone(),
+            false,
+        )]));
+        let input_batch = RecordBatch::try_new(schema, vec![Arc::new(map_array)]).unwrap();
+
+        let output_batch = deserialize_file(serialize_file(&input_batch));
+        assert_eq!(input_batch, output_batch);
+
+        let output_batch = deserialize_stream(serialize_stream(&input_batch));
+        assert_eq!(input_batch, output_batch);
     }
 
     #[test]
@@ -3530,5 +4186,74 @@ mod tests {
         // should be good enough.
         let all_passed = (0..20).all(|_| create_hash() == expected);
         assert!(all_passed);
+    }
+
+    #[test]
+    fn test_dictionary_tracker_reset() {
+        let data_gen = IpcDataGenerator::default();
+        let mut dictionary_tracker = DictionaryTracker::new(false);
+        let writer_options = IpcWriteOptions::default();
+        let mut compression_ctx = CompressionContext::default();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let mut write_single_batch_stream =
+            |batch: RecordBatch, dict_tracker: &mut DictionaryTracker| -> Vec<u8> {
+                let mut buffer = Vec::new();
+
+                // create a new IPC stream:
+                let stream_header = data_gen.schema_to_bytes_with_dictionary_tracker(
+                    &schema,
+                    dict_tracker,
+                    &writer_options,
+                );
+                _ = write_message(&mut buffer, stream_header, &writer_options).unwrap();
+
+                let (encoded_dicts, encoded_batch) = data_gen
+                    .encode(&batch, dict_tracker, &writer_options, &mut compression_ctx)
+                    .unwrap();
+                for encoded_dict in encoded_dicts {
+                    _ = write_message(&mut buffer, encoded_dict, &writer_options).unwrap();
+                }
+                _ = write_message(&mut buffer, encoded_batch, &writer_options).unwrap();
+
+                buffer
+            };
+
+        let batch1 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values([0]),
+                Arc::new(StringArray::from_iter_values(["a"])),
+            ))],
+        )
+        .unwrap();
+        let buffer = write_single_batch_stream(batch1.clone(), &mut dictionary_tracker);
+
+        // ensure we can read the stream back
+        let mut reader = StreamReader::try_new(Cursor::new(buffer), None).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+        assert_eq!(read_batch, batch1);
+
+        // reset the dictionary tracker so it can be used for next stream
+        dictionary_tracker.clear();
+
+        // now write a 2nd stream and ensure we can also read it:
+        let batch2 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values([0]),
+                Arc::new(StringArray::from_iter_values(["a"])),
+            ))],
+        )
+        .unwrap();
+        let buffer = write_single_batch_stream(batch2.clone(), &mut dictionary_tracker);
+        let mut reader = StreamReader::try_new(Cursor::new(buffer), None).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+        assert_eq!(read_batch, batch2);
     }
 }

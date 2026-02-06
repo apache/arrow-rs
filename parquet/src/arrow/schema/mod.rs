@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_ipc::writer;
-use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
 
 use crate::basic::{
     ConvertedType, LogicalType, Repetition, TimeUnit as ParquetTimeUnit, Type as PhysicalType,
@@ -35,14 +35,16 @@ use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 mod complex;
 mod extension;
 mod primitive;
+pub mod virtual_type;
 
 use super::PARQUET_FIELD_ID_META_KEY;
 use crate::arrow::ProjectionMask;
 use crate::arrow::schema::extension::{
-    has_extension_type, logical_type_for_fixed_size_binary, logical_type_for_string,
-    logical_type_for_struct, try_add_extension_type,
+    has_extension_type, logical_type_for_binary, logical_type_for_binary_view,
+    logical_type_for_fixed_size_binary, logical_type_for_string, logical_type_for_struct,
+    try_add_extension_type,
 };
-pub(crate) use complex::{ParquetField, ParquetFieldType};
+pub(crate) use complex::{ParquetField, ParquetFieldType, VirtualColumnType};
 
 /// Convert Parquet schema to Arrow schema including optional metadata
 ///
@@ -62,7 +64,7 @@ pub fn parquet_to_arrow_schema_by_columns(
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema> {
-    Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata)?.0)
+    Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata, &[])?.0)
 }
 
 /// Determines the Arrow Schema from a Parquet schema
@@ -74,6 +76,7 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     parquet_schema: &SchemaDescriptor,
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
+    virtual_columns: &[FieldRef],
 ) -> Result<(Schema, Option<ParquetField>)> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     let maybe_schema = metadata
@@ -89,7 +92,8 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     }
 
     let hint = maybe_schema.as_ref().map(|s| s.fields());
-    let field_levels = parquet_to_arrow_field_levels(parquet_schema, mask, hint)?;
+    let field_levels =
+        parquet_to_arrow_field_levels_with_virtual(parquet_schema, mask, hint, virtual_columns)?;
     let schema = Schema::new_with_metadata(field_levels.fields, metadata);
     Ok((schema, field_levels.levels))
 }
@@ -132,18 +136,123 @@ pub fn parquet_to_arrow_field_levels(
     mask: ProjectionMask,
     hint: Option<&Fields>,
 ) -> Result<FieldLevels> {
-    match complex::convert_schema(schema, mask, hint)? {
-        Some(field) => match &field.arrow_type {
-            DataType::Struct(fields) => Ok(FieldLevels {
-                fields: fields.clone(),
-                levels: Some(field),
-            }),
-            _ => unreachable!(),
-        },
-        None => Ok(FieldLevels {
-            fields: Fields::empty(),
-            levels: None,
+    parquet_to_arrow_field_levels_with_virtual(schema, mask, hint, &[])
+}
+
+/// Convert a parquet [`SchemaDescriptor`] to [`FieldLevels`] with support for virtual columns
+///
+/// Columns not included within [`ProjectionMask`] will be ignored.
+///
+/// The optional `hint` parameter is the desired Arrow schema. See the
+/// [`arrow`] module documentation for more information.
+///
+/// [`arrow`]: crate::arrow
+///
+/// # Arguments
+/// * `schema` - The Parquet schema descriptor
+/// * `mask` - Projection mask to select which columns to include
+/// * `hint` - Optional hint for Arrow field types to use instead of defaults
+/// * `virtual_columns` - Virtual columns to append to the schema (e.g., row numbers)
+///
+/// # Notes:
+/// Where a field type in `hint` is compatible with the corresponding parquet type in `schema`, it
+/// will be used, otherwise the default arrow type for the given parquet column type will be used.
+///
+/// Virtual columns are columns that don't exist in the Parquet file but are generated during reading.
+/// They must have extension type names starting with "arrow.virtual.".
+///
+/// This is to accommodate arrow types that cannot be round-tripped through parquet natively.
+/// Depending on the parquet writer, this can lead to a mismatch between a file's parquet schema
+/// and its embedded arrow schema. The parquet `schema` must be treated as authoritative in such
+/// an event. See [#1663](https://github.com/apache/arrow-rs/issues/1663) for more information
+///
+/// Note: this is a low-level API, most users will want to make use of the higher-level
+/// [`parquet_to_arrow_schema`] for decoding metadata from a parquet file.
+pub fn parquet_to_arrow_field_levels_with_virtual(
+    schema: &SchemaDescriptor,
+    mask: ProjectionMask,
+    hint: Option<&Fields>,
+    virtual_columns: &[FieldRef],
+) -> Result<FieldLevels> {
+    // Validate that all fields are virtual columns
+    for field in virtual_columns {
+        if !virtual_type::is_virtual_column(field) {
+            return Err(ParquetError::General(format!(
+                "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
+                field.name()
+            )));
+        }
+    }
+
+    // Convert the regular schema first
+    let mut parquet_field = match complex::convert_schema(schema, mask, hint)? {
+        Some(field) => field,
+        None if virtual_columns.is_empty() => {
+            return Ok(FieldLevels {
+                fields: Fields::empty(),
+                levels: None,
+            });
+        }
+        None => {
+            // No regular fields, but we have virtual columns - create empty root struct
+            ParquetField {
+                rep_level: 0,
+                def_level: 0,
+                nullable: false,
+                arrow_type: DataType::Struct(Fields::empty()),
+                field_type: ParquetFieldType::Group {
+                    children: Vec::new(),
+                },
+            }
+        }
+    };
+
+    // Append virtual columns if any
+    if !virtual_columns.is_empty() {
+        match &mut parquet_field.field_type {
+            ParquetFieldType::Group { children } => {
+                // Get the mutable fields from the struct type
+                let DataType::Struct(ref mut fields) = parquet_field.arrow_type else {
+                    unreachable!("Root field must be a struct");
+                };
+
+                // Convert to mutable Vec to append
+                let mut fields_vec: Vec<FieldRef> = fields.iter().cloned().collect();
+
+                // Append each virtual column
+                for virtual_column in virtual_columns {
+                    // Virtual columns can only be added at the root level
+                    assert_eq!(
+                        parquet_field.rep_level, 0,
+                        "Virtual columns can only be added at rep level 0"
+                    );
+                    assert_eq!(
+                        parquet_field.def_level, 0,
+                        "Virtual columns can only be added at def level 0"
+                    );
+
+                    fields_vec.push(virtual_column.clone());
+                    let virtual_parquet_field = complex::convert_virtual_field(
+                        virtual_column,
+                        parquet_field.rep_level,
+                        parquet_field.def_level,
+                    )?;
+                    children.push(virtual_parquet_field);
+                }
+
+                // Update the fields
+                parquet_field.arrow_type = DataType::Struct(Fields::from(fields_vec));
+            }
+            _ => unreachable!("Root field must be a group"),
+        }
+    }
+
+    match &parquet_field.arrow_type {
+        DataType::Struct(fields) => Ok(FieldLevels {
+            fields: fields.clone(),
+            levels: Some(parquet_field),
         }),
+        _ => unreachable!(),
     }
 }
 
@@ -604,6 +713,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
                 .with_repetition(repetition)
                 .with_id(id)
+                .with_logical_type(logical_type_for_binary(field))
                 .build()
         }
         DataType::FixedSizeBinary(length) => {
@@ -617,6 +727,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         DataType::BinaryView => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
             .with_repetition(repetition)
             .with_id(id)
+            .with_logical_type(logical_type_for_binary_view(field))
             .build(),
         DataType::Decimal32(precision, scale)
         | DataType::Decimal64(precision, scale)
@@ -1840,7 +1951,7 @@ mod tests {
                 // This is because the Arrow conversion always sets logical type,
                 // even if there wasn't originally one.
                 // This is not an issue, but is an inconvenience for this test.
-                match a.logical_type() {
+                match a.logical_type_ref() {
                     Some(_) => {
                         assert_eq!(a, b)
                     }
@@ -2216,8 +2327,8 @@ mod tests {
         let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
 
         assert_eq!(
-            parquet_schema.column(0).logical_type(),
-            Some(LogicalType::Uuid)
+            parquet_schema.column(0).logical_type_ref(),
+            Some(&LogicalType::Uuid)
         );
 
         let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
@@ -2237,8 +2348,8 @@ mod tests {
         let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
 
         assert_eq!(
-            parquet_schema.column(0).logical_type(),
-            Some(LogicalType::Json)
+            parquet_schema.column(0).logical_type_ref(),
+            Some(&LogicalType::Json)
         );
 
         let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
@@ -2248,5 +2359,33 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_parquet_to_arrow_field_levels_with_virtual_rejects_non_virtual() {
+        let message_type = "
+        message test_schema {
+            REQUIRED INT32 id;
+        }
+        ";
+        let parquet_schema = Arc::new(parse_message_type(message_type).unwrap());
+        let descriptor = SchemaDescriptor::new(parquet_schema);
+
+        // Try to pass a regular field (not a virtual column)
+        let regular_field = Arc::new(Field::new("regular_column", DataType::Int64, false));
+        let result = parquet_to_arrow_field_levels_with_virtual(
+            &descriptor,
+            ProjectionMask::all(),
+            None,
+            &[regular_field],
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is not a virtual column")
+        );
     }
 }

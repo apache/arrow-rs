@@ -27,6 +27,7 @@ use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
+use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::{FilePageIterator, FileReader};
 
 mod builder;
@@ -42,12 +43,15 @@ mod map_array;
 mod null_array;
 mod primitive_array;
 mod row_group_cache;
+mod row_group_index;
+mod row_number;
 mod struct_array;
 
 #[cfg(test)]
 mod test_util;
 
 // Note that this crate is public under the `experimental` feature flag.
+use crate::file::metadata::RowGroupMetaData;
 pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
@@ -139,16 +143,34 @@ pub trait RowGroups {
     /// Returns a [`PageIterator`] for all pages in the specified column chunk
     /// across all row groups in this collection.
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>>;
+
+    /// Returns an iterator over the row groups in this collection
+    ///
+    /// Note this may not include all row groups in [`Self::metadata`].
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_>;
+
+    /// Returns the parquet metadata
+    fn metadata(&self) -> &ParquetMetaData;
 }
 
 impl RowGroups for Arc<dyn FileReader> {
     fn num_rows(&self) -> usize {
-        self.metadata().file_metadata().num_rows() as usize
+        FileReader::metadata(self.as_ref())
+            .file_metadata()
+            .num_rows() as usize
     }
 
     fn column_chunks(&self, column_index: usize) -> Result<Box<dyn PageIterator>> {
         let iterator = FilePageIterator::new(column_index, Arc::clone(self))?;
         Ok(Box::new(iterator))
+    }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(FileReader::metadata(self.as_ref()).row_groups().iter())
+    }
+
+    fn metadata(&self) -> &ParquetMetaData {
+        FileReader::metadata(self.as_ref())
     }
 }
 

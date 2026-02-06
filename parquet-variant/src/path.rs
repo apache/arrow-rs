@@ -16,6 +16,8 @@
 // under the License.
 use std::{borrow::Cow, ops::Deref};
 
+use crate::utils::parse_path;
+
 /// Represents a qualified path to a potential subfield or index of a variant
 /// value.
 ///
@@ -53,6 +55,15 @@ use std::{borrow::Cow, ops::Deref};
 /// assert_eq!(path, path3);
 /// ```
 ///
+/// # Example: From Dot notation strings
+/// ```
+/// # use parquet_variant::{VariantPath, VariantPathElement};
+/// /// You can also convert strings directly into paths using dot notation
+/// let path = VariantPath::from("foo.bar.baz");
+/// let expected = VariantPath::from("foo").join("bar").join("baz");
+/// assert_eq!(path, expected);
+/// ```
+///
 /// # Example: Accessing Compound paths
 /// ```
 /// # use parquet_variant::{VariantPath, VariantPathElement};
@@ -87,6 +98,11 @@ impl<'a> VariantPath<'a> {
     pub fn push(&mut self, element: impl Into<VariantPathElement<'a>>) {
         self.0.push(element.into());
     }
+
+    /// Returns whether [`VariantPath`] has no path elements
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl<'a> From<Vec<VariantPathElement<'a>>> for VariantPath<'a> {
@@ -98,7 +114,7 @@ impl<'a> From<Vec<VariantPathElement<'a>>> for VariantPath<'a> {
 /// Create from &str with support for dot notation
 impl<'a> From<&'a str> for VariantPath<'a> {
     fn from(path: &'a str) -> Self {
-        VariantPath::new(path.split('.').map(Into::into).collect())
+        VariantPath::new(path.split(".").flat_map(parse_path).collect())
     }
 }
 
@@ -180,5 +196,60 @@ impl<'a> From<&'a String> for VariantPathElement<'a> {
 impl<'a> From<usize> for VariantPathElement<'a> {
     fn from(index: usize) -> Self {
         VariantPathElement::index(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_variant_path_empty() {
+        let path = VariantPath::from_iter([]);
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn test_variant_path_empty_str() {
+        let path = VariantPath::from("");
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn test_variant_path_non_empty() {
+        let p = VariantPathElement::from("a");
+        let path = VariantPath::from_iter([p]);
+        assert!(!path.is_empty());
+    }
+
+    #[test]
+    fn test_variant_path_dot_notation_with_array_index() {
+        let path = VariantPath::from("city.store.books[3].title");
+
+        let expected = VariantPath::from("city")
+            .join("store")
+            .join("books")
+            .join(3)
+            .join("title");
+
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn test_variant_path_dot_notation_with_only_array_index() {
+        let path = VariantPath::from("[3]");
+
+        let expected = VariantPath::from(3);
+
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn test_variant_path_dot_notation_with_starting_array_index() {
+        let path = VariantPath::from("[3].title");
+
+        let expected = VariantPath::from(3).join("title");
+
+        assert_eq!(path, expected);
     }
 }

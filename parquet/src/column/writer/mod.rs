@@ -868,8 +868,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             // So truncation of those types could lead to inaccurate min/max statistics
             Type::FIXED_LEN_BYTE_ARRAY
                 if !matches!(
-                    self.descr.logical_type(),
-                    Some(LogicalType::Decimal { .. }) | Some(LogicalType::Float16)
+                    self.descr.logical_type_ref(),
+                    Some(&LogicalType::Decimal { .. }) | Some(&LogicalType::Float16)
                 ) =>
             {
                 true
@@ -882,7 +882,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Returns `true` if this column's logical type is a UTF-8 string.
     fn is_utf8(&self) -> bool {
-        self.get_descriptor().logical_type() == Some(LogicalType::String)
+        self.get_descriptor().logical_type_ref() == Some(&LogicalType::String)
             || self.get_descriptor().converted_type() == ConvertedType::UTF8
     }
 
@@ -1385,7 +1385,7 @@ fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut 
 fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
     match T::PHYSICAL_TYPE {
         Type::FLOAT | Type::DOUBLE => val != val,
-        Type::FIXED_LEN_BYTE_ARRAY if descr.logical_type() == Some(LogicalType::Float16) => {
+        Type::FIXED_LEN_BYTE_ARRAY if descr.logical_type_ref() == Some(&LogicalType::Float16) => {
             let val = val.as_bytes();
             let val = f16::from_le_bytes([val[0], val[1]]);
             val.is_nan()
@@ -1421,7 +1421,7 @@ fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) 
         Type::INT32 | Type::INT64 => {
             if let Some(LogicalType::Integer {
                 is_signed: false, ..
-            }) = descr.logical_type()
+            }) = descr.logical_type_ref()
             {
                 // need to compare unsigned
                 return compare_greater_unsigned_int(a, b);
@@ -1438,13 +1438,13 @@ fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) 
             };
         }
         Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-            if let Some(LogicalType::Decimal { .. }) = descr.logical_type() {
+            if let Some(LogicalType::Decimal { .. }) = descr.logical_type_ref() {
                 return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
             }
             if let ConvertedType::DECIMAL = descr.converted_type() {
                 return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
             }
-            if let Some(LogicalType::Float16) = descr.logical_type() {
+            if let Some(LogicalType::Float16) = descr.logical_type_ref() {
                 return compare_greater_f16(a.as_bytes(), b.as_bytes());
             }
         }

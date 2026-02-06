@@ -393,7 +393,7 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
             ));
         }
         let mut rle_decoder = RleDecoder::new(bit_width);
-        rle_decoder.set_data(data.slice(1..));
+        rle_decoder.set_data(data.slice(1..))?;
         self.num_values = num_values;
         self.rle_decoder = Some(rle_decoder);
         Ok(())
@@ -473,7 +473,7 @@ impl<T: DataType> Decoder<T> for RleValueDecoder<T> {
 
         self.decoder = RleDecoder::new(1);
         self.decoder
-            .set_data(data.slice(I32_SIZE..I32_SIZE + data_size));
+            .set_data(data.slice(I32_SIZE..I32_SIZE + data_size))?;
         self.values_left = num_values;
         Ok(())
     }
@@ -680,6 +680,10 @@ where
             .ok_or_else(|| eof_err!("Not enough data to decode 'mini_blocks_per_block'"))?
             .try_into()
             .map_err(|_| general_err!("invalid 'mini_blocks_per_block'"))?;
+
+        if self.mini_blocks_per_block == 0 {
+            return Err(general_err!("cannot have zero miniblocks per block"));
+        }
 
         self.values_left = self
             .bit_reader
@@ -1004,7 +1008,8 @@ pub struct DeltaByteArrayDecoder<T: DataType> {
     suffix_decoder: Option<DeltaLengthByteArrayDecoder<ByteArrayType>>,
 
     // The last byte array, used to derive the current prefix
-    previous_value: Vec<u8>,
+    // Stored as Bytes to avoid clone allocation when creating output
+    previous_value: Bytes,
 
     // Number of values left
     num_values: usize,
@@ -1026,7 +1031,7 @@ impl<T: DataType> DeltaByteArrayDecoder<T> {
             prefix_lengths: vec![],
             current_idx: 0,
             suffix_decoder: None,
-            previous_value: vec![],
+            previous_value: Bytes::new(),
             num_values: 0,
             _phantom: PhantomData,
         }
@@ -1049,7 +1054,7 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                 self.suffix_decoder = Some(suffix_decoder);
                 self.num_values = num_prefixes;
                 self.current_idx = 0;
-                self.previous_value.clear();
+                self.previous_value = Bytes::new();
                 Ok(())
             }
             _ => Err(general_err!(
@@ -1077,14 +1082,14 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                     let prefix_len = self.prefix_lengths[self.current_idx] as usize;
 
                     // Concatenate prefix with suffix
-                    let mut result = Vec::new();
+                    let mut result = Vec::with_capacity(prefix_len + suffix.len());
                     result.extend_from_slice(&self.previous_value[0..prefix_len]);
                     result.extend_from_slice(suffix);
 
-                    let data = Bytes::from(result.clone());
-                    item.set_from_bytes(data);
+                    let data = Bytes::from(result);
+                    item.set_from_bytes(data.clone());
 
-                    self.previous_value = result;
+                    self.previous_value = data;
                     self.current_idx += 1;
                 }
 
@@ -1686,6 +1691,21 @@ mod tests {
             Int64Type::gen_vec(-1, 64),
         ];
         test_delta_bit_packed_decode::<Int64Type>(data);
+    }
+
+    #[test]
+    fn test_delta_bit_packed_zero_miniblocks() {
+        // It is invalid for mini_blocks_per_block to be 0
+        let data = vec![
+            128, 1, // block_size = 128
+            0, // mini_blocks_per_block = 0
+        ];
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        let err = decoder.set_data(data.into(), 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: cannot have zero miniblocks per block"
+        );
     }
 
     #[test]

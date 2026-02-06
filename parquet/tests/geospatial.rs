@@ -15,140 +15,145 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tests for Geometry and Geography logical types
-
-use parquet::{
-    basic::{EdgeInterpolationAlgorithm, LogicalType},
-    file::{
-        metadata::ParquetMetaData,
-        reader::{FileReader, SerializedFileReader},
-    },
-    geospatial::bounding_box::BoundingBox,
-};
-use serde_json::Value;
-use std::fs::File;
-
-fn read_metadata(geospatial_test_file: &str) -> ParquetMetaData {
-    let path = format!(
-        "{}/geospatial/{geospatial_test_file}",
-        arrow::util::test_util::parquet_test_data(),
-    );
-    let file = File::open(path).unwrap();
-    let reader = SerializedFileReader::try_from(file).unwrap();
-    reader.metadata().clone()
-}
-
-#[test]
-fn test_read_logical_type() {
-    // Some crs values are short strings
-    let expected_logical_type = [
-        ("crs-default.parquet", LogicalType::Geometry { crs: None }),
-        (
-            "crs-srid.parquet",
-            LogicalType::Geometry {
-                crs: Some("srid:5070".to_string()),
-            },
-        ),
-        (
-            "crs-projjson.parquet",
-            LogicalType::Geometry {
-                crs: Some("projjson:projjson_epsg_5070".to_string()),
-            },
-        ),
-        (
-            "crs-geography.parquet",
-            LogicalType::Geography {
-                crs: None,
-                algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
-            },
-        ),
-    ];
-
-    for (geospatial_file, expected_type) in expected_logical_type {
-        let metadata = read_metadata(geospatial_file);
-        let logical_type = metadata
-            .file_metadata()
-            .schema_descr()
-            .column(1)
-            .logical_type()
-            .unwrap();
-
-        assert_eq!(logical_type, expected_type);
-    }
-
-    // The crs value may also contain arbitrary values (in this case some JSON
-    // a bit too lengthy to type out)
-    let metadata = read_metadata("crs-arbitrary-value.parquet");
-    let logical_type = metadata
-        .file_metadata()
-        .schema_descr()
-        .column(1)
-        .logical_type()
-        .unwrap();
-
-    if let LogicalType::Geometry { crs } = logical_type {
-        let crs_parsed: Value = serde_json::from_str(&crs.unwrap()).unwrap();
-        assert_eq!(crs_parsed.get("id").unwrap().get("code").unwrap(), 5070);
-    } else {
-        panic!("Expected geometry type but got {logical_type:?}");
-    }
-}
-
-#[test]
-fn test_read_geospatial_statistics() {
-    let metadata = read_metadata("geospatial.parquet");
-
-    // geospatial.parquet schema:
-    //    optional binary field_id=-1 group (String);
-    //    optional binary field_id=-1 wkt (String);
-    //    optional binary field_id=-1 geometry (Geometry(crs=));
-    let fields = metadata.file_metadata().schema().get_fields();
-    let logical_type = fields[2].get_basic_info().logical_type().unwrap();
-    assert_eq!(logical_type, LogicalType::Geometry { crs: None });
-
-    let geo_statistics = metadata.row_group(0).column(2).geo_statistics();
-    assert!(geo_statistics.is_some());
-
-    let expected_bbox = BoundingBox::new(10.0, 40.0, 10.0, 40.0)
-        .with_zrange(30.0, 80.0)
-        .with_mrange(200.0, 1600.0);
-    let expected_geospatial_types = vec![
-        1, 2, 3, 4, 5, 6, 7, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 2001, 2002, 2003, 2004,
-        2005, 2006, 2007, 3001, 3002, 3003, 3004, 3005, 3006, 3007,
-    ];
-    assert_eq!(
-        geo_statistics.unwrap().geospatial_types(),
-        Some(&expected_geospatial_types)
-    );
-    assert_eq!(geo_statistics.unwrap().bounding_box(), Some(&expected_bbox));
-}
-
 #[cfg(all(feature = "arrow", feature = "geospatial"))]
 mod test {
     //! Tests for Geometry and Geography logical types that require the arrow
     //! and/or geospatial features enabled
 
-    use super::*;
-
-    use std::{iter::zip, sync::Arc};
+    use std::{fs::File, iter::zip, sync::Arc};
 
     use arrow_array::{ArrayRef, BinaryArray, RecordBatch, create_array};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef, extension::ExtensionType as _};
     use bytes::Bytes;
     use parquet::{
-        arrow::{ArrowWriter, arrow_writer::ArrowWriterOptions},
+        arrow::{
+            ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
+            arrow_writer::ArrowWriterOptions,
+        },
+        basic::{EdgeInterpolationAlgorithm, LogicalType},
         column::reader::ColumnReader,
         data_type::{ByteArray, ByteArrayType},
         file::{
-            metadata::RowGroupMetaData,
+            metadata::{ParquetMetaData, RowGroupMetaData},
             properties::{EnabledStatistics, WriterProperties},
-            reader::FileReader,
+            reader::{FileReader, SerializedFileReader},
             writer::SerializedFileWriter,
         },
-        geospatial::statistics::GeospatialStatistics,
-        schema::types::{SchemaDescriptor, Type},
+        geospatial::{bounding_box::BoundingBox, statistics::GeospatialStatistics},
+        schema::types::SchemaDescriptor,
     };
-    use parquet_geospatial::testing::wkb_point_xy;
+    use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType, testing::wkb_point_xy};
+    use serde_json::Value;
+
+    fn read_metadata(geospatial_test_file: &str) -> (Arc<ParquetMetaData>, SchemaRef) {
+        let path = format!(
+            "{}/geospatial/{geospatial_test_file}",
+            arrow::util::test_util::parquet_test_data(),
+        );
+        let file = File::open(path).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+
+        (reader.metadata().clone(), reader.schema().clone())
+    }
+
+    #[test]
+    fn test_read_logical_type() {
+        // Some crs values are short strings
+        let expected_metadata = [
+            (
+                "crs-default.parquet",
+                LogicalType::Geometry { crs: None },
+                WkbMetadata::new(None, None),
+            ),
+            (
+                "crs-srid.parquet",
+                LogicalType::Geometry {
+                    crs: Some("srid:5070".to_string()),
+                },
+                WkbMetadata::new(Some("srid:5070"), None),
+            ),
+            (
+                "crs-projjson.parquet",
+                LogicalType::Geometry {
+                    crs: Some("projjson:projjson_epsg_5070".to_string()),
+                },
+                WkbMetadata::new(Some("projjson:projjson_epsg_5070"), None),
+            ),
+            (
+                "crs-geography.parquet",
+                LogicalType::Geography {
+                    crs: None,
+                    algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
+                },
+                WkbMetadata::new(None, Some(WkbEdges::Spherical)),
+            ),
+        ];
+
+        for (geospatial_file, expected_type, expected_field_meta) in expected_metadata {
+            let (metadata, schema) = read_metadata(geospatial_file);
+            let column_descr = metadata.file_metadata().schema_descr().column(1);
+            let logical_type = column_descr.logical_type_ref().unwrap();
+
+            assert_eq!(logical_type, &expected_type);
+
+            let field = schema.field(1);
+            let wkb_type = field.try_extension_type::<WkbType>().unwrap();
+
+            assert_eq!(wkb_type.metadata().crs, expected_field_meta.crs);
+            assert_eq!(wkb_type.metadata().algorithm, expected_field_meta.algorithm);
+        }
+
+        // The crs value may also contain arbitrary values (in this case some JSON
+        // a bit too lengthy to type out)
+        let (metadata, schema) = read_metadata("crs-arbitrary-value.parquet");
+        let column_descr = metadata.file_metadata().schema_descr().column(1);
+        let logical_type = column_descr.logical_type_ref().unwrap();
+
+        if let LogicalType::Geometry { crs } = logical_type {
+            let crs = crs.as_ref();
+            let crs_parsed: Value = serde_json::from_str(crs.unwrap()).unwrap();
+            assert_eq!(crs_parsed.get("id").unwrap().get("code").unwrap(), 5070);
+        } else {
+            panic!("Expected geometry type but got {logical_type:?}");
+        }
+
+        let field = schema.field(1);
+        let wkb_type = field.try_extension_type::<WkbType>().unwrap();
+        assert_eq!(
+            wkb_type.metadata().crs.as_ref().unwrap()["id"]["code"],
+            5070
+        );
+        assert_eq!(wkb_type.metadata().algorithm, None);
+    }
+
+    #[test]
+    fn test_read_geospatial_statistics() {
+        let (metadata, _) = read_metadata("geospatial.parquet");
+
+        // geospatial.parquet schema:
+        //    optional binary field_id=-1 group (String);
+        //    optional binary field_id=-1 wkt (String);
+        //    optional binary field_id=-1 geometry (Geometry(crs=));
+        let fields = metadata.file_metadata().schema().get_fields();
+        let logical_type = fields[2].get_basic_info().logical_type_ref().unwrap();
+        assert_eq!(logical_type, &LogicalType::Geometry { crs: None });
+
+        let geo_statistics = metadata.row_group(0).column(2).geo_statistics();
+        assert!(geo_statistics.is_some());
+
+        let expected_bbox = BoundingBox::new(10.0, 40.0, 10.0, 40.0)
+            .with_zrange(30.0, 80.0)
+            .with_mrange(200.0, 1600.0);
+        let expected_geospatial_types = vec![
+            1, 2, 3, 4, 5, 6, 7, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 2001, 2002, 2003, 2004,
+            2005, 2006, 2007, 3001, 3002, 3003, 3004, 3005, 3006, 3007,
+        ];
+        assert_eq!(
+            geo_statistics.unwrap().geospatial_types(),
+            Some(&expected_geospatial_types)
+        );
+        assert_eq!(geo_statistics.unwrap().bounding_box(), Some(&expected_bbox));
+    }
 
     fn read_row_group_metadata(b: Bytes) -> Vec<RowGroupMetaData> {
         let reader = SerializedFileReader::new(b).unwrap();
@@ -184,8 +189,7 @@ mod test {
             None,
         ];
 
-        let root = parquet_schema_geometry();
-        let schema = SchemaDescriptor::new(root.into());
+        let schema = parquet_schema_geometry();
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Chunk)
             .build();
@@ -274,9 +278,7 @@ mod test {
             None,
         ];
 
-        let root = parquet_schema_geometry();
-        let schema = SchemaDescriptor::new(root.into());
-
+        let schema = parquet_schema_geometry();
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Chunk)
             .build();
@@ -367,8 +369,7 @@ mod test {
         let mut values = Vec::new();
         let mut def_levels = Vec::new();
 
-        let root = parquet_schema_geometry();
-        let schema = SchemaDescriptor::new(root.into());
+        let schema = parquet_schema_geometry();
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Chunk)
             .build();
@@ -413,17 +414,14 @@ mod test {
         }
     }
 
-    fn parquet_schema_geometry() -> Type {
-        Type::group_type_builder("root")
-            .with_fields(vec![
-                Type::primitive_type_builder("geo", parquet::basic::Type::BYTE_ARRAY)
-                    .with_logical_type(Some(LogicalType::Geometry { crs: None }))
-                    .build()
-                    .unwrap()
-                    .into(),
-            ])
-            .build()
-            .unwrap()
+    fn parquet_schema_geometry() -> SchemaDescriptor {
+        let wkb_meta = WkbMetadata::new(None, None);
+        let wkb_type = WkbType::new(Some(wkb_meta));
+
+        let field = Field::new("geo", DataType::Binary, true).with_extension_type(wkb_type);
+        let schema = Schema::new(vec![field]);
+
+        ArrowSchemaConverter::new().convert(&schema).unwrap()
     }
 
     fn wkb_array_xy(coords: impl IntoIterator<Item = Option<(f64, f64)>>) -> ArrayRef {

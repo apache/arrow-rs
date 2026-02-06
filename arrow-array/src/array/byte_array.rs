@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{get_offsets, print_long_array};
+use crate::array::{get_offsets_from_buffer, print_long_array};
 use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::ByteArrayType;
@@ -188,6 +188,29 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Create a new [`Scalar`] from `v`
     pub fn new_scalar(value: impl AsRef<T::Native>) -> Scalar<Self> {
         Scalar::new(Self::from_iter_values(std::iter::once(value)))
+    }
+
+    /// Create a new [`GenericByteArray`] where `value` is repeated `repeat_count` times.
+    ///
+    /// # Panics
+    /// This will panic if value's length multiplied by `repeat_count` overflows usize.
+    ///
+    pub fn new_repeated(value: impl AsRef<T::Native>, repeat_count: usize) -> Self {
+        let s: &[u8] = value.as_ref().as_ref();
+        let value_offsets = OffsetBuffer::from_repeated_length(s.len(), repeat_count);
+        let bytes: Buffer = {
+            let mut mutable_buffer = MutableBuffer::with_capacity(0);
+            mutable_buffer.repeat_slice_n_times(s, repeat_count);
+
+            mutable_buffer.into()
+        };
+
+        Self {
+            data_type: T::DATA_TYPE,
+            value_data: bytes,
+            value_offsets,
+            nulls: None,
+        }
     }
 
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
@@ -439,7 +462,8 @@ impl<T: ByteArrayType> std::fmt::Debug for GenericByteArray<T> {
     }
 }
 
-impl<T: ByteArrayType> Array for GenericByteArray<T> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<T: ByteArrayType> Array for GenericByteArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -517,30 +541,34 @@ impl<'a, T: ByteArrayType> ArrayAccessor for &'a GenericByteArray<T> {
 
 impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
     fn from(data: ArrayData) -> Self {
+        let (data_type, len, nulls, offset, mut buffers, _child_data) = data.into_parts();
         assert_eq!(
-            data.data_type(),
-            &Self::DATA_TYPE,
+            data_type,
+            Self::DATA_TYPE,
             "{}{}Array expects DataType::{}",
             T::Offset::PREFIX,
             T::PREFIX,
             Self::DATA_TYPE
         );
         assert_eq!(
-            data.buffers().len(),
+            buffers.len(),
             2,
             "{}{}Array data should contain 2 buffers only (offsets and values)",
             T::Offset::PREFIX,
             T::PREFIX,
         );
+        // buffers are offset then value, so pop in reverse
+        let value_data = buffers.pop().expect("checked above");
+        let offset_buffer = buffers.pop().expect("checked above");
+
         // SAFETY:
         // ArrayData is valid, and verified type above
-        let value_offsets = unsafe { get_offsets(&data) };
-        let value_data = data.buffers()[1].clone();
+        let value_offsets = unsafe { get_offsets_from_buffer(offset_buffer, offset, len) };
         Self {
             value_offsets,
             value_data,
-            data_type: T::DATA_TYPE,
-            nulls: data.nulls().cloned(),
+            data_type,
+            nulls,
         }
     }
 }
@@ -593,7 +621,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{BinaryArray, StringArray};
+    use crate::{Array, BinaryArray, StringArray};
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
 
     #[test]
@@ -650,5 +678,43 @@ mod tests {
         );
 
         BinaryArray::new(offsets, non_ascii_data, None);
+    }
+
+    #[test]
+    fn create_repeated() {
+        let arr = BinaryArray::new_repeated(b"hello", 3);
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.value(0), b"hello");
+        assert_eq!(arr.value(1), b"hello");
+        assert_eq!(arr.value(2), b"hello");
+
+        let arr = StringArray::new_repeated("world", 2);
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr.value(0), "world");
+        assert_eq!(arr.value(1), "world");
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn create_repeated_usize_overflow_1() {
+        let _arr = BinaryArray::new_repeated(b"hello", (usize::MAX / "hello".len()) + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn create_repeated_usize_overflow_2() {
+        let _arr = BinaryArray::new_repeated(b"hello", usize::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn create_repeated_i32_offset_overflow_1() {
+        let _arr = BinaryArray::new_repeated(b"hello", usize::MAX / "hello".len());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn create_repeated_i32_offset_overflow_2() {
+        let _arr = BinaryArray::new_repeated(b"hello", ((i32::MAX as usize) / "hello".len()) + 1);
     }
 }

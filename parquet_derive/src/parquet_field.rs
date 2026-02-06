@@ -643,7 +643,7 @@ impl Type {
             }
             "f32" => BasicType::FLOAT,
             "f64" => BasicType::DOUBLE,
-            "String" | "str" => BasicType::BYTE_ARRAY,
+            "String" | "str" | "Arc < str >" => BasicType::BYTE_ARRAY,
             "Uuid" => BasicType::FIXED_LEN_BYTE_ARRAY,
             f => unimplemented!("{} currently is not supported", f),
         }
@@ -733,7 +733,7 @@ impl Type {
             "NaiveDate" => quote! { Some(LogicalType::Date) },
             "NaiveDateTime" => quote! { None },
             "f32" | "f64" => quote! { None },
-            "String" | "str" => quote! { Some(LogicalType::String) },
+            "String" | "str" | "Arc < str >" => quote! { Some(LogicalType::String) },
             "Uuid" => quote! { Some(LogicalType::Uuid) },
             f => unimplemented!("{} currently is not supported", f),
         }

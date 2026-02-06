@@ -20,12 +20,13 @@ use std::sync::Arc;
 
 use crate::arrow::schema::extension::try_add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
+use crate::arrow::schema::virtual_type::{RowGroupIndex, RowNumber};
 use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
-use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
+use arrow_schema::{DataType, Field, Fields, SchemaBuilder, extension::ExtensionType};
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
@@ -77,8 +78,18 @@ impl ParquetField {
         match &self.field_type {
             ParquetFieldType::Primitive { .. } => None,
             ParquetFieldType::Group { children } => Some(children),
+            ParquetFieldType::Virtual(_) => None,
         }
     }
+}
+
+/// Types of virtual columns that can be computed at read time
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VirtualColumnType {
+    /// Row number within the file
+    RowNumber,
+    /// Row group index
+    RowGroupIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +103,9 @@ pub enum ParquetFieldType {
     Group {
         children: Vec<ParquetField>,
     },
+    /// Virtual column that doesn't exist in the parquet file
+    /// but is computed at read time (e.g., row_number)
+    Virtual(VirtualColumnType),
 }
 
 /// Encodes the context of the parent of the field currently under consideration
@@ -539,6 +553,56 @@ impl Visitor {
             }
         }
     }
+}
+
+/// Converts a virtual Arrow [`Field`] to a [`ParquetField`]
+///
+/// Virtual fields don't correspond to any data in the parquet file,
+/// but are computed at read time (e.g., row_number)
+///
+/// The levels are computed based on the parent context:
+/// - If nullable: def_level = parent_def_level + 1
+/// - If required: def_level = parent_def_level
+/// - rep_level = parent_rep_level (virtual fields are not repeated)
+pub(super) fn convert_virtual_field(
+    arrow_field: &Field,
+    parent_rep_level: i16,
+    parent_def_level: i16,
+) -> Result<ParquetField> {
+    let nullable = arrow_field.is_nullable();
+    let def_level = if nullable {
+        parent_def_level + 1
+    } else {
+        parent_def_level
+    };
+
+    // Determine the virtual column type based on the extension type name
+    let extension_name = arrow_field.extension_type_name().ok_or_else(|| {
+        ParquetError::ArrowError(format!(
+            "virtual column field '{}' must have an extension type",
+            arrow_field.name()
+        ))
+    })?;
+
+    let virtual_type = match extension_name {
+        RowNumber::NAME => VirtualColumnType::RowNumber,
+        RowGroupIndex::NAME => VirtualColumnType::RowGroupIndex,
+        _ => {
+            return Err(ParquetError::ArrowError(format!(
+                "unsupported virtual column type '{}' for field '{}'",
+                extension_name,
+                arrow_field.name()
+            )));
+        }
+    };
+
+    Ok(ParquetField {
+        rep_level: parent_rep_level,
+        def_level,
+        nullable,
+        arrow_type: arrow_field.data_type().clone(),
+        field_type: ParquetFieldType::Virtual(virtual_type),
+    })
 }
 
 /// Computes the Arrow [`Field`] for a child column

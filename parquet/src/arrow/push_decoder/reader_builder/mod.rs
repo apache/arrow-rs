@@ -22,8 +22,9 @@ use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection,
+    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -31,13 +32,14 @@ use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 /// The current row group being read and the read plan
 #[derive(Debug)]
@@ -155,6 +157,9 @@ pub(crate) struct RowGroupReaderBuilder {
     /// The metrics collector
     metrics: ArrowReaderMetrics,
 
+    /// Strategy for materialising row selections
+    row_selection_policy: RowSelectionPolicy,
+
     /// Current state of the decoder.
     ///
     /// It is taken when processing, and must be put back before returning
@@ -179,6 +184,7 @@ impl RowGroupReaderBuilder {
         metrics: ArrowReaderMetrics,
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
+        row_selection_policy: RowSelectionPolicy,
     ) -> Self {
         Self {
             batch_size,
@@ -190,6 +196,7 @@ impl RowGroupReaderBuilder {
             offset,
             metrics,
             max_predicate_cache_size,
+            row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -233,7 +240,9 @@ impl RowGroupReaderBuilder {
                 "Internal Error: next_row_group called while still reading a row group. Expected Finished state, got {state:?}"
             )));
         }
-        let plan_builder = ReadPlanBuilder::new(self.batch_size).with_selection(selection);
+        let plan_builder = ReadPlanBuilder::new(self.batch_size)
+            .with_selection(selection)
+            .with_row_selection_policy(self.row_selection_policy);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
@@ -320,7 +329,7 @@ impl RowGroupReaderBuilder {
 
                 let cache_info = CacheInfo::new(
                     cache_projection,
-                    Arc::new(Mutex::new(RowGroupCache::new(
+                    Arc::new(RwLock::new(RowGroupCache::new(
                         self.batch_size,
                         self.max_predicate_cache_size,
                     ))),
@@ -425,7 +434,18 @@ impl RowGroupReaderBuilder {
 
                 let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_cache_options(Some(&cache_options))
+                    .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+
+                // Prepare to evaluate the filter.
+                // Note: first update the selection strategy to properly handle any pages
+                // pruned during fetch
+                plan_builder = override_selector_strategy_if_needed(
+                    plan_builder,
+                    predicate.projection(),
+                    self.row_group_offset_index(row_group_idx),
+                );
+                // `with_predicate` actually evaluates the filter
 
                 plan_builder =
                     plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
@@ -484,7 +504,7 @@ impl RowGroupReaderBuilder {
                 }
 
                 // Apply any limit and offset
-                let plan_builder = plan_builder
+                let mut plan_builder = plan_builder
                     .limited(row_count)
                     .with_offset(self.offset)
                     .with_limit(self.limit)
@@ -523,6 +543,14 @@ impl RowGroupReaderBuilder {
                 // Final projection fetch shouldn't expand selection for cache
                 // so don't call with_cache_projection here
                 .build();
+
+                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+
+                plan_builder = override_selector_strategy_if_needed(
+                    plan_builder,
+                    &self.projection,
+                    self.row_group_offset_index(row_group_idx),
+                );
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
@@ -573,7 +601,8 @@ impl RowGroupReaderBuilder {
                 let plan = plan_builder.build();
 
                 // if we have any cached results, connect them up
-                let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics);
+                let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_parquet_metadata(&self.metadata);
                 let array_reader = if let Some(cache_info) = cache_info.as_ref() {
                     let cache_options = cache_info.builder().consumer();
                     array_reader_builder
@@ -608,6 +637,10 @@ impl RowGroupReaderBuilder {
     }
 
     fn compute_cache_projection_inner(&self, filter: &RowFilter) -> Option<ProjectionMask> {
+        // Do not compute the projection mask if the predicate cache is disabled
+        if self.max_predicate_cache_size == 0 {
+            return None;
+        }
         let mut cache_projection = filter.predicates.first()?.projection().clone();
         for predicate in filter.predicates.iter() {
             cache_projection.union(predicate.projection());
@@ -618,42 +651,77 @@ impl RowGroupReaderBuilder {
 
     /// Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
     fn exclude_nested_columns_from_cache(&self, mask: &ProjectionMask) -> Option<ProjectionMask> {
-        let schema = self.metadata.file_metadata().schema_descr();
-        let num_leaves = schema.num_columns();
-
-        // Count how many leaves each root column has
-        let num_roots = schema.root_schema().get_fields().len();
-        let mut root_leaf_counts = vec![0usize; num_roots];
-        for leaf_idx in 0..num_leaves {
-            let root_idx = schema.get_column_root_idx(leaf_idx);
-            root_leaf_counts[root_idx] += 1;
-        }
-
-        // Keep only leaves whose root has exactly one leaf (non-nested)
-        let mut included_leaves = Vec::new();
-        for leaf_idx in 0..num_leaves {
-            if mask.leaf_included(leaf_idx) {
-                let root_idx = schema.get_column_root_idx(leaf_idx);
-                if root_leaf_counts[root_idx] == 1 {
-                    included_leaves.push(leaf_idx);
-                }
-            }
-        }
-
-        if included_leaves.is_empty() {
-            None
-        } else {
-            Some(ProjectionMask::leaves(schema, included_leaves))
-        }
+        mask.without_nested_types(self.metadata.file_metadata().schema_descr())
     }
+
+    /// Get the offset index for the specified row group, if any
+    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<&[OffsetIndexMetaData]> {
+        self.metadata
+            .offset_index()
+            .filter(|index| !index.is_empty())
+            .and_then(|index| index.get(row_group_idx))
+            .map(|columns| columns.as_slice())
+    }
+}
+
+/// Override the selection strategy if needed.
+///
+/// Some pages can be skipped during row-group construction if they are not read
+/// by the selections. This means that the data pages for those rows are never
+/// loaded and definition/repetition levels are never read. When using
+/// `RowSelections` selection works because `skip_records()` handles this
+/// case and skips the page accordingly.
+///
+/// However, with the current mask design, all values must be read and decoded
+/// and then a mask filter is applied. Thus if any pages are skipped during
+/// row-group construction, the data pages are missing and cannot be decoded.
+///
+/// A simple example:
+/// * the page size is 2, the mask is 100001, row selection should be read(1) skip(4) read(1)
+/// * the `ColumnChunkData` would be page1(10), page2(skipped), page3(01)
+///
+/// Using the row selection to skip(4), page2 won't be read at all, so in this
+/// case we can't decode all the rows and apply a mask. To correctly apply the
+/// bit mask, we need all 6 values be read, but page2 is not in memory.
+fn override_selector_strategy_if_needed(
+    plan_builder: ReadPlanBuilder,
+    projection_mask: &ProjectionMask,
+    offset_index: Option<&[OffsetIndexMetaData]>,
+) -> ReadPlanBuilder {
+    // override only applies to Auto policy, If the policy is already Mask or Selectors, respect that
+    let RowSelectionPolicy::Auto { .. } = plan_builder.row_selection_policy() else {
+        return plan_builder;
+    };
+
+    let preferred_strategy = plan_builder.resolve_selection_strategy();
+
+    let force_selectors = matches!(preferred_strategy, RowSelectionStrategy::Mask)
+        && plan_builder.selection().is_some_and(|selection| {
+            selection.should_force_selectors(projection_mask, offset_index)
+        });
+
+    let resolved_strategy = if force_selectors {
+        RowSelectionStrategy::Selectors
+    } else {
+        preferred_strategy
+    };
+
+    // override the plan builder strategy with the resolved one
+    let new_policy = match resolved_strategy {
+        RowSelectionStrategy::Mask => RowSelectionPolicy::Mask,
+        RowSelectionStrategy::Selectors => RowSelectionPolicy::Selectors,
+    };
+
+    plan_builder.with_row_selection_policy(new_policy)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 184);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
     }
 }

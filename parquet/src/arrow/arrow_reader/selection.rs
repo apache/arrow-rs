@@ -15,13 +15,50 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::arrow::ProjectionMask;
+use crate::errors::ParquetError;
+use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use arrow_array::{Array, BooleanArray};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::SlicesIterator;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
 
-use crate::file::page_index::offset_index::PageLocation;
+/// Policy for picking a strategy to materialise [`RowSelection`] during execution.
+///
+/// Note that this is a user-provided preference, and the actual strategy used
+/// may differ based on safety considerations (e.g. page skipping).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RowSelectionPolicy {
+    /// Use a queue of [`RowSelector`] values
+    Selectors,
+    /// Use a boolean mask to materialise the selection
+    Mask,
+    /// Choose between [`Self::Mask`] and [`Self::Selectors`] based on selector density
+    Auto {
+        /// Average selector length below which masks are preferred
+        threshold: usize,
+    },
+}
+
+impl Default for RowSelectionPolicy {
+    fn default() -> Self {
+        Self::Auto { threshold: 32 }
+    }
+}
+
+/// Fully resolved strategy for materializing [`RowSelection`] during execution.
+///
+/// This is determined from a combination of user preference (via [`RowSelectionPolicy`])
+/// and safety considerations (e.g. page skipping).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RowSelectionStrategy {
+    /// Use a queue of [`RowSelector`] values
+    Selectors,
+    /// Use a boolean mask to materialise the selection
+    Mask,
+}
 
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
 /// scanning a parquet file
@@ -211,6 +248,39 @@ impl RowSelection {
         }
 
         ranges
+    }
+
+    /// Returns true if this selection would skip any data pages within the provided columns
+    fn selection_skips_any_page(
+        &self,
+        projection: &ProjectionMask,
+        columns: &[OffsetIndexMetaData],
+    ) -> bool {
+        columns.iter().enumerate().any(|(leaf_idx, column)| {
+            if !projection.leaf_included(leaf_idx) {
+                return false;
+            }
+
+            let locations = column.page_locations();
+            if locations.is_empty() {
+                return false;
+            }
+
+            let ranges = self.scan_ranges(locations);
+            !ranges.is_empty() && ranges.len() < locations.len()
+        })
+    }
+
+    /// Returns true if selectors should be forced, preventing mask materialisation
+    pub(crate) fn should_force_selectors(
+        &self,
+        projection: &ProjectionMask,
+        offset_index: Option<&[OffsetIndexMetaData]>,
+    ) -> bool {
+        match offset_index {
+            Some(columns) => self.selection_skips_any_page(projection, columns),
+            None => false,
+        }
     }
 
     /// Splits off the first `row_count` from this [`RowSelection`]
@@ -689,6 +759,177 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
     });
 
     iter.collect()
+}
+
+/// Cursor for iterating a mask-backed [`RowSelection`]
+///
+/// This is best for dense selections where there are many small skips
+/// or selections. For example, selecting every other row.
+#[derive(Debug)]
+pub struct MaskCursor {
+    mask: BooleanBuffer,
+    /// Current absolute offset into the selection
+    position: usize,
+}
+
+impl MaskCursor {
+    /// Returns `true` when no further rows remain
+    pub fn is_empty(&self) -> bool {
+        self.position >= self.mask.len()
+    }
+
+    /// Advance through the mask representation, producing the next chunk summary
+    pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
+        let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
+            let mask = &self.mask;
+
+            if self.position >= mask.len() {
+                return None;
+            }
+
+            let start_position = self.position;
+            let mut cursor = start_position;
+            let mut initial_skip = 0;
+
+            while cursor < mask.len() && !mask.value(cursor) {
+                initial_skip += 1;
+                cursor += 1;
+            }
+
+            let mask_start = cursor;
+            let mut chunk_rows = 0;
+            let mut selected_rows = 0;
+
+            // Advance until enough rows have been selected to satisfy the batch size,
+            // or until the mask is exhausted. This mirrors the behaviour of the legacy
+            // `RowSelector` queue-based iteration.
+            while cursor < mask.len() && selected_rows < batch_size {
+                chunk_rows += 1;
+                if mask.value(cursor) {
+                    selected_rows += 1;
+                }
+                cursor += 1;
+            }
+
+            (initial_skip, chunk_rows, selected_rows, mask_start, cursor)
+        };
+
+        self.position = end_position;
+
+        Some(MaskChunk {
+            initial_skip,
+            chunk_rows,
+            selected_rows,
+            mask_start,
+        })
+    }
+
+    /// Materialise the boolean values for a mask-backed chunk
+    pub fn mask_values_for(&self, chunk: &MaskChunk) -> Result<BooleanArray, ParquetError> {
+        if chunk.mask_start.saturating_add(chunk.chunk_rows) > self.mask.len() {
+            return Err(ParquetError::General(
+                "Internal Error: MaskChunk exceeds mask length".to_string(),
+            ));
+        }
+        Ok(BooleanArray::from(
+            self.mask.slice(chunk.mask_start, chunk.chunk_rows),
+        ))
+    }
+}
+
+/// Cursor for iterating a selector-backed [`RowSelection`]
+///
+/// This is best for sparse selections where large contiguous
+/// blocks of rows are selected or skipped.
+#[derive(Debug)]
+pub struct SelectorsCursor {
+    selectors: VecDeque<RowSelector>,
+    /// Current absolute offset into the selection
+    position: usize,
+}
+
+impl SelectorsCursor {
+    /// Returns `true` when no further rows remain
+    pub fn is_empty(&self) -> bool {
+        self.selectors.is_empty()
+    }
+
+    pub(crate) fn selectors_mut(&mut self) -> &mut VecDeque<RowSelector> {
+        &mut self.selectors
+    }
+
+    /// Return the next [`RowSelector`]
+    pub(crate) fn next_selector(&mut self) -> RowSelector {
+        let selector = self.selectors.pop_front().unwrap();
+        self.position += selector.row_count;
+        selector
+    }
+
+    /// Return a selector to the front, rewinding the position
+    pub(crate) fn return_selector(&mut self, selector: RowSelector) {
+        self.position = self.position.saturating_sub(selector.row_count);
+        self.selectors.push_front(selector);
+    }
+}
+
+/// Result of computing the next chunk to read when using a [`MaskCursor`]
+#[derive(Debug)]
+pub struct MaskChunk {
+    /// Number of leading rows to skip before reaching selected rows
+    pub initial_skip: usize,
+    /// Total rows covered by this chunk (selected + skipped)
+    pub chunk_rows: usize,
+    /// Rows actually selected within the chunk
+    pub selected_rows: usize,
+    /// Starting offset within the mask where the chunk begins
+    pub mask_start: usize,
+}
+
+/// Cursor for iterating a [`RowSelection`] during execution within a
+/// [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan).
+///
+/// This keeps per-reader state such as the current position and delegates the
+/// actual storage strategy to the internal `RowSelectionBacking`.
+#[derive(Debug)]
+pub enum RowSelectionCursor {
+    /// Reading all rows
+    All,
+    /// Use a bitmask to back the selection (dense selections)
+    Mask(MaskCursor),
+    /// Use a queue of selectors to back the selection (sparse selections)
+    Selectors(SelectorsCursor),
+}
+
+impl RowSelectionCursor {
+    /// Create a [`MaskCursor`] cursor backed by a bitmask, from an existing set of selectors
+    pub(crate) fn new_mask_from_selectors(selectors: Vec<RowSelector>) -> Self {
+        Self::Mask(MaskCursor {
+            mask: boolean_mask_from_selectors(&selectors),
+            position: 0,
+        })
+    }
+
+    /// Create a [`RowSelectionCursor::Selectors`] from the provided selectors
+    pub(crate) fn new_selectors(selectors: Vec<RowSelector>) -> Self {
+        Self::Selectors(SelectorsCursor {
+            selectors: selectors.into(),
+            position: 0,
+        })
+    }
+
+    /// Create a cursor that selects all rows
+    pub(crate) fn new_all() -> Self {
+        Self::All
+    }
+}
+
+fn boolean_mask_from_selectors(selectors: &[RowSelector]) -> BooleanBuffer {
+    let total_rows: usize = selectors.iter().map(|s| s.row_count).sum();
+    let mut builder = BooleanBufferBuilder::new(total_rows);
+    for selector in selectors {
+        builder.append_n(selector.row_count, !selector.skip);
+    }
+    builder.finish()
 }
 
 #[cfg(test)]

@@ -309,6 +309,9 @@ impl ArrayData {
     ///
     /// Note: This is a low level API and most users of the arrow crate should create
     /// arrays using the builders found in [arrow_array](https://docs.rs/arrow-array)
+    /// or [`ArrayDataBuilder`].
+    ///
+    /// See also [`Self::into_parts`] to recover the fields
     pub fn try_new(
         data_type: DataType,
         len: usize,
@@ -349,6 +352,33 @@ impl ArrayData {
         // a call to `ArrayData::try_new` or created using unsafe
         new_self.validate_data()?;
         Ok(new_self)
+    }
+
+    /// Return the constituent parts of this ArrayData
+    ///
+    /// This is the inverse of [`ArrayData::try_new`].
+    ///
+    /// Returns `(data_type, len, nulls, offset, buffers, child_data)`
+    pub fn into_parts(
+        self,
+    ) -> (
+        DataType,
+        usize,
+        Option<NullBuffer>,
+        usize,
+        Vec<Buffer>,
+        Vec<ArrayData>,
+    ) {
+        let Self {
+            data_type,
+            len,
+            nulls,
+            offset,
+            buffers,
+            child_data,
+        } = self;
+
+        (data_type, len, nulls, offset, buffers, child_data)
     }
 
     /// Returns a builder to construct a [`ArrayData`] instance of the same [`DataType`]
@@ -615,6 +645,16 @@ impl ArrayData {
                     vec![ArrayData::new_empty(f.data_type())],
                     true,
                 ),
+                DataType::ListView(f) => (
+                    vec![zeroed(len * 4), zeroed(len * 4)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                    true,
+                ),
+                DataType::LargeListView(f) => (
+                    vec![zeroed(len * 8), zeroed(len * 8)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                    true,
+                ),
                 DataType::FixedSizeList(f, list_len) => (
                     vec![],
                     vec![ArrayData::new_null(f.data_type(), *list_len as usize * len)],
@@ -659,36 +699,65 @@ impl ArrayData {
                     (buffers, children, false)
                 }
                 DataType::RunEndEncoded(r, v) => {
-                    let runs = match r.data_type() {
-                        DataType::Int16 => {
-                            let i = i16::from_usize(len).expect("run overflow");
-                            Buffer::from_slice_ref([i])
-                        }
-                        DataType::Int32 => {
-                            let i = i32::from_usize(len).expect("run overflow");
-                            Buffer::from_slice_ref([i])
-                        }
-                        DataType::Int64 => {
-                            let i = i64::from_usize(len).expect("run overflow");
-                            Buffer::from_slice_ref([i])
-                        }
-                        dt => unreachable!("Invalid run ends data type {dt}"),
-                    };
+                    if len == 0 {
+                        // For empty arrays, create zero-length child arrays.
+                        let runs = ArrayData::new_empty(r.data_type());
+                        let values = ArrayData::new_empty(v.data_type());
+                        (vec![], vec![runs, values], false)
+                    } else {
+                        let runs = match r.data_type() {
+                            DataType::Int16 => {
+                                let i = i16::from_usize(len).expect("run overflow");
+                                Buffer::from_slice_ref([i])
+                            }
+                            DataType::Int32 => {
+                                let i = i32::from_usize(len).expect("run overflow");
+                                Buffer::from_slice_ref([i])
+                            }
+                            DataType::Int64 => {
+                                let i = i64::from_usize(len).expect("run overflow");
+                                Buffer::from_slice_ref([i])
+                            }
+                            dt => unreachable!("Invalid run ends data type {dt}"),
+                        };
 
-                    let builder = ArrayData::builder(r.data_type().clone())
-                        .len(1)
-                        .buffers(vec![runs]);
+                        let builder = ArrayData::builder(r.data_type().clone())
+                            .len(1)
+                            .buffers(vec![runs]);
 
-                    // SAFETY:
-                    // Valid by construction
-                    let runs = unsafe { builder.build_unchecked() };
-                    (
-                        vec![],
-                        vec![runs, ArrayData::new_null(v.data_type(), 1)],
-                        false,
-                    )
+                        // SAFETY:
+                        // Valid by construction
+                        let runs = unsafe { builder.build_unchecked() };
+                        (
+                            vec![],
+                            vec![runs, ArrayData::new_null(v.data_type(), 1)],
+                            false,
+                        )
+                    }
                 }
-                d => unreachable!("{d}"),
+                // Handled by Some(width) branch above
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float16
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Timestamp(_, _)
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Duration(_)
+                | DataType::Interval(_)
+                | DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => unreachable!("{data_type}"),
             },
         };
 
@@ -1783,7 +1852,7 @@ impl DataTypeLayout {
                 },
             ],
             can_contain_null_mask: true,
-            variadic: true,
+            variadic: false,
         }
     }
 }
@@ -2468,6 +2537,24 @@ mod tests {
         }
 
         let array = ArrayData::new_null(&DataType::Utf8View, array_len);
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(
+            &DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            array_len,
+        );
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(
+            &DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            array_len,
+        );
         assert_eq!(array.len(), array_len);
         for i in 0..array.len() {
             assert!(array.is_null(i));

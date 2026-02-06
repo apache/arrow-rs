@@ -29,17 +29,38 @@ use std::ops::Deref;
 /// with the following differences:
 ///
 /// - slicing and cloning is O(1).
-/// - it supports external allocated memory
+/// - support for external allocated memory (e.g. via FFI).
 ///
+/// See [`Buffer`] for more low-level memory management details.
+///
+/// # Example: Convert to/from Vec (without copies)
+///
+/// (See [`Buffer::from_vec`] and [`Buffer::into_vec`] for a lower level API)
 /// ```
 /// # use arrow_buffer::ScalarBuffer;
 /// // Zero-copy conversion from Vec
 /// let buffer = ScalarBuffer::from(vec![1, 2, 3]);
 /// assert_eq!(&buffer, &[1, 2, 3]);
+/// // convert the buffer back to Vec without copy assuming:
+/// // 1. the inner buffer is not sliced
+/// // 2. the inner buffer uses standard allocation
+/// // 3. there are no other references to the inner buffer
+/// let vec: Vec<i32> = buffer.into();
+/// assert_eq!(&vec, &[1, 2, 3]);
+/// ```
 ///
+/// # Example: Zero copy slicing
+/// ```
+/// # use arrow_buffer::ScalarBuffer;
+/// let buffer = ScalarBuffer::from(vec![1, 2, 3]);
+/// assert_eq!(&buffer, &[1, 2, 3]);
 /// // Zero-copy slicing
 /// let sliced = buffer.slice(1, 2);
 /// assert_eq!(&sliced, &[2, 3]);
+/// // Original buffer is unchanged
+/// assert_eq!(&buffer, &[1, 2, 3]);
+/// // converting the sliced buffer back to Vec incurs a copy
+/// let vec: Vec<i32> = sliced.into();
 /// ```
 #[derive(Clone, Default)]
 pub struct ScalarBuffer<T: ArrowNativeType> {

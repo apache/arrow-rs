@@ -39,7 +39,7 @@ pub(crate) fn try_add_extension_type(
     mut arrow_field: Field,
     parquet_type: &Type,
 ) -> Result<Field, ParquetError> {
-    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type() else {
+    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type_ref() else {
         return Ok(arrow_field);
     };
     match parquet_logical_type {
@@ -55,6 +55,17 @@ pub(crate) fn try_add_extension_type(
         LogicalType::Json => {
             arrow_field.try_with_extension_type(arrow_schema::extension::Json::default())?;
         }
+        #[cfg(feature = "geospatial")]
+        LogicalType::Geometry { crs } => {
+            let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), None);
+            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
+        }
+        #[cfg(feature = "geospatial")]
+        LogicalType::Geography { crs, algorithm } => {
+            let algorithm = algorithm.map(|a| a.try_as_edges()).transpose()?;
+            let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), algorithm);
+            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
+        }
         _ => {}
     };
     Ok(arrow_field)
@@ -65,7 +76,7 @@ pub(crate) fn try_add_extension_type(
 ///
 /// This is used to preallocate the metadata hashmap size
 pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
-    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type() else {
+    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type_ref() else {
         return false;
     };
     match parquet_logical_type {
@@ -75,6 +86,10 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
         LogicalType::Uuid => true,
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Json => true,
+        #[cfg(feature = "geospatial")]
+        LogicalType::Geometry { .. } => true,
+        #[cfg(feature = "geospatial")]
+        LogicalType::Geography { .. } => true,
         _ => false,
     }
 }
@@ -132,4 +147,41 @@ pub(crate) fn logical_type_for_string(field: &Field) -> Option<LogicalType> {
 #[cfg(not(feature = "arrow_canonical_extension_types"))]
 pub(crate) fn logical_type_for_string(_field: &Field) -> Option<LogicalType> {
     Some(LogicalType::String)
+}
+
+#[cfg(feature = "geospatial")]
+pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+    use parquet_geospatial::WkbType;
+    use parquet_geospatial::WkbTypeHint;
+
+    match field.extension_type_name() {
+        Some(n) if n == WkbType::NAME => match field.try_extension_type::<WkbType>() {
+            Ok(wkb_type) => match wkb_type.metadata().type_hint() {
+                WkbTypeHint::Geometry => Some(LogicalType::Geometry {
+                    crs: wkb_type.metadata().crs.as_ref().map(|c| c.to_string()),
+                }),
+                WkbTypeHint::Geography => Some(LogicalType::Geography {
+                    crs: wkb_type.metadata().crs.as_ref().map(|c| c.to_string()),
+                    algorithm: wkb_type.metadata().algorithm.map(|a| a.into()),
+                }),
+            },
+            Err(_e) => None,
+        },
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "geospatial"))]
+pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+    None
+}
+
+#[cfg(feature = "geospatial")]
+pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType> {
+    logical_type_for_binary(field)
+}
+
+#[cfg(not(feature = "geospatial"))]
+pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType> {
+    None
 }

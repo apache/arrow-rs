@@ -20,15 +20,14 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
+use crate::{BooleanBuffer, BufferBuilder};
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
 #[cfg(feature = "pool")]
 use crate::pool::MemoryPool;
 
-use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
 
 /// A contiguous memory region that can be shared with other buffers and across
@@ -344,7 +343,7 @@ impl Buffer {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
-        bitwise_unary_op_helper(self, offset, len, |a| a)
+        BooleanBuffer::from_bits(self.as_slice(), offset, len).into_inner()
     }
 
     /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
@@ -363,6 +362,23 @@ impl Buffer {
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
     /// Returns `Err` if this is shared or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
+    ///
+    /// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
+    /// ```
+    /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
+    /// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
+    /// // Only possible to convert a Buffer into a MutableBuffer if uniquely owned
+    /// // (i.e., there are no other references to it).
+    /// let mut mutable_buffer = match buffer.into_mutable() {
+    ///    Ok(mutable) => mutable,
+    ///    Err(orig_buffer) => {
+    ///      panic!("buffer was not uniquely owned");
+    ///    }
+    /// };
+    /// mutable_buffer.push(5u8);
+    /// let buffer = Buffer::from(mutable_buffer);
+    /// assert_eq!(buffer.as_slice(), &[1u8, 2, 3, 4, 5])
+    /// ```
     ///
     /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
@@ -388,8 +404,8 @@ impl Buffer {
     /// # Errors
     ///
     /// Returns `Err(self)` if
-    /// 1. this buffer does not have the same [`Layout`] as the destination Vec
-    /// 2. contains a non-zero offset
+    /// 1. The buffer does not have the same [`Layout`] as the destination Vec
+    /// 2. The buffer contains a non-zero offset
     /// 3. The buffer is shared
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
@@ -521,6 +537,12 @@ impl std::ops::Deref for Buffer {
 
     fn deref(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
+    }
+}
+
+impl AsRef<[u8]> for &Buffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
     }
 }
 

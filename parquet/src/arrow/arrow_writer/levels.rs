@@ -550,8 +550,8 @@ impl LevelInfoBuilder {
     /// and the other is a native array, the dictionary values must have the same type as the
     /// native array
     fn types_compatible(a: &DataType, b: &DataType) -> bool {
-        // if the Arrow data types are the same, the types are clearly compatible
-        if a == b {
+        // if the Arrow data types are equal, the types are deemed compatible
+        if a.equals_datatype(b) {
             return true;
         }
 

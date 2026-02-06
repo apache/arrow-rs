@@ -726,7 +726,7 @@ mod tests {
             schema.to_string(),
             "Field { \"first_name\": Utf8, metadata: {\"k\": \"v\"} }, \
              Field { \"last_name\": Utf8 }, \
-             Field { \"address\": Struct(\"street\": Utf8, \"zip\": UInt16) }, \
+             Field { \"address\": Struct(\"street\": non-null Utf8, \"zip\": non-null UInt16) }, \
              Field { \"interests\": nullable Dictionary(Int32, Utf8), dict_id: 123, dict_is_ordered }"
         )
     }

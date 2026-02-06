@@ -756,7 +756,7 @@ impl Field {
                     descr.type_precision(),
                     descr.type_scale(),
                 )),
-                ConvertedType::NONE if descr.logical_type() == Some(LogicalType::Float16) => {
+                ConvertedType::NONE if descr.logical_type_ref() == Some(&LogicalType::Float16) => {
                     if value.len() != 2 {
                         return Err(general_err!(
                             "Error reading FIXED_LEN_BYTE_ARRAY as FLOAT16. Length must be 2, got {}",

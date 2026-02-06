@@ -23,7 +23,7 @@ use crate::{
     file::{
         column_crypto_metadata::ColumnCryptoMetaData,
         metadata::{
-            HeapSize, ParquetMetaData, RowGroupMetaData,
+            HeapSize, ParquetMetaData, ParquetMetaDataOptions, RowGroupMetaData,
             thrift::{parquet_metadata_from_bytes, read_column_metadata, validate_column_metadata},
         },
     },
@@ -113,6 +113,7 @@ pub(crate) struct FileCryptoMetaData<'a> {
 fn row_group_from_encrypted_thrift(
     mut rg: RowGroupMetaData,
     decryptor: Option<&FileDecryptor>,
+    options: Option<&ParquetMetaDataOptions>,
 ) -> Result<RowGroupMetaData> {
     let schema_descr = rg.schema_descr;
 
@@ -144,10 +145,18 @@ fn row_group_from_encrypted_thrift(
                 }
                 Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(crypto_metadata)) => {
                     let column_name = crypto_metadata.path_in_schema.join(".");
-                    decryptor.get_column_metadata_decryptor(
+                    // Try to get the decryptor - if it fails, we don't have the key
+                    match decryptor.get_column_metadata_decryptor(
                         column_name.as_str(),
                         crypto_metadata.key_metadata.as_deref(),
-                    )?
+                    ) {
+                        Ok(dec) => dec,
+                        Err(_) => {
+                            // We don't have the key for this column, so we can't decrypt its metadata.
+                            columns.push(c);
+                            continue;
+                        }
+                    }
                 }
                 Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY) => {
                     decryptor.get_footer_decryptor()?
@@ -176,7 +185,7 @@ fn row_group_from_encrypted_thrift(
 
             // parse decrypted buffer and then replace fields in 'c'
             let mut prot = ThriftSliceInputProtocol::new(&decrypted_cc_buf);
-            let mask = read_column_metadata(&mut prot, &mut c)?;
+            let mask = read_column_metadata(&mut prot, &mut c, i, options)?;
             validate_column_metadata(mask)?;
 
             columns.push(c);
@@ -213,6 +222,7 @@ pub(crate) fn parquet_metadata_with_encryption(
     file_decryption_properties: Option<&Arc<FileDecryptionProperties>>,
     encrypted_footer: bool,
     buf: &[u8],
+    options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ParquetMetaData> {
     use crate::file::metadata::ParquetMetaDataBuilder;
 
@@ -262,7 +272,7 @@ pub(crate) fn parquet_metadata_with_encryption(
         }
     }
 
-    let parquet_meta = parquet_metadata_from_bytes(buf)
+    let parquet_meta = parquet_metadata_from_bytes(buf, options)
         .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
 
     let ParquetMetaData {
@@ -296,7 +306,7 @@ pub(crate) fn parquet_metadata_with_encryption(
     // decrypt column chunk info
     let row_groups = row_groups
         .into_iter()
-        .map(|rg| row_group_from_encrypted_thrift(rg, file_decryptor.as_ref()))
+        .map(|rg| row_group_from_encrypted_thrift(rg, file_decryptor.as_ref(), options))
         .collect::<Result<Vec<_>>>()?;
 
     let metadata = ParquetMetaDataBuilder::new(file_metadata)

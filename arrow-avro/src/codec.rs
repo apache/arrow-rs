@@ -993,13 +993,13 @@ fn union_branch_name(dt: &AvroDataType) -> String {
     dt.codec.union_field_name()
 }
 
-fn build_union_fields(encodings: &[AvroDataType]) -> UnionFields {
+fn build_union_fields(encodings: &[AvroDataType]) -> Result<UnionFields, ArrowError> {
     let arrow_fields: Vec<Field> = encodings
         .iter()
         .map(|encoding| encoding.field_with_name(&union_branch_name(encoding)))
         .collect();
     let type_ids: Vec<i8> = (0..arrow_fields.len()).map(|i| i as i8).collect();
-    UnionFields::new(type_ids, arrow_fields)
+    UnionFields::try_new(type_ids, arrow_fields)
 }
 
 /// Resolves Avro type names to [`AvroDataType`]
@@ -1267,7 +1267,7 @@ impl<'a> Maker<'a> {
                     .map(|s| self.parse_type(s, namespace))
                     .collect::<Result<_, _>>()?;
                 // Build Arrow layout once here
-                let union_fields = build_union_fields(&children);
+                let union_fields = build_union_fields(&children)?;
                 Ok(AvroDataType::new(
                     Codec::Union(Arc::from(children), union_fields, UnionMode::Dense),
                     Default::default(),
@@ -1529,23 +1529,71 @@ impl<'a> Maker<'a> {
                 Ok(dt)
             }
             (writer_non_union, Schema::Union(reader_variants)) => {
-                let promo = self.find_best_promotion(
-                    writer_non_union,
-                    reader_variants.as_slice(),
-                    namespace,
-                );
-                let Some((reader_index, promotion)) = promo else {
-                    return Err(ArrowError::SchemaError(
-                        "Writer schema does not match any reader union branch".to_string(),
-                    ));
-                };
-                let mut dt = self.parse_type(reader_schema, namespace)?;
-                dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
-                    writer_to_reader: Arc::from(vec![Some((reader_index, promotion))]),
-                    writer_is_union: false,
-                    reader_is_union: true,
-                }));
-                Ok(dt)
+                if let Some((nullability, non_null_branch)) =
+                    nullable_union_variants(reader_variants)
+                {
+                    let mut dt = self.resolve_type(writer_non_union, non_null_branch, namespace)?;
+                    let non_null_idx = match nullability {
+                        Nullability::NullFirst => 1,
+                        Nullability::NullSecond => 0,
+                    };
+                    #[cfg(feature = "avro_custom_types")]
+                    Self::propagate_nullability_into_ree(&mut dt, nullability);
+                    dt.nullability = Some(nullability);
+                    let promotion = Self::coercion_from(&dt);
+                    dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
+                        writer_to_reader: Arc::from(vec![Some((non_null_idx, promotion))]),
+                        writer_is_union: false,
+                        reader_is_union: true,
+                    }));
+                    Ok(dt)
+                } else {
+                    let mut best_match: Option<(usize, AvroDataType, Promotion)> = None;
+                    for (i, variant) in reader_variants.iter().enumerate() {
+                        if let Ok(resolved_dt) =
+                            self.resolve_type(writer_non_union, variant, namespace)
+                        {
+                            let promotion = Self::coercion_from(&resolved_dt);
+                            if promotion == Promotion::Direct {
+                                best_match = Some((i, resolved_dt, promotion));
+                                break;
+                            } else if best_match.is_none() {
+                                best_match = Some((i, resolved_dt, promotion));
+                            }
+                        }
+                    }
+                    let Some((match_idx, match_dt, promotion)) = best_match else {
+                        return Err(ArrowError::SchemaError(
+                            "Writer schema does not match any reader union branch".to_string(),
+                        ));
+                    };
+                    let mut children = Vec::with_capacity(reader_variants.len());
+                    let mut match_dt = Some(match_dt);
+                    for (i, variant) in reader_variants.iter().enumerate() {
+                        if i == match_idx {
+                            if let Some(mut dt) = match_dt.take() {
+                                if matches!(dt.resolution, Some(ResolutionInfo::Promotion(_))) {
+                                    dt.resolution = None;
+                                }
+                                children.push(dt);
+                            }
+                        } else {
+                            children.push(self.parse_type(variant, namespace)?);
+                        }
+                    }
+                    let union_fields = build_union_fields(&children)?;
+                    let mut dt = AvroDataType::new(
+                        Codec::Union(children.into(), union_fields, UnionMode::Dense),
+                        Default::default(),
+                        None,
+                    );
+                    dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
+                        writer_to_reader: Arc::from(vec![Some((match_idx, promotion))]),
+                        writer_is_union: false,
+                        reader_is_union: true,
+                    }));
+                    Ok(dt)
+                }
             }
             (
                 Schema::Complex(ComplexType::Array(writer_array)),
@@ -1620,7 +1668,7 @@ impl<'a> Maker<'a> {
         for writer in writer_variants {
             writer_to_reader.push(self.find_best_promotion(writer, reader_variants, namespace));
         }
-        let union_fields = build_union_fields(&reader_encodings);
+        let union_fields = build_union_fields(&reader_encodings)?;
         let mut dt = AvroDataType::new(
             Codec::Union(reader_encodings.into(), union_fields, UnionMode::Dense),
             Default::default(),
@@ -2923,6 +2971,42 @@ mod tests {
             );
         } else {
             panic!("expected list codec");
+        }
+    }
+
+    #[test]
+    fn test_resolve_array_writer_nonunion_items_reader_nullable_items() {
+        let writer_schema = Schema::Complex(ComplexType::Array(Array {
+            items: Box::new(Schema::TypeName(TypeName::Primitive(PrimitiveType::Int))),
+            attributes: Attributes::default(),
+        }));
+        let reader_schema = Schema::Complex(ComplexType::Array(Array {
+            items: Box::new(mk_union(vec![
+                Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
+                Schema::TypeName(TypeName::Primitive(PrimitiveType::Int)),
+            ])),
+            attributes: Attributes::default(),
+        }));
+        let mut maker = Maker::new(false, false);
+        let dt = maker
+            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .unwrap();
+        if let Codec::List(inner) = dt.codec() {
+            assert_eq!(inner.nullability(), Some(Nullability::NullFirst));
+            assert!(matches!(inner.codec(), Codec::Int32));
+            match inner.resolution.as_ref() {
+                Some(ResolutionInfo::Union(info)) => {
+                    assert!(!info.writer_is_union, "writer should be non-union");
+                    assert!(info.reader_is_union, "reader should be union");
+                    assert_eq!(
+                        info.writer_to_reader.as_ref(),
+                        &[Some((1, Promotion::Direct))]
+                    );
+                }
+                other => panic!("expected Union resolution, got {other:?}"),
+            }
+        } else {
+            panic!("expected List codec");
         }
     }
 

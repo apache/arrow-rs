@@ -286,7 +286,8 @@ impl BooleanArray {
     }
 }
 
-impl Array for BooleanArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for BooleanArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -387,24 +388,21 @@ impl From<Vec<Option<bool>>> for BooleanArray {
 
 impl From<ArrayData> for BooleanArray {
     fn from(data: ArrayData) -> Self {
+        let (data_type, len, nulls, offset, mut buffers, _child_data) = data.into_parts();
         assert_eq!(
-            data.data_type(),
-            &DataType::Boolean,
-            "BooleanArray expected ArrayData with type {} got {}",
+            data_type,
             DataType::Boolean,
-            data.data_type()
+            "BooleanArray expected ArrayData with type Boolean got {data_type:?}",
         );
         assert_eq!(
-            data.buffers().len(),
+            buffers.len(),
             1,
             "BooleanArray data should contain a single buffer only (values buffer)"
         );
-        let values = BooleanBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
+        let buffer = buffers.pop().expect("checked above");
+        let values = BooleanBuffer::new(buffer, offset, len);
 
-        Self {
-            values,
-            nulls: data.nulls().cloned(),
-        }
+        Self { values, nulls }
     }
 }
 
@@ -828,5 +826,33 @@ mod tests {
         let (values, nulls) = boolean_array.into_parts();
         assert_eq!(values.values(), &[0b1000_0000]);
         assert!(nulls.is_none());
+    }
+
+    #[test]
+    fn test_new_null_array() {
+        let arr = BooleanArray::new_null(5);
+
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr.null_count(), 5);
+        assert_eq!(arr.true_count(), 0);
+        assert_eq!(arr.false_count(), 0);
+
+        for i in 0..5 {
+            assert!(arr.is_null(i));
+            assert!(!arr.is_valid(i));
+        }
+    }
+
+    #[test]
+    fn test_slice_with_nulls() {
+        let arr = BooleanArray::from(vec![Some(true), None, Some(false)]);
+        let sliced = arr.slice(1, 2);
+
+        assert_eq!(sliced.len(), 2);
+        assert_eq!(sliced.null_count(), 1);
+
+        assert!(sliced.is_null(0));
+        assert!(sliced.is_valid(1));
+        assert!(!sliced.value(1));
     }
 }

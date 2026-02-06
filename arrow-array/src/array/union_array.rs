@@ -19,7 +19,7 @@
 use crate::{Array, ArrayRef, make_array};
 use arrow_buffer::bit_chunk_iterator::{BitChunkIterator, BitChunks};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{BooleanBuffer, MutableBuffer, ScalarBuffer};
+use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, UnionFields, UnionMode};
 /// Contains the `UnionArray` type.
@@ -307,6 +307,14 @@ impl UnionArray {
                 .iter()
                 .map(|(_, f)| f.name().as_str())
                 .collect::<Vec<&str>>(),
+            _ => unreachable!("Union array's data type is not a union!"),
+        }
+    }
+
+    /// Returns the [`UnionFields`] for the union.
+    pub fn fields(&self) -> &UnionFields {
+        match self.data_type() {
+            DataType::Union(fields, _) => fields,
             _ => unreachable!("Union array's data type is not a union!"),
         }
     }
@@ -672,32 +680,36 @@ impl UnionArray {
 
 impl From<ArrayData> for UnionArray {
     fn from(data: ArrayData) -> Self {
-        let (fields, mode) = match data.data_type() {
-            DataType::Union(fields, mode) => (fields, *mode),
+        let (data_type, len, _nulls, offset, buffers, child_data) = data.into_parts();
+
+        let (fields, mode) = match &data_type {
+            DataType::Union(fields, mode) => (fields, mode),
             d => panic!("UnionArray expected ArrayData with type Union got {d}"),
         };
+
         let (type_ids, offsets) = match mode {
-            UnionMode::Sparse => (
-                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len()),
-                None,
-            ),
-            UnionMode::Dense => (
-                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len()),
-                Some(ScalarBuffer::new(
-                    data.buffers()[1].clone(),
-                    data.offset(),
-                    data.len(),
-                )),
-            ),
+            UnionMode::Sparse => {
+                let [buffer]: [Buffer; 1] = buffers.try_into().expect("1 buffer for type_ids");
+                (ScalarBuffer::new(buffer, offset, len), None)
+            }
+            UnionMode::Dense => {
+                let [type_ids_buffer, offsets_buffer]: [Buffer; 2] = buffers
+                    .try_into()
+                    .expect("2 buffers for type_ids and offsets");
+                (
+                    ScalarBuffer::new(type_ids_buffer, offset, len),
+                    Some(ScalarBuffer::new(offsets_buffer, offset, len)),
+                )
+            }
         };
 
         let max_id = fields.iter().map(|(i, _)| i).max().unwrap_or_default() as usize;
         let mut boxed_fields = vec![None; max_id + 1];
-        for (cd, (field_id, _)) in data.child_data().iter().zip(fields.iter()) {
-            boxed_fields[field_id as usize] = Some(make_array(cd.clone()));
+        for (cd, (field_id, _)) in child_data.into_iter().zip(fields.iter()) {
+            boxed_fields[field_id as usize] = Some(make_array(cd));
         }
         Self {
-            data_type: data.data_type().clone(),
+            data_type,
             type_ids,
             offsets,
             fields: boxed_fields,
@@ -730,7 +742,8 @@ impl From<UnionArray> for ArrayData {
     }
 }
 
-impl Array for UnionArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for UnionArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -1674,14 +1687,15 @@ mod tests {
     #[test]
     fn test_custom_type_ids() {
         let data_type = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![8, 4, 9],
                 vec![
                     Field::new("strings", DataType::Utf8, false),
                     Field::new("integers", DataType::Int32, false),
                     Field::new("floats", DataType::Float64, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         );
 
@@ -1788,14 +1802,15 @@ mod tests {
     fn into_parts_custom_type_ids() {
         let set_field_type_ids: [i8; 3] = [8, 4, 9];
         let data_type = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 set_field_type_ids,
                 [
                     Field::new("strings", DataType::Utf8, false),
                     Field::new("integers", DataType::Int32, false),
                     Field::new("floats", DataType::Float64, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         );
         let string_array = StringArray::from(vec!["foo", "bar", "baz"]);
@@ -1828,13 +1843,14 @@ mod tests {
 
     #[test]
     fn test_invalid() {
-        let fields = UnionFields::new(
+        let fields = UnionFields::try_new(
             [3, 2],
             [
                 Field::new("a", DataType::Utf8, false),
                 Field::new("b", DataType::Utf8, false),
             ],
-        );
+        )
+        .unwrap();
         let children = vec![
             Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
             Arc::new(StringArray::from_iter_values(["c", "d"])) as _,
@@ -1904,13 +1920,14 @@ mod tests {
 
         assert_eq!(array.logical_nulls(), None);
 
-        let fields = UnionFields::new(
+        let fields = UnionFields::try_new(
             [1, 3],
             [
                 Field::new("a", DataType::Int8, false), // non nullable
                 Field::new("b", DataType::Int8, false), // non nullable
             ],
-        );
+        )
+        .unwrap();
         let array = UnionArray::try_new(
             fields,
             vec![1].into(),
@@ -1924,13 +1941,14 @@ mod tests {
 
         assert_eq!(array.logical_nulls(), None);
 
-        let nullable_fields = UnionFields::new(
+        let nullable_fields = UnionFields::try_new(
             [1, 3],
             [
                 Field::new("a", DataType::Int8, true), // nullable but without nulls
                 Field::new("b", DataType::Int8, true), // nullable but without nulls
             ],
-        );
+        )
+        .unwrap();
         let array = UnionArray::try_new(
             nullable_fields.clone(),
             vec![1, 1].into(),

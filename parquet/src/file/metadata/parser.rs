@@ -22,7 +22,9 @@
 
 use crate::errors::ParquetError;
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
-use crate::file::metadata::{ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData};
+use crate::file::metadata::{
+    ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+};
 
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::index_reader::{decode_column_index, decode_offset_index};
@@ -51,6 +53,8 @@ mod inner {
     pub(crate) struct MetadataParser {
         // the credentials and keys needed to decrypt metadata
         file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+        // metadata parsing options
+        metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     }
 
     impl MetadataParser {
@@ -66,6 +70,16 @@ mod inner {
             self
         }
 
+        pub(crate) fn with_metadata_options(
+            self,
+            options: Option<Arc<ParquetMetaDataOptions>>,
+        ) -> Self {
+            Self {
+                metadata_options: options,
+                ..self
+            }
+        }
+
         pub(crate) fn decode_metadata(
             &self,
             buf: &[u8],
@@ -76,9 +90,10 @@ mod inner {
                     self.file_decryption_properties.as_ref(),
                     encrypted_footer,
                     buf,
+                    self.metadata_options.as_deref(),
                 )
             } else {
-                decode_metadata(buf)
+                decode_metadata(buf, self.metadata_options.as_deref())
             }
         }
     }
@@ -144,15 +159,28 @@ mod inner {
 mod inner {
     use super::*;
     use crate::errors::Result;
+    use std::sync::Arc;
     /// parallel implementation when encryption feature is not enabled
     ///
     /// This has the same API as the encryption-enabled version
     #[derive(Debug, Default)]
-    pub(crate) struct MetadataParser;
+    pub(crate) struct MetadataParser {
+        // metadata parsing options
+        metadata_options: Option<Arc<ParquetMetaDataOptions>>,
+    }
 
     impl MetadataParser {
         pub(crate) fn new() -> Self {
-            MetadataParser
+            MetadataParser::default()
+        }
+
+        pub(crate) fn with_metadata_options(
+            self,
+            options: Option<Arc<ParquetMetaDataOptions>>,
+        ) -> Self {
+            Self {
+                metadata_options: options,
+            }
         }
 
         pub(crate) fn decode_metadata(
@@ -165,7 +193,7 @@ mod inner {
                     "Parquet file has an encrypted footer but the encryption feature is disabled"
                 ))
             } else {
-                decode_metadata(buf)
+                decode_metadata(buf, self.metadata_options.as_deref())
             }
         }
     }
@@ -198,8 +226,11 @@ mod inner {
 /// by the [Parquet Spec].
 ///
 /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
-pub(crate) fn decode_metadata(buf: &[u8]) -> crate::errors::Result<ParquetMetaData> {
-    parquet_metadata_from_bytes(buf)
+pub(crate) fn decode_metadata(
+    buf: &[u8],
+    options: Option<&ParquetMetaDataOptions>,
+) -> crate::errors::Result<ParquetMetaData> {
+    parquet_metadata_from_bytes(buf, options)
 }
 
 /// Parses column index from the provided bytes and adds it to the metadata.

@@ -39,7 +39,7 @@ jobs:
       env:
         RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -69,9 +69,9 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Download crate docs
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: crate-docs
           path: website/build

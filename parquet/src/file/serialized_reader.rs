@@ -38,7 +38,7 @@ use crate::parquet_thrift::ThriftSliceInputProtocol;
 use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 use crate::record::Row;
 use crate::record::reader::RowIter;
-use crate::schema::types::Type as SchemaType;
+use crate::schema::types::{SchemaDescPtr, Type as SchemaType};
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
@@ -110,6 +110,7 @@ pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: Option<ReaderProperties>,
+    metadata_options: ParquetMetaDataOptions,
 }
 
 impl ReadOptionsBuilder {
@@ -152,6 +153,53 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
+    /// footer will be skipped.
+    pub fn with_parquet_schema(mut self, schema: SchemaDescPtr) -> Self {
+        self.metadata_options.set_schema(schema);
+        self
+    }
+
+    /// Set whether to convert the [`encoding_stats`] in the Parquet `ColumnMetaData` to a bitmask
+    /// (defaults to `false`).
+    ///
+    /// See [`ColumnChunkMetaData::page_encoding_stats_mask`] for an explanation of why this
+    /// might be desirable.
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
+    pub fn with_encoding_stats_as_mask(mut self, val: bool) -> Self {
+        self.metadata_options.set_encoding_stats_as_mask(val);
+        self
+    }
+
+    /// Sets the decoding policy for [`encoding_stats`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
+    pub fn with_encoding_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_encoding_stats_policy(policy);
+        self
+    }
+
+    /// Sets the decoding policy for [`statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L912
+    pub fn with_column_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_column_stats_policy(policy);
+        self
+    }
+
+    /// Sets the decoding policy for [`size_statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`size_statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L936
+    pub fn with_size_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_size_stats_policy(policy);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -161,18 +209,20 @@ impl ReadOptionsBuilder {
             predicates: self.predicates,
             enable_page_index: self.enable_page_index,
             props,
+            metadata_options: self.metadata_options,
         }
     }
 }
 
 /// A collection of options for reading a Parquet file.
 ///
-/// Currently, only predicates on row group metadata are supported.
+/// Predicates are currently only supported on row group metadata.
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: ReaderProperties,
+    metadata_options: ParquetMetaDataOptions,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -193,6 +243,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     #[allow(deprecated)]
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
         let mut metadata_builder = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options.metadata_options.clone()))
             .parse_and_finish(&chunk_reader)?
             .into_builder();
         let mut predicates = options.predicates;
@@ -387,8 +438,6 @@ pub(crate) fn decode_page(
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
 
-    // TODO: page header could be huge because of statistics. We should set a
-    // maximum page header size and abort if that is exceeded.
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
@@ -397,9 +446,11 @@ pub(crate) fn decode_page(
             }
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
-            decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
+            decompressed.extend_from_slice(&buffer[..offset]);
+            // decompressed size of zero corresponds to a page with no non-null values
+            // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
             if decompressed_size > 0 {
-                let compressed = &buffer.as_ref()[offset..];
+                let compressed = &buffer[offset..];
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
             }
 
@@ -897,6 +948,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *remaining,
                     )?;
                     let data_len = header.compressed_page_size as usize;
+                    let data_start = *offset;
                     *offset += data_len as u64;
                     *remaining -= data_len as u64;
 
@@ -904,16 +956,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         continue;
                     }
 
-                    let mut buffer = Vec::with_capacity(data_len);
-                    let read = read.take(data_len as u64).read_to_end(&mut buffer)?;
-
-                    if read != data_len {
-                        return Err(eof_err!(
-                            "Expected to read {} bytes of page, read only {}",
-                            data_len,
-                            read
-                        ));
-                    }
+                    let buffer = self.reader.get_bytes(data_start, data_len)?;
 
                     let buffer =
                         self.context
@@ -921,7 +964,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let page = decode_page(
                         header,
-                        Bytes::from(buffer),
+                        buffer,
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?;
@@ -1830,7 +1873,10 @@ mod tests {
     fn test_file_reader_optional_metadata() {
         // file with optional metadata: bloom filters, encoding stats, column index and offset index.
         let file = get_test_file("data_index_bloom_encoding_stats.parquet");
-        let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(false)
+            .build();
+        let file_reader = Arc::new(SerializedFileReader::new_with_options(file, options).unwrap());
 
         let row_group_metadata = file_reader.metadata.row_group(0);
         let col0_metadata = row_group_metadata.column(0);
@@ -1852,6 +1898,103 @@ mod tests {
         // test optional offset index offset
         assert_eq!(col0_metadata.offset_index_offset().unwrap(), 181);
         assert_eq!(col0_metadata.offset_index_length().unwrap(), 11);
+    }
+
+    #[test]
+    fn test_file_reader_page_stats_mask() {
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(true)
+            .build();
+        let file_reader = Arc::new(SerializedFileReader::new_with_options(file, options).unwrap());
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+
+        // test page encoding stats
+        let page_encoding_stats = row_group_metadata
+            .column(0)
+            .page_encoding_stats_mask()
+            .unwrap();
+        assert!(page_encoding_stats.is_only(Encoding::PLAIN));
+        let page_encoding_stats = row_group_metadata
+            .column(2)
+            .page_encoding_stats_mask()
+            .unwrap();
+        assert!(page_encoding_stats.is_only(Encoding::PLAIN_DICTIONARY));
+    }
+
+    #[test]
+    fn test_file_reader_page_stats_skipped() {
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+
+        // test skipping all
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for column in row_group_metadata.columns() {
+            assert!(column.page_encoding_stats().is_none());
+            assert!(column.page_encoding_stats_mask().is_none());
+            assert!(column.statistics().is_none());
+        }
+
+        // test skipping all but one column
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(true)
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
+            .with_column_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for (idx, column) in row_group_metadata.columns().iter().enumerate() {
+            assert!(column.page_encoding_stats().is_none());
+            assert_eq!(column.page_encoding_stats_mask().is_some(), idx == 0);
+            assert_eq!(column.statistics().is_some(), idx == 0);
+        }
+    }
+
+    #[test]
+    fn test_file_reader_size_stats_skipped() {
+        let file = get_test_file("repeated_primitive_no_list.parquet");
+
+        // test skipping all
+        let options = ReadOptionsBuilder::new()
+            .with_size_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for column in row_group_metadata.columns() {
+            assert!(column.repetition_level_histogram().is_none());
+            assert!(column.definition_level_histogram().is_none());
+            assert!(column.unencoded_byte_array_data_bytes().is_none());
+        }
+
+        // test skipping all but one column
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(true)
+            .with_size_stats_policy(ParquetStatisticsPolicy::skip_except(&[1]))
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for (idx, column) in row_group_metadata.columns().iter().enumerate() {
+            assert_eq!(column.repetition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.definition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.unencoded_byte_array_data_bytes().is_some(), idx == 1);
+        }
     }
 
     #[test]
@@ -2703,5 +2846,52 @@ mod tests {
                 metadata.row_group(i).column(0).data_page_offset()
             );
         }
+    }
+
+    #[test]
+    fn test_reuse_schema() {
+        let file = get_test_file("alltypes_plain.parquet");
+        let file_reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+        let schema = file_reader.metadata().file_metadata().schema_descr_ptr();
+        let expected = file_reader.metadata;
+
+        let options = ReadOptionsBuilder::new()
+            .with_parquet_schema(schema)
+            .build();
+        let file_reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        assert_eq!(expected.as_ref(), file_reader.metadata.as_ref());
+        // Should have used the same schema instance
+        assert!(Arc::ptr_eq(
+            &expected.file_metadata().schema_descr_ptr(),
+            &file_reader.metadata.file_metadata().schema_descr_ptr()
+        ));
+    }
+
+    #[test]
+    fn test_read_unknown_logical_type() {
+        let file = get_test_file("unknown-logical-type.parquet");
+        let reader = SerializedFileReader::new(file).expect("Error opening file");
+
+        let schema = reader.metadata().file_metadata().schema_descr();
+        assert_eq!(
+            schema.column(0).logical_type_ref(),
+            Some(&basic::LogicalType::String)
+        );
+        assert_eq!(
+            schema.column(1).logical_type_ref(),
+            Some(&basic::LogicalType::_Unknown { field_id: 2555 })
+        );
+        assert_eq!(schema.column(1).physical_type(), Type::BYTE_ARRAY);
+
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+
+        let mut num_rows = 0;
+        while iter.next().is_some() {
+            num_rows += 1;
+        }
+        assert_eq!(num_rows, reader.metadata().file_metadata().num_rows());
     }
 }

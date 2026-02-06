@@ -134,6 +134,10 @@
 //!
 
 use crate::StructMode;
+use crate::reader::binary_array::{
+    BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
+};
+use std::borrow::Cow;
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -159,6 +163,7 @@ use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
+mod binary_array;
 mod boolean_array;
 mod decimal_array;
 mod list_array;
@@ -291,21 +296,21 @@ impl ReaderBuilder {
 
     /// Create a [`Decoder`]
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
-        let (data_type, nullable) = match self.is_field {
-            false => (DataType::Struct(self.schema.fields.clone()), false),
-            true => {
-                let field = &self.schema.fields[0];
-                (field.data_type().clone(), field.is_nullable())
-            }
+        let (data_type, nullable) = if self.is_field {
+            let field = &self.schema.fields[0];
+            let data_type = Cow::Borrowed(field.data_type());
+            (data_type, field.is_nullable())
+        } else {
+            let data_type = Cow::Owned(DataType::Struct(self.schema.fields.clone()));
+            (data_type, false)
         };
 
-        let decoder = make_decoder(
-            data_type,
-            self.coerce_primitive,
-            self.strict_mode,
-            nullable,
-            self.struct_mode,
-        )?;
+        let ctx = DecoderContext {
+            coerce_primitive: self.coerce_primitive,
+            strict_mode: self.strict_mode,
+            struct_mode: self.struct_mode,
+        };
+        let decoder = ctx.make_decoder(data_type.as_ref(), nullable)?;
 
         let num_fields = self.schema.flattened_fields().len();
 
@@ -675,6 +680,48 @@ trait ArrayDecoder: Send {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError>;
 }
 
+/// Context for decoder creation, containing configuration.
+///
+/// This context is passed through the decoder creation process and contains
+/// all the configuration needed to create decoders recursively.
+pub struct DecoderContext {
+    /// Whether to coerce primitives to strings
+    coerce_primitive: bool,
+    /// Whether to validate struct fields strictly
+    strict_mode: bool,
+    /// How to decode struct fields
+    struct_mode: StructMode,
+}
+
+impl DecoderContext {
+    /// Returns whether to coerce primitive types (e.g., number to string)
+    pub fn coerce_primitive(&self) -> bool {
+        self.coerce_primitive
+    }
+
+    /// Returns whether to validate struct fields strictly
+    pub fn strict_mode(&self) -> bool {
+        self.strict_mode
+    }
+
+    /// Returns how to decode struct fields
+    pub fn struct_mode(&self) -> StructMode {
+        self.struct_mode
+    }
+
+    /// Create a decoder for a type.
+    ///
+    /// This is the standard way to create child decoders from within a decoder
+    /// implementation.
+    fn make_decoder(
+        &self,
+        data_type: &DataType,
+        is_nullable: bool,
+    ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+        make_decoder(self, data_type, is_nullable)
+    }
+}
+
 macro_rules! primitive_decoder {
     ($t:ty, $data_type:expr) => {
         Ok(Box::new(PrimitiveArrayDecoder::<$t>::new($data_type)))
@@ -682,14 +729,13 @@ macro_rules! primitive_decoder {
 }
 
 fn make_decoder(
-    data_type: DataType,
-    coerce_primitive: bool,
-    strict_mode: bool,
+    ctx: &DecoderContext,
+    data_type: &DataType,
     is_nullable: bool,
-    struct_mode: StructMode,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+    let coerce_primitive = ctx.coerce_primitive();
     downcast_integer! {
-        data_type => (primitive_decoder, data_type),
+        *data_type => (primitive_decoder, data_type),
         DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
         DataType::Float16 => primitive_decoder!(Float16Type, data_type),
         DataType::Float32 => primitive_decoder!(Float32Type, data_type),
@@ -740,14 +786,15 @@ fn make_decoder(
         DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
         DataType::Utf8View => Ok(Box::new(StringViewArrayDecoder::new(coerce_primitive))),
         DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
-        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
-            Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
-        }
-        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(ctx, data_type, is_nullable)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(ctx, data_type, is_nullable)?)),
+        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(ctx, data_type, is_nullable)?)),
+        DataType::Binary => Ok(Box::new(BinaryArrayDecoder::<i32>::default())),
+        DataType::LargeBinary => Ok(Box::new(BinaryArrayDecoder::<i64>::default())),
+        DataType::FixedSizeBinary(len) => Ok(Box::new(FixedSizeBinaryArrayDecoder::new(len))),
+        DataType::BinaryView => Ok(Box::new(BinaryViewDecoder::default())),
+        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(ctx, data_type, is_nullable)?)),
+        _ => Err(ArrowError::NotYetImplemented(format!("Support for {data_type} in JSON reader")))
     }
 }
 

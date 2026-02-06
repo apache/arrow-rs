@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::Array;
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeBinaryArray};
 use arrow_buffer::Buffer;
@@ -99,6 +100,23 @@ impl FixedSizeBinaryBuilder {
         self.values_builder
             .extend(std::iter::repeat_n(0u8, self.value_length as usize * n));
         self.null_buffer_builder.append_n_nulls(n);
+    }
+
+    /// Appends all elements in array into the builder.
+    pub fn append_array(&mut self, array: &FixedSizeBinaryArray) -> Result<(), ArrowError> {
+        if self.value_length != array.value_length() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Cannot append FixedSizeBinaryArray with different value length".to_string(),
+            ));
+        }
+        let buffer = array.value_data();
+        self.values_builder.extend_from_slice(buffer);
+        if let Some(validity) = array.nulls() {
+            self.null_buffer_builder.append_buffer(validity);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
+        }
+        Ok(())
     }
 
     /// Returns the current values buffer as a slice
@@ -269,5 +287,46 @@ mod tests {
     #[should_panic(expected = "value length (-1) of the array must >= 0")]
     fn test_fixed_size_binary_builder_invalid_value_length() {
         let _ = FixedSizeBinaryBuilder::with_capacity(15, -1);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_builder_append_array() {
+        let mut other_builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
+        other_builder.append_value(b"hello").unwrap();
+        other_builder.append_null();
+        other_builder.append_value(b"arrow").unwrap();
+        let other_array = other_builder.finish();
+
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(6, 5);
+        builder.append_array(&other_array).unwrap();
+        // Append again to test if breaks when appending multiple times
+        builder.append_array(&other_array).unwrap();
+        let array = builder.finish();
+
+        assert_eq!(array.value_length(), other_array.value_length());
+        assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
+        assert_eq!(6, array.len());
+        assert_eq!(2, array.null_count());
+        for i in 0..6 {
+            assert_eq!(i * 5, array.value_offset(i as usize));
+        }
+
+        assert_eq!(b"hello", array.value(0));
+        assert!(array.is_null(1));
+        assert_eq!(b"arrow", array.value(2));
+
+        assert_eq!(b"hello", array.value(3));
+        assert!(array.is_null(4));
+        assert_eq!(b"arrow", array.value(5));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot append FixedSizeBinaryArray with different value length")]
+    fn test_fixed_size_binary_builder_append_array_invalid_value_length() {
+        let mut other_builder = FixedSizeBinaryBuilder::with_capacity(3, 4);
+        other_builder.append_value(b"test").unwrap();
+        let other_array = other_builder.finish();
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
+        builder.append_array(&other_array).unwrap();
     }
 }

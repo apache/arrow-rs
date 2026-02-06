@@ -55,7 +55,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -68,7 +68,6 @@ jobs:
         run: |
           # Test parquet examples
           cargo run -p parquet --example read_parquet
-          cargo run -p parquet --example async_read_parquet --features="async"
           cargo run -p parquet --example read_with_rowgroup --features="async"
 
   # test compilation
@@ -78,7 +77,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -133,7 +132,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -156,7 +155,7 @@ jobs:
       matrix:
         rust: [ stable ]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -189,7 +188,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy

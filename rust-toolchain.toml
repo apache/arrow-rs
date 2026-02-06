@@ -16,5 +16,5 @@
 # under the License.
 
 [toolchain]
-channel = "1.90"
+channel = "1.91"
 components = ["rustfmt", "clippy"]

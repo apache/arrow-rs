@@ -32,7 +32,7 @@ pub trait ColumnLevelDecoder {
     type Buffer;
 
     /// Set data for this [`ColumnLevelDecoder`]
-    fn set_data(&mut self, encoding: Encoding, data: Bytes);
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()>;
 }
 
 pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
@@ -266,15 +266,15 @@ enum LevelDecoder {
 }
 
 impl LevelDecoder {
-    fn new(encoding: Encoding, data: Bytes, bit_width: u8) -> Self {
+    fn new(encoding: Encoding, data: Bytes, bit_width: u8) -> Result<Self> {
         match encoding {
             Encoding::RLE => {
                 let mut decoder = RleDecoder::new(bit_width);
-                decoder.set_data(data);
-                Self::Rle(decoder)
+                decoder.set_data(data)?;
+                Ok(Self::Rle(decoder))
             }
             #[allow(deprecated)]
-            Encoding::BIT_PACKED => Self::Packed(BitReader::new(data), bit_width),
+            Encoding::BIT_PACKED => Ok(Self::Packed(BitReader::new(data), bit_width)),
             _ => unreachable!("invalid level encoding: {}", encoding),
         }
     }
@@ -310,8 +310,9 @@ impl DefinitionLevelDecoderImpl {
 impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
     type Buffer = Vec<i16>;
 
-    fn set_data(&mut self, encoding: Encoding, data: Bytes) {
-        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width))
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
+        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width)?);
+        Ok(())
     }
 }
 
@@ -413,10 +414,11 @@ impl RepetitionLevelDecoderImpl {
 impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
     type Buffer = Vec<i16>;
 
-    fn set_data(&mut self, encoding: Encoding, data: Bytes) {
-        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width));
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
+        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width)?);
         self.buffer_len = 0;
         self.buffer_offset = 0;
+        Ok(())
     }
 }
 
@@ -499,14 +501,14 @@ mod tests {
         let data = Bytes::from(encoder.consume());
 
         let mut decoder = RepetitionLevelDecoderImpl::new(1);
-        decoder.set_data(Encoding::RLE, data.clone());
+        decoder.set_data(Encoding::RLE, data.clone()).unwrap();
         let (_, levels) = decoder.skip_rep_levels(100, 4).unwrap();
         assert_eq!(levels, 4);
 
         // The length of the final bit packed run is ambiguous, so without the correct
         // levels limit, it will decode zero padding
         let mut decoder = RepetitionLevelDecoderImpl::new(1);
-        decoder.set_data(Encoding::RLE, data);
+        decoder.set_data(Encoding::RLE, data).unwrap();
         let (_, levels) = decoder.skip_rep_levels(100, 6).unwrap();
         assert_eq!(levels, 6);
     }
@@ -525,7 +527,7 @@ mod tests {
             let data = Bytes::from(encoder.consume());
 
             let mut decoder = RepetitionLevelDecoderImpl::new(5);
-            decoder.set_data(Encoding::RLE, data);
+            decoder.set_data(Encoding::RLE, data).unwrap();
 
             let total_records = encoded.iter().filter(|x| **x == 0).count();
             let mut remaining_records = total_records;

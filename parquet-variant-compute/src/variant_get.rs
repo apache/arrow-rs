@@ -180,7 +180,7 @@ fn shredded_get_path(
             ShreddedPathStep::Missing => {
                 let num_rows = input.len();
                 let arr = match as_field.map(|f| f.data_type()) {
-                    Some(data_type) => Arc::new(array::new_null_array(data_type, num_rows)) as _,
+                    Some(data_type) => array::new_null_array(data_type, num_rows),
                     None => Arc::new(array::NullArray::new(num_rows)) as _,
                 };
                 return Ok(arr);
@@ -208,6 +208,11 @@ fn shredded_get_path(
         return Ok(ArrayRef::from(target));
     };
 
+    // Try to return the typed value directly when we have a perfect shredding match.
+    if let Some(shredded) = try_perfect_shredding(&target, as_field) {
+        return Ok(shredded);
+    }
+
     // Structs are special. Recurse into each field separately, hoping to follow the shredding even
     // further, and build up the final struct from those individually shredded results.
     if let DataType::Struct(fields) = as_field.data_type() {
@@ -234,6 +239,28 @@ fn shredded_get_path(
 
     // Not a struct, so directly shred the variant as the requested type
     shred_basic_variant(target, VariantPath::default(), Some(as_field))
+}
+
+fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Option<ArrayRef> {
+    // Try to return the typed value directly when we have a perfect shredding match.
+    if matches!(as_field.data_type(), DataType::Struct(_)) {
+        return None;
+    }
+    let typed_value = variant_array.typed_value_field()?;
+    if typed_value.data_type() == as_field.data_type()
+        && variant_array
+            .value_field()
+            .is_none_or(|v| v.null_count() == v.len())
+    {
+        // Here we need to gate against the case where the `typed_value` is null but data is in the `value` column.
+        // 1. If the `value` column is null, or
+        // 2. If every row in the `value` column is null
+
+        // This is a perfect shredding, where the value is entirely shredded out,
+        // so we can just return the typed value.
+        return Some(typed_value.clone());
+    }
+    None
 }
 
 /// Returns an array with the specified path extracted from the variant values.
@@ -309,21 +336,24 @@ mod test {
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::{VariantArray, VariantArrayBuilder, json_to_variant};
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Decimal32Array,
-        Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, NullBuilder, StringArray, StructArray,
-        Time64MicrosecondArray,
+        Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+        Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
+        ListViewArray, NullBuilder, StringArray, StringViewArray, StructArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     };
-    use arrow::buffer::NullBuffer;
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
+    use arrow::util::display::FormatOptions;
     use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
-    use arrow_schema::{DataType, Field, FieldRef, Fields, TimeUnit};
+    use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
     use chrono::DateTime;
     use parquet_variant::{
-        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
-        VariantDecimalType, VariantPath,
+        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8,
+        VariantDecimal16, VariantDecimalType, VariantPath,
     };
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
@@ -778,6 +808,27 @@ mod test {
         BooleanArray::from(vec![Some(true), Some(false), Some(true)])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_large_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_large_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_view_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_view_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
     macro_rules! perfectly_shredded_variant_array_fn {
         ($func:ident, $typed_value_gen:expr) => {
             fn $func() -> ArrayRef {
@@ -800,6 +851,18 @@ mod test {
             }
         };
     }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_variant_array, || {
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_large_utf8_variant_array, || {
+        LargeStringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_view_variant_array, || {
+        StringViewArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_bool_variant_array, || {
         BooleanArray::from(vec![Some(true), Some(false), Some(true)])
@@ -938,6 +1001,152 @@ mod test {
         }
     );
 
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_micro_variant_array_for_second_and_milli_second,
+        || {
+            arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(1234),       // can't be cast to second & millisecond
+                Some(1234000),    // can be cast to millisecond, but not second
+                Some(1234000000), // can be cast to second & millisecond
+            ])
+            .with_timezone("+00:00")
+        }
+    );
+
+    // The following two tests wants to cover the micro with timezone -> milli/second cases
+    // there are three test items, which contains some items can be cast safely, and some can't
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_timestamp_second,
+        DataType::Timestamp(TimeUnit::Second, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampSecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to second safely
+            Some(1234)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_timestamp_milli,
+        DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampMillisecondArray::from(vec![
+            None, // Return None if can't be cast to millisecond safely
+            Some(1234),
+            Some(1234000)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_micro_ntz_variant_array_for_second_and_milli_second,
+        || {
+            arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(1234),       // can't be cast to second & millisecond
+                Some(1234000),    // can be cast to millisecond, but not second
+                Some(1234000000), // can be cast to second & millisecond
+            ])
+        }
+    );
+
+    // The following two tests wants to cover the micro_ntz -> milli/second cases
+    // there are three test items, which contains some items can be cast safely, and some can't
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_timestamp_second,
+        DataType::Timestamp(TimeUnit::Second, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampSecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to second safely
+            Some(1234)
+        ])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_timestamp_milli,
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampMillisecondArray::from(vec![
+            None, // Return None if can't be cast to millisecond safely
+            Some(1234),
+            Some(1234000)
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_nano_variant_array_for_second_and_milli_second,
+        || {
+            arrow::array::TimestampNanosecondArray::from(vec![
+                Some(1234000),       // can't be cast to second & millisecond
+                Some(1234000000),    // can be cast to millisecond, but not second
+                Some(1234000000000), // can be cast to second & millisecond
+            ])
+            .with_timezone("+00:00")
+        }
+    );
+
+    // The following two tests wants to cover the nano with timezone -> milli/second cases
+    // there are three test items, which contains some items can be cast safely, and some can't
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_as_timestamp_second,
+        DataType::Timestamp(TimeUnit::Second, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_nano_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampSecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to second safely
+            Some(1234)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_as_timestamp_milli,
+        DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_nano_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampMillisecondArray::from(vec![
+            None, // Return None if can't be cast to millisecond safely
+            Some(1234),
+            Some(1234000)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_nano_ntz_variant_array_for_second_and_milli_second,
+        || {
+            arrow::array::TimestampNanosecondArray::from(vec![
+                Some(1234000),       // can't be cast to second & millisecond
+                Some(1234000000),    // can be cast to millisecond, but not second
+                Some(1234000000000), // can be cast to second & millisecond
+            ])
+        }
+    );
+
+    // The following two tests wants to cover the nano_ntz -> milli/second cases
+    // there are three test items, which contains some items can be cast safely, and some can't
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_ntz_as_timestamp_second,
+        DataType::Timestamp(TimeUnit::Second, None),
+        perfectly_shredded_timestamp_nano_ntz_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampSecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to second safely
+            Some(1234)
+        ])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_ntz_as_timestamp_milli,
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+        perfectly_shredded_timestamp_nano_ntz_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampMillisecondArray::from(vec![
+            None, // Return None if can't be cast to millisecond safely
+            Some(1234),
+            Some(1234000)
+        ])
+    );
+
     perfectly_shredded_to_arrow_primitive_test!(
         get_variant_perfectly_shredded_timestamp_nano_ntz_as_timestamp_nano_ntz,
         DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -981,6 +1190,17 @@ mod test {
         Date32Array::from(vec![Some(-12345), Some(17586), Some(20000)])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_date_as_date64,
+        DataType::Date64,
+        perfectly_shredded_date_variant_array,
+        Date64Array::from(vec![
+            Some(-1066608000000),
+            Some(1519430400000),
+            Some(1728000000000)
+        ])
+    );
+
     perfectly_shredded_variant_array_fn!(perfectly_shredded_time_variant_array, || {
         Time64MicrosecondArray::from(vec![Some(12345000), Some(87654000), Some(135792000)])
     });
@@ -990,6 +1210,47 @@ mod test {
         DataType::Time64(TimeUnit::Microsecond),
         perfectly_shredded_time_variant_array,
         Time64MicrosecondArray::from(vec![Some(12345000), Some(87654000), Some(135792000)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_time_as_time64_nano,
+        DataType::Time64(TimeUnit::Nanosecond),
+        perfectly_shredded_time_variant_array,
+        Time64NanosecondArray::from(vec![
+            Some(12345000000),
+            Some(87654000000),
+            Some(135792000000)
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_time_variant_array_for_time32, || {
+        Time64MicrosecondArray::from(vec![
+            Some(1234),        // This can't be cast to Time32 losslessly
+            Some(7654000),     // This can be cast to Time32(Millisecond), but not Time32(Second)
+            Some(35792000000), // This can be cast to Time32(Second) & Time32(Millisecond)
+        ])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_time_as_time32_second,
+        DataType::Time32(TimeUnit::Second),
+        perfectly_shredded_time_variant_array_for_time32,
+        Time32SecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to Time32(Second) safely
+            Some(35792)
+        ])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_time_as_time32_milli,
+        DataType::Time32(TimeUnit::Millisecond),
+        perfectly_shredded_time_variant_array_for_time32,
+        Time32MillisecondArray::from(vec![
+            None, // Return None if can't be cast to Time32(Second) safely
+            Some(7654),
+            Some(35792000)
+        ])
     );
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_null_variant_array, || {
@@ -1004,6 +1265,43 @@ mod test {
         perfectly_shredded_null_variant_array,
         arrow::array::NullArray::new(3)
     );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_null_variant_array_with_int, || {
+        Int32Array::from(vec![Some(32), Some(64), Some(48)])
+    });
+
+    // We append null values if type miss match happens in safe mode
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_null_with_type_missmatch_in_safe_mode,
+        DataType::Null,
+        perfectly_shredded_null_variant_array_with_int,
+        arrow::array::NullArray::new(3)
+    );
+
+    // We'll return an error if type miss match happens in strict mode
+    #[test]
+    fn get_variant_perfectly_shredded_null_as_null_with_type_missmatch_in_strict_mode() {
+        let array = perfectly_shredded_null_variant_array_with_int();
+        let field = Field::new("typed_value", DataType::Null, true);
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(field)))
+            .with_cast_options(CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            });
+
+        let result = variant_get(&array, options);
+
+        assert!(result.is_err());
+        let error_msg = format!("{}", result.unwrap_err());
+        assert!(
+            error_msg
+                .contains("Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])"),
+            "Expected=[Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])],\
+                Got error message=[{}]",
+            error_msg
+        );
+    }
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_decimal4_variant_array, || {
         Decimal32Array::from(vec![Some(12345), Some(23400), Some(-12342)])
@@ -1282,6 +1580,63 @@ mod test {
             ]
         )
     }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_binary_variant_array, || {
+        BinaryArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_binary_as_binary,
+        DataType::Binary,
+        perfectly_shredded_binary_variant_array,
+        BinaryArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_large_binary_variant_array, || {
+        LargeBinaryArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_large_binary_as_large_binary,
+        DataType::LargeBinary,
+        perfectly_shredded_large_binary_variant_array,
+        LargeBinaryArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_binary_view_variant_array, || {
+        BinaryViewArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_binary_view_as_binary_view,
+        DataType::BinaryView,
+        perfectly_shredded_binary_view_variant_array,
+        BinaryViewArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    );
 
     /// Return a VariantArray that represents a normal "shredded" variant
     /// for the following example
@@ -3594,18 +3949,46 @@ mod test {
         ));
     }
 
-    perfectly_shredded_variant_array_fn!(perfectly_shredded_invalid_time_variant_array, || {
+    #[test]
+    fn get_non_supported_temporal_types_error() {
+        let values = vec![None, Some(Variant::Null), Some(Variant::BooleanFalse)];
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter(values));
+
+        let test_cases = vec![
+            FieldRef::from(Field::new(
+                "result",
+                DataType::Duration(TimeUnit::Microsecond),
+                true,
+            )),
+            FieldRef::from(Field::new(
+                "result",
+                DataType::Interval(IntervalUnit::YearMonth),
+                true,
+            )),
+        ];
+
+        for field in test_cases {
+            let options = GetOptions::new().with_as_type(Some(field));
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Casting Variant to duration/interval types is not supported")
+            );
+        }
+    }
+
+    fn invalid_time_variant_array() -> ArrayRef {
+        let mut builder = VariantArrayBuilder::new(3);
         // 86401000000 is invalid for Time64Microsecond (max is 86400000000)
-        Time64MicrosecondArray::from(vec![
-            Some(86401000000),
-            Some(86401000000),
-            Some(86401000000),
-        ])
-    });
+        builder.append_variant(Variant::Int64(86401000000));
+        builder.append_variant(Variant::Int64(86401000000));
+        builder.append_variant(Variant::Int64(86401000000));
+        Arc::new(builder.build().into_inner())
+    }
 
     #[test]
     fn test_variant_get_error_when_cast_failure_and_safe_false() {
-        let variant_array = perfectly_shredded_invalid_time_variant_array();
+        let variant_array = invalid_time_variant_array();
 
         let field = Field::new("result", DataType::Time64(TimeUnit::Microsecond), true);
         let cast_options = CastOptions {
@@ -3618,14 +4001,15 @@ mod test {
         let err = variant_get(&variant_array, options).unwrap_err();
         assert!(
             err.to_string().contains(
-                "Cast error: Cast failed at index 0 (array type: Time64(µs)): Invalid microsecond from midnight: 86401000000"
-            )
+                "Cast error: Failed to extract primitive of type Time64(µs) from variant Int64(86401000000) at path VariantPath([])"
+            ),
+            "actual: {err}",
         );
     }
 
     #[test]
     fn test_variant_get_return_null_when_cast_failure_and_safe_true() {
-        let variant_array = perfectly_shredded_invalid_time_variant_array();
+        let variant_array = invalid_time_variant_array();
 
         let field = Field::new("result", DataType::Time64(TimeUnit::Microsecond), true);
         let cast_options = CastOptions {
@@ -3640,6 +4024,335 @@ mod test {
 
         for i in 0..3 {
             assert!(result.is_null(i));
+        }
+    }
+
+    #[test]
+    fn test_perfect_shredding_returns_same_arc_ptr() {
+        let variant_array = perfectly_shredded_int32_variant_array();
+
+        let variant_array_ref = VariantArray::try_new(&variant_array).unwrap();
+        let typed_value_arc = variant_array_ref.typed_value_field().unwrap().clone();
+
+        let field = Field::new("result", DataType::Int32, true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+
+        assert!(Arc::ptr_eq(&typed_value_arc, &result));
+    }
+
+    #[test]
+    fn test_perfect_shredding_three_typed_value_columns() {
+        // Column 1: perfectly shredded primitive with all nulls
+        let all_nulls_values: Arc<Int32Array> = Arc::new(Int32Array::from(vec![
+            Option::<i32>::None,
+            Option::<i32>::None,
+            Option::<i32>::None,
+        ]));
+        let all_nulls_erased: ArrayRef = all_nulls_values.clone();
+        let all_nulls_field =
+            ShreddedVariantFieldArray::from_parts(None, Some(all_nulls_erased.clone()), None);
+        let all_nulls_type = all_nulls_field.data_type().clone();
+        let all_nulls_struct: ArrayRef = ArrayRef::from(all_nulls_field);
+
+        // Column 2: perfectly shredded primitive with some nulls
+        let some_nulls_values: Arc<Int32Array> =
+            Arc::new(Int32Array::from(vec![Some(10), None, Some(30)]));
+        let some_nulls_erased: ArrayRef = some_nulls_values.clone();
+        let some_nulls_field =
+            ShreddedVariantFieldArray::from_parts(None, Some(some_nulls_erased.clone()), None);
+        let some_nulls_type = some_nulls_field.data_type().clone();
+        let some_nulls_struct: ArrayRef = ArrayRef::from(some_nulls_field);
+
+        // Column 3: perfectly shredded nested struct
+        let inner_values: Arc<Int32Array> =
+            Arc::new(Int32Array::from(vec![Some(111), None, Some(333)]));
+        let inner_erased: ArrayRef = inner_values.clone();
+        let inner_field =
+            ShreddedVariantFieldArray::from_parts(None, Some(inner_erased.clone()), None);
+        let inner_field_type = inner_field.data_type().clone();
+        let inner_struct_array: ArrayRef = ArrayRef::from(inner_field);
+
+        let nested_struct = Arc::new(
+            StructArray::try_new(
+                Fields::from(vec![Field::new("inner", inner_field_type, true)]),
+                vec![inner_struct_array],
+                None,
+            )
+            .unwrap(),
+        );
+        let nested_struct_erased: ArrayRef = nested_struct.clone();
+        let struct_field =
+            ShreddedVariantFieldArray::from_parts(None, Some(nested_struct_erased.clone()), None);
+        let struct_field_type = struct_field.data_type().clone();
+        let struct_field_struct: ArrayRef = ArrayRef::from(struct_field);
+
+        // Assemble the top-level typed_value struct with the three columns above
+        let typed_value_struct = StructArray::try_new(
+            Fields::from(vec![
+                Field::new("all_nulls", all_nulls_type, true),
+                Field::new("some_nulls", some_nulls_type, true),
+                Field::new("struct_field", struct_field_type, true),
+            ]),
+            vec![all_nulls_struct, some_nulls_struct, struct_field_struct],
+            None,
+        )
+        .unwrap();
+
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+            EMPTY_VARIANT_METADATA_BYTES,
+            all_nulls_values.len(),
+        ));
+        let variant_struct = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), false)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
+            .build();
+        let variant_array: ArrayRef = VariantArray::try_new(&variant_struct).unwrap().into();
+
+        // Case 1: all-null primitive column should reuse the typed_value Arc directly
+        let all_nulls_field_ref = FieldRef::from(Field::new("result", DataType::Int32, true));
+        let all_nulls_result = variant_get(
+            &variant_array,
+            GetOptions::new_with_path(VariantPath::from("all_nulls"))
+                .with_as_type(Some(all_nulls_field_ref)),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(&all_nulls_result, &all_nulls_erased));
+
+        // Case 2: primitive column with some nulls should also reuse its typed_value Arc
+        let some_nulls_field_ref = FieldRef::from(Field::new("result", DataType::Int32, true));
+        let some_nulls_result = variant_get(
+            &variant_array,
+            GetOptions::new_with_path(VariantPath::from("some_nulls"))
+                .with_as_type(Some(some_nulls_field_ref)),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(&some_nulls_result, &some_nulls_erased));
+
+        // Case 3: struct column should return a StructArray composed from the nested field
+        let struct_child_fields = Fields::from(vec![Field::new("inner", DataType::Int32, true)]);
+        let struct_field_ref = FieldRef::from(Field::new(
+            "result",
+            DataType::Struct(struct_child_fields.clone()),
+            true,
+        ));
+        let struct_result = variant_get(
+            &variant_array,
+            GetOptions::new_with_path(VariantPath::from("struct_field"))
+                .with_as_type(Some(struct_field_ref)),
+        )
+        .unwrap();
+        let struct_array = struct_result
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(struct_array.len(), 3);
+        assert_eq!(struct_array.null_count(), 0);
+
+        let inner_values_result = struct_array
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(inner_values_result.len(), 3);
+        assert_eq!(inner_values_result.value(0), 111);
+        assert!(inner_values_result.is_null(1));
+        assert_eq!(inner_values_result.value(2), 333);
+    }
+
+    #[test]
+    fn test_variant_get_list_like_safe_cast() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec![
+            r#"{"outer":{"list":[1, "two", 3]}}"#,
+            r#"{"outer":{"list":"not a list"}}"#,
+        ]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+
+        let value_array: ArrayRef = {
+            let mut builder = VariantBuilder::new();
+            builder.append_value("two");
+            let (_, value_bytes) = builder.finish();
+            Arc::new(BinaryViewArray::from(vec![
+                None,
+                Some(value_bytes.as_slice()),
+                None,
+            ]))
+        };
+        let typed_value_array: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
+        let struct_fields = Fields::from(vec![
+            Field::new("value", DataType::BinaryView, true),
+            Field::new("typed_value", DataType::Int64, true),
+        ]);
+        let struct_array: ArrayRef = Arc::new(
+            StructArray::try_new(
+                struct_fields.clone(),
+                vec![value_array.clone(), typed_value_array.clone()],
+                None,
+            )
+            .unwrap(),
+        );
+
+        let request_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let result_field = Arc::new(Field::new("item", DataType::Struct(struct_fields), true));
+
+        let expectations = vec![
+            (
+                DataType::List(request_field.clone()),
+                Arc::new(ListArray::new(
+                    result_field.clone(),
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 3])),
+                    struct_array.clone(),
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::LargeList(request_field.clone()),
+                Arc::new(LargeListArray::new(
+                    result_field.clone(),
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 3])),
+                    struct_array.clone(),
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::ListView(request_field.clone()),
+                Arc::new(ListViewArray::new(
+                    result_field.clone(),
+                    ScalarBuffer::from(vec![0, 3]),
+                    ScalarBuffer::from(vec![3, 0]),
+                    struct_array.clone(),
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::LargeListView(request_field),
+                Arc::new(LargeListViewArray::new(
+                    result_field,
+                    ScalarBuffer::from(vec![0, 3]),
+                    ScalarBuffer::from(vec![3, 0]),
+                    struct_array,
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+        ];
+
+        for (request_type, expected) in expectations {
+            let options = GetOptions::new_with_path(VariantPath::from("outer").join("list"))
+                .with_as_type(Some(FieldRef::from(Field::new(
+                    "result",
+                    request_type.clone(),
+                    true,
+                ))));
+
+            let result = variant_get(&variant_array, options).unwrap();
+            assert_eq!(result.data_type(), expected.data_type());
+            assert_eq!(&result, &expected);
+        }
+
+        for (idx, expected) in [
+            (0, vec![Some(1), None]),
+            (1, vec![None, None]),
+            (2, vec![Some(3), None]),
+        ] {
+            let index_options =
+                GetOptions::new_with_path(VariantPath::from("outer").join("list").join(idx))
+                    .with_as_type(Some(FieldRef::from(Field::new(
+                        "result",
+                        DataType::Int64,
+                        true,
+                    ))));
+            let index_result = variant_get(&variant_array, index_options).unwrap();
+            let index_expected: ArrayRef = Arc::new(Int64Array::from(expected));
+            assert_eq!(&index_result, &index_expected);
+        }
+    }
+
+    #[test]
+    fn test_variant_get_list_like_unsafe_cast_errors_on_element_mismatch() {
+        let string_array: ArrayRef =
+            Arc::new(StringArray::from(vec![r#"[1, "two", 3]"#, "[4, 5]"]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let item_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let request_types = vec![
+            DataType::List(item_field.clone()),
+            DataType::LargeList(item_field.clone()),
+            DataType::ListView(item_field.clone()),
+            DataType::LargeListView(item_field),
+        ];
+
+        for request_type in request_types {
+            let options = GetOptions::new()
+                .with_as_type(Some(FieldRef::from(Field::new(
+                    "result",
+                    request_type.clone(),
+                    true,
+                ))))
+                .with_cast_options(cast_options.clone());
+
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Failed to extract primitive of type Int64")
+            );
+        }
+    }
+
+    #[test]
+    fn test_variant_get_list_like_unsafe_cast_errors_on_non_list() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2]", "\"not a list\""]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let item_field = Arc::new(Field::new("item", Int64, true));
+        let data_types = vec![
+            DataType::List(item_field.clone()),
+            DataType::LargeList(item_field.clone()),
+            DataType::ListView(item_field.clone()),
+            DataType::LargeListView(item_field),
+        ];
+
+        for data_type in data_types {
+            let options = GetOptions::new()
+                .with_as_type(Some(FieldRef::from(Field::new("result", data_type, true))))
+                .with_cast_options(cast_options.clone());
+
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Failed to extract list from variant"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_variant_get_fixed_size_list_not_implemented() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2]", "\"not a list\""]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+        let item_field = Arc::new(Field::new("item", Int64, true));
+        for safe in [true, false] {
+            let options = GetOptions::new()
+                .with_as_type(Some(FieldRef::from(Field::new(
+                    "result",
+                    DataType::FixedSizeList(item_field.clone(), 2),
+                    true,
+                ))))
+                .with_cast_options(CastOptions {
+                    safe,
+                    ..Default::default()
+                });
+
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Converting unshredded variant arrays to arrow fixed-size lists")
+            );
         }
     }
 }

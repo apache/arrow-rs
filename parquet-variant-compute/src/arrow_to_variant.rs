@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::type_conversion::CastOptions;
 use arrow::array::{
-    Array, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
-    GenericStringArray, OffsetSizeTrait, PrimitiveArray,
+    Array, ArrayRef, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
+    GenericListViewArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
-use arrow::compute::kernels::cast;
+use arrow::compute::{CastOptions, kernels::cast};
 use arrow::datatypes::{
     self as datatypes, ArrowNativeType, ArrowPrimitiveType, ArrowTemporalType, ArrowTimestampType,
     DecimalType, RunEndIndexType,
@@ -367,7 +366,7 @@ macro_rules! define_row_builder {
                         $(
                             // NOTE: The `?` macro expansion fails without the type annotation.
                             let Some(value): Option<$option_ty> = value else {
-                                if self.options.strict {
+                                if !self.options.safe {
                                     return Err(ArrowError::ComputeError(format!(
                                         "Failed to convert value at index {index}: conversion failed",
                                     )));
@@ -404,7 +403,7 @@ define_row_builder!(
     where
         V: VariantDecimalType<Native = A::Native>,
     {
-        options: &'a CastOptions,
+        options: &'a CastOptions<'a>,
         scale: i8,
     },
     |array| -> PrimitiveArray<A> { array.as_primitive() },
@@ -414,7 +413,7 @@ define_row_builder!(
 // Decimal256 needs a two-stage conversion via i128
 define_row_builder!(
     struct Decimal256ArrowToVariantBuilder<'a> {
-        options: &'a CastOptions,
+        options: &'a CastOptions<'a>,
         scale: i8,
     },
     |array| -> arrow::array::Decimal256Array { array.as_primitive() },
@@ -426,7 +425,7 @@ define_row_builder!(
 
 define_row_builder!(
     struct TimestampArrowToVariantBuilder<'a, T: ArrowTimestampType> {
-        options: &'a CastOptions,
+        options: &'a CastOptions<'a>,
         has_time_zone: bool,
     },
     |array| -> PrimitiveArray<T> { array.as_primitive() },
@@ -450,7 +449,7 @@ define_row_builder!(
     where
         i64: From<T::Native>,
     {
-        options: &'a CastOptions,
+        options: &'a CastOptions<'a>,
     },
     |array| -> PrimitiveArray<T> { array.as_primitive() },
     |value| -> Option<_> {
@@ -464,7 +463,7 @@ define_row_builder!(
     where
         i64: From<T::Native>,
     {
-        options: &'a CastOptions,
+        options: &'a CastOptions<'a>,
     },
     |array| -> PrimitiveArray<T> { array.as_primitive() },
     |value| -> Option<_> {
@@ -556,14 +555,14 @@ impl<'a, L: ListLikeArray> ListArrowToVariantBuilder<'a, L> {
 /// Trait for list-like arrays that can provide element ranges
 pub(crate) trait ListLikeArray: Array {
     /// Get the values array
-    fn values(&self) -> &dyn Array;
+    fn values(&self) -> &ArrayRef;
 
     /// Get the start and end indices for a list element
     fn element_range(&self, index: usize) -> Range<usize>;
 }
 
 impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
-    fn values(&self) -> &dyn Array {
+    fn values(&self) -> &ArrayRef {
         self.values()
     }
 
@@ -576,7 +575,7 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
 }
 
 impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
-    fn values(&self) -> &dyn Array {
+    fn values(&self) -> &ArrayRef {
         self.values()
     }
 
@@ -590,7 +589,7 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
 }
 
 impl ListLikeArray for FixedSizeListArray {
-    fn values(&self) -> &dyn Array {
+    fn values(&self) -> &ArrayRef {
         self.values()
     }
 
@@ -899,7 +898,13 @@ mod tests {
 
     /// Builds a VariantArray from an Arrow array using the row builder.
     fn execute_row_builder_test(array: &dyn Array) -> VariantArray {
-        execute_row_builder_test_with_options(array, CastOptions::default())
+        execute_row_builder_test_with_options(
+            array,
+            CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )
     }
 
     /// Variant of `execute_row_builder_test` that allows specifying options
@@ -925,7 +930,14 @@ mod tests {
     /// Generic helper function to test row builders with basic assertion patterns.
     /// Uses execute_row_builder_test and adds simple value comparison assertions.
     fn test_row_builder_basic(array: &dyn Array, expected_values: Vec<Option<Variant>>) {
-        test_row_builder_basic_with_options(array, expected_values, CastOptions::default());
+        test_row_builder_basic_with_options(
+            array,
+            expected_values,
+            CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        );
     }
 
     /// Variant of `test_row_builder_basic` that allows specifying options
@@ -1058,7 +1070,10 @@ mod tests {
         let run_ends = Int32Array::from(vec![2, 5, 6]);
         let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
 
-        let options = CastOptions::default();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let mut row_builder =
             make_arrow_to_variant_row_builder(run_array.data_type(), &run_array, &options).unwrap();
 
@@ -1084,7 +1099,10 @@ mod tests {
         let run_ends = Int32Array::from(vec![2, 4, 5]);
         let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
 
-        let options = CastOptions::default();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let mut row_builder =
             make_arrow_to_variant_row_builder(run_array.data_type(), &run_array, &options).unwrap();
         let mut array_builder = VariantArrayBuilder::new(5);
@@ -1135,7 +1153,10 @@ mod tests {
         let keys = Int32Array::from(vec![Some(0), None, Some(1), None, Some(2)]);
         let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
 
-        let options = CastOptions::default();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let mut row_builder =
             make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array, &options)
                 .unwrap();
@@ -1167,7 +1188,10 @@ mod tests {
         let keys = Int32Array::from(vec![0, 1, 2, 0, 1, 2]);
         let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
 
-        let options = CastOptions::default();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let mut row_builder =
             make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array, &options)
                 .unwrap();
@@ -1207,7 +1231,10 @@ mod tests {
         let dict_array =
             DictionaryArray::<Int32Type>::try_new(keys, Arc::new(struct_array)).unwrap();
 
-        let options = CastOptions::default();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let mut row_builder =
             make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array, &options)
                 .unwrap();
@@ -1302,7 +1329,10 @@ mod tests {
         // Slice to get just the middle element: [[3, 4, 5]]
         let sliced_array = list_array.slice(1, 1);
 
-        let options = CastOptions::default();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let mut row_builder =
             make_arrow_to_variant_row_builder(sliced_array.data_type(), &sliced_array, &options)
                 .unwrap();
@@ -1346,7 +1376,10 @@ mod tests {
             Some(arrow::buffer::NullBuffer::from(vec![true, false])),
         );
 
-        let options = CastOptions::default();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let mut row_builder =
             make_arrow_to_variant_row_builder(outer_list.data_type(), &outer_list, &options)
                 .unwrap();
@@ -1467,14 +1500,11 @@ mod tests {
         let string_array = StringArray::from(vec![None, None, Some("hello"), None, None, None]);
         let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),
@@ -1515,14 +1545,11 @@ mod tests {
             .into_iter()
             .collect::<ScalarBuffer<i32>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),
@@ -1539,7 +1566,10 @@ mod tests {
         .unwrap();
 
         // Test the row builder
-        let options = CastOptions::default();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let mut row_builder =
             make_arrow_to_variant_row_builder(union_array.data_type(), &union_array, &options)
                 .unwrap();
@@ -1571,13 +1601,14 @@ mod tests {
         let string_array = StringArray::from(vec![None, Some("test")]);
         let type_ids = [1, 3].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let union_fields = UnionFields::new(
+        let union_fields = UnionFields::try_new(
             vec![1, 3], // Non-contiguous type IDs
             vec![
                 Field::new("int_field", DataType::Int32, false),
                 Field::new("string_field", DataType::Utf8, false),
             ],
-        );
+        )
+        .unwrap();
 
         let children: Vec<Arc<dyn Array>> = vec![Arc::new(int_array), Arc::new(string_array)];
 
@@ -1590,7 +1621,10 @@ mod tests {
         .unwrap();
 
         // Test the row builder
-        let options = CastOptions::default();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let mut row_builder =
             make_arrow_to_variant_row_builder(union_array.data_type(), &union_array, &options)
                 .unwrap();
@@ -1668,7 +1702,7 @@ mod tests {
                 Some(Variant::Null), // Overflow value becomes Variant::Null
                 Some(Variant::from(VariantDecimal16::try_new(123, 3).unwrap())),
             ],
-            CastOptions { strict: false },
+            CastOptions::default(),
         );
     }
 

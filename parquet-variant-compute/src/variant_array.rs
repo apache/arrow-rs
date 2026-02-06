@@ -967,6 +967,16 @@ fn typed_value_to_variant<'a>(
             let value = array.value(index);
             Ok(Variant::from(value))
         }
+        DataType::LargeUtf8 => {
+            let array = typed_value.as_string::<i64>();
+            let value = array.value(index);
+            Ok(Variant::from(value))
+        }
+        DataType::Utf8View => {
+            let array = typed_value.as_string_view();
+            let value = array.value(index);
+            Ok(Variant::from(value))
+        }
         DataType::Int8 => {
             primitive_conversion_single_value!(Int8Type, typed_value, index)
         }
@@ -1019,7 +1029,7 @@ fn typed_value_to_variant<'a>(
             generic_conversion_single_value!(
                 Date32Type,
                 as_primitive,
-                Date32Type::to_naive_date,
+                |v| Date32Type::to_naive_date_opt(v).unwrap(),
                 typed_value,
                 index
             )
@@ -1162,17 +1172,17 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
         Date32 | Time64(TimeUnit::Microsecond) => borrow!(),
         Date64 | Time32(_) | Time64(_) | Duration(_) | Interval(_) => fail!(),
 
-        // Binary and string are allowed. Force Binary to BinaryView because that's what the parquet
+        // Binary and string are allowed. Force Binary/LargeBinary to BinaryView because that's what the parquet
         // reader returns and what the rest of the variant code expects.
-        Binary => Cow::Owned(DataType::BinaryView),
-        BinaryView | Utf8 => borrow!(),
+        Binary | LargeBinary => Cow::Owned(BinaryView),
+        BinaryView | Utf8 | LargeUtf8 | Utf8View => borrow!(),
 
         // UUID maps to 16-byte fixed-size binary; no other width is allowed
         FixedSizeBinary(16) => borrow!(),
         FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
 
         // We can _possibly_ allow (some of) these some day?
-        LargeBinary | LargeUtf8 | Utf8View | ListView(_) | LargeList(_) | LargeListView(_) => {
+        ListView(_) | LargeList(_) | LargeListView(_) => {
             fail!()
         }
 

@@ -26,8 +26,10 @@ use std::vec::IntoIter;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
-use arrow_array::{ArrayRef, RecordBatch, RecordBatchWriter};
-use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef};
+use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter};
+use arrow_schema::{
+    ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef, TimeUnit,
+};
 
 use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_precision};
 
@@ -819,7 +821,15 @@ impl ArrowColumnWriter {
     pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
         match &mut self.writer {
             ArrowColumnWriterImpl::Column(c) => {
-                write_leaf(c, &col.0)?;
+                let leaf = col.0.array();
+                match leaf.as_any_dictionary_opt() {
+                    Some(dictionary) => {
+                        let materialized =
+                            arrow_select::take::take(dictionary.values(), dictionary.keys(), None)?;
+                        write_leaf(c, &materialized, &col.0)?
+                    }
+                    None => write_leaf(c, leaf, &col.0)?,
+                };
             }
             ArrowColumnWriterImpl::ByteArray(c) => {
                 write_primitive(c, col.0.array().as_ref(), &col.0)?;
@@ -1132,26 +1142,65 @@ impl ArrowColumnWriterFactory {
     }
 }
 
-fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usize> {
-    let column = levels.array().as_ref();
+fn write_leaf(
+    writer: &mut ColumnWriter<'_>,
+    column: &dyn arrow_array::Array,
+    levels: &ArrayLevels,
+) -> Result<usize> {
     let indices = levels.non_null_indices();
+
     match writer {
+        // Note: this should match the contents of arrow_to_parquet_type
         ColumnWriter::Int32ColumnWriter(typed) => {
             match column.data_type() {
-                ArrowDataType::Date64 => {
-                    // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
-                    let array = arrow_cast::cast(column, &ArrowDataType::Date32)?;
-                    let array = arrow_cast::cast(&array, &ArrowDataType::Int32)?;
-
-                    let array = array.as_primitive::<Int32Type>();
+                ArrowDataType::Null => {
+                    let array = Int32Array::new_null(column.len());
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Int8 => {
+                    let array: Int32Array = column.as_primitive::<Int8Type>().unary(|x| x as i32);
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Int16 => {
+                    let array: Int32Array = column.as_primitive::<Int16Type>().unary(|x| x as i32);
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Int32 => {
+                    write_primitive(typed, column.as_primitive::<Int32Type>().values(), levels)
+                }
+                ArrowDataType::UInt8 => {
+                    let array: Int32Array = column.as_primitive::<UInt8Type>().unary(|x| x as i32);
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::UInt16 => {
+                    let array: Int32Array = column.as_primitive::<UInt16Type>().unary(|x| x as i32);
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::UInt32 => {
-                    let values = column.as_primitive::<UInt32Type>().values();
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
                     // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
-                    let array = values.inner().typed_data::<i32>();
-                    write_primitive(typed, array, levels)
+                    let array = column.as_primitive::<UInt32Type>();
+                    write_primitive(typed, array.values().inner().typed_data(), levels)
+                }
+                ArrowDataType::Date32 => {
+                    let array = column.as_primitive::<Date32Type>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Time32(TimeUnit::Second) => {
+                    let array = column.as_primitive::<Time32SecondType>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Time32(TimeUnit::Millisecond) => {
+                    let array = column.as_primitive::<Time32MillisecondType>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Date64 => {
+                    // If the column is a Date64, we truncate it
+                    let array: Int32Array = column
+                        .as_primitive::<Date64Type>()
+                        .unary(|x| (x / 86_400_000) as _);
+
+                    write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Decimal32(_, _) => {
                     let array = column
@@ -1180,46 +1229,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .unary::<_, Int32Type>(|v| v.as_i128() as i32);
                     write_primitive(typed, array.values(), levels)
                 }
-                ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-                    ArrowDataType::Decimal32(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal32Type>()
-                            .unary::<_, Int32Type>(|v| v);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal64(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal64Type>()
-                            .unary::<_, Int32Type>(|v| v as i32);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal128(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal128Type>()
-                            .unary::<_, Int32Type>(|v| v as i32);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal256(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal256Type>()
-                            .unary::<_, Int32Type>(|v| v.as_i128() as i32);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    _ => {
-                        let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
-                        let array = array.as_primitive::<Int32Type>();
-                        write_primitive(typed, array.values(), levels)
-                    }
-                },
-                _ => {
-                    let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
-                    let array = array.as_primitive::<Int32Type>();
-                    write_primitive(typed, array.values(), levels)
-                }
+                d => Err(ParquetError::General(format!("Cannot coerce {d} to I32"))),
             }
         }
         ColumnWriter::BoolColumnWriter(typed) => {
@@ -1233,9 +1243,10 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
         ColumnWriter::Int64ColumnWriter(typed) => {
             match column.data_type() {
                 ArrowDataType::Date64 => {
-                    let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
+                    let array = column
+                        .as_primitive::<Date64Type>()
+                        .reinterpret_cast::<Int64Type>();
 
-                    let array = array.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Int64 => {
@@ -1249,10 +1260,54 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     let array = values.inner().typed_data::<i64>();
                     write_primitive(typed, array, levels)
                 }
+                ArrowDataType::Time64(TimeUnit::Microsecond) => {
+                    let array = column.as_primitive::<Time64MicrosecondType>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Time64(TimeUnit::Nanosecond) => {
+                    let array = column.as_primitive::<Time64NanosecondType>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Timestamp(unit, _) => match unit {
+                    TimeUnit::Second => {
+                        let array = column.as_primitive::<TimestampSecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Millisecond => {
+                        let array = column.as_primitive::<TimestampMillisecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Microsecond => {
+                        let array = column.as_primitive::<TimestampMicrosecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Nanosecond => {
+                        let array = column.as_primitive::<TimestampNanosecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                },
+                ArrowDataType::Duration(unit) => match unit {
+                    TimeUnit::Second => {
+                        let array = column.as_primitive::<DurationSecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Millisecond => {
+                        let array = column.as_primitive::<DurationMillisecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Microsecond => {
+                        let array = column.as_primitive::<DurationMicrosecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Nanosecond => {
+                        let array = column.as_primitive::<DurationNanosecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                },
                 ArrowDataType::Decimal64(_, _) => {
                     let array = column
                         .as_primitive::<Decimal64Type>()
-                        .unary::<_, Int64Type>(|v| v);
+                        .reinterpret_cast::<Int64Type>();
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Decimal128(_, _) => {
@@ -1269,39 +1324,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .unary::<_, Int64Type>(|v| v.as_i128() as i64);
                     write_primitive(typed, array.values(), levels)
                 }
-                ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-                    ArrowDataType::Decimal64(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal64Type>()
-                            .unary::<_, Int64Type>(|v| v);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal128(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal128Type>()
-                            .unary::<_, Int64Type>(|v| v as i64);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal256(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal256Type>()
-                            .unary::<_, Int64Type>(|v| v.as_i128() as i64);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    _ => {
-                        let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
-                        let array = array.as_primitive::<Int64Type>();
-                        write_primitive(typed, array.values(), levels)
-                    }
-                },
-                _ => {
-                    let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
-                    let array = array.as_primitive::<Int64Type>();
-                    write_primitive(typed, array.values(), levels)
-                }
+                d => Err(ParquetError::General(format!("Cannot coerce {d} to I64"))),
             }
         }
         ColumnWriter::Int96ColumnWriter(_typed) => {
@@ -1322,17 +1345,11 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
             let bytes = match column.data_type() {
                 ArrowDataType::Interval(interval_unit) => match interval_unit {
                     IntervalUnit::YearMonth => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow_array::IntervalYearMonthArray>()
-                            .unwrap();
+                        let array = column.as_primitive::<IntervalYearMonthType>();
                         get_interval_ym_array_slice(array, indices)
                     }
                     IntervalUnit::DayTime => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow_array::IntervalDayTimeArray>()
-                            .unwrap();
+                        let array = column.as_primitive::<IntervalDayTimeType>();
                         get_interval_dt_array_slice(array, indices)
                     }
                     _ => {
@@ -1342,10 +1359,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::FixedSizeBinaryArray>()
-                        .unwrap();
+                    let array = column.as_fixed_size_binary();
                     get_fsb_array_slice(array, indices)
                 }
                 ArrowDataType::Decimal32(_, _) => {
@@ -1361,10 +1375,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     get_decimal_128_array_slice(array, indices)
                 }
                 ArrowDataType::Decimal256(_, _) => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::Decimal256Array>()
-                        .unwrap();
+                    let array = column.as_primitive::<Decimal256Type>();
                     get_decimal_256_array_slice(array, indices)
                 }
                 ArrowDataType::Float16 => {
@@ -1522,24 +1533,25 @@ fn get_fsb_array_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     use std::fs::File;
 
-    use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::{ARROW_SCHEMA_META_KEY, PARQUET_FIELD_ID_META_KEY};
     use crate::column::page::{Page, PageReader};
     use crate::file::metadata::thrift::PageHeader;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::reader::SerializedPageReader;
     use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
-    use crate::schema::types::{ColumnPath, Type};
+    use crate::schema::types::ColumnPath;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
     use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, i256};
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, OffsetBuffer, i256};
     use arrow_schema::Fields;
     use half::f16;
     use num_traits::{FromPrimitive, ToPrimitive};
@@ -1783,6 +1795,42 @@ mod tests {
 
         roundtrip(batch.clone(), Some(SMALL_SIZE / 2));
         roundtrip(batch, None);
+    }
+
+    #[test]
+    fn arrow_writer_binary_view_long_value() {
+        let string_field = Field::new("a", DataType::Utf8View, false);
+        let binary_field = Field::new("b", DataType::BinaryView, false);
+        let schema = Schema::new(vec![string_field, binary_field]);
+
+        // There is special case validation for long values (greater than 128)
+        // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
+        // trigger the long-string UTF-8 validation branch in the plain decoder.
+        let long = "a".repeat(128);
+        let raw_string_values = vec!["foo", long.as_str(), "bar"];
+        let raw_binary_values = vec![b"foo".to_vec(), long.as_bytes().to_vec(), b"bar".to_vec()];
+
+        let string_view_values: ArrayRef = Arc::new(StringViewArray::from(raw_string_values));
+        let binary_view_values: ArrayRef =
+            Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
+
+        one_column_roundtrip(Arc::clone(&string_view_values), false);
+        one_column_roundtrip(Arc::clone(&binary_view_values), false);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![string_view_values, binary_view_values],
+        )
+        .unwrap();
+
+        // Disable dictionary to exercise plain encoding paths in the reader.
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let props = WriterProperties::builder()
+                .set_writer_version(version)
+                .set_dictionary_enabled(false)
+                .build();
+            roundtrip_opts(&batch, props);
+        }
     }
 
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
@@ -2298,6 +2346,8 @@ mod tests {
     const SMALL_SIZE: usize = 7;
     const MEDIUM_SIZE: usize = 63;
 
+    // Write the batch to parquet and read it back out, ensuring
+    // that what comes out is the same as what was written in
     fn roundtrip(expected_batch: RecordBatch, max_row_group_size: Option<usize>) -> Vec<Bytes> {
         let mut files = vec![];
         for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
@@ -3323,6 +3373,52 @@ mod tests {
             BinaryViewArray::from_iter_values(vec![b"barquet"]),
             LargeBinaryArray::from_iter_values(vec![b"parquet", b"barquet"]),
         );
+
+        // check compatibility for list types
+
+        let list_field_metadata = HashMap::from_iter(vec![(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "1".to_string(),
+        )]);
+        let list_field = Field::new_list_field(DataType::Int32, false);
+
+        let values1 = Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4]));
+        let offsets1 = OffsetBuffer::new(vec![0, 2, 5].into());
+
+        let values2 = Arc::new(Int32Array::from(vec![5, 6, 7, 8, 9]));
+        let offsets2 = OffsetBuffer::new(vec![0, 3, 5].into());
+
+        let values_expected = Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        let offsets_expected = OffsetBuffer::new(vec![0, 2, 5, 8, 10].into());
+
+        ensure_compatible_write(
+            // when the initial schema has the metadata ...
+            ListArray::try_new(
+                Arc::new(
+                    list_field
+                        .clone()
+                        .with_metadata(list_field_metadata.clone()),
+                ),
+                offsets1,
+                values1,
+                None,
+            )
+            .unwrap(),
+            // ... and some intermediate schema doesn't have the metadata
+            ListArray::try_new(Arc::new(list_field.clone()), offsets2, values2, None).unwrap(),
+            // ... the write will still go through, and the resulting schema will inherit the initial metadata
+            ListArray::try_new(
+                Arc::new(
+                    list_field
+                        .clone()
+                        .with_metadata(list_field_metadata.clone()),
+                ),
+                offsets_expected,
+                values_expected,
+                None,
+            )
+            .unwrap(),
+        );
     }
 
     #[test]
@@ -4157,68 +4253,6 @@ mod tests {
     }
 
     #[test]
-    fn test_arrow_writer_explicit_schema() {
-        // Write an int32 array using explicit int64 storage
-        let batch_schema = Arc::new(Schema::new(vec![Field::new(
-            "integers",
-            DataType::Int32,
-            true,
-        )]));
-        let parquet_schema = Type::group_type_builder("root")
-            .with_fields(vec![
-                Type::primitive_type_builder("integers", crate::basic::Type::INT64)
-                    .build()
-                    .unwrap()
-                    .into(),
-            ])
-            .build()
-            .unwrap();
-        let parquet_schema_descr = SchemaDescriptor::new(parquet_schema.into());
-
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
-        )
-        .unwrap();
-
-        let explicit_schema_options =
-            ArrowWriterOptions::new().with_parquet_schema(parquet_schema_descr);
-        let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new_with_options(
-            &mut buf,
-            batch_schema.clone(),
-            explicit_schema_options,
-        )
-        .unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let bytes = Bytes::from(buf);
-        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
-
-        let expected_schema = Arc::new(Schema::new(vec![Field::new(
-            "integers",
-            DataType::Int64,
-            true,
-        )]));
-        assert_eq!(reader_builder.schema(), &expected_schema);
-
-        let batches = reader_builder
-            .build()
-            .unwrap()
-            .collect::<Result<Vec<_>, ArrowError>>()
-            .unwrap();
-        assert_eq!(batches.len(), 1);
-
-        let expected_batch = RecordBatch::try_new(
-            expected_schema.clone(),
-            vec![Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as _],
-        )
-        .unwrap();
-        assert_eq!(batches[0], expected_batch);
-    }
-
-    #[test]
     fn mismatched_schemas() {
         let batch_schema = Schema::new(vec![Field::new("count", DataType::Int32, false)]);
         let file_schema = Arc::new(Schema::new(vec![Field::new(
@@ -4433,7 +4467,10 @@ mod tests {
             .unwrap();
 
         // check that the read metadata is also correct
-        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let options = ReadOptionsBuilder::new()
+            .with_page_index()
+            .with_encoding_stats_as_mask(false)
+            .build();
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         let rowgroup = reader.get_row_group(0).expect("row group missing");

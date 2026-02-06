@@ -381,7 +381,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 offset: 0,
             },
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Decoder::Dict {
-                decoder: DictIndexDecoder::new(data, num_levels, num_values),
+                decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
             },
             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
                 decoder: DeltaByteArrayDecoder::new(data)?,

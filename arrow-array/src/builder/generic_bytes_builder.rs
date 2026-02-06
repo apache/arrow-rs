@@ -348,6 +348,94 @@ impl<O: OffsetSizeTrait> std::fmt::Write for GenericStringBuilder<O> {
     }
 }
 
+/// A byte size value representing the number of bytes to allocate per string in [`GenericStringBuilder`]
+///
+/// To create a [`GenericStringBuilder`] using `.with_capacity` we are required to provide: \
+/// - `item_capacity` - the row count \
+/// - `data_capacity` - total string byte count \
+///
+/// We will use the `AVERAGE_STRING_LENGTH` * row_count for `data_capacity`. \
+///
+/// These capacities are preallocation hints used to improve performance,
+/// but consequences of passing a hint too large or too small should be negligible.
+const AVERAGE_STRING_LENGTH: usize = 16;
+/// Trait for string-like array builders
+///
+/// This trait provides unified interface for builders that append string-like data
+/// such as [`GenericStringBuilder<O>`] and [`crate::builder::StringViewBuilder`]
+pub trait StringLikeArrayBuilder: ArrayBuilder {
+    /// Returns a human-readable type name for the builder.
+    fn type_name() -> &'static str;
+
+    /// Creates a new builder with the given row capacity.
+    fn with_capacity(capacity: usize) -> Self;
+
+    /// Appends a non-null string value to the builder.
+    fn append_value(&mut self, value: &str);
+
+    /// Appends a null value to the builder.
+    fn append_null(&mut self);
+}
+
+impl<O: OffsetSizeTrait> StringLikeArrayBuilder for GenericStringBuilder<O> {
+    fn type_name() -> &'static str {
+        std::any::type_name::<Self>()
+    }
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity, capacity * AVERAGE_STRING_LENGTH)
+    }
+    fn append_value(&mut self, value: &str) {
+        Self::append_value(self, value);
+    }
+    fn append_null(&mut self) {
+        Self::append_null(self);
+    }
+}
+
+/// A byte size value representing the number of bytes to allocate per binary in [`GenericBinaryBuilder`]
+///
+/// To create a [`GenericBinaryBuilder`] using `.with_capacity` we are required to provide: \
+/// - `item_capacity` - the row count \
+/// - `data_capacity` - total binary byte count \
+///
+/// We will use the `AVERAGE_BINARY_LENGTH` * row_count for `data_capacity`. \
+///
+/// These capacities are preallocation hints used to improve performance,
+/// but consequences of passing a hint too large or too small should be negligible.
+const AVERAGE_BINARY_LENGTH: usize = 128;
+/// Trait for binary-like array builders
+///
+/// This trait provides unified interface for builders that append binary-like data
+/// such as [`GenericBinaryBuilder<O>`] and [`crate::builder::BinaryViewBuilder`]
+pub trait BinaryLikeArrayBuilder: ArrayBuilder {
+    /// Returns a human-readable type name for the builder.
+    fn type_name() -> &'static str;
+
+    /// Creates a new builder with the given row capacity.
+    fn with_capacity(capacity: usize) -> Self;
+
+    /// Appends a non-null string value to the builder.
+    fn append_value(&mut self, value: &[u8]);
+
+    /// Appends a null value to the builder.
+    fn append_null(&mut self);
+}
+
+impl<O: OffsetSizeTrait> BinaryLikeArrayBuilder for GenericBinaryBuilder<O> {
+    fn type_name() -> &'static str {
+        std::any::type_name::<Self>()
+    }
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity, capacity * AVERAGE_BINARY_LENGTH)
+    }
+    fn append_value(&mut self, value: &[u8]) {
+        Self::append_value(self, value);
+    }
+    fn append_null(&mut self) {
+        Self::append_null(self);
+    }
+}
+
 ///  Array builder for [`GenericBinaryArray`][crate::GenericBinaryArray]
 ///
 /// Values can be appended using [`GenericByteBuilder::append_value`], and nulls with

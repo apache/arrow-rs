@@ -17,6 +17,7 @@
 
 //! Defines take kernel for [Array]
 
+use std::fmt::Display;
 use std::sync::Arc;
 
 use arrow_array::builder::{BufferBuilder, UInt32Builder};
@@ -164,31 +165,47 @@ pub fn take_arrays(
 fn check_bounds<T: ArrowPrimitiveType>(
     len: usize,
     indices: &PrimitiveArray<T>,
-) -> Result<(), ArrowError> {
+) -> Result<(), ArrowError>
+where
+    T::Native: Display,
+{
+    let len = match T::Native::from_usize(len) {
+        Some(len) => len,
+        None => {
+            if T::DATA_TYPE.is_integer() {
+                // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
+                return Ok(());
+            } else {
+                return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
+            }
+        }
+    };
+
     if indices.null_count() > 0 {
         indices.iter().flatten().try_for_each(|index| {
-            let ix = index
-                .to_usize()
-                .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            if ix >= len {
+            if index >= len {
                 return Err(ArrowError::ComputeError(format!(
-                    "Array index out of bounds, cannot get item at index {ix} from {len} entries"
+                    "Array index out of bounds, cannot get item at index {index} from {len} entries"
                 )));
             }
             Ok(())
         })
     } else {
-        indices.values().iter().try_for_each(|index| {
-            let ix = index
-                .to_usize()
-                .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            if ix >= len {
-                return Err(ArrowError::ComputeError(format!(
-                    "Array index out of bounds, cannot get item at index {ix} from {len} entries"
-                )));
+        let in_bounds = indices.values().iter().fold(true, |in_bounds, &i| {
+            in_bounds & (i >= T::Native::ZERO) & (i < len)
+        });
+
+        if !in_bounds {
+            for &index in indices.values() {
+                if index < T::Native::ZERO || index >= len {
+                    return Err(ArrowError::ComputeError(format!(
+                        "Array index out of bounds, cannot get item at index {index} from {len} entries"
+                    )));
+                }
             }
-            Ok(())
-        })
+        }
+
+        Ok(())
     }
 }
 
@@ -197,6 +214,9 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
     values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ArrayRef, ArrowError> {
+    if indices.is_empty() {
+        return Ok(new_empty_array(values.data_type()));
+    }
     downcast_primitive_array! {
         values => Ok(Arc::new(take_primitive(values, indices)?)),
         DataType::Boolean => {
@@ -367,13 +387,6 @@ pub struct TakeOptions {
     pub check_bounds: bool,
 }
 
-#[inline(always)]
-fn maybe_usize<I: ArrowNativeType>(index: I) -> Result<usize, ArrowError> {
-    index
-        .to_usize()
-        .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))
-}
-
 /// `take` implementation for all primitive arrays
 ///
 /// This checks if an `indices` slot is populated, and gets the value from `values`
@@ -422,9 +435,10 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
             .enumerate()
             .map(|(idx, index)| match values.get(index.as_usize()) {
                 Some(v) => *v,
-                None => match n.is_null(idx) {
-                    true => T::default(),
-                    false => panic!("Out-of-bounds index {index:?}"),
+                // SAFETY: idx<indices.len()
+                None => match unsafe { n.inner().value_unchecked(idx) } {
+                    false => T::default(),
+                    true => panic!("Out-of-bounds index {index:?}"),
                 },
             })
             .collect(),
@@ -448,8 +462,10 @@ fn take_bits<I: ArrowPrimitiveType>(
             let mut output_buffer = MutableBuffer::new_null(len);
             let output_slice = output_buffer.as_slice_mut();
             nulls.valid_indices().for_each(|idx| {
-                if values.value(indices.value(idx).as_usize()) {
-                    bit_util::set_bit(output_slice, idx);
+                // SAFETY: idx is a valid index in indices.nulls() --> idx<indices.len()
+                if values.value(unsafe { indices.value_unchecked(idx).as_usize() }) {
+                    // SAFETY: MutableBuffer was created with space for indices.len() bit, and idx < indices.len()
+                    unsafe { bit_util::set_bit_raw(output_slice.as_mut_ptr(), idx) };
                 }
             });
             BooleanBuffer::new(output_buffer.into(), 0, len)
@@ -693,27 +709,60 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType>(
     Ok(FixedSizeListArray::from(list_data))
 }
 
+/// The take kernel implementation for `FixedSizeBinaryArray`.
+///
+/// The computation is done in two steps:
+/// - Compute the values buffer
+/// - Compute the null buffer
 fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
     values: &FixedSizeBinaryArray,
     indices: &PrimitiveArray<IndexType>,
     size: i32,
 ) -> Result<FixedSizeBinaryArray, ArrowError> {
-    let nulls = values.nulls();
-    let array_iter = indices
-        .values()
-        .iter()
-        .map(|idx| {
-            let idx = maybe_usize::<IndexType::Native>(*idx)?;
-            if nulls.map(|n| n.is_valid(idx)).unwrap_or(true) {
-                Ok(Some(values.value(idx)))
-            } else {
-                Ok(None)
-            }
-        })
-        .collect::<Result<Vec<_>, ArrowError>>()?
-        .into_iter();
+    let size_usize = usize::try_from(size).map_err(|_| {
+        ArrowError::InvalidArgumentError(format!("Cannot convert size '{}' to usize", size))
+    })?;
 
-    FixedSizeBinaryArray::try_from_sparse_iter_with_size(array_iter, size)
+    let values_buffer = values.values().as_slice();
+    let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
+
+    if indices.null_count() == 0 {
+        let array_iter = indices.values().iter().map(|idx| {
+            let offset = idx.as_usize() * size_usize;
+            &values_buffer[offset..offset + size_usize]
+        });
+        for slice in array_iter {
+            values_buffer_builder.append_slice(slice);
+        }
+    } else {
+        // The indices nullability cannot be ignored here because the values buffer may contain
+        // nulls which should not cause a panic.
+        let array_iter = indices.iter().map(|idx| {
+            idx.map(|idx| {
+                let offset = idx.as_usize() * size_usize;
+                &values_buffer[offset..offset + size_usize]
+            })
+        });
+        for slice in array_iter {
+            match slice {
+                None => values_buffer_builder.append_n(size_usize, 0),
+                Some(slice) => values_buffer_builder.append_slice(slice),
+            }
+        }
+    }
+
+    let values_buffer = values_buffer_builder.finish();
+    let value_nulls = take_nulls(values.nulls(), indices);
+    let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
+
+    let array_data = ArrayDataBuilder::new(DataType::FixedSizeBinary(size))
+        .len(indices.len())
+        .nulls(final_nulls)
+        .offset(0)
+        .add_buffer(values_buffer)
+        .build()?;
+
+    Ok(FixedSizeBinaryArray::from(array_data))
 }
 
 /// `take` implementation for dictionary arrays
@@ -965,7 +1014,6 @@ to_indices_reinterpret!(Int64Type, UInt64Type);
 /// # use arrow_array::{StringArray, Int32Array, UInt32Array, RecordBatch};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # use arrow_select::take::take_record_batch;
-///
 /// let schema = Arc::new(Schema::new(vec![
 ///     Field::new("a", DataType::Int32, true),
 ///     Field::new("b", DataType::Utf8, true),
@@ -2077,6 +2125,32 @@ mod tests {
     }
 
     #[test]
+    fn test_take_fixed_size_binary_with_nulls_indices() {
+        let fsb = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            [
+                Some(vec![0x01, 0x01, 0x01, 0x01]),
+                Some(vec![0x02, 0x02, 0x02, 0x02]),
+                Some(vec![0x03, 0x03, 0x03, 0x03]),
+                Some(vec![0x04, 0x04, 0x04, 0x04]),
+            ]
+            .into_iter(),
+            4,
+        )
+        .unwrap();
+
+        // The two middle indices are null -> Should be null in the output.
+        let indices = UInt32Array::from(vec![Some(0), None, None, Some(3)]);
+
+        let result = take_fixed_size_binary(&fsb, &indices, 4).unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(
+            result.nulls().unwrap().iter().collect::<Vec<_>>(),
+            vec![true, false, false, true]
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "index out of bounds: the len is 4 but the index is 1000")]
     fn test_take_list_out_of_bounds() {
         // Construct a value array, [[0,0,0], [-1,-2,-1], [2,3]]
@@ -2367,6 +2441,27 @@ mod tests {
     }
 
     #[test]
+    fn test_take_runs_sliced() {
+        let logical_array: Vec<i32> = vec![1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6];
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend(logical_array.into_iter().map(Some));
+        let run_array = builder.finish();
+
+        let run_array = run_array.slice(4, 6); // [3, 3, 3, 4, 4, 5]
+
+        let take_indices: PrimitiveArray<Int32Type> = vec![0, 5, 5, 1, 4].into_iter().collect();
+
+        let result = take_run(&run_array, &take_indices).unwrap();
+        let result = result.downcast::<Int32Array>().unwrap();
+
+        let expected = vec![3, 5, 5, 3, 4];
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn test_take_value_index_from_fixed_list() {
         let list = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
             vec![
@@ -2564,7 +2659,7 @@ mod tests {
 
     #[test]
     fn test_take_union_dense_all_match_issue_6206() {
-        let fields = UnionFields::new(vec![0], vec![Field::new("a", DataType::Int64, false)]);
+        let fields = UnionFields::from_fields(vec![Field::new("a", DataType::Int64, false)]);
         let ints = Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5]));
 
         let array = UnionArray::try_new(
@@ -2589,5 +2684,29 @@ mod tests {
             take(&values, &indices, None),
             Err(ArrowError::OffsetOverflowError(_))
         ));
+    }
+
+    #[test]
+    fn test_take_run_empty_indices() {
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([Some(1), Some(1), Some(2), Some(2)]);
+        let run_array = builder.finish();
+
+        let logical_indices: PrimitiveArray<Int32Type> = PrimitiveArray::from(Vec::<i32>::new());
+
+        let result = take_impl(&run_array, &logical_indices).expect("take_run with empty indices");
+
+        // Verify the result is a valid empty RunArray
+        assert_eq!(result.len(), 0);
+        assert_eq!(result.null_count(), 0);
+
+        // Verify that the result can be downcast and used without validation errors
+        // This specifically tests that "The values in run_ends array should be strictly positive" is not triggered
+        let run_result = result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("result should be a RunArray");
+        assert_eq!(run_result.run_ends().len(), 0);
+        assert_eq!(run_result.values().len(), 0);
     }
 }

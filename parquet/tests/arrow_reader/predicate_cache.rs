@@ -17,24 +17,22 @@
 
 //! Test for predicate cache in Parquet Arrow reader
 
+use super::io::TestReader;
 use arrow::array::ArrayRef;
 use arrow::array::Int64Array;
 use arrow::compute::and;
 use arrow::compute::kernels::cmp::{gt, lt};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{RecordBatch, StringViewArray};
+use arrow_array::{RecordBatch, StringArray, StringViewArray, StructArray};
+use arrow_schema::{DataType, Field};
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
 use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
-use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
-use std::ops::Range;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -51,8 +49,7 @@ async fn test_default_read() {
 #[tokio::test]
 async fn test_async_cache_with_filters() {
     let test = ParquetPredicateCacheTest::new().with_expected_records_read_from_cache(49);
-    let async_builder = test.async_builder().await;
-    let async_builder = test.add_project_ab_and_filter_b(async_builder);
+    let async_builder = test.async_builder().await.add_project_ab_and_filter_b();
     test.run_async(async_builder).await;
 }
 
@@ -62,8 +59,7 @@ async fn test_sync_cache_with_filters() {
         // The sync reader does not use the cache. See https://github.com/apache/arrow-rs/issues/8000
         .with_expected_records_read_from_cache(0);
 
-    let sync_builder = test.sync_builder();
-    let sync_builder = test.add_project_ab_and_filter_b(sync_builder);
+    let sync_builder = test.sync_builder().add_project_ab_and_filter_b();
     test.run_sync(sync_builder);
 }
 
@@ -71,12 +67,28 @@ async fn test_sync_cache_with_filters() {
 async fn test_cache_disabled_with_filters() {
     // expect no records to be read from cache, because the cache is disabled
     let test = ParquetPredicateCacheTest::new().with_expected_records_read_from_cache(0);
-    let sync_builder = test.sync_builder().with_max_predicate_cache_size(0);
-    let sync_builder = test.add_project_ab_and_filter_b(sync_builder);
+    let sync_builder = test
+        .sync_builder()
+        .with_max_predicate_cache_size(0)
+        .add_project_ab_and_filter_b();
     test.run_sync(sync_builder);
 
-    let async_builder = test.async_builder().await.with_max_predicate_cache_size(0);
-    let async_builder = test.add_project_ab_and_filter_b(async_builder);
+    let async_builder = test
+        .async_builder()
+        .await
+        .with_max_predicate_cache_size(0)
+        .add_project_ab_and_filter_b();
+    test.run_async(async_builder).await;
+}
+
+#[tokio::test]
+async fn test_cache_projection_excludes_nested_columns() {
+    let test = ParquetPredicateCacheTest::new_nested().with_expected_records_read_from_cache(0);
+
+    let sync_builder = test.sync_builder().add_nested_filter();
+    test.run_sync(sync_builder);
+
+    let async_builder = test.async_builder().await.add_nested_filter();
     test.run_async(async_builder).await;
 }
 
@@ -104,6 +116,18 @@ impl ParquetPredicateCacheTest {
         }
     }
 
+    /// Create a new `TestParquetFile` with
+    /// 2 columns:
+    ///
+    /// * string column `a`
+    /// * nested struct column `b { aa, bb }`
+    fn new_nested() -> Self {
+        Self {
+            bytes: NESTED_TEST_FILE_DATA.clone(),
+            expected_records_read_from_cache: 0,
+        }
+    }
+
     /// Set the expected number of records read from the cache
     fn with_expected_records_read_from_cache(
         mut self,
@@ -126,32 +150,6 @@ impl ParquetPredicateCacheTest {
         ParquetRecordBatchStreamBuilder::new_with_options(reader, ArrowReaderOptions::default())
             .await
             .unwrap()
-    }
-
-    /// Return a [`ParquetRecordBatchReaderBuilder`] for reading the file with
-    ///
-    /// 1. a projection selecting the "a" and "b" column
-    /// 2. a row_filter applied to "b": 575 < "b" < 625 (select 1 data page from each row group)
-    fn add_project_ab_and_filter_b<T>(
-        &self,
-        builder: ArrowReaderBuilder<T>,
-    ) -> ArrowReaderBuilder<T> {
-        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
-
-        // "b" > 575 and "b" < 625
-        let row_filter = ArrowPredicateFn::new(
-            ProjectionMask::columns(&schema_descr, ["b"]),
-            |batch: RecordBatch| {
-                let scalar_575 = Int64Array::new_scalar(575);
-                let scalar_625 = Int64Array::new_scalar(625);
-                let column = batch.column(0).as_primitive::<Int64Type>();
-                and(&gt(column, &scalar_575)?, &lt(column, &scalar_625)?)
-            },
-        );
-
-        builder
-            .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b"]))
-            .with_row_filter(RowFilter::new(vec![Box::new(row_filter)]))
     }
 
     /// Build the reader from the specified builder, reading all batches from it,
@@ -239,42 +237,88 @@ static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
     Bytes::from(output)
 });
 
-/// Copy paste version of the `AsyncFileReader` trait for testing purposes 🤮
-/// TODO put this in a common place
-#[derive(Clone)]
-struct TestReader {
-    data: Bytes,
-    metadata: Option<Arc<ParquetMetaData>>,
+/// Build a ParquetFile with a
+///
+/// * string column `a`
+/// * nested struct column `b { aa, bb }`
+static NESTED_TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
+    const NUM_ROWS: usize = 100;
+    let a: StringArray = (0..NUM_ROWS).map(|i| Some(format!("r{i}"))).collect();
+
+    let aa: StringArray = (0..NUM_ROWS).map(|i| Some(format!("v{i}"))).collect();
+    let bb: StringArray = (0..NUM_ROWS).map(|i| Some(format!("w{i}"))).collect();
+    let b = StructArray::from(vec![
+        (
+            Arc::new(Field::new("aa", DataType::Utf8, true)),
+            Arc::new(aa) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("bb", DataType::Utf8, true)),
+            Arc::new(bb) as ArrayRef,
+        ),
+    ]);
+
+    let input_batch = RecordBatch::try_from_iter([
+        ("a", Arc::new(a) as ArrayRef),
+        ("b", Arc::new(b) as ArrayRef),
+    ])
+    .unwrap();
+
+    let mut output = Vec::new();
+    let writer_options = None;
+    let mut writer =
+        ArrowWriter::try_new(&mut output, input_batch.schema(), writer_options).unwrap();
+    writer.write(&input_batch).unwrap();
+    writer.close().unwrap();
+    Bytes::from(output)
+});
+
+trait ArrowReaderBuilderExt {
+    /// Applies the following:
+    /// 1. a projection selecting the "a" and "b" column
+    /// 2. a row_filter applied to "b": 575 < "b" < 625 (select 1 data page from each row group)
+    fn add_project_ab_and_filter_b(self) -> Self;
+
+    /// Adds a row filter that projects the nested leaf column "b.aa" and
+    /// returns true for all rows.
+    fn add_nested_filter(self) -> Self;
 }
 
-impl TestReader {
-    fn new(data: Bytes) -> Self {
-        Self {
-            data,
-            metadata: Default::default(),
-        }
-    }
-}
+impl<T> ArrowReaderBuilderExt for ArrowReaderBuilder<T> {
+    fn add_project_ab_and_filter_b(self) -> Self {
+        let schema_descr = self.metadata().file_metadata().schema_descr_ptr();
 
-impl AsyncFileReader for TestReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        let range = range.clone();
-        futures::future::ready(Ok(self
-            .data
-            .slice(range.start as usize..range.end as usize)))
-        .boxed()
-    }
-
-    fn get_metadata<'a>(
-        &'a mut self,
-        options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        let metadata_reader = ParquetMetaDataReader::new().with_page_index_policy(
-            PageIndexPolicy::from(options.is_some_and(|o| o.page_index())),
+        // "b" > 575 and "b" < 625
+        let row_filter = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["b"]),
+            |batch: RecordBatch| {
+                let scalar_575 = Int64Array::new_scalar(575);
+                let scalar_625 = Int64Array::new_scalar(625);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                and(&gt(column, &scalar_575)?, &lt(column, &scalar_625)?)
+            },
         );
-        self.metadata = Some(Arc::new(
-            metadata_reader.parse_and_finish(&self.data).unwrap(),
-        ));
-        futures::future::ready(Ok(self.metadata.clone().unwrap().clone())).boxed()
+
+        self.with_projection(ProjectionMask::columns(&schema_descr, ["a", "b"]))
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter)]))
+    }
+
+    fn add_nested_filter(self) -> Self {
+        let schema_descr = self.metadata().file_metadata().schema_descr_ptr();
+
+        // Build a RowFilter whose predicate projects a leaf under the nested root `b`
+        // Leaf indices are depth-first; with schema [a, b.aa, b.bb] we pick index 1 (b.aa)
+        let nested_leaf_mask = ProjectionMask::leaves(&schema_descr, vec![1]);
+
+        let always_true = ArrowPredicateFn::new(nested_leaf_mask.clone(), |batch: RecordBatch| {
+            Ok(arrow_array::BooleanArray::from(vec![
+                true;
+                batch.num_rows()
+            ]))
+        });
+        let row_filter = RowFilter::new(vec![Box::new(always_true)]);
+
+        self.with_projection(nested_leaf_mask)
+            .with_row_filter(row_filter)
     }
 }

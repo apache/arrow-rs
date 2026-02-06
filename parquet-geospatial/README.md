@@ -17,26 +17,20 @@
   under the License.
 -->
 
-# Apache Parquet Geometry/Geography Rust Implementation
+# Apache Parquet Geometry/Geography Rust Implementation Details
 
 [![crates.io](https://img.shields.io/crates/v/parquet-geospatial.svg)](https://crates.io/crates/parquet-geospatial)
 [![docs.rs](https://img.shields.io/docsrs/parquet-geospatial.svg)](https://docs.rs/parquet/latest/parquet-geospatial/)
 
-This crate contains an implementation of [Geometry and Geography Encoding] from
-[Apache Parquet]. This software is developed as part of the [Apache Arrow] project.
+This crate contains implementation details for the [Geometry and Geography Encoding] from
+[Apache Parquet], including utilities for calculating geospatial column statistics and writing
+tests. This software is developed as part of the [Apache Arrow] project.
 
 [Geometry and Geography Encoding]: https://github.com/apache/parquet-format/blob/master/Geospatial.md
 [Apache Parquet]: https://parquet.apache.org/
 [Apache Arrow]: https://arrow.apache.org/
 
 Please see the [API documentation](https://docs.rs/parquet-geospatial/latest) for more details.
-
-## 🚧 Work In Progress
-
-NOTE: This crate is under active development and is not yet ready for production use.
-If you are interested in helping, you can find more information on the GitHub [Geometry issue]
-
-[Geometry issue]: https://github.com/apache/arrow-rs/issues/8373
 
 ## License
 

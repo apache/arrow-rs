@@ -140,8 +140,8 @@ pub unsafe fn export_array_into_raw(
     Ok(())
 }
 
-// returns the number of bits that buffer `i` (in the C data interface) is expected to have.
-// This is set by the Arrow specification
+/// returns the number of bits that buffer `i` (in the C data interface) is expected to have.
+/// This is set by the Arrow specification
 fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     if let Some(primitive) = data_type.primitive_width() {
         return match i {
@@ -180,6 +180,10 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         | (DataType::List(_), 1)
         | (DataType::Map(_, _), 1) => i32::BITS as _,
         (DataType::Utf8, 2) | (DataType::Binary, 2) => u8::BITS as _,
+        // List views have two i32 buffers, offsets and sizes
+        (DataType::ListView(_), 1) | (DataType::ListView(_), 2) => i32::BITS as _,
+        // Large list views have two i64 buffers, offsets and sizes
+        (DataType::LargeListView(_), 1) | (DataType::LargeListView(_), 2) => i64::BITS as _,
         (DataType::List(_), _) | (DataType::Map(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
@@ -351,6 +355,8 @@ impl ImportedArrowArray<'_> {
             DataType::List(field)
             | DataType::FixedSizeList(field, _)
             | DataType::LargeList(field)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field)
             | DataType::Map(field, _) => Ok([self.consume_child(0, field.data_type())?].to_vec()),
             DataType::Struct(fields) => {
                 assert!(fields.len() == self.array.num_children());
@@ -471,6 +477,14 @@ impl ImportedArrowArray<'_> {
                 debug_assert_eq!(bits % 8, 0);
                 (length + 1) * (bits / 8)
             }
+            (DataType::ListView(_), 1)
+            | (DataType::ListView(_), 2)
+            | (DataType::LargeListView(_), 1)
+            | (DataType::LargeListView(_), 2) => {
+                let bits = bit_width(data_type, i)?;
+                debug_assert_eq!(bits % 8, 0);
+                length * (bits / 8)
+            }
             (DataType::Utf8, 2) | (DataType::Binary, 2) => {
                 if self.array.is_empty() {
                     return Ok(0);
@@ -553,7 +567,7 @@ mod tests_to_then_from_ffi {
     use std::collections::HashMap;
     use std::mem::ManuallyDrop;
 
-    use arrow_buffer::NullBuffer;
+    use arrow_buffer::{ArrowNativeType, NullBuffer};
     use arrow_schema::Field;
 
     use crate::builder::UnionBuilder;
@@ -781,6 +795,71 @@ mod tests_to_then_from_ffi {
     #[test]
     fn test_large_list() -> Result<()> {
         test_generic_list::<i64>()
+    }
+
+    fn test_generic_list_view<Offset: OffsetSizeTrait + ArrowNativeType>() -> Result<()> {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int16)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref([0_i16, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+        let value_offsets = [0_usize, 3, 6]
+            .iter()
+            .map(|i| Offset::from_usize(*i).unwrap())
+            .collect::<Buffer>();
+
+        let sizes_buffer = [3_usize, 3, 2]
+            .iter()
+            .map(|i| Offset::from_usize(*i).unwrap())
+            .collect::<Buffer>();
+
+        // Construct a list array from the above two
+        let list_view_dt = GenericListViewArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Arc::new(
+            Field::new_list_field(DataType::Int16, false),
+        ));
+
+        let list_data = ArrayData::builder(list_view_dt)
+            .len(3)
+            .add_buffer(value_offsets)
+            .add_buffer(sizes_buffer)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+
+        let original = GenericListViewArray::<Offset>::from(list_data.clone());
+
+        // export it
+        let (array, schema) = to_ffi(&original.to_data())?;
+
+        // (simulate consumer) import it
+        let data = unsafe { from_ffi(array, &schema) }?;
+        let array = make_array(data);
+
+        // downcast
+        let array = array
+            .as_any()
+            .downcast_ref::<GenericListViewArray<Offset>>()
+            .unwrap();
+
+        assert_eq!(&array.value(0), &original.value(0));
+        assert_eq!(&array.value(1), &original.value(1));
+        assert_eq!(&array.value(2), &original.value(2));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_view() -> Result<()> {
+        test_generic_list_view::<i32>()
+    }
+
+    #[test]
+    fn test_large_list_view() -> Result<()> {
+        test_generic_list_view::<i64>()
     }
 
     fn test_generic_binary<Offset: OffsetSizeTrait>() -> Result<()> {
@@ -1315,6 +1394,7 @@ mod tests_from_ffi {
     use std::ptr::NonNull;
     use std::sync::Arc;
 
+    use arrow_buffer::NullBuffer;
     #[cfg(not(feature = "force_validate"))]
     use arrow_buffer::{ScalarBuffer, bit_util, buffer::Buffer};
     #[cfg(feature = "force_validate")]
@@ -1325,6 +1405,7 @@ mod tests_from_ffi {
     use arrow_schema::{DataType, Field};
 
     use super::Result;
+
     use crate::builder::GenericByteViewBuilder;
     use crate::types::{BinaryViewType, ByteViewType, Int32Type, StringViewType};
     use crate::{
@@ -1526,6 +1607,65 @@ mod tests_from_ffi {
 
         let data = array.into_data();
         test_round_trip(&data)
+    }
+
+    #[test]
+    fn test_list_view() -> Result<()> {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int16)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref([0_i16, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+        let value_offsets = Buffer::from(vec![0_i32, 3, 6]);
+        let sizes_buffer = Buffer::from(vec![3_i32, 3, 2]);
+
+        // Construct a list array from the above two
+        let list_view_dt =
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int16, false)));
+
+        let list_view_data = ArrayData::builder(list_view_dt)
+            .len(3)
+            .add_buffer(value_offsets)
+            .add_buffer(sizes_buffer)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+
+        test_round_trip(&list_view_data)
+    }
+
+    #[test]
+    fn test_list_view_with_nulls() -> Result<()> {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int16)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref([0_i16, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7], null]
+        let value_offsets = Buffer::from(vec![0_i32, 3, 6, 8]);
+        let sizes_buffer = Buffer::from(vec![3_i32, 3, 2, 0]);
+
+        // Construct a list array from the above two
+        let list_view_dt =
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int16, true)));
+
+        let list_view_data = ArrayData::builder(list_view_dt)
+            .len(4)
+            .add_buffer(value_offsets)
+            .add_buffer(sizes_buffer)
+            .add_child_data(value_data)
+            .nulls(Some(NullBuffer::from(vec![true, true, true, false])))
+            .build()
+            .unwrap();
+
+        test_round_trip(&list_view_data)
     }
 
     #[test]
