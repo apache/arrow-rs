@@ -168,6 +168,7 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    zstd_window_log_override: Option<u32>,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -378,6 +379,11 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_COMPRESSION)
     }
 
+    /// Returns the optional zstd window log size.
+    pub(crate) fn zstd_window_log_override(&self) -> Option<u32> {
+        self.zstd_window_log_override
+    }
+
     /// Returns `true` if dictionary encoding is enabled for a column.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_dictionary_enabled`]
@@ -457,6 +463,7 @@ pub struct WriterPropertiesBuilder {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    zstd_window_log_override: Option<u32>,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -480,6 +487,7 @@ impl Default for WriterPropertiesBuilder {
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
+            zstd_window_log_override: None,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -505,6 +513,7 @@ impl WriterPropertiesBuilder {
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
+            zstd_window_log_override: self.zstd_window_log_override,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -742,6 +751,14 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Overrides the zstd window log size that would normally be derived from
+    /// the compression level (e.g. 27 = 128MB window).
+    /// Only applies when using [`Compression::ZSTD`].
+    pub fn set_zstd_window_log_override(mut self, value: u32) -> Self {
+        self.zstd_window_log_override = Some(value);
+        self
+    }
+
     /// Sets default flag to enable/disable dictionary encoding for all columns (defaults to `true`
     /// via [`DEFAULT_DICTIONARY_ENABLED`]).
     ///
@@ -964,6 +981,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             column_index_truncate_length: props.column_index_truncate_length,
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
+            zstd_window_log_override: props.zstd_window_log_override,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }
