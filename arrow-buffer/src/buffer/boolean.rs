@@ -190,7 +190,7 @@ impl BooleanBuffer {
         F: FnMut(u64) -> u64,
     {
         let end = offset_in_bits + len_in_bits;
-        let aligned_start = &src.as_ref()[offset_in_bits / 8..bit_util::ceil(end, 8)];
+        let aligned_start = &src.as_ref()[offset_in_bits / 64..bit_util::ceil(end, 8)];
 
         let (prefix, aligned_u64s, suffix) = unsafe { aligned_start.as_ref().align_to::<u64>() };
         match (prefix, suffix) {
@@ -200,7 +200,6 @@ impl BooleanBuffer {
                 return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 8, len_in_bits);
             }
             ([], suffix) => {
-                // the buffer is only aligned at the end, so we can still use optimized Vec code for the aligned part
                 let suffix = read_u64(suffix);
                 let result_u64s: Vec<u64> = aligned_u64s
                     .iter()
@@ -208,7 +207,7 @@ impl BooleanBuffer {
                     .chain(std::iter::once(suffix))
                     .map(&mut op)
                     .collect();
-                return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 8, len_in_bits);
+                return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 64, len_in_bits);
             }
             _ => {}
         }
@@ -224,7 +223,7 @@ impl BooleanBuffer {
             iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
         };
 
-        BooleanBuffer::new(vec_u64s.into(), offset_in_bits % 8, len_in_bits)
+        BooleanBuffer::new(vec_u64s.into(), offset_in_bits % 64, len_in_bits)
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
