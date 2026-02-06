@@ -67,6 +67,9 @@ pub(crate) mod private {
                 "Encoding {} is not supported for type",
                 encoding
             )),
+            Encoding::ALP => Err(nyi_err!(
+                "Encoding ALP is not implemented"
+            )),
             e => Err(nyi_err!("Encoding {} is not supported", e)),
         }
     }
