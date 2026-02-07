@@ -1369,4 +1369,130 @@ mod tests {
             );
         }
     }
+
+    /// Regression test for <https://github.com/apache/arrow-rs/issues/9370>
+    ///
+    /// When `skip_records` crosses a page boundary by fully consuming a v1 page
+    /// (setting `has_partial=true` in the rep level decoder) and then
+    /// whole-page-skips a v2 page (which doesn't touch the rep level decoder),
+    /// the stale `has_partial` state caused a subsequent `read_records` call to
+    /// produce a "phantom" record with 0 values.
+    #[test]
+    fn test_skip_records_v2_page_skip_resets_partial_state() {
+        use crate::encodings::levels::LevelEncoder;
+        use crate::util::test_common::page_util::{DataPageBuilder, DataPageBuilderImpl};
+
+        let max_rep_level: i16 = 1;
+        let max_def_level: i16 = 1;
+
+        // Column descriptor for a list element column (rep=1, def=1)
+        let primitive_type = SchemaType::primitive_type_builder("element", PhysicalType::INT32)
+            .with_repetition(Repetition::REQUIRED)
+            .build()
+            .unwrap();
+        let desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(primitive_type),
+            max_def_level,
+            max_rep_level,
+            ColumnPath::new(vec!["list".to_string(), "element".to_string()]),
+        ));
+
+        // Page 1 (DataPage v1): 1 record with 2 elements
+        //   rep_levels = [0, 1], def_levels = [1, 1], values = [10, 20]
+        //
+        // During skip_records, all levels are consumed. count_records sees
+        // no following rep=0 delimiter, so has_partial is set to true.
+        // has_record_delimiter is false (InMemoryPageReader: next page exists)
+        // so flush_partial is NOT called.
+        let page1 = {
+            let mut builder = DataPageBuilderImpl::new(desc.clone(), 2, false);
+            builder.add_rep_levels(max_rep_level, &[0, 1]);
+            builder.add_def_levels(max_def_level, &[1, 1]);
+            builder.add_values::<Int32Type>(Encoding::PLAIN, &[10, 20]);
+            builder.consume()
+        };
+
+        // Page 2 (DataPage v2): 2 records with 2 elements each
+        //   rep_levels = [0, 1, 0, 1], def_levels = [1, 1, 1, 1]
+        //   values = [30, 40, 50, 60], num_rows = 2
+        //
+        // Because num_rows (2) <= remaining_records (2), the whole page is
+        // skipped via skip_next_page(). The rep level decoder is NOT touched,
+        // so has_partial remains true from page 1.
+        let page2 = {
+            let mut rep_enc = LevelEncoder::v2(max_rep_level, 4);
+            rep_enc.put(&[0i16, 1, 0, 1]);
+            let rep_bytes = rep_enc.consume();
+
+            let mut def_enc = LevelEncoder::v2(max_def_level, 4);
+            def_enc.put(&[1i16, 1, 1, 1]);
+            let def_bytes = def_enc.consume();
+
+            let val_bytes: Vec<u8> = [30i32, 40, 50, 60]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&rep_bytes);
+            buf.extend_from_slice(&def_bytes);
+            buf.extend_from_slice(&val_bytes);
+
+            Page::DataPageV2 {
+                buf: Bytes::from(buf),
+                num_values: 4,
+                encoding: Encoding::PLAIN,
+                num_nulls: 0,
+                num_rows: 2,
+                def_levels_byte_len: def_bytes.len() as u32,
+                rep_levels_byte_len: rep_bytes.len() as u32,
+                is_compressed: false,
+                statistics: None,
+            }
+        };
+
+        // Page 3 (DataPage v1): 1 record with 2 elements
+        //   rep_levels = [0, 1], def_levels = [1, 1], values = [70, 80]
+        //
+        // Without the fix, the stale has_partial=true from page 1 causes
+        // the rep=0 at position 0 to be counted as completing a phantom
+        // partial record (1 record, 0 levels, 0 values).
+        let page3 = {
+            let mut builder = DataPageBuilderImpl::new(desc.clone(), 2, false);
+            builder.add_rep_levels(max_rep_level, &[0, 1]);
+            builder.add_def_levels(max_def_level, &[1, 1]);
+            builder.add_values::<Int32Type>(Encoding::PLAIN, &[70, 80]);
+            builder.consume()
+        };
+
+        let pages = VecDeque::from(vec![page1, page2, page3]);
+        let page_reader = InMemoryPageReader::new(pages);
+        let column_reader: ColumnReader = get_column_reader(desc, Box::new(page_reader));
+        let mut typed_reader = get_typed_column_reader::<Int32Type>(column_reader);
+
+        // Skip 2 records:
+        //  - Iter 1: load page 1, consume all levels → has_partial=true
+        //  - Iter 2: peek page 2 (v2, num_rows=2 <= 2) → whole-page skip
+        //  - remaining_records = 0, loop exits
+        let skipped = typed_reader.skip_records(2).unwrap();
+        assert_eq!(skipped, 2);
+
+        // Read 1 record — should get page 3's data [70, 80]
+        let mut values = Vec::new();
+        let mut def_levels = Vec::new();
+        let mut rep_levels = Vec::new();
+
+        let (records, values_read, levels_read) = typed_reader
+            .read_records(1, Some(&mut def_levels), Some(&mut rep_levels), &mut values)
+            .unwrap();
+
+        // Without the fix: (1, 0, 0) — phantom record from stale has_partial
+        // With the fix:    (1, 2, 2) — correct read of page 3's record
+        assert_eq!(records, 1, "should read exactly 1 record");
+        assert_eq!(levels_read, 2, "should read 2 levels for the record");
+        assert_eq!(values_read, 2, "should read 2 non-null values");
+        assert_eq!(values, vec![70, 80], "should contain page 3's values");
+        assert_eq!(rep_levels, vec![0, 1], "rep levels for a 2-element list");
+        assert_eq!(def_levels, vec![1, 1], "def levels (all non-null)");
+    }
 }
