@@ -97,6 +97,36 @@ fn read_varint_slow(buf: &[u8]) -> Option<(u64, usize)> {
     None
 }
 
+pub(crate) fn skip_varint(buf: &[u8]) -> Option<usize> {
+    let first = *buf.first()?;
+    if first < 0x80 {
+        return Some(1);
+    }
+    if let Some(array) = buf.get(..10) {
+        return skip_varint_array(array.try_into().unwrap());
+    }
+    skip_varint_slow(buf)
+}
+
+fn skip_varint_array(buf: [u8; 10]) -> Option<usize> {
+    for idx in 0..10 {
+        if buf[idx] < 0x80 {
+            return Some(idx + 1);
+        }
+    }
+    None
+}
+
+#[cold]
+fn skip_varint_slow(buf: &[u8]) -> Option<usize> {
+    for (idx, &byte) in buf.iter().take(10).enumerate() {
+        if byte < 0x80 {
+            return Some(idx + 1);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
