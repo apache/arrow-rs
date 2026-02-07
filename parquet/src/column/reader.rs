@@ -378,6 +378,14 @@ where
                 ));
             }
         }
+
+        // Reset partial record state after successfully skipping all requested records.
+        if remaining_records == 0 {
+            if let Some(decoder) = self.rep_level_decoder.as_mut() {
+                decoder.flush_partial();
+            }
+        }
+
         Ok(num_records - remaining_records)
     }
 
