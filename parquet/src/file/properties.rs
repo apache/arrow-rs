@@ -43,7 +43,7 @@ pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 /// Default value for [`WriterProperties::write_page_header_statistics`]
 pub const DEFAULT_WRITE_PAGE_HEADER_STATISTICS: bool = false;
-/// Default value for [`WriterProperties::max_row_group_size`]
+/// Default value for [`WriterProperties::max_row_group_row_count`]
 pub const DEFAULT_MAX_ROW_GROUP_ROW_COUNT: usize = 1024 * 1024;
 /// Default value for [`WriterProperties::bloom_filter_position`]
 pub const DEFAULT_BLOOM_FILTER_POSITION: BloomFilterPosition = BloomFilterPosition::AfterRowGroup;
@@ -251,6 +251,7 @@ impl WriterProperties {
     /// Returns maximum number of rows in a row group, or `usize::MAX` if unlimited.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_max_row_group_size`]
+    #[deprecated(since = "58.0.0", note = "Use `max_row_group_row_count` instead")]
     pub fn max_row_group_size(&self) -> usize {
         self.max_row_group_row_count.unwrap_or(usize::MAX)
     }
@@ -1382,7 +1383,10 @@ mod tests {
             DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT
         );
         assert_eq!(props.write_batch_size(), DEFAULT_WRITE_BATCH_SIZE);
-        assert_eq!(props.max_row_group_size(), DEFAULT_MAX_ROW_GROUP_ROW_COUNT);
+        assert_eq!(
+            props.max_row_group_row_count(),
+            Some(DEFAULT_MAX_ROW_GROUP_ROW_COUNT)
+        );
         assert_eq!(props.max_row_group_bytes(), None);
         assert_eq!(props.bloom_filter_position(), DEFAULT_BLOOM_FILTER_POSITION);
         assert_eq!(props.writer_version(), DEFAULT_WRITER_VERSION);
@@ -1494,7 +1498,7 @@ mod tests {
             assert_eq!(props.data_page_size_limit(), 10);
             assert_eq!(props.dictionary_page_size_limit(), 20);
             assert_eq!(props.write_batch_size(), 30);
-            assert_eq!(props.max_row_group_size(), 40);
+            assert_eq!(props.max_row_group_row_count(), Some(40));
             assert_eq!(props.created_by(), "default");
             assert_eq!(
                 props.key_value_metadata(),
