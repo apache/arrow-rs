@@ -14,10 +14,13 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, BinaryArray, RecordBatch};
+use arrow_array::builder::BinaryBuilder;
+use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
+
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::basic::Encoding;
@@ -25,14 +28,22 @@ use parquet::file::properties::WriterProperties;
 
 use tempfile::tempfile;
 
-const ROWS: usize = 500;
-const VALUE_SIZE: usize = 5_068_563; // ~5MB per row → triggers >2GB total
+/// Number of rows written
+const ROWS: usize = 1024;
+
+/// Size of each binary value (~3MB)
+/// 1024 * 3MB ≈ 3GB total → guaranteed offset overflow for i32
+const VALUE_SIZE: usize = 3 * 1024 * 1024;
 
 fn make_large_binary_array() -> ArrayRef {
-    let value = vec![b'a'; VALUE_SIZE];
-    let values: Vec<Vec<u8>> = std::iter::repeat(value).take(ROWS).collect();
+    let mut builder = BinaryBuilder::new();
 
-    Arc::new(BinaryArray::from(values)) as ArrayRef
+    for _ in 0..ROWS {
+        let data = vec![b'a'; VALUE_SIZE];
+        builder.append_value(&data);
+    }
+
+    Arc::new(builder.finish()) as ArrayRef
 }
 
 fn write_parquet_with_encoding(array: ArrayRef, encoding: Encoding) -> std::fs::File {
@@ -46,10 +57,13 @@ fn write_parquet_with_encoding(array: ArrayRef, encoding: Encoding) -> std::fs::
 
     let file = tempfile().unwrap();
 
-    let props = WriterProperties::builder()
-        .set_dictionary_enabled(true)
-        .set_encoding(encoding)
-        .build();
+    let builder = WriterProperties::builder();
+    let builder = match encoding {
+        Encoding::RLE_DICTIONARY => builder.set_dictionary_enabled(true),
+        _ => builder.set_dictionary_enabled(false).set_encoding(encoding),
+    };
+
+    let props = builder.build();
 
     let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema, Some(props)).unwrap();
 
@@ -60,7 +74,8 @@ fn write_parquet_with_encoding(array: ArrayRef, encoding: Encoding) -> std::fs::
 }
 
 #[test]
-#[ignore = "regression test for >2GB binary offset overflow"]
+// Panics until https://github.com/apache/arrow-rs/issues/7973 is fixed
+#[should_panic(expected = "byte array offset overflow")]
 fn large_binary_plain_encoding_overflow() {
     let array = make_large_binary_array();
     let file = write_parquet_with_encoding(array, Encoding::PLAIN);
@@ -70,7 +85,8 @@ fn large_binary_plain_encoding_overflow() {
         .build()
         .unwrap();
 
-    assert!(matches!(reader.next(), Some(Ok(_))));
+    // Trigger decoding; this is where the overflow panic occurs
+    let _ = reader.next().unwrap();
 }
 
 #[test]

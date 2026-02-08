@@ -44,6 +44,7 @@ mod bloom_filter;
 mod checksum;
 mod int96_stats_roundtrip;
 mod io;
+mod large_string_overflow;
 #[cfg(feature = "async")]
 mod predicate_cache;
 mod row_filter;
