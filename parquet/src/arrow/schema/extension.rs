@@ -18,7 +18,7 @@
 //! Arrow Extension Type Support for Parquet
 //!
 //! This module contains mapping code to map Parquet [`LogicalType`]s to/from
-//! Arrow [`ExtensionType`]s.
+//! Arrow [`arrow_schema::extension::ExtensionType`]s.
 //!
 //! Extension types are represented using the metadata from Arrow [`Field`]s
 //! with the key "ARROW:extension:name".
@@ -27,7 +27,6 @@ use crate::basic::LogicalType;
 use crate::errors::ParquetError;
 use crate::schema::types::Type;
 use arrow_schema::Field;
-use arrow_schema::extension::ExtensionType;
 
 /// Adds extension type metadata, if necessary, based on the Parquet field's
 /// [`LogicalType`]
@@ -36,7 +35,8 @@ use arrow_schema::extension::ExtensionType;
 /// Arrow DataType, and instead are represented by an Arrow ExtensionType.
 /// Extension types are attached to Arrow Fields via metadata.
 pub(crate) fn try_add_extension_type(
-    mut arrow_field: Field,
+    // `mut` is needed when some features are enabled.
+    #[allow(unused_mut)] mut arrow_field: Field,
     parquet_type: &Type,
 ) -> Result<Field, ParquetError> {
     let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type_ref() else {
@@ -97,6 +97,7 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
 /// Return the Parquet logical type to use for the specified Arrow Struct field, if any.
 #[cfg(feature = "variant_experimental")]
 pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
+    use arrow_schema::extension::ExtensionType;
     use parquet_variant_compute::VariantType;
     // Check the name (= quick and cheap) and only try_extension_type if the name matches
     // to avoid unnecessary String allocations in ArrowError
@@ -151,6 +152,7 @@ pub(crate) fn logical_type_for_string(_field: &Field) -> Option<LogicalType> {
 
 #[cfg(feature = "geospatial")]
 pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+    use arrow_schema::extension::ExtensionType;
     use parquet_geospatial::WkbType;
     use parquet_geospatial::WkbTypeHint;
 
@@ -172,7 +174,7 @@ pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
 }
 
 #[cfg(not(feature = "geospatial"))]
-pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+pub(crate) fn logical_type_for_binary(_field: &Field) -> Option<LogicalType> {
     None
 }
 
@@ -182,6 +184,6 @@ pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType>
 }
 
 #[cfg(not(feature = "geospatial"))]
-pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType> {
+pub(crate) fn logical_type_for_binary_view(_field: &Field) -> Option<LogicalType> {
     None
 }

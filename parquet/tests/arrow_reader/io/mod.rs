@@ -244,6 +244,8 @@ struct TestParquetFile {
     /// The operation log for IO operations performed on this file
     ops: Arc<OperationLog>,
     /// The (pre-parsed) parquet metadata for this file
+    // TODO: this is unused; consider removing it.
+    #[allow(dead_code)]
     parquet_metadata: Arc<ParquetMetaData>,
 }
 
@@ -303,6 +305,8 @@ impl TestParquetFile {
     }
 
     /// Return the parquet metadata for this file
+    // TODO: this is unused; consider removing it.
+    #[allow(dead_code)]
     fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
         &self.parquet_metadata
     }
@@ -477,10 +481,12 @@ enum LogEntry {
     /// Read the metadata of the parquet file
     ReadMetadata(Range<usize>),
     /// Access previously parsed metadata
+    #[allow(dead_code)]
     GetProvidedMetadata,
     /// Read a single logical data object
     ReadData(ReadInfo),
     /// Read one or more logical data objects in a single operation
+    #[allow(dead_code)]
     ReadMultipleData(Vec<LogEntry>),
     /// Not known where the read came from
     Unknown(Range<usize>),
@@ -572,6 +578,8 @@ impl OperationLog {
     /// accessed by the specified range
     ///
     /// It behaves the same as [`add_entry_for_range`] but for multiple ranges.
+    // TODO: this is unused; consider removing it.
+    #[allow(dead_code)]
     fn add_entry_for_ranges<'a>(&self, ranges: impl IntoIterator<Item = &'a Range<usize>>) {
         let entries = ranges
             .into_iter()
