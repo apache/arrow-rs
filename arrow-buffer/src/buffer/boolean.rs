@@ -494,14 +494,17 @@ impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
 
     fn bitand(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.bit_len, rhs.bit_len);
-        BooleanBuffer::from_bitwise_binary_op(
-            &self.buffer,
-            self.bit_offset,
-            &rhs.buffer,
-            rhs.bit_offset,
-            self.bit_len,
-            |a, b| a & b,
-        )
+        BooleanBuffer {
+            buffer: buffer_bin_and(
+                &self.buffer,
+                self.bit_offset,
+                &rhs.buffer,
+                rhs.bit_offset,
+                self.bit_len,
+            ),
+            bit_offset: 0,
+            bit_len: self.bit_len,
+        }
     }
 }
 
