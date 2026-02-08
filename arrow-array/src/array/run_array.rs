@@ -123,6 +123,28 @@ impl<R: RunEndIndexType> RunArray<R> {
         Ok(array_data.into())
     }
 
+    /// Create a new [`RunArray`] from the provided parts, without validation
+    ///
+    /// # Safety
+    ///
+    /// Safe if [`Self::try_new`] would not error
+    pub unsafe fn new_unchecked(
+        data_type: DataType,
+        run_ends: RunEndBuffer<R::Native>,
+        values: ArrayRef,
+    ) -> Self {
+        Self {
+            data_type,
+            run_ends,
+            values,
+        }
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (DataType, RunEndBuffer<R::Native>, ArrayRef) {
+        (self.data_type, self.run_ends, self.values)
+    }
+
     /// Returns a reference to the [`RunEndBuffer`].
     pub fn run_ends(&self) -> &RunEndBuffer<R::Native> {
         &self.run_ends
@@ -258,11 +280,7 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         let run_ends = unsafe { RunEndBuffer::new_unchecked(scalar, offset, len) };
 
         let values = make_array(values_child);
-        Self {
-            data_type,
-            run_ends,
-            values,
-        }
+        unsafe { Self::new_unchecked(data_type, run_ends, values) }
     }
 }
 
@@ -1294,5 +1312,28 @@ mod tests {
 
         let slice3 = array1.slice(0, 4); // a, a, b, b
         assert_ne!(slice1, slice3);
+    }
+
+    #[test]
+    fn allow_to_create_invalid_array_using_new_unchecked() {
+        let valid = RunArray::<Int32Type>::from_iter(["32"]);
+        let (_, buffer, values) = valid.into_parts();
+
+        let _ = unsafe {
+            // mismatch data type
+            RunArray::<Int32Type>::new_unchecked(DataType::Int64, buffer, values)
+        };
+    }
+
+    #[test]
+    fn test_run_array_roundtrip() {
+        let run = Int32Array::from(vec![3, 6, 9, 12]);
+        let values = Int32Array::from(vec![Some(0), None, Some(1), None]);
+        let array = RunArray::try_new(&run, &values).unwrap();
+
+        let (dt, buffer, values) = array.clone().into_parts();
+        let created_from_parts =
+            unsafe { RunArray::<Int32Type>::new_unchecked(dt, buffer, values) };
+        assert_eq!(array, created_from_parts);
     }
 }
