@@ -29,8 +29,8 @@ fn compare_run_end_encoded<R: RunEndIndexType>(
     right: &dyn Array,
     opts: SortOptions,
 ) -> Result<DynComparator, ArrowError> {
-    let left = left.as_any().downcast_ref::<RunArray<R>>().unwrap();
-    let right = right.as_any().downcast_ref::<RunArray<R>>().unwrap();
+    let left = left.as_run::<R>();
+    let right = right.as_run::<R>();
 
     let c_opts = child_opts(opts);
     let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
@@ -502,28 +502,6 @@ pub fn make_comparator(
 ) -> Result<DynComparator, ArrowError> {
     use arrow_schema::DataType::*;
 
-    // Handle RunEndEncoded arrays first
-    if let (RunEndEncoded(l_run_ends, _), RunEndEncoded(r_run_ends, _)) =
-        (left.data_type(), right.data_type())
-    {
-        return match (l_run_ends.data_type(), r_run_ends.data_type()) {
-            (DataType::Int16, DataType::Int16) => {
-                compare_run_end_encoded::<Int16Type>(left, right, opts)
-            }
-            (DataType::Int32, DataType::Int32) => {
-                compare_run_end_encoded::<Int32Type>(left, right, opts)
-            }
-            (DataType::Int64, DataType::Int64) => {
-                compare_run_end_encoded::<Int64Type>(left, right, opts)
-            }
-            _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot compare RunEndEncoded arrays with different run ends types: left={:?}, right={:?}",
-                l_run_ends.data_type(),
-                r_run_ends.data_type()
-            ))),
-        };
-    }
-
     macro_rules! primitive_helper {
         ($t:ty, $left:expr, $right:expr, $nulls_first:expr) => {
             Ok(compare_primitive::<$t>($left, $right, $nulls_first))
@@ -564,6 +542,21 @@ pub fn make_comparator(
                  l_key.as_ref(), r_key.as_ref() => (dict_helper, left, right, opts),
                  _ => unreachable!()
              }
+        },
+        (RunEndEncoded(l_run_ends, _), RunEndEncoded(r_run_ends, _)) => {
+            macro_rules! run_end_helper {
+                ($t:ty, $left:expr, $right:expr, $opts:expr) => {
+                    compare_run_end_encoded::<$t>($left, $right, $opts)
+                };
+            }
+            downcast_run_end_index! {
+                l_run_ends.data_type(), r_run_ends.data_type() => (run_end_helper, left, right, opts),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "Cannot compare RunEndEncoded arrays with different run ends types: left={:?}, right={:?}",
+                    l_run_ends.data_type(),
+                    r_run_ends.data_type()
+                )))
+            }
         },
         (Map(_, _), Map(_, _)) => compare_map(left, right, opts),
         (Null, Null) => Ok(Box::new(|_, _| Ordering::Equal)),
@@ -1834,6 +1827,77 @@ mod tests {
         assert_eq!(cmp(1, 2), Ordering::Equal); // 10 vs 10
         assert_eq!(cmp(2, 3), Ordering::Equal); // 20 vs 20
         assert_eq!(cmp(4, 4), Ordering::Greater); // 30 vs 20
+    }
+
+    #[test]
+    fn test_run_end_encoded_sliced() {
+        // Create a RunEndEncoded array and slice it:
+        // original: [1, 1, 2, 2, 2, 3, 3, 4]
+        // run_ends: [2, 5, 7, 8], values: [1, 2, 3, 4]
+        let run_ends = Int32Array::from(vec![2, 5, 7, 8]);
+        let values = Int32Array::from(vec![1, 2, 3, 4]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        // slice1 = array[1..5] => [1, 2, 2, 2]
+        let slice1 = array.slice(1, 4);
+        // slice2 = array[3..7] => [2, 2, 3, 3]
+        let slice2 = array.slice(3, 4);
+
+        let cmp = make_comparator(&slice1, &slice2, SortOptions::default()).unwrap();
+
+        // slice1[0]=1, slice2[0]=2
+        assert_eq!(cmp(0, 0), Ordering::Less);
+        // slice1[1]=2, slice2[0]=2
+        assert_eq!(cmp(1, 0), Ordering::Equal);
+        // slice1[3]=2, slice2[2]=3
+        assert_eq!(cmp(3, 2), Ordering::Less);
+        // slice1[1]=2, slice2[3]=3
+        assert_eq!(cmp(1, 3), Ordering::Less);
+
+        // Compare a sliced array with an unsliced array
+        let run_ends2 = Int32Array::from(vec![2, 4]);
+        let values2 = Int32Array::from(vec![1, 2]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let cmp = make_comparator(&slice1, &array2, SortOptions::default()).unwrap();
+
+        // slice1[0]=1, array2[0]=1
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        // slice1[1]=2, array2[1]=1
+        assert_eq!(cmp(1, 1), Ordering::Greater);
+        // slice1[3]=2, array2[3]=2
+        assert_eq!(cmp(3, 3), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_run_end_encoded_sliced_with_nulls() {
+        // Create a RunEndEncoded array with nulls:
+        // original: [1, 1, null, null, 2, 2, null, 3]
+        // run_ends: [2, 4, 6, 7, 8], values: [1, null, 2, null, 3]
+        let run_ends = Int32Array::from(vec![2, 4, 6, 7, 8]);
+        let values = Int32Array::from(vec![Some(1), None, Some(2), None, Some(3)]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        // slice1 = array[1..6] => [1, null, null, 2, 2]
+        let slice1 = array.slice(1, 5);
+        // slice2 = array[3..8] => [null, 2, 2, null, 3]
+        let slice2 = array.slice(3, 5);
+
+        let opts = SortOptions::default(); // nulls_first=true, descending=false
+        let cmp = make_comparator(&slice1, &slice2, opts).unwrap();
+
+        // slice1[0]=1, slice2[0]=null
+        assert_eq!(cmp(0, 0), Ordering::Greater);
+        // slice1[1]=null, slice2[0]=null
+        assert_eq!(cmp(1, 0), Ordering::Equal);
+        // slice1[1]=null, slice2[1]=2
+        assert_eq!(cmp(1, 1), Ordering::Less);
+        // slice1[3]=2, slice2[1]=2
+        assert_eq!(cmp(3, 1), Ordering::Equal);
+        // slice1[4]=2, slice2[4]=3
+        assert_eq!(cmp(4, 4), Ordering::Less);
+        // slice1[3]=2, slice2[3]=null
+        assert_eq!(cmp(3, 3), Ordering::Greater);
     }
 
     #[test]
