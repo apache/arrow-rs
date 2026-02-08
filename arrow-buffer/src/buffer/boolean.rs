@@ -18,7 +18,10 @@
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::bit_util::read_u64;
-use crate::{BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_or, buffer_bin_xor};
+use crate::{
+    BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
+    buffer_bin_xor,
+};
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
