@@ -45,9 +45,6 @@ pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Pag
 pub const DEFAULT_WRITE_PAGE_HEADER_STATISTICS: bool = false;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
-/// Default value for [`WriterProperties::max_row_group_bytes`] (128 MB, same as the official Java
-/// implementation for `parquet.block.size`)
-pub const DEFAULT_MAX_ROW_GROUP_BYTES: usize = 128 * 1024 * 1024;
 /// Default value for [`WriterProperties::bloom_filter_position`]
 pub const DEFAULT_BLOOM_FILTER_POSITION: BloomFilterPosition = BloomFilterPosition::AfterRowGroup;
 /// Default value for [`WriterProperties::created_by`]
@@ -594,7 +591,7 @@ impl WriterPropertiesBuilder {
     ///
     /// # Panics
     /// If the value is set to 0.
-    #[deprecated(since = "57.3.0", note = "Use `set_max_row_group_row_count` instead")]
+    #[deprecated(since = "58.0.0", note = "Use `set_max_row_group_row_count` instead")]
     pub fn set_max_row_group_size(mut self, value: usize) -> Self {
         assert!(value > 0, "Cannot have a 0 max row group size");
         self.max_row_group_row_count = Some(value);
@@ -604,12 +601,12 @@ impl WriterPropertiesBuilder {
     /// Sets maximum number of rows in a row group, or `None` for unlimited.
     ///
     /// If both `max_row_group_row_count` and `max_row_group_bytes` are set,
-    /// the row group with the smallest limit will be applied.
+    /// the row group with the smaller limit will be produced.
     ///
     /// # Panics
     /// If the value is `Some(0)`.
     pub fn set_max_row_group_row_count(mut self, value: Option<usize>) -> Self {
-        assert_ne!(value, Some(0), "Cannot have a 0 max row group bytes");
+        assert_ne!(value, Some(0), "Cannot have a 0 max row group row count");
         self.max_row_group_row_count = value;
         self
     }
@@ -620,7 +617,7 @@ impl WriterPropertiesBuilder {
     /// This is similar to the official Java implementation for `parquet.block.size`'s behavior.
     ///
     /// If both `max_row_group_row_count` and `max_row_group_bytes` are set,
-    /// the row group with the smallest limit will be applied.
+    /// the row group with the smaller limit will be produced.
     ///
     /// # Panics
     /// If the value is `Some(0)`.

@@ -319,7 +319,7 @@ impl<W: Write + Send> ArrowWriter<W> {
 
     /// Encodes the provided [`RecordBatch`]
     ///
-    /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_size`]
+    /// If this would cause the current row group to exceed [`WriterProperties::max_row_group_row_count`]
     /// rows or [`WriterProperties::max_row_group_bytes`] bytes, the contents of `batch` will be
     /// written to one or more row groups such that limits are respected.
     ///
