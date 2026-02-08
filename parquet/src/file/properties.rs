@@ -594,10 +594,7 @@ impl WriterPropertiesBuilder {
     ///
     /// # Panics
     /// If the value is set to 0.
-    #[deprecated(
-        since = "57.3.0",
-        note = "Use `set_max_row_group_row_count` instead",
-    )]
+    #[deprecated(since = "57.3.0", note = "Use `set_max_row_group_row_count` instead")]
     pub fn set_max_row_group_size(mut self, value: usize) -> Self {
         assert!(value > 0, "Cannot have a 0 max row group size");
         self.max_row_group_row_count = Some(value);

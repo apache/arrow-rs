@@ -4583,14 +4583,22 @@ mod tests {
     }
 
     /// Helper function to write batches with the provided `WriteBatchesShape` into an `ArrowWriter`
-    fn write_batches(WriteBatchesShape {num_batches, rows_per_batch, row_size}: WriteBatchesShape, props: WriterProperties) -> ParquetRecordBatchReaderBuilder<File> {
+    fn write_batches(
+        WriteBatchesShape {
+            num_batches,
+            rows_per_batch,
+            row_size,
+        }: WriteBatchesShape,
+        props: WriterProperties,
+    ) -> ParquetRecordBatchReaderBuilder<File> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "str",
             ArrowDataType::Utf8,
             false,
         )]));
         let file = tempfile::tempfile().unwrap();
-        let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
 
         for batch_idx in 0..num_batches {
             let strings: Vec<String> = (0..rows_per_batch)
@@ -4612,11 +4620,14 @@ mod tests {
             .set_max_row_group_bytes(None)
             .build();
 
-        let builder = write_batches(WriteBatchesShape {
-            num_batches: 1,
-            rows_per_batch: 1000,
-            row_size: 4
-        }, props);
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 1,
+                rows_per_batch: 1000,
+                row_size: 4,
+            },
+            props,
+        );
 
         assert_eq!(
             &row_group_sizes(builder.metadata()),
@@ -4633,11 +4644,14 @@ mod tests {
             .set_max_row_group_bytes(None)
             .build();
 
-        let builder = write_batches(WriteBatchesShape {
-            num_batches: 1,
-            rows_per_batch: 1000,
-            row_size: 4
-        }, props);
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 1,
+                rows_per_batch: 1000,
+                row_size: 4,
+            },
+            props,
+        );
 
         assert_eq!(
             &row_group_sizes(builder.metadata()),
@@ -4655,11 +4669,14 @@ mod tests {
             .set_max_row_group_bytes(Some(3500))
             .build();
 
-        let builder = write_batches(WriteBatchesShape {
-            num_batches: 10,
-            rows_per_batch: 10,
-            row_size: 100
-        }, props);
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 10,
+                rows_per_batch: 10,
+                row_size: 100,
+            },
+            props,
+        );
 
         let sizes = row_group_sizes(builder.metadata());
 
@@ -4680,11 +4697,14 @@ mod tests {
             .set_max_row_group_bytes(Some(1024 * 1024)) // 1MB - won't trigger for small int data
             .build();
 
-        let builder = write_batches(WriteBatchesShape {
-            num_batches: 1,
-            row_size: 4,
-            rows_per_batch: 1000
-        }, props);
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 1,
+                row_size: 4,
+                rows_per_batch: 1000,
+            },
+            props,
+        );
 
         assert_eq!(
             &row_group_sizes(builder.metadata()),
@@ -4692,7 +4712,6 @@ mod tests {
             "Row limit should trigger before byte limit"
         );
     }
-
 
     #[test]
     // When both limits are set, the row limit triggers first
@@ -4702,13 +4721,14 @@ mod tests {
             .set_max_row_group_bytes(Some(9999)) // Won't trigger
             .build();
 
-        let builder = write_batches(WriteBatchesShape {
-            num_batches: 10,
-            rows_per_batch: 10,
-            row_size: 100
-        }, props);
-
-        let sizes = row_group_sizes(builder.metadata());
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 10,
+                rows_per_batch: 10,
+                row_size: 100,
+            },
+            props,
+        );
 
         assert_eq!(
             &row_group_sizes(builder.metadata()),
@@ -4725,11 +4745,14 @@ mod tests {
             .set_max_row_group_bytes(Some(3500)) // Will trigger at ~30-35 rows
             .build();
 
-        let builder = write_batches(WriteBatchesShape {
-            num_batches: 10,
-            rows_per_batch: 10,
-            row_size: 100
-        }, props);
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 10,
+                rows_per_batch: 10,
+                row_size: 100,
+            },
+            props,
+        );
 
         let sizes = row_group_sizes(builder.metadata());
 
