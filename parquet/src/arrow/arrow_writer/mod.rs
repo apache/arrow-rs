@@ -364,6 +364,7 @@ impl<W: Write + Send> ArrowWriter<W> {
 
                 let avg_row_bytes = current_bytes / in_progress.buffered_rows;
                 if avg_row_bytes > 0 {
+                    // At this point, `current_bytes < max_bytes` (checked above)
                     let remaining_bytes = max_bytes - current_bytes;
                     let rows_that_fit = remaining_bytes / avg_row_bytes;
 
