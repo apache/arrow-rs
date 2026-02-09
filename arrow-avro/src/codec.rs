@@ -1560,16 +1560,33 @@ impl<'a> Maker<'a> {
                     }
                     Ok(dt)
                 } else {
-                    let Some((match_idx, resolution)) =
+                    let Some((match_idx, mut match_dt)) =
                         self.find_best_union_match(writer_non_union, reader_variants, namespace)
                     else {
                         return Err(ArrowError::SchemaError(
                             "Writer schema does not match any reader union branch".to_string(),
                         ));
                     };
+                    // Steal the resolution info from the matching reader branch
+                    // for the Union resolution, but preserve possible resolution
+                    // information on its inner types.
+                    // For other branches, resolution is irrelevant,
+                    // so just parse them.
+                    let resolution = match_dt
+                        .resolution
+                        .take()
+                        .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
+                    let mut match_dt = Some(match_dt);
                     let children = reader_variants
                         .iter()
-                        .map(|variant| self.parse_type(variant, namespace))
+                        .enumerate()
+                        .map(|(idx, variant)| {
+                            if idx == match_idx {
+                                Ok(match_dt.take().unwrap())
+                            } else {
+                                self.parse_type(variant, namespace)
+                            }
+                        })
                         .collect::<Result<Vec<_>, _>>()?;
                     let union_fields = build_union_fields(&children)?;
                     let mut dt = AvroDataType::new(
@@ -1618,19 +1635,19 @@ impl<'a> Maker<'a> {
         writer: &Schema<'a>,
         reader_variants: &[Schema<'a>],
         namespace: Option<&'a str>,
-    ) -> Option<(usize, ResolutionInfo)> {
+    ) -> Option<(usize, AvroDataType)> {
         let mut first_resolution = None;
         for (reader_index, reader) in reader_variants.iter().enumerate() {
-            if let Ok(tmp) = self.resolve_type(writer, reader, namespace) {
-                match tmp.resolution {
+            if let Ok(dt) = self.resolve_type(writer, reader, namespace) {
+                match &dt.resolution {
                     None | Some(ResolutionInfo::Promotion(Promotion::Direct)) => {
                         // An exact match is best, return immediately.
-                        return Some((reader_index, ResolutionInfo::Promotion(Promotion::Direct)));
+                        return Some((reader_index, dt));
                     }
-                    Some(resolution) => {
+                    Some(_) => {
                         if first_resolution.is_none() {
                             // Store the first valid promotion but keep searching for a direct match.
-                            first_resolution = Some((reader_index, resolution));
+                            first_resolution = Some((reader_index, dt));
                         }
                     }
                 };
@@ -1649,11 +1666,18 @@ impl<'a> Maker<'a> {
             .iter()
             .map(|reader_schema| self.parse_type(reader_schema, namespace))
             .collect::<Result<_, _>>()?;
-        let mut writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> =
-            Vec::with_capacity(writer_variants.len());
-        for writer in writer_variants {
-            writer_to_reader.push(self.find_best_union_match(writer, reader_variants, namespace));
-        }
+        let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
+            .iter()
+            .map(|writer| {
+                self.find_best_union_match(writer, reader_variants, namespace)
+                    .map(|(match_idx, match_dt)| {
+                        let resolution = match_dt
+                            .resolution
+                            .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
+                        (match_idx, resolution)
+                    })
+            })
+            .collect();
         let union_fields = build_union_fields(&reader_encodings)?;
         let mut dt = AvroDataType::new(
             Codec::Union(reader_encodings.into(), union_fields, UnionMode::Dense),
