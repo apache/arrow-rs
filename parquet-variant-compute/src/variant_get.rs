@@ -4237,12 +4237,13 @@ mod test {
         ];
 
         for (request_type, expected) in expectations {
-            let options = GetOptions::new_with_path(VariantPath::from("outer").join("list"))
-                .with_as_type(Some(FieldRef::from(Field::new(
-                    "result",
-                    request_type.clone(),
-                    true,
-                ))));
+            let options =
+                GetOptions::new_with_path(VariantPath::from_str_or_panic("outer").join("list"))
+                    .with_as_type(Some(FieldRef::from(Field::new(
+                        "result",
+                        request_type.clone(),
+                        true,
+                    ))));
 
             let result = variant_get(&variant_array, options).unwrap();
             assert_eq!(result.data_type(), expected.data_type());
@@ -4254,13 +4255,16 @@ mod test {
             (1, vec![None, None]),
             (2, vec![Some(3), None]),
         ] {
-            let index_options =
-                GetOptions::new_with_path(VariantPath::from("outer").join("list").join(idx))
-                    .with_as_type(Some(FieldRef::from(Field::new(
-                        "result",
-                        DataType::Int64,
-                        true,
-                    ))));
+            let index_options = GetOptions::new_with_path(
+                VariantPath::from_str_or_panic("outer")
+                    .join("list")
+                    .join(idx),
+            )
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::Int64,
+                true,
+            ))));
             let index_result = variant_get(&variant_array, index_options).unwrap();
             let index_expected: ArrayRef = Arc::new(Int64Array::from(expected));
             assert_eq!(&index_result, &index_expected);
