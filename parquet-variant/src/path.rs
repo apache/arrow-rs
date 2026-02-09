@@ -116,7 +116,7 @@ impl<'a> VariantPath<'a> {
 
     /// Parses a path string, panics on invalid input.
     /// Only use for tests for known-valid input.
-    pub fn from_str_unchecked(s: &'a str) -> Self {
+    pub fn from_str_or_panic(s: &'a str) -> Self {
         VariantPath::try_from(s).unwrap()
     }
 }
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_variant_path_empty_str() {
-        let path = VariantPath::from_str_unchecked("");
+        let path = VariantPath::from_str_or_panic("");
         assert!(path.is_empty());
     }
 
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_variant_path_dot_notation_with_array_index() {
-        let path = VariantPath::from_str_unchecked("city.store.books[3].title");
+        let path = VariantPath::from_str_or_panic("city.store.books[3].title");
 
         let expected = VariantPath::try_from("city")
             .unwrap()
