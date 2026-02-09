@@ -2461,7 +2461,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_writer_non_union_record_to_reader_union_preserves_defaults() {
+    fn test_resolve_writer_non_union_to_reader_union_preserves_inner_record_defaults() {
         // Writer: record Inner{a: int}
         // Reader: union [Inner{a: int, b: int default 42}, string]
         // The matching child (Inner) should preserve DefaultValue(Int(42)) on field b.
@@ -2521,6 +2521,102 @@ mod tests {
             "expected the non-union record to resolve to a union variant"
         );
         let resolution = match resolved.writer_to_reader.first().unwrap() {
+            Some((0, resolution)) => resolution,
+            other => panic!("unexpected writer-to-reader table value {other:?}"),
+        };
+        match resolution {
+            ResolutionInfo::Record(ResolvedRecord {
+                writer_to_reader,
+                default_fields,
+                skip_fields,
+            }) => {
+                assert_eq!(writer_to_reader.len(), 1);
+                assert_eq!(writer_to_reader[0], Some(0));
+                assert_eq!(default_fields.len(), 1);
+                assert_eq!(default_fields[0], 1);
+                assert_eq!(skip_fields.len(), 1);
+                assert_eq!(skip_fields[0], None);
+            }
+            other => panic!("unexpected resolution {other:?}"),
+        }
+        // The matching child (Inner at index 0) should have field b with DefaultValue
+        let children = match dt.codec() {
+            Codec::Union(children, _, _) => children,
+            other => panic!("expected union codec, got {other:?}"),
+        };
+        let inner_fields = match children[0].codec() {
+            Codec::Struct(f) => f,
+            other => panic!("expected struct codec for Inner, got {other:?}"),
+        };
+        assert_eq!(inner_fields.len(), 2);
+        assert_eq!(inner_fields[1].name(), "b");
+        assert_eq!(
+            inner_fields[1].data_type().resolution,
+            Some(ResolutionInfo::DefaultValue(AvroLiteral::Int(42))),
+            "field b should have DefaultValue(Int(42)) from schema resolution"
+        );
+    }
+
+    #[test]
+    fn test_resolve_writer_union_to_reader_union_preserves_inner_record_defaults() {
+        // Writer: record [string, Inner{a: int}]
+        // Reader: union [Inner{a: int, b: int default 42}, string]
+        // The matching child (Inner) should preserve DefaultValue(Int(42)) on field b.
+        let writer = mk_union(vec![
+            mk_primitive(PrimitiveType::String),
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![AvroFieldSchema {
+                    name: "a",
+                    doc: None,
+                    r#type: mk_primitive(PrimitiveType::Int),
+                    default: None,
+                    aliases: vec![],
+                }],
+                attributes: Attributes::default(),
+            })),
+        ]);
+        let reader = mk_union(vec![
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![
+                    AvroFieldSchema {
+                        name: "a",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: None,
+                        aliases: vec![],
+                    },
+                    AvroFieldSchema {
+                        name: "b",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: Some(Value::Number(serde_json::Number::from(42))),
+                        aliases: vec![],
+                    },
+                ],
+                attributes: Attributes::default(),
+            })),
+            mk_primitive(PrimitiveType::String),
+        ]);
+        let mut maker = Maker::new(false, false);
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None)
+            .expect("resolution should succeed");
+        // Verify the union resolution structure
+        let resolved = match dt.resolution.as_ref() {
+            Some(ResolutionInfo::Union(u)) => u,
+            other => panic!("expected union resolution info, got {other:?}"),
+        };
+        assert!(resolved.writer_is_union && resolved.reader_is_union);
+        assert_eq!(resolved.writer_to_reader.len(), 2);
+        let resolution = match resolved.writer_to_reader[1].as_ref() {
             Some((0, resolution)) => resolution,
             other => panic!("unexpected writer-to-reader table value {other:?}"),
         };
