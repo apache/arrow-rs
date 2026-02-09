@@ -776,7 +776,8 @@ impl WriterPropertiesBuilder {
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
     pub fn set_data_page_size_limit(mut self, value: usize) -> Self {
-        self.default_column_properties.set_data_page_size_limit(value);
+        self.default_column_properties
+            .set_data_page_size_limit(value);
         self
     }
 
