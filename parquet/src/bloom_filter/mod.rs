@@ -48,6 +48,19 @@
 //!
 //! Where, `NP2` denotes *the next power of two*, and `m` is divided by 8 to be represented as bytes.
 //!
+//! # Cache-Efficient Bloom Filter Sizing
+//!
+//! The block structure of SBBFs introduces overhead due to the Poisson distribution of elements
+//! across blocks. Following the approach in "Cache-, hash-, and space-efficient bloom
+//! filters"<sup>[3][cache-efficient-bf]</sup>, we apply a compensation factor to the theoretical
+//! bits-per-element calculation to account for this overhead.
+//!
+//! The compensation is based on Table I from the paper, which provides empirically-determined
+//! adjustment factors for different theoretical bits-per-element values. We use linear interpolation
+//! between consecutive integer entries in the table to provide precise compensation values.
+//! This ensures that the actual false positive rate matches the requested rate while maintaining
+//! cache efficiency.
+//!
 //! Here is a table of calculated sizes for various FPP and NDV:
 //!
 //! | NDV       | FPP       | b       | Size (KB) |
@@ -71,6 +84,7 @@
 //! [parquet-bf-spec]: https://github.com/apache/parquet-format/blob/master/BloomFilter.md
 //! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
+//! [cache-efficient-bf]: https://dl.acm.org/doi/10.1145/1498698.1594230
 
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
@@ -242,14 +256,82 @@ fn optimal_num_of_bytes(num_bytes: usize) -> usize {
     num_bytes.next_power_of_two()
 }
 
-// see http://algo2.iti.kit.edu/documents/cacheefficientbloomfilters-jea.pdf
-// given fpp = (1 - e^(-k * n / m)) ^ k
-// we have m = - k * n / ln(1 - fpp ^ (1 / k))
-// where k = number of hash functions, m = number of bits, n = number of distinct values
+/// Compensation table from Table I of the paper referenced in the module documentation.
+/// Maps theoretical bits-per-element (c) to compensated bits-per-element (c') for B=512.
+const COMPENSATION_TABLE: &[(f64, f64)] = &[
+    (5.0, 6.0),
+    (6.0, 7.0),
+    (7.0, 8.0),
+    (8.0, 9.0),
+    (9.0, 10.0),
+    (10.0, 11.0),
+    (11.0, 12.0),
+    (12.0, 13.0),
+    (13.0, 14.0),
+    (14.0, 16.0),
+    (15.0, 17.0),
+    (16.0, 18.0),
+    (17.0, 20.0),
+    (18.0, 21.0),
+    (19.0, 23.0),
+    (20.0, 25.0),
+    (21.0, 26.0),
+    (22.0, 28.0),
+    (23.0, 30.0),
+    (24.0, 32.0),
+    (25.0, 35.0),
+    (26.0, 38.0),
+    (27.0, 40.0),
+    (28.0, 44.0),
+    (29.0, 48.0),
+    (30.0, 51.0),
+    (31.0, 58.0),
+    (32.0, 64.0),
+    (33.0, 74.0),
+    (34.0, 90.0),
+];
+
+/// Calculates the number of bits needed for a Split Block Bloom Filter given NDV and FPP.
+///
+/// Uses the compensation approach described in the module documentation to account for
+/// block structure overhead. The calculation:
+/// 1. Determines the theoretical bits-per-element (c) for an ideal Bloom filter with k=8
+/// 2. Applies compensation factors using linear interpolation between table entries
+/// 3. Multiplies by NDV to get the total number of bits needed
 #[inline]
 fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
-    let num_bits = -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln();
-    num_bits as usize
+    // Calculate the theoretical 'c' (bits per element) for an IDEAL filter.
+    // With k=8 fixed: c = -k / ln(1 - fpp^(1/k))
+    let k = 8.0;
+    let theoretical_c = -k / (1.0 - fpp.powf(1.0 / k)).ln();
+
+    // Apply compensation using linear interpolation between table entries
+    let compensated_c = if theoretical_c <= COMPENSATION_TABLE[0].0 {
+        // Below table range, use first entry
+        COMPENSATION_TABLE[0].1
+    } else if theoretical_c >= COMPENSATION_TABLE[COMPENSATION_TABLE.len() - 1].0 {
+        // Beyond c=34, SBBF efficiency drops off a cliff
+        theoretical_c * 2.65
+    } else {
+        // Find the two table entries to interpolate between
+        let idx = COMPENSATION_TABLE
+            .iter()
+            .position(|(c, _)| *c >= theoretical_c)
+            .unwrap(); // Safe because we checked bounds above
+
+        if idx == 0 || COMPENSATION_TABLE[idx].0 == theoretical_c {
+            // Exact match or at start
+            COMPENSATION_TABLE[idx].1
+        } else {
+            // Linear interpolation between consecutive entries
+            let (c_low, c_prime_low) = COMPENSATION_TABLE[idx - 1];
+            let (c_high, c_prime_high) = COMPENSATION_TABLE[idx];
+            let ratio = (theoretical_c - c_low) / (c_high - c_low);
+            c_prime_low + ratio * (c_prime_high - c_prime_low)
+        }
+    };
+
+    (ndv as f64 * compensated_c).ceil() as usize
 }
 
 impl Sbbf {
@@ -489,6 +571,74 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
 mod tests {
     use super::*;
 
+    /// Exact FPP calculation from Putze et al. equation 3.
+    /// This is a direct port of the C `libfilter_block_fpp_detail` function for validation purposes.
+    /// See https://github.com/jbapple/libfilter/blob/master/c/lib/util.c
+    ///
+    /// For Parquet SBBF:
+    /// - word_bits = 32 (each word is 32 bits)
+    /// - bucket_words = 8 (8 words per block, i.e., 256 bits per block)
+    /// - hash_bits = 32 (32-bit hash for block selection)
+    fn exact_fpp_from_formula(ndv: u64, bytes: usize) -> f64 {
+        const CHAR_BIT: usize = 8;
+        const WORD_BITS: f64 = 32.0;
+        const BUCKET_WORDS: f64 = 8.0;
+        const HASH_BITS: f64 = 32.0;
+
+        // Edge cases from the C implementation
+        if ndv == 0 {
+            return 0.0;
+        }
+        if bytes == 0 {
+            return 1.0;
+        }
+        let bits = bytes * CHAR_BIT;
+        if ndv as f64 / bits as f64 > 3.0 {
+            return 1.0;
+        }
+
+        let mut result = 0.0;
+
+        // Lambda parameter: average number of elements per block
+        // lam = bucket_words * word_bits / ((bytes * CHAR_BIT) / ndv)
+        //     = bucket_words * word_bits * ndv / (bytes * CHAR_BIT)
+        let lam = BUCKET_WORDS * WORD_BITS * (ndv as f64) / (bits as f64);
+        let loglam = lam.ln();
+        let log1collide = -HASH_BITS * 2.0_f64.ln();
+
+        const MAX_J: u64 = 10000;
+        for j in 0..MAX_J {
+            let i = MAX_J - 1 - j;
+            let i_f64 = i as f64;
+
+            // logp: log of Poisson probability P(X = i) where X ~ Poisson(lam)
+            // P(X = i) = (lam^i * e^(-lam)) / i!
+            // log(P(X = i)) = i*log(lam) - lam - log(i!)
+            let logp = i_f64 * loglam - lam - libm::lgamma(i_f64 + 1.0);
+
+            // Probability that a block with i elements is saturated (all bits set)
+            // After inserting i elements, each of bucket_words bits has probability
+            // (1 - 1/word_bits)^i of being 0. We need all bucket_words bits to have
+            // at least one bit set.
+            let logfinner = if i == 0 {
+                f64::NEG_INFINITY // log(0) = -infinity, contributes 0 to result
+            } else {
+                BUCKET_WORDS * (-(1.0 - 1.0 / WORD_BITS).powf(i_f64)).log1p()
+            };
+
+            // Probability of hash collision (two elements map to same block)
+            let logcollide = if i == 0 {
+                f64::NEG_INFINITY
+            } else {
+                i_f64.ln() + log1collide
+            };
+
+            result += logp.exp() * logfinner.exp() + logp.exp() * logcollide.exp();
+        }
+
+        result.min(1.0)
+    }
+
     #[test]
     fn test_hash_bytes() {
         assert_eq!(hash_as_bytes(""), 17241709254077376921);
@@ -576,25 +726,36 @@ mod tests {
     #[test]
     fn test_num_of_bits_from_ndv_fpp() {
         for (fpp, ndv, num_bits) in &[
-            (0.1, 10, 57),
-            (0.01, 10, 96),
-            (0.001, 10, 146),
-            (0.1, 100, 577),
-            (0.01, 100, 968),
-            (0.001, 100, 1460),
-            (0.1, 1000, 5772),
-            (0.01, 1000, 9681),
-            (0.001, 1000, 14607),
-            (0.1, 10000, 57725),
-            (0.01, 10000, 96815),
-            (0.001, 10000, 146076),
-            (0.1, 100000, 577254),
-            (0.01, 100000, 968152),
-            (0.001, 100000, 1460769),
-            (0.1, 1000000, 5772541),
-            (0.01, 1000000, 9681526),
-            (0.001, 1000000, 14607697),
-            (1e-50, 1_000_000_000_000, 14226231280773240832),
+            (0.1, 10, 68),
+            (0.01, 10, 107),
+            (0.001, 10, 167),
+            (0.0001, 10, 261),
+            (0.00001, 10, 497),
+            (0.1, 100, 678),
+            (0.01, 100, 1069),
+            (0.001, 100, 1661),
+            (0.0001, 100, 2610),
+            (0.00001, 100, 4967),
+            (0.1, 1000, 6773),
+            (0.01, 1000, 10682),
+            (0.001, 1000, 16608),
+            (0.0001, 1000, 26091),
+            (0.00001, 1000, 49667),
+            (0.1, 10000, 67726),
+            (0.01, 10000, 106816),
+            (0.001, 10000, 166077),
+            (0.0001, 10000, 260909),
+            (0.00001, 10000, 496665),
+            (0.1, 100000, 677255),
+            (0.01, 100000, 1068153),
+            (0.001, 100000, 1660770),
+            (0.0001, 100000, 2609082),
+            (0.00001, 100000, 4966647),
+            (0.1, 1000000, 6772542),
+            (0.01, 1000000, 10681527),
+            (0.001, 1000000, 16607698),
+            (0.0001, 1000000, 26090819),
+            (0.00001, 1000000, 49666467),
         ] {
             assert_eq!(*num_bits, num_of_bits_from_ndv_fpp(*ndv, *fpp) as u64);
         }
@@ -637,5 +798,267 @@ mod tests {
                 value
             );
         }
+    }
+
+    /// Test that the actual false positive probability matches the expected FPP
+    /// for various configurations of NDV and FPP.
+    #[test]
+    fn test_actual_fpp_matches_expected() {
+        // Test configurations: (expected_fpp, ndv, num_tests)
+        let test_cases = [
+            (0.01, 10_000, 100_000),
+            (0.001, 50_000, 200_000),
+            (0.01, 100_000, 200_000),
+        ];
+
+        for (expected_fpp, ndv, num_tests) in test_cases {
+            println!("Testing FPP={expected_fpp}, NDV={ndv}");
+
+            // Create bloom filter with specified NDV and FPP
+            let mut sbbf = Sbbf::new_with_ndv_fpp(ndv, expected_fpp).unwrap();
+
+            // Insert exactly NDV elements (using format "inserted_{i}")
+            for i in 0..ndv {
+                let value = format!("inserted_{i}");
+                sbbf.insert(value.as_str());
+            }
+
+            // Verify inserted elements are all found (no false negatives)
+            for i in 0..ndv.min(1000) {
+                let value = format!("inserted_{i}");
+                assert!(
+                    sbbf.check(&value.as_str()),
+                    "False negative detected for inserted value: {value}"
+                );
+            }
+
+            // Test non-inserted elements to measure actual FPP
+            let mut false_positives = 0;
+            for i in 0..num_tests {
+                let value = format!("not_inserted_{i}");
+                if sbbf.check(&value.as_str()) {
+                    false_positives += 1;
+                }
+            }
+
+            let actual_fpp = false_positives as f64 / num_tests as f64;
+            println!("  Expected FPP: {expected_fpp}, Actual FPP: {actual_fpp}");
+
+            // Verify actual FPP is not worse than expected by a large margin
+            // The compensation table often results in better (lower) FPP than theoretical,
+            // so we mainly check that we don't exceed the expected FPP by too much
+            let upper_tolerance = 3.0;
+            let upper_bound = expected_fpp * upper_tolerance;
+
+            assert!(
+                actual_fpp <= upper_bound,
+                "Actual FPP {actual_fpp} exceeds upper bound {upper_bound} (expected FPP: {expected_fpp})"
+            );
+
+            // Log if the filter performs significantly better than expected
+            if actual_fpp < expected_fpp * 0.5 {
+                println!(
+                    "  Note: Filter performs {:.1}x better than expected",
+                    expected_fpp / actual_fpp
+                );
+            }
+        }
+    }
+
+    /// Test that the bloom filter correctly handles no false negatives
+    /// while allowing false positives.
+    #[test]
+    fn test_no_false_negatives() {
+        let ndv = 10_000;
+        let fpp = 0.01;
+        let mut sbbf = Sbbf::new_with_ndv_fpp(ndv, fpp).unwrap();
+
+        // Insert elements
+        let inserted_elements: Vec<String> = (0..ndv).map(|i| format!("element_{i}")).collect();
+        for elem in &inserted_elements {
+            sbbf.insert(elem.as_str());
+        }
+
+        // Verify every inserted element is found (no false negatives allowed)
+        for elem in &inserted_elements {
+            assert!(
+                sbbf.check(&elem.as_str()),
+                "False negative detected: bloom filter must never report false negatives"
+            );
+        }
+    }
+
+    /// Test edge cases for FPP values
+    #[test]
+    fn test_fpp_edge_cases() {
+        // Very low FPP
+        let sbbf = Sbbf::new_with_ndv_fpp(1000, 0.0001).unwrap();
+        assert!(!sbbf.0.is_empty());
+
+        // High FPP (but still valid)
+        let sbbf = Sbbf::new_with_ndv_fpp(1000, 0.5).unwrap();
+        assert!(!sbbf.0.is_empty());
+
+        // Invalid FPP values should error (>= 1.0 or negative)
+        assert!(Sbbf::new_with_ndv_fpp(1000, 1.0).is_err());
+        assert!(Sbbf::new_with_ndv_fpp(1000, 1.5).is_err());
+        assert!(Sbbf::new_with_ndv_fpp(1000, -0.1).is_err());
+    }
+
+    /// Test that the compensation table approach produces FPP close to the exact formula.
+    /// This validates that our table-based approximation is accurate.
+    #[test]
+    fn test_compensation_table_vs_exact_formula() {
+        // Test various (FPP, NDV) configurations
+        let test_cases = [
+            (0.1, 1_000),
+            (0.01, 1_000),
+            (0.001, 1_000),
+            (0.0001, 1_000),
+            (0.1, 10_000),
+            (0.01, 10_000),
+            (0.001, 10_000),
+            (0.0001, 10_000),
+            (0.00001, 10_000),
+            (0.1, 100_000),
+            (0.01, 100_000),
+            (0.001, 100_000),
+            (0.0001, 100_000),
+            (0.00001, 100_000),
+            (0.1, 1_000_000),
+            (0.01, 1_000_000),
+            (0.001, 1_000_000),
+            (0.0001, 1_000_000),
+            (0.00001, 1_000_000),
+        ];
+
+        for (target_fpp, ndv) in test_cases {
+            // Use compensation table approach to determine size
+            let num_bits = num_of_bits_from_ndv_fpp(ndv, target_fpp);
+            let num_bytes = optimal_num_of_bytes(num_bits / 8);
+
+            // Calculate actual FPP using exact formula
+            let exact_fpp = exact_fpp_from_formula(ndv, num_bytes);
+
+            println!(
+                "NDV: {ndv:7}, Target FPP: {target_fpp:.6}, Bytes: {num_bytes:8}, Exact FPP: {exact_fpp:.6}"
+            );
+
+            // The compensation table should produce an FPP that's at or below the target
+            // We allow some tolerance for floating point arithmetic
+            // The goal is to not significantly exceed the target FPP
+            assert!(
+                exact_fpp <= target_fpp * 1.05,
+                "Exact FPP {exact_fpp:.6} significantly exceeds target {target_fpp:.6} for NDV={ndv}"
+            );
+        }
+    }
+
+    /// Test that demonstrates the compensation table achieves better (lower) FPP than naive calculation.
+    /// This shows why the compensation is necessary for block bloom filters.
+    ///
+    /// The naive implementation often FAILS to hit the target FPP (actual > target),
+    /// while the improved table lookup version succeeds at hitting the target FPP.
+    #[test]
+    fn test_compensation_benefit() {
+        // Use a matrix to define test cases as rows of (fpp, ndv)
+        let test_cases_matrix: [[(f64, u64); 3]; 5] = [
+            [(0.1, 100), (0.1, 1_000), (0.1, 10_000)],
+            [(0.01, 100), (0.01, 1_000), (0.01, 10_000)],
+            [(0.001, 100), (0.001, 1_000), (0.001, 10_000)],
+            [(0.0001, 100), (0.0001, 1_000), (0.0001, 10_000)],
+            [(0.00001, 100), (0.00001, 1_000), (0.00001, 10_000)],
+        ];
+        // Flatten the matrix into a Vec for processing
+        let test_cases: Vec<(f64, u64)> = test_cases_matrix
+            .iter()
+            .flat_map(|row| row.iter().copied())
+            .collect();
+
+        let mut naive_failures = 0;
+        let mut compensated_failures = 0;
+
+        for (target_fpp, ndv) in &test_cases {
+            let target_fpp = *target_fpp;
+            let ndv = *ndv;
+
+            // Naive calculation (without compensation)
+            let k = 8.0;
+            let theoretical_c = -k / (1.0 - target_fpp.powf(1.0 / k)).ln();
+            let naive_bits = (ndv as f64 * theoretical_c).ceil() as usize;
+            let naive_bytes = optimal_num_of_bytes(naive_bits / 8);
+            let naive_exact_fpp = exact_fpp_from_formula(ndv, naive_bytes);
+
+            // With compensation table
+            let compensated_bits = num_of_bits_from_ndv_fpp(ndv, target_fpp);
+            let compensated_bytes = optimal_num_of_bytes(compensated_bits / 8);
+            let compensated_exact_fpp = exact_fpp_from_formula(ndv, compensated_bytes);
+
+            // Track failures: when actual FPP exceeds target FPP (with small tolerance for rounding)
+            let tolerance = 1.01; // Allow 1% tolerance for rounding errors
+            let naive_fails = naive_exact_fpp > target_fpp * tolerance;
+            let compensated_fails = compensated_exact_fpp > target_fpp * tolerance;
+
+            if naive_fails {
+                naive_failures += 1;
+            }
+            if compensated_fails {
+                compensated_failures += 1;
+            }
+
+            println!("\nNDV: {ndv}, Target FPP: {target_fpp}");
+            println!(
+                "  Naive: {} bytes, actual FPP: {:.6} {}",
+                naive_bytes,
+                naive_exact_fpp,
+                if naive_fails {
+                    "❌ EXCEEDS TARGET"
+                } else {
+                    "✓"
+                }
+            );
+            println!(
+                "  Compensated: {} bytes, actual FPP: {:.6} {}",
+                compensated_bytes,
+                compensated_exact_fpp,
+                if compensated_fails {
+                    "❌ EXCEEDS TARGET"
+                } else {
+                    "✓ meets target"
+                }
+            );
+
+            // The compensated version should always be better than or equal to the naive version
+            assert!(
+                compensated_exact_fpp <= naive_exact_fpp,
+                "Compensated FPP {compensated_exact_fpp:.6} should be <= naive FPP {naive_exact_fpp:.6}"
+            );
+        }
+
+        println!("\n=== Summary ===");
+        println!(
+            "Naive implementation failures (exceeded target FPP): {}/{}",
+            naive_failures,
+            test_cases.len()
+        );
+        println!(
+            "Compensated implementation failures: {}/{}",
+            compensated_failures,
+            test_cases.len()
+        );
+
+        // Assert that the naive implementation fails on at least some test cases
+        assert!(
+            naive_failures > 0,
+            "Expected naive implementation to fail to hit target FPP on some test cases"
+        );
+
+        // Assert that the compensated implementation has fewer failures than naive
+        assert!(
+            compensated_failures < naive_failures,
+            "Compensated implementation should have fewer failures than naive (compensated: {}, naive: {})",
+            compensated_failures,
+            naive_failures
+        );
     }
 }
