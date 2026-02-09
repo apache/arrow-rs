@@ -527,9 +527,9 @@ impl Decoder {
                     }
                     Some(ResolutionInfo::Union(info)) if !info.writer_is_union => {
                         let Some(Some((_, resolution))) = info.writer_to_reader.first() else {
-                            panic!(
-                                "unexpected union resolution info for non-union writer and union reader type",
-                            );
+                            return Err(AvroError::SchemaError(
+                                "unexpected union resolution info for non-union writer and union reader type".into(),
+                            ));
                         };
                         let resolution = ResolutionPlan::try_new(&decoder, resolution)?;
                         NullablePlan::FromSingle { resolution }
@@ -538,7 +538,9 @@ impl Decoder {
                         let Some((_, resolution)) =
                             info.writer_to_reader[nullability.non_null_index()].as_ref()
                         else {
-                            panic!("unexpected union resolution info for nullable writer type");
+                            return Err(AvroError::SchemaError(
+                                "unexpected union resolution info for nullable writer type".into(),
+                            ));
                         };
                         NullablePlan::ReadTag {
                             nullability,
@@ -1101,7 +1103,9 @@ impl Decoder {
             ResolutionPlan::DefaultValue(lit) => self.append_default(lit),
             ResolutionPlan::EnumMapping(res) => {
                 let Self::Enum(indices, _, _) = self else {
-                    panic!("enum mapping resolution provided for non-enum decoder");
+                    return Err(AvroError::SchemaError(
+                        "enum mapping resolution provided for non-enum decoder".into(),
+                    ));
                 };
                 let raw = buf.get_int()?;
                 let resolved = res.resolve(raw)?;
@@ -1110,7 +1114,9 @@ impl Decoder {
             }
             ResolutionPlan::Record(proj) => {
                 let Self::Record(_, encodings, _, _) = self else {
-                    panic!("record projection provided for non-record decoder");
+                    return Err(AvroError::SchemaError(
+                        "record projection provided for non-record decoder".into(),
+                    ));
                 };
                 proj.project_record(buf, encodings)
             }
@@ -1383,9 +1389,9 @@ impl ResolutionPlan {
             (Decoder::Record(_, _, field_defaults, _), ResolutionInfo::Record(r)) => Ok(
                 ResolutionPlan::Record(ProjectorBuilder::try_new(r, field_defaults).build()?),
             ),
-            (_, ResolutionInfo::Record(_)) => {
-                unreachable!("record resolution on non-record decoder")
-            }
+            (_, ResolutionInfo::Record(_)) => Err(AvroError::SchemaError(
+                "record resolution on non-record decoder".into(),
+            )),
             (_, ResolutionInfo::Union(_)) => Err(AvroError::SchemaError(
                 "union variant cannot be resolved to a union type".into(),
             )),
