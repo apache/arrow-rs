@@ -157,6 +157,7 @@ use crate::reader::list_array::ListArrayDecoder;
 use crate::reader::map_array::MapArrayDecoder;
 use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
+use crate::reader::run_end_array::RunEndEncodedArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
@@ -170,6 +171,7 @@ mod list_array;
 mod map_array;
 mod null_array;
 mod primitive_array;
+mod run_end_array;
 mod schema;
 mod serializer;
 mod string_array;
@@ -794,6 +796,7 @@ fn make_decoder(
         DataType::FixedSizeBinary(len) => Ok(Box::new(FixedSizeBinaryArrayDecoder::new(len))),
         DataType::BinaryView => Ok(Box::new(BinaryViewDecoder::default())),
         DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(ctx, data_type, is_nullable)?)),
+        DataType::RunEndEncoded(_, _) => Ok(Box::new(RunEndEncodedArrayDecoder::new(ctx, data_type, is_nullable)?)),
         _ => Err(ArrowError::NotYetImplemented(format!("Support for {data_type} in JSON reader")))
     }
 }
@@ -2856,5 +2859,188 @@ mod tests {
                 .to_string(),
             "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
         );
+    }
+
+    #[test]
+    fn test_read_run_end_encoded() {
+        let buf = r#"
+        {"a": "x"}
+        {"a": "x"}
+        {"a": "y"}
+        {"a": "y"}
+        {"a": "y"}
+        "#;
+
+        let ree_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0);
+        let run_array = col
+            .as_any()
+            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .unwrap();
+
+        // 5 logical values compressed into 2 runs
+        assert_eq!(run_array.len(), 5);
+        assert_eq!(run_array.run_ends().values(), &[2, 5]);
+
+        let values = run_array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values.value(0), "x");
+        assert_eq!(values.value(1), "y");
+    }
+
+    #[test]
+    fn test_run_end_encoded_roundtrip() {
+        let run_ends = arrow_array::Int32Array::from(vec![3, 5, 7]);
+        let values = StringArray::from(vec![Some("a"), None, Some("b")]);
+        let ree =
+            arrow_array::RunArray::<arrow_array::types::Int32Type>::try_new(&run_ends, &values)
+                .unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c",
+            ree.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ree)]).unwrap();
+
+        // Write to JSON
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        // Read back with REE schema
+        let batches = do_read(
+            std::str::from_utf8(&buf).unwrap(),
+            1024,
+            false,
+            false,
+            schema,
+        );
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0);
+        let run_array = col
+            .as_any()
+            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .unwrap();
+
+        assert_eq!(run_array.len(), 7);
+        // "a","a","a" → run_end=3, null,null → run_end=5, "b","b" → run_end=7
+        assert_eq!(run_array.run_ends().values(), &[3, 5, 7]);
+
+        let values = run_array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.len(), 3);
+        assert_eq!(values.value(0), "a");
+        assert!(values.is_null(1));
+        assert_eq!(values.value(2), "b");
+    }
+
+    #[test]
+    fn test_read_run_end_encoded_consecutive_nulls() {
+        let buf = r#"
+        {"a": "x"}
+        {}
+        {}
+        {}
+        {"a": "y"}
+        "#;
+
+        let ree_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0);
+        let run_array = col
+            .as_any()
+            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .unwrap();
+
+        // 5 logical values: "x", null, null, null, "y" → 3 runs
+        assert_eq!(run_array.len(), 5);
+        assert_eq!(run_array.run_ends().values(), &[1, 4, 5]);
+
+        let values = run_array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.len(), 3);
+        assert_eq!(values.value(0), "x");
+        assert!(values.is_null(1));
+        assert_eq!(values.value(2), "y");
+    }
+
+    #[test]
+    fn test_read_run_end_encoded_all_unique() {
+        let buf = r#"
+        {"a": 1}
+        {"a": 2}
+        {"a": 3}
+        "#;
+
+        let ree_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0);
+        let run_array = col
+            .as_any()
+            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .unwrap();
+
+        // No compression: 3 unique values → 3 runs
+        assert_eq!(run_array.len(), 3);
+        assert_eq!(run_array.run_ends().values(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_read_run_end_encoded_int16_run_ends() {
+        let buf = r#"
+        {"a": "x"}
+        {"a": "x"}
+        {"a": "y"}
+        "#;
+
+        let ree_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0);
+        let run_array = col
+            .as_any()
+            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int16Type>>()
+            .unwrap();
+
+        assert_eq!(run_array.len(), 3);
+        assert_eq!(run_array.run_ends().values(), &[2i16, 3]);
     }
 }

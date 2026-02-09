@@ -2658,4 +2658,69 @@ mod tests {
 
         assert_eq!(json_value, expected);
     }
+
+    #[test]
+    fn test_write_run_end_encoded() {
+        let run_ends = Int32Array::from(vec![2, 5, 6]);
+        let values = StringArray::from(vec![Some("a"), Some("b"), None]);
+        let ree = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "c1",
+            ree.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(ree)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"c1":"a"}
+{"c1":"a"}
+{"c1":"b"}
+{"c1":"b"}
+{"c1":"b"}
+{}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_write_run_end_encoded_int_values() {
+        let run_ends = Int32Array::from(vec![3, 5]);
+        let values = Int32Array::from(vec![10, 20]);
+        let ree = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "n",
+            ree.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(ree)]).unwrap();
+
+        let json_value: Value = {
+            let mut buf = Vec::new();
+            let mut writer = WriterBuilder::new().build::<_, JsonArray>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+            writer.finish().unwrap();
+            serde_json::from_slice(&buf).unwrap()
+        };
+
+        let expected = json!([
+            {"n": 10},
+            {"n": 10},
+            {"n": 10},
+            {"n": 20},
+            {"n": 20},
+        ]);
+
+        assert_eq!(json_value, expected);
+    }
 }
