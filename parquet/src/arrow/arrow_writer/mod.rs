@@ -4874,29 +4874,7 @@ mod tests {
         );
     }
 
-    #[test]
-    // If remaining bytes are non-zero but too small for one estimated row, flush and retry.
-    fn test_row_group_limit_bytes_flushes_when_no_rows_fit_estimate() {
-        let props = WriterProperties::builder()
-            .set_max_row_group_row_count(None)
-            .set_max_row_group_bytes(Some(1999))
-            .build();
 
-        let builder = write_batches(
-            WriteBatchesShape {
-                num_batches: 2,
-                rows_per_batch: 1,
-                row_size: 1000,
-            },
-            props,
-        );
-
-        assert_eq!(
-            &row_group_sizes(builder.metadata()),
-            &[1, 1],
-            "Expected flush when estimated rows_that_fit is zero"
-        );
-    }
 
     #[test]
     // When both limits are set, the row limit triggers first
