@@ -1106,7 +1106,9 @@ impl ArrowColumnWriterFactory {
             | ArrowDataType::Utf8View => out.push(bytes(leaves.next().unwrap())?),
             ArrowDataType::List(f)
             | ArrowDataType::LargeList(f)
-            | ArrowDataType::FixedSizeList(f, _) => {
+            | ArrowDataType::FixedSizeList(f, _)
+            | ArrowDataType::ListView(f)
+            | ArrowDataType::LargeListView(f) => {
                 self.get_arrow_column_writer(f.data_type(), props, leaves, out)?
             }
             ArrowDataType::Struct(fields) => {
@@ -1730,6 +1732,143 @@ mod tests {
         // This test fails if the max row group size is less than the batch's length
         // see https://github.com/apache/arrow-rs/issues/518
         assert_eq!(batch.column(0).null_count(), 0);
+
+        roundtrip(batch, None);
+    }
+
+    #[test]
+    fn arrow_writer_list_view() {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::ListView(list_field.clone()),
+            true,
+        )]);
+
+        //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
+        let a = ListViewArray::new(
+            list_field,
+            vec![0, 1, 0, 3, 6].into(),
+            vec![1, 2, 0, 3, 4].into(),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+            Some(vec![true, true, false, true, true].into()),
+        );
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        assert_eq!(batch.column(0).null_count(), 1);
+
+        roundtrip(batch, None);
+    }
+
+    #[test]
+    fn arrow_writer_list_view_non_null() {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::ListView(list_field.clone()),
+            false,
+        )]);
+
+        //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
+        let a = ListViewArray::new(
+            list_field,
+            vec![0, 1, 0, 3, 6].into(),
+            vec![1, 2, 0, 3, 4].into(),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+            None,
+        );
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        assert_eq!(batch.column(0).null_count(), 0);
+
+        roundtrip(batch, None);
+    }
+
+    #[test]
+    fn arrow_writer_list_view_out_of_order() {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::ListView(list_field.clone()),
+            false,
+        )]);
+
+        // [[1], [2, 3], [], [7, 8, 9, 10], [4, 5, 6]] - out of order offsets
+        let a = ListViewArray::new(
+            list_field,
+            vec![0, 1, 0, 6, 3].into(),
+            vec![1, 2, 0, 4, 3].into(),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+            None,
+        );
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        roundtrip(batch, None);
+    }
+
+    #[test]
+    fn arrow_writer_large_list_view() {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::LargeListView(list_field.clone()),
+            true,
+        )]);
+
+        //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
+        let a = LargeListViewArray::new(
+            list_field,
+            vec![0i64, 1, 0, 3, 6].into(),
+            vec![1i64, 2, 0, 3, 4].into(),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+            Some(vec![true, true, false, true, true].into()),
+        );
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        assert_eq!(batch.column(0).null_count(), 1);
+
+        roundtrip(batch, None);
+    }
+
+    #[test]
+    fn arrow_writer_list_view_with_struct() {
+        // Test ListView containing Struct: ListView<Struct<Int32, Utf8>>
+        let struct_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        let struct_type = DataType::Struct(struct_fields.clone());
+        let list_field = Arc::new(Field::new("item", struct_type.clone(), false));
+
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::ListView(list_field.clone()),
+            true,
+        )]);
+
+        // Create struct values
+        let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let name_array = StringArray::from(vec!["a", "b", "c", "d", "e"]);
+        let struct_array = StructArray::new(
+            struct_fields,
+            vec![Arc::new(id_array), Arc::new(name_array)],
+            None,
+        );
+
+        // Create ListView: [{1, "a"}, {2, "b"}], null, [{3, "c"}, {4, "d"}, {5, "e"}]
+        let list_view = ListViewArray::new(
+            list_field,
+            vec![0, 2, 2].into(), // offsets
+            vec![2, 0, 3].into(), // sizes
+            Arc::new(struct_array),
+            Some(vec![true, false, true].into()),
+        );
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_view)]).unwrap();
 
         roundtrip(batch, None);
     }
