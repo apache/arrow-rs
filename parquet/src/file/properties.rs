@@ -1609,6 +1609,29 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
+    fn test_writer_properties_deprecated_max_row_group_size_still_works() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(42)
+            .build();
+
+        assert_eq!(props.max_row_group_row_count(), Some(42));
+        assert_eq!(props.max_row_group_size(), 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 max row group row count")]
+    fn test_writer_properties_panic_on_zero_row_group_row_count() {
+        let _ = WriterProperties::builder().set_max_row_group_row_count(Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 max row group bytes")]
+    fn test_writer_properties_panic_on_zero_row_group_bytes() {
+        let _ = WriterProperties::builder().set_max_row_group_bytes(Some(0));
+    }
+
+    #[test]
     fn test_writer_properties_bloom_filter_ndv_fpp_set() {
         assert_eq!(
             WriterProperties::builder()
