@@ -1131,7 +1131,7 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .expect("tempfile creation");
 
     let mut builder = WriterProperties::builder()
-        .set_max_row_group_size(row_per_group)
+        .set_max_row_group_row_count(Some(row_per_group))
         .set_bloom_filter_enabled(true)
         .set_statistics_enabled(EnabledStatistics::Page);
     if scenario.truncate_stats() {
