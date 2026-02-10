@@ -50,7 +50,7 @@ chrono = { workspace = true }
 lexical-core = { version = "1.0", default-features = false}
 memchr = "2.7.4"
 simdutf8 = { workspace = true }
-ryu = "1.0"
+zmij = { workspace = true }
 itoa = "1.0"
 
 [dev-dependencies]

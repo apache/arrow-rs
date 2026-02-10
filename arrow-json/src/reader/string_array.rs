@@ -25,7 +25,7 @@ use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
 
 use itoa;
-use ryu;
+use zmij;
 
 const TRUE: &str = "true";
 const FALSE: &str = "false";
@@ -88,7 +88,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
 
         let mut builder = GenericStringBuilder::<O>::with_capacity(pos.len(), data_capacity);
 
-        let mut float_formatter = ryu::Buffer::new();
+        let mut float_formatter = zmij::Buffer::new();
         let mut int_formatter = itoa::Buffer::new();
 
         for p in pos {
