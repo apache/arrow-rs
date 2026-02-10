@@ -190,15 +190,11 @@ impl std::fmt::Debug for MutableArrayData<'_> {
 
 /// Builds an extend that adds `offset` to the source primitive
 /// Additionally validates that the maximum index fits into the underlying primitive type
-fn build_extend_dictionary(
-    array: &ArrayData,
-    offset: usize,
-    num_values: usize,
-) -> Option<Extend<'_>> {
+fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend<'_>> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
-            if num_values > 0 {
-                let max_index = num_values - 1;
+            if max > 0 {
+                let max_index = max - 1;
                 let _: $dt = max_index.try_into().ok()?;
             }
             let offset: $dt = offset.try_into().ok()?;
