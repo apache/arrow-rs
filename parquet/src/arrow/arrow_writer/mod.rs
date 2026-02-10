@@ -4852,7 +4852,8 @@ mod tests {
                 .map(|i| format!("{:0>100}", i))
                 .collect::<Vec<String>>(),
         );
-        let first_batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(first_array)]).unwrap();
+        let first_batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(first_array)]).unwrap();
         writer.write(&first_batch).unwrap();
         assert_eq!(writer.in_progress_rows(), 10);
 
@@ -4873,8 +4874,6 @@ mod tests {
             "The second write should flush an oversized in-progress row group first",
         );
     }
-
-
 
     #[test]
     // When both limits are set, the row limit triggers first
