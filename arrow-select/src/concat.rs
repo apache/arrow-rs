@@ -1904,12 +1904,20 @@ mod tests {
     #[test]
     fn test_concat_u8_dictionary_256_values() {
         // Integration test: concat should work with exactly 256 unique values
-        let values = StringArray::from((0..256).map(|i| format!("v{}", i)).collect::<Vec<_>>());
-        let keys = UInt8Array::from((0..256).map(|i| i as u8).collect::<Vec<_>>());
-        let dict = DictionaryArray::<UInt8Type>::try_new(keys, Arc::new(values)).unwrap();
+        // Use two different dictionaries to force the merge code path
 
-        // Concatenate with itself - should succeed
-        let result = concat(&[&dict as &dyn Array, &dict as &dyn Array]);
+        // Dictionary 1: "a0" .. "a127" (128 values)
+        let values1 = StringArray::from((0..128).map(|i| format!("a{}", i)).collect::<Vec<_>>());
+        let keys1 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
+        let dict1 = DictionaryArray::<UInt8Type>::try_new(keys1, Arc::new(values1)).unwrap();
+
+        // Dictionary 2: "b0" .. "b127" (128 values)
+        let values2 = StringArray::from((0..128).map(|i| format!("b{}", i)).collect::<Vec<_>>());
+        let keys2 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
+        let dict2 = DictionaryArray::<UInt8Type>::try_new(keys2, Arc::new(values2)).unwrap();
+
+        // Concatenate → 128 + 128 = 256 unique values total
+        let result = concat(&[&dict1 as &dyn Array, &dict2 as &dyn Array]);
         assert!(
             result.is_ok(),
             "Concat should succeed with 256 unique values for u8"
@@ -1918,8 +1926,8 @@ mod tests {
         let concatenated = result.unwrap();
         assert_eq!(
             concatenated.len(),
-            512,
-            "Should have 512 total elements (256 * 2)"
+            256,
+            "Should have 256 total elements (128 + 128)"
         );
     }
 
@@ -1945,13 +1953,21 @@ mod tests {
     #[test]
     fn test_concat_u16_dictionary_65536_values() {
         // Integration test: concat should work with exactly 65,536 unique values for u16
-        // Note: This test creates a large array, so it may be slow
-        let values = StringArray::from((0..65536).map(|i| format!("v{}", i)).collect::<Vec<_>>());
-        let keys = UInt16Array::from((0..65536).map(|i| i as u16).collect::<Vec<_>>());
-        let dict = DictionaryArray::<UInt16Type>::try_new(keys, Arc::new(values)).unwrap();
+        // Use two different dictionaries to force the merge code path
+        // Note: This test creates large arrays, so it may be slow
 
-        // Concatenate with itself - should succeed
-        let result = concat(&[&dict as &dyn Array, &dict as &dyn Array]);
+        // Dictionary 1: "a0" .. "a32767" (32,768 values)
+        let values1 = StringArray::from((0..32768).map(|i| format!("a{}", i)).collect::<Vec<_>>());
+        let keys1 = UInt16Array::from((0..32768).map(|i| i as u16).collect::<Vec<_>>());
+        let dict1 = DictionaryArray::<UInt16Type>::try_new(keys1, Arc::new(values1)).unwrap();
+
+        // Dictionary 2: "b0" .. "b32767" (32,768 values)
+        let values2 = StringArray::from((0..32768).map(|i| format!("b{}", i)).collect::<Vec<_>>());
+        let keys2 = UInt16Array::from((0..32768).map(|i| i as u16).collect::<Vec<_>>());
+        let dict2 = DictionaryArray::<UInt16Type>::try_new(keys2, Arc::new(values2)).unwrap();
+
+        // Concatenate → 32,768 + 32,768 = 65,536 unique values total
+        let result = concat(&[&dict1 as &dyn Array, &dict2 as &dyn Array]);
         assert!(
             result.is_ok(),
             "Concat should succeed with 65,536 unique values for u16"
@@ -1960,8 +1976,8 @@ mod tests {
         let concatenated = result.unwrap();
         assert_eq!(
             concatenated.len(),
-            131072,
-            "Should have 131,072 total elements (65,536 * 2)"
+            65536,
+            "Should have 65,536 total elements (32,768 + 32,768)"
         );
     }
 
