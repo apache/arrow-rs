@@ -378,6 +378,14 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_COMPRESSION)
     }
 
+    /// Returns the optional zstd window log override for a column.
+    pub(crate) fn zstd_window_log_override(&self, col: &ColumnPath) -> Option<u32> {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.zstd_window_log_override())
+            .or_else(|| self.default_column_properties.zstd_window_log_override())
+    }
+
     /// Returns `true` if dictionary encoding is enabled for a column.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_dictionary_enabled`]
@@ -742,6 +750,16 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Overrides the zstd window log size for all columns. The window log is
+    /// normally derived from the compression level by the zstd library
+    /// (e.g. 21 = 2MB at levels 3-8, up to 27 = 128MB at level 22).
+    /// Only applies when using [`Compression::ZSTD`].
+    pub fn set_zstd_window_log_override(mut self, value: u32) -> Self {
+        self.default_column_properties
+            .set_zstd_window_log_override(value);
+        self
+    }
+
     /// Sets default flag to enable/disable dictionary encoding for all columns (defaults to `true`
     /// via [`DEFAULT_DICTIONARY_ENABLED`]).
     ///
@@ -870,6 +888,14 @@ impl WriterPropertiesBuilder {
     /// encoding flag being set.
     pub fn set_column_encoding(mut self, col: ColumnPath, value: Encoding) -> Self {
         self.get_mut_props(col).set_encoding(value);
+        self
+    }
+
+    /// Overrides the zstd window log size for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_zstd_window_log_override`].
+    pub fn set_column_zstd_window_log_override(mut self, col: ColumnPath, value: u32) -> Self {
+        self.get_mut_props(col).set_zstd_window_log_override(value);
         self
     }
 
@@ -1071,6 +1097,7 @@ struct ColumnProperties {
     write_page_header_statistics: Option<bool>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
+    zstd_window_log_override: Option<u32>,
 }
 
 impl ColumnProperties {
@@ -1093,6 +1120,11 @@ impl ColumnProperties {
     /// Sets compression codec for this column.
     fn set_compression(&mut self, value: Compression) {
         self.codec = Some(value);
+    }
+
+    /// Sets the zstd window log override for this column.
+    fn set_zstd_window_log_override(&mut self, value: u32) {
+        self.zstd_window_log_override = Some(value);
     }
 
     /// Sets whether dictionary encoding is enabled for this column.
@@ -1190,6 +1222,11 @@ impl ColumnProperties {
     /// Returns the bloom filter properties, or `None` if not enabled
     fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
         self.bloom_filter_properties.as_ref()
+    }
+
+    /// Returns the optional zstd window log override for this column.
+    fn zstd_window_log_override(&self) -> Option<u32> {
+        self.zstd_window_log_override
     }
 }
 

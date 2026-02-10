@@ -79,6 +79,10 @@ pub trait Codec: Send {
 pub struct CodecOptions {
     /// Whether or not to fallback to other LZ4 older implementations on error in LZ4_HADOOP.
     backward_compatible_lz4: bool,
+    /// Optional override for the zstd window log size, which is normally derived
+    /// from the compression level by the zstd library (e.g. 21 = 2MB at levels
+    /// 3-8, 22 = 4MB at levels 9-16, up to 27 = 128MB at level 22).
+    zstd_window_log_override: Option<u32>,
 }
 
 impl Default for CodecOptions {
@@ -90,12 +94,17 @@ impl Default for CodecOptions {
 pub struct CodecOptionsBuilder {
     /// Whether or not to fallback to other LZ4 older implementations on error in LZ4_HADOOP.
     backward_compatible_lz4: bool,
+    /// Optional override for the zstd window log size, which is normally derived
+    /// from the compression level by the zstd library (e.g. 21 = 2MB at levels
+    /// 3-8, 22 = 4MB at levels 9-16, up to 27 = 128MB at level 22).
+    zstd_window_log_override: Option<u32>,
 }
 
 impl Default for CodecOptionsBuilder {
     fn default() -> Self {
         Self {
             backward_compatible_lz4: true,
+            zstd_window_log_override: None,
         }
     }
 }
@@ -114,9 +123,18 @@ impl CodecOptionsBuilder {
         self
     }
 
+    /// Overrides the zstd window log size that would normally be derived from
+    /// the compression level (e.g. 27 = 128MB window).
+    /// Pass `None` to use the zstd default for the given compression level.
+    pub fn set_zstd_window_log_override(mut self, value: Option<u32>) -> CodecOptionsBuilder {
+        self.zstd_window_log_override = value;
+        self
+    }
+
     pub fn build(self) -> CodecOptions {
         CodecOptions {
             backward_compatible_lz4: self.backward_compatible_lz4,
+            zstd_window_log_override: self.zstd_window_log_override,
         }
     }
 }
@@ -179,7 +197,10 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
         }
         CodecType::ZSTD(level) => {
             #[cfg(any(feature = "zstd", test))]
-            return Ok(Some(Box::new(ZSTDCodec::new(level))));
+            return Ok(Some(Box::new(ZSTDCodec::new(
+                level,
+                _options.zstd_window_log_override,
+            ))));
             Err(ParquetError::General(
                 "Disabled feature at compile time: zstd".into(),
             ))
@@ -511,12 +532,13 @@ mod zstd_codec {
     /// Codec for Zstandard compression algorithm.
     pub struct ZSTDCodec {
         level: ZstdLevel,
+        window_log: Option<u32>,
     }
 
     impl ZSTDCodec {
         /// Creates new Zstandard compression codec.
-        pub(crate) fn new(level: ZstdLevel) -> Self {
-            Self { level }
+        pub(crate) fn new(level: ZstdLevel, window_log: Option<u32>) -> Self {
+            Self { level, window_log }
         }
     }
 
@@ -536,6 +558,9 @@ mod zstd_codec {
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let mut encoder = zstd::Encoder::new(output_buf, self.level.0)?;
+            if let Some(wl) = self.window_log {
+                encoder.window_log(wl)?;
+            }
             encoder.write_all(input_buf)?;
             match encoder.finish() {
                 Ok(_) => Ok(()),
@@ -915,6 +940,25 @@ mod tests {
             test_codec_with_size(CodecType::ZSTD(level));
             test_codec_without_size(CodecType::ZSTD(level));
         }
+    }
+
+    #[test]
+    fn test_codec_zstd_with_window_log() {
+        let level = ZstdLevel::try_new(3).unwrap();
+        let options = CodecOptionsBuilder::default()
+            .set_zstd_window_log_override(Some(27))
+            .build();
+        let mut codec = create_codec(CodecType::ZSTD(level), &options)
+            .unwrap()
+            .unwrap();
+        let data = b"hello world hello world hello world";
+        let mut compressed = Vec::new();
+        codec.compress(data, &mut compressed).unwrap();
+        let mut decompressed = Vec::new();
+        codec
+            .decompress(&compressed, &mut decompressed, Some(data.len()))
+            .unwrap();
+        assert_eq!(&decompressed, data);
     }
 
     #[test]
