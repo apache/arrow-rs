@@ -392,7 +392,6 @@ where
                 ));
             }
         }
-
         Ok(num_records - remaining_records)
     }
 
