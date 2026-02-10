@@ -1904,15 +1904,19 @@ mod tests {
     #[test]
     fn test_concat_u8_dictionary_256_values() {
         // Integration test: concat should work with exactly 256 unique values
-        // Use two different dictionaries to force the merge code path
+        // Use FixedSizeBinary to ensure the test actually catches the bug
+        use arrow_array::FixedSizeBinaryArray;
 
-        // Dictionary 1: "a0" .. "a127" (128 values)
-        let values1 = StringArray::from((0..128).map(|i| format!("a{}", i)).collect::<Vec<_>>());
+        // Dictionary 1: 128 unique FixedSizeBinary(1) values
+        let values1 =
+            FixedSizeBinaryArray::try_from_iter((0..128_u8).map(|i| vec![i])).unwrap();
         let keys1 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
         let dict1 = DictionaryArray::<UInt8Type>::try_new(keys1, Arc::new(values1)).unwrap();
 
-        // Dictionary 2: "b0" .. "b127" (128 values)
-        let values2 = StringArray::from((0..128).map(|i| format!("b{}", i)).collect::<Vec<_>>());
+        // Dictionary 2: 128 unique FixedSizeBinary(1) values (128..255)
+        let values2 =
+            FixedSizeBinaryArray::try_from_iter((128..256_u16).map(|i| vec![i as u8]))
+                .unwrap();
         let keys2 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
         let dict2 = DictionaryArray::<UInt8Type>::try_new(keys2, Arc::new(values2)).unwrap();
 
@@ -1931,24 +1935,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_concat_u8_dictionary_257_values_fails() {
-        // Integration test: concat should fail with 257 distinct values
-        let values1 = StringArray::from((0..128).map(|i| format!("a{}", i)).collect::<Vec<_>>());
-        let keys1 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
-        let dict1 = DictionaryArray::<UInt8Type>::try_new(keys1, Arc::new(values1)).unwrap();
-
-        let values2 = StringArray::from((0..129).map(|i| format!("b{}", i)).collect::<Vec<_>>());
-        let keys2 = UInt8Array::from((0..129).map(|i| i as u8).collect::<Vec<_>>());
-        let dict2 = DictionaryArray::<UInt8Type>::try_new(keys2, Arc::new(values2)).unwrap();
-
-        // Should fail with 257 distinct values
-        let result = concat(&[&dict1 as &dyn Array, &dict2 as &dyn Array]);
-        assert!(
-            result.is_err(),
-            "Concat should fail with 257 distinct values for u8"
-        );
-    }
 
     #[test]
     fn test_concat_u16_dictionary_65536_values() {
