@@ -107,7 +107,15 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         .inspect(|d| output_len += d.len())
         .collect();
 
-    if !should_merge_dictionary_values::<K>(&dictionaries, output_len).0 {
+    let (should_merge, has_overflow) =
+        should_merge_dictionary_values::<K>(&dictionaries, output_len);
+
+    // Return error if concatenating would overflow the key type
+    if has_overflow {
+        return Err(ArrowError::DictionaryKeyOverflowError);
+    }
+
+    if !should_merge {
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
@@ -1908,15 +1916,13 @@ mod tests {
         use arrow_array::FixedSizeBinaryArray;
 
         // Dictionary 1: 128 unique FixedSizeBinary(1) values
-        let values1 =
-            FixedSizeBinaryArray::try_from_iter((0..128_u8).map(|i| vec![i])).unwrap();
+        let values1 = FixedSizeBinaryArray::try_from_iter((0..128_u8).map(|i| vec![i])).unwrap();
         let keys1 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
         let dict1 = DictionaryArray::<UInt8Type>::try_new(keys1, Arc::new(values1)).unwrap();
 
         // Dictionary 2: 128 unique FixedSizeBinary(1) values (128..255)
         let values2 =
-            FixedSizeBinaryArray::try_from_iter((128..256_u16).map(|i| vec![i as u8]))
-                .unwrap();
+            FixedSizeBinaryArray::try_from_iter((128..256_u16).map(|i| vec![i as u8])).unwrap();
         let keys2 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
         let dict2 = DictionaryArray::<UInt8Type>::try_new(keys2, Arc::new(values2)).unwrap();
 
@@ -1934,7 +1940,6 @@ mod tests {
             "Should have 256 total elements (128 + 128)"
         );
     }
-
 
     #[test]
     fn test_concat_u16_dictionary_65536_values() {
@@ -1986,6 +1991,58 @@ mod tests {
         assert!(
             result.is_err(),
             "Should return error for overflow, not panic"
+        );
+    }
+
+    #[test]
+    fn test_concat_u8_dictionary_257_values_fails() {
+        // Test the exact boundary: 257 values should fail for u8 keys
+        // This is the test that was mentioned in the maintainer's comment
+        use arrow_array::FixedSizeBinaryArray;
+
+        // Dictionary 1: 128 unique FixedSizeBinary(1) values (0..127)
+        let values1 = FixedSizeBinaryArray::try_from_iter((0..128_u8).map(|i| vec![i])).unwrap();
+        let keys1 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
+        let dict1 = DictionaryArray::<UInt8Type>::try_new(keys1, Arc::new(values1)).unwrap();
+
+        // Dictionary 2: 129 unique FixedSizeBinary(1) values (128..256)
+        let values2 =
+            FixedSizeBinaryArray::try_from_iter((128..257_u16).map(|i| vec![i as u8])).unwrap();
+        let keys2 = UInt8Array::from((0..129).map(|i| i as u8).collect::<Vec<_>>());
+        let dict2 = DictionaryArray::<UInt8Type>::try_new(keys2, Arc::new(values2)).unwrap();
+
+        // Concatenate → 128 + 129 = 257 unique values total (OVERFLOW)
+        let result = concat(&[&dict1 as &dyn Array, &dict2 as &dyn Array]);
+        assert!(
+            result.is_err(),
+            "Concat should fail with 257 unique values for u8 (max key would be 256, doesn't fit)"
+        );
+    }
+
+    #[test]
+    fn test_concat_u16_dictionary_65537_values_fails() {
+        // Test the exact boundary: 65537 values should fail for u16 keys
+        use arrow_array::FixedSizeBinaryArray;
+
+        // Dictionary 1: 32768 unique values
+        let values1 =
+            FixedSizeBinaryArray::try_from_iter((0..32768_u32).map(|i| vec![(i % 256) as u8]))
+                .unwrap();
+        let keys1 = UInt16Array::from((0..32768).map(|i| i as u16).collect::<Vec<_>>());
+        let dict1 = DictionaryArray::<UInt16Type>::try_new(keys1, Arc::new(values1)).unwrap();
+
+        // Dictionary 2: 32769 unique values (one more than half)
+        let values2 =
+            FixedSizeBinaryArray::try_from_iter((32768..65537_u32).map(|i| vec![(i % 256) as u8]))
+                .unwrap();
+        let keys2 = UInt16Array::from((0..32769).map(|i| i as u16).collect::<Vec<_>>());
+        let dict2 = DictionaryArray::<UInt16Type>::try_new(keys2, Arc::new(values2)).unwrap();
+
+        // Concatenate → 32768 + 32769 = 65537 unique values total (OVERFLOW)
+        let result = concat(&[&dict1 as &dyn Array, &dict2 as &dyn Array]);
+        assert!(
+            result.is_err(),
+            "Concat should fail with 65537 unique values for u16 (max key would be 65536, doesn't fit)"
         );
     }
 }

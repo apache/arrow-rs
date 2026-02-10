@@ -200,12 +200,15 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     let dictionaries: Vec<_> = arrays.iter().map(|x| x.as_dictionary::<K>()).collect();
     let (should_merge, has_overflow) =
         should_merge_dictionary_values::<K>(&dictionaries, indices.len());
+
+    // If overflow detected, use generic fallback (not dictionary-specific)
+    if has_overflow {
+        return interleave_fallback(arrays, indices);
+    }
+
     if !should_merge {
-        return if has_overflow {
-            interleave_fallback(arrays, indices)
-        } else {
-            interleave_fallback_dictionary::<K>(&dictionaries, indices)
-        };
+        // Safe to use dictionary fallback since overflow was checked above
+        return interleave_fallback_dictionary::<K>(&dictionaries, indices);
     }
 
     let masks: Vec<_> = dictionaries
@@ -426,20 +429,21 @@ fn interleave_fallback_dictionary<K: ArrowDictionaryKeyType>(
     let any_nulls = dictionaries.iter().any(|d| d.keys().nulls().is_some());
     let (new_keys, nulls) = if any_nulls {
         let mut has_nulls = false;
-        let new_keys: Vec<K::Native> = indices
+        let new_keys: Result<Vec<K::Native>, ArrowError> = indices
             .iter()
             .map(|(array, row)| {
                 let old_keys = dictionaries[*array].keys();
                 if old_keys.is_valid(*row) {
                     let old_key = old_keys.values()[*row].as_usize();
                     K::Native::from_usize(relative_offsets[*array] + old_key)
-                        .expect("key overflow should be checked by caller")
+                        .ok_or_else(|| ArrowError::DictionaryKeyOverflowError)
                 } else {
                     has_nulls = true;
-                    K::Native::ZERO
+                    Ok(K::Native::ZERO)
                 }
             })
             .collect();
+        let new_keys = new_keys?;
 
         let nulls = if has_nulls {
             let null_buffer = BooleanBuffer::collect_bool(indices.len(), |i| {
@@ -452,15 +456,15 @@ fn interleave_fallback_dictionary<K: ArrowDictionaryKeyType>(
         };
         (new_keys, nulls)
     } else {
-        let new_keys: Vec<K::Native> = indices
+        let new_keys: Result<Vec<K::Native>, ArrowError> = indices
             .iter()
             .map(|(array, row)| {
                 let old_key = dictionaries[*array].keys().values()[*row].as_usize();
                 K::Native::from_usize(relative_offsets[*array] + old_key)
-                    .expect("key overflow should be checked by caller")
+                    .ok_or_else(|| ArrowError::DictionaryKeyOverflowError)
             })
             .collect();
-        (new_keys, None)
+        (new_keys?, None)
     };
 
     let keys_array = PrimitiveArray::<K>::new(new_keys.into(), nulls);
