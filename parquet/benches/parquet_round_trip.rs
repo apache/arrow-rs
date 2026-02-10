@@ -299,7 +299,7 @@ fn file_from_spec(spec: ParquetFileSpec, buffer: &mut Vec<u8>) {
 
     let schema = schema(spec.column_type, spec.num_columns);
     let props = WriterProperties::builder()
-        .set_max_row_group_size(spec.rows_per_row_group)
+        .set_max_row_group_row_count(Some(spec.rows_per_row_group))
         .set_data_page_row_count_limit(spec.rows_per_page)
         .set_encoding(spec.encoding)
         .set_dictionary_enabled(spec.use_dict)

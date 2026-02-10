@@ -432,7 +432,7 @@ fn uniform_encryption_roundtrip(
 
     let props = WriterProperties::builder()
         // Ensure multiple row groups
-        .set_max_row_group_size(50)
+        .set_max_row_group_row_count(Some(50))
         // Ensure multiple pages per row group
         .set_write_batch_size(20)
         .set_data_page_row_count_limit(20)
@@ -537,7 +537,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
 
     let props = WriterProperties::builder()
         // Ensure multiple row groups
-        .set_max_row_group_size(50)
+        .set_max_row_group_row_count(Some(50))
         // Ensure multiple pages per row group
         .set_write_batch_size(20)
         .set_data_page_row_count_limit(20)

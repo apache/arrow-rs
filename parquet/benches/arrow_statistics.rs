@@ -79,7 +79,7 @@ fn create_parquet_file(
         )])),
     };
 
-    let mut props = WriterProperties::builder().set_max_row_group_size(row_groups);
+    let mut props = WriterProperties::builder().set_max_row_group_row_count(Some(row_groups));
     if let Some(limit) = data_page_row_count_limit {
         props = props
             .set_data_page_row_count_limit(*limit)

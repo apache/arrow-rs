@@ -541,7 +541,7 @@ mod tests {
 
         let file = tempfile::tempfile().unwrap();
         let props = WriterProperties::builder()
-            .set_max_row_group_size(200)
+            .set_max_row_group_row_count(Some(200))
             .build();
 
         let writer = ArrowWriter::try_new(

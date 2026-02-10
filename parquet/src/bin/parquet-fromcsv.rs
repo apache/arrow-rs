@@ -297,7 +297,8 @@ fn configure_writer_properties(args: &Args) -> WriterProperties {
         properties_builder = properties_builder.set_writer_version(writer_version);
     }
     if let Some(max_row_group_size) = args.max_row_group_size {
-        properties_builder = properties_builder.set_max_row_group_size(max_row_group_size);
+        properties_builder =
+            properties_builder.set_max_row_group_row_count(Some(max_row_group_size));
     }
     if let Some(enable_bloom_filter) = args.enable_bloom_filter {
         properties_builder = properties_builder.set_bloom_filter_enabled(enable_bloom_filter);
