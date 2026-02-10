@@ -15,19 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::marker::PhantomData;
+
 use crate::reader::tape::Tape;
 use crate::reader::{ArrayDecoder, DecoderContext};
-use arrow_array::Array;
+use arrow_array::types::RunEndIndexType;
+use arrow_array::{Array, PrimitiveArray, new_empty_array};
+use arrow_buffer::{ArrowNativeType, ScalarBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 
-pub struct RunEndEncodedArrayDecoder {
+pub struct RunEndEncodedArrayDecoder<R> {
     data_type: DataType,
     decoder: Box<dyn ArrayDecoder>,
+    phantom: PhantomData<R>,
 }
 
-impl RunEndEncodedArrayDecoder {
+impl<R: RunEndIndexType> RunEndEncodedArrayDecoder<R> {
     pub fn new(
         ctx: &DecoderContext,
         data_type: &DataType,
@@ -45,48 +50,49 @@ impl RunEndEncodedArrayDecoder {
         Ok(Self {
             data_type: data_type.clone(),
             decoder,
+            phantom: Default::default(),
         })
     }
 }
 
-impl ArrayDecoder for RunEndEncodedArrayDecoder {
+impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        let run_ends_type = match &self.data_type {
-            DataType::RunEndEncoded(r, _) => r.data_type(),
-            _ => unreachable!(),
-        };
-
         let len = pos.len();
         if len == 0 {
-            let empty_run_ends = new_empty_run_ends(run_ends_type);
-            let empty_values = self.decoder.decode(tape, &[])?;
-            let data = ArrayDataBuilder::new(self.data_type.clone())
-                .len(0)
-                .add_child_data(empty_run_ends)
-                .add_child_data(empty_values);
-            // Safety:
-            // Valid by construction
-            return Ok(unsafe { data.build_unchecked() });
+            return Ok(new_empty_array(&self.data_type).to_data());
         }
 
         let flat_data = self.decoder.decode(tape, pos)?;
 
-        let mut run_ends: Vec<i64> = Vec::new();
+        let mut run_ends: Vec<R::Native> = Vec::new();
         let mut mutable = MutableArrayData::new(vec![&flat_data], false, len);
 
         let mut run_start = 0;
         for i in 1..len {
             if !same_run(&flat_data, run_start, i) {
-                run_ends.push(i as i64);
+                let run_end = R::Native::from_usize(i).ok_or_else(|| {
+                    ArrowError::JsonError(format!(
+                        "Run end value {i} exceeds {:?} range",
+                        R::DATA_TYPE
+                    ))
+                })?;
+                run_ends.push(run_end);
                 mutable.extend(0, run_start, run_start + 1);
                 run_start = i;
             }
         }
-        run_ends.push(len as i64);
+        let run_end = R::Native::from_usize(len).ok_or_else(|| {
+            ArrowError::JsonError(format!(
+                "Run end value {len} exceeds {:?} range",
+                R::DATA_TYPE
+            ))
+        })?;
+        run_ends.push(run_end);
         mutable.extend(0, run_start, run_start + 1);
 
         let values_data = mutable.freeze();
-        let run_ends_data = build_run_ends_array(run_ends_type, run_ends)?;
+        let run_ends_data =
+            PrimitiveArray::<R>::new(ScalarBuffer::from(run_ends), None).into_data();
 
         let data = ArrayDataBuilder::new(self.data_type.clone())
             .len(len)
@@ -94,7 +100,8 @@ impl ArrayDecoder for RunEndEncodedArrayDecoder {
             .add_child_data(values_data);
 
         // Safety:
-        // Valid by construction
+        // run_ends are strictly increasing with the last value equal to len,
+        // and values has the same length as run_ends
         Ok(unsafe { data.build_unchecked() })
     }
 }
@@ -109,42 +116,4 @@ fn same_run(data: &ArrayData, i: usize, j: usize) -> bool {
         return true;
     }
     data.slice(i, 1) == data.slice(j, 1)
-}
-
-fn build_run_ends_array(dt: &DataType, run_ends: Vec<i64>) -> Result<ArrayData, ArrowError> {
-    match dt {
-        DataType::Int16 => {
-            let values = run_ends
-                .iter()
-                .map(|&v| {
-                    i16::try_from(v).map_err(|_| {
-                        ArrowError::JsonError(format!("Run end value {v} exceeds Int16 range"))
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(arrow_array::Int16Array::from(values).into_data())
-        }
-        DataType::Int32 => {
-            let values = run_ends
-                .iter()
-                .map(|&v| {
-                    i32::try_from(v).map_err(|_| {
-                        ArrowError::JsonError(format!("Run end value {v} exceeds Int32 range"))
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(arrow_array::Int32Array::from(values).into_data())
-        }
-        DataType::Int64 => Ok(arrow_array::Int64Array::from(run_ends).into_data()),
-        _ => unreachable!(),
-    }
-}
-
-fn new_empty_run_ends(dt: &DataType) -> ArrayData {
-    match dt {
-        DataType::Int16 => arrow_array::Int16Array::from(Vec::<i16>::new()).into_data(),
-        DataType::Int32 => arrow_array::Int32Array::from(Vec::<i32>::new()).into_data(),
-        DataType::Int64 => arrow_array::Int64Array::from(Vec::<i64>::new()).into_data(),
-        _ => unreachable!(),
-    }
 }
