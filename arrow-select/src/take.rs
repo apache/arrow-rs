@@ -94,6 +94,20 @@ pub fn take(
         indices => {
             if options.check_bounds {
                 check_bounds(values.len(), indices)?;
+            } else {
+                // let max_index = match indices.nulls().filter(|n| n.null_count() > 0) {
+                //     Some(_) => {
+                //         let max_index = indices.iter().max();
+                //         max_index.unwrap_or(None)
+                //     },
+                //     None => {
+                //         indices.values().iter().max().copied()
+                //     }
+                // };
+                //
+                // if let Some(index) = max_index {
+                //     assert!(index.as_usize() < values.len(), "index out of bounds: the len is {} but the max index is {}", values.len(), index.as_usize())
+                // }
             }
             let indices = indices.to_indices();
             take_impl(values, &indices)
@@ -442,11 +456,21 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
                 },
             })
             .collect(),
-        None => indices
-            .values()
-            .iter()
-            .map(|index| values[index.as_usize()])
-            .collect(),
+        None => {
+            let out = indices
+              .values()
+              .iter()
+              .map(|index| {
+                  let index = index.as_usize();
+                  // Safety: we either checked already bounds (passed check_bounds = true) or the user
+                  //         guarantees the value to be in range.
+                  //         Avoiding bound checks allows the compiler to vectorize it and do better loop unrolling
+                  unsafe { *values.get_unchecked(index) }
+              })
+              .collect::<Vec<T>>();
+
+            ScalarBuffer::from(out)
+        },
     }
 }
 
