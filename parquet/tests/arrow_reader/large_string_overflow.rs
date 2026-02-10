@@ -85,12 +85,12 @@ fn large_binary_plain_encoding_overflow() {
         .build()
         .unwrap();
 
-    // Trigger decoding; this is where the overflow panic occurs
     let _ = reader.next().unwrap();
 }
 
 #[test]
-#[ignore = "regression test for >2GB binary offset overflow"]
+// Panics until https://github.com/apache/arrow-rs/issues/7973 is fixed
+#[should_panic(expected = "byte array offset overflow")]
 fn large_binary_delta_length_encoding_overflow() {
     let array = make_large_binary_array();
     let file = write_parquet_with_encoding(array, Encoding::DELTA_LENGTH_BYTE_ARRAY);
@@ -100,11 +100,12 @@ fn large_binary_delta_length_encoding_overflow() {
         .build()
         .unwrap();
 
-    assert!(matches!(reader.next(), Some(Ok(_))));
+    let _ = reader.next().unwrap();
 }
 
 #[test]
-#[ignore = "regression test for >2GB binary offset overflow"]
+// Panics until https://github.com/apache/arrow-rs/issues/7973 is fixed
+#[should_panic(expected = "byte array offset overflow")]
 fn large_binary_delta_byte_array_encoding_overflow() {
     let array = make_large_binary_array();
     let file = write_parquet_with_encoding(array, Encoding::DELTA_BYTE_ARRAY);
@@ -114,11 +115,12 @@ fn large_binary_delta_byte_array_encoding_overflow() {
         .build()
         .unwrap();
 
-    assert!(matches!(reader.next(), Some(Ok(_))));
+    let _ = reader.next().unwrap();
 }
 
 #[test]
-#[ignore = "regression test for >2GB binary offset overflow"]
+// Panics until https://github.com/apache/arrow-rs/issues/7973 is fixed
+#[should_panic(expected = "byte array offset overflow")]
 fn large_binary_rle_dictionary_encoding_overflow() {
     let array = make_large_binary_array();
     let file = write_parquet_with_encoding(array, Encoding::RLE_DICTIONARY);
@@ -128,5 +130,5 @@ fn large_binary_rle_dictionary_encoding_overflow() {
         .build()
         .unwrap();
 
-    assert!(matches!(reader.next(), Some(Ok(_))));
+    let _ = reader.next().unwrap();
 }
