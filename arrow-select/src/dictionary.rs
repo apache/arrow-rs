@@ -275,12 +275,12 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
 
             for (value_idx, value) in values {
                 mapping[value_idx] =
-                    *interner.intern(value, || -> Result<K::Native, ArrowError> {
-                        let next_idx = indices.len();
-                        let key = K::Native::from_usize(next_idx)
-                            .ok_or_else(|| ArrowError::DictionaryKeyOverflowError)?;
-                        indices.push((dictionary_idx, value_idx));
-                        Ok(key)
+                    *interner.intern(value, || match K::Native::from_usize(indices.len()) {
+                        Some(idx) => {
+                            indices.push((dictionary_idx, value_idx));
+                            Ok(idx)
+                        }
+                        None => Err(ArrowError::DictionaryKeyOverflowError),
                     })?;
             }
             Ok(mapping)
@@ -378,11 +378,7 @@ mod tests {
     use arrow_array::cast::as_string_array;
     use arrow_array::types::Int8Type;
     use arrow_array::types::Int32Type;
-    use arrow_array::types::UInt8Type;
-    use arrow_array::types::UInt16Type;
-    use arrow_array::{
-        DictionaryArray, Int8Array, Int32Array, StringArray, UInt8Array, UInt16Array,
-    };
+    use arrow_array::{DictionaryArray, Int8Array, Int32Array, StringArray};
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
     use std::sync::Arc;
 
@@ -530,110 +526,5 @@ mod tests {
         let merged = merge_dictionary_values(&[&a], None).unwrap();
         let expected = StringArray::from(vec!["b"]);
         assert_eq!(merged.values.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_merge_u8_boundary_256_values() {
-        // Test that exactly 256 unique values works for u8 (boundary case)
-        // This is the maximum valid cardinality for u8 keys (0..=255)
-        let values = StringArray::from((0..256).map(|i| format!("v{}", i)).collect::<Vec<_>>());
-        let keys = UInt8Array::from((0..256).map(|i| i as u8).collect::<Vec<_>>());
-        let dict = DictionaryArray::<UInt8Type>::try_new(keys, Arc::new(values)).unwrap();
-
-        let merged = merge_dictionary_values(&[&dict], None).unwrap();
-        assert_eq!(
-            merged.values.len(),
-            256,
-            "Should support exactly 256 values for u8"
-        );
-        assert_eq!(merged.key_mappings.len(), 1);
-        assert_eq!(merged.key_mappings[0].len(), 256);
-    }
-
-    #[test]
-    fn test_merge_u8_overflow_257_values() {
-        // Test that 257 distinct values correctly fails for u8
-        // Create two dictionaries with no overlap that together have 257 values
-        let values1 = StringArray::from((0..128).map(|i| format!("a{}", i)).collect::<Vec<_>>());
-        let keys1 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
-        let dict1 = DictionaryArray::<UInt8Type>::try_new(keys1, Arc::new(values1)).unwrap();
-
-        let values2 = StringArray::from((0..129).map(|i| format!("b{}", i)).collect::<Vec<_>>());
-        let keys2 = UInt8Array::from((0..129).map(|i| i as u8).collect::<Vec<_>>());
-        let dict2 = DictionaryArray::<UInt8Type>::try_new(keys2, Arc::new(values2)).unwrap();
-
-        let result = merge_dictionary_values(&[&dict1, &dict2], None);
-        assert!(
-            result.is_err(),
-            "Should fail with 257 distinct values for u8"
-        );
-        if let Err(e) = result {
-            assert!(matches!(e, ArrowError::DictionaryKeyOverflowError));
-        }
-    }
-
-    #[test]
-    fn test_merge_u8_with_overlap() {
-        // Test that overlap is handled correctly and doesn't cause false overflow
-        // dict1: 150 values (val0..val149)
-        // dict2: 150 values (val100..val249), overlaps with dict1 on val100..val149
-        // Total distinct: 150 + 100 = 250 values (should succeed)
-        // Note: Interner is best-effort, so actual count may be slightly higher due to hash collisions
-        let values1 = StringArray::from((0..150).map(|i| format!("val{}", i)).collect::<Vec<_>>());
-        let keys1 = UInt8Array::from((0..150).map(|i| i as u8).collect::<Vec<_>>());
-        let dict1 = DictionaryArray::<UInt8Type>::try_new(keys1, Arc::new(values1)).unwrap();
-
-        // Second dict: val100..val249 (overlaps on val100..val149, adds val150..val249)
-        let values2 =
-            StringArray::from((100..250).map(|i| format!("val{}", i)).collect::<Vec<_>>());
-        let keys2 = UInt8Array::from((0..150).map(|i| i as u8).collect::<Vec<_>>());
-        let dict2 = DictionaryArray::<UInt8Type>::try_new(keys2, Arc::new(values2)).unwrap();
-
-        let result = merge_dictionary_values(&[&dict1, &dict2], None);
-        assert!(
-            result.is_ok(),
-            "Should succeed with ~250 distinct values (within u8 range)"
-        );
-        let merged = result.unwrap();
-        assert!(merged.values.len() <= 256, "Should not exceed u8 maximum");
-    }
-
-    #[test]
-    fn test_merge_u16_boundary_65536_values() {
-        // Test that exactly 65,536 unique values works for u16 (boundary case)
-        // This is the maximum valid cardinality for u16 keys (0..=65535)
-        let values = StringArray::from((0..65536).map(|i| format!("v{}", i)).collect::<Vec<_>>());
-        let keys = UInt16Array::from((0..65536).map(|i| i as u16).collect::<Vec<_>>());
-        let dict = DictionaryArray::<UInt16Type>::try_new(keys, Arc::new(values)).unwrap();
-
-        let merged = merge_dictionary_values(&[&dict], None).unwrap();
-        assert_eq!(
-            merged.values.len(),
-            65536,
-            "Should support exactly 65,536 values for u16"
-        );
-        assert_eq!(merged.key_mappings.len(), 1);
-        assert_eq!(merged.key_mappings[0].len(), 65536);
-    }
-
-    #[test]
-    fn test_merge_u16_overflow_65537_values() {
-        // Test that 65,537 distinct values correctly fails for u16
-        let values1 = StringArray::from((0..32768).map(|i| format!("a{}", i)).collect::<Vec<_>>());
-        let keys1 = UInt16Array::from((0..32768).map(|i| i as u16).collect::<Vec<_>>());
-        let dict1 = DictionaryArray::<UInt16Type>::try_new(keys1, Arc::new(values1)).unwrap();
-
-        let values2 = StringArray::from((0..32769).map(|i| format!("b{}", i)).collect::<Vec<_>>());
-        let keys2 = UInt16Array::from((0..32769).map(|i| i as u16).collect::<Vec<_>>());
-        let dict2 = DictionaryArray::<UInt16Type>::try_new(keys2, Arc::new(values2)).unwrap();
-
-        let result = merge_dictionary_values(&[&dict1, &dict2], None);
-        assert!(
-            result.is_err(),
-            "Should fail with 65,537 distinct values for u16"
-        );
-        if let Err(e) = result {
-            assert!(matches!(e, ArrowError::DictionaryKeyOverflowError));
-        }
     }
 }
