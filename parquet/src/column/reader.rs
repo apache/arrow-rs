@@ -309,6 +309,20 @@ where
                 });
 
                 if let Some(rows) = rows {
+                    // If there is a pending partial record from a previous page,
+                    // count it before considering the whole-page skip. When the
+                    // next page provides num_rows (e.g. a V2 data page or via
+                    // offset index), its records are self-contained, so the
+                    // partial from the previous page is complete at this boundary.
+                    if let Some(decoder) = self.rep_level_decoder.as_mut() {
+                        if decoder.flush_partial() {
+                            remaining_records -= 1;
+                            if remaining_records == 0 {
+                                return Ok(num_records);
+                            }
+                        }
+                    }
+
                     if rows <= remaining_records {
                         self.page_reader.skip_next_page()?;
                         remaining_records -= rows;
@@ -376,13 +390,6 @@ where
                     values,
                     values_read
                 ));
-            }
-        }
-
-        // Reset partial record state after successfully skipping all requested records.
-        if remaining_records == 0 {
-            if let Some(decoder) = self.rep_level_decoder.as_mut() {
-                decoder.flush_partial();
             }
         }
 
@@ -1372,13 +1379,17 @@ mod tests {
 
     /// Regression test for <https://github.com/apache/arrow-rs/issues/9370>
     ///
-    /// When `skip_records` crosses a page boundary by fully consuming a v1 page
-    /// (setting `has_partial=true` in the rep level decoder) and then
-    /// whole-page-skips a v2 page (which doesn't touch the rep level decoder),
-    /// the stale `has_partial` state caused a subsequent `read_records` call to
-    /// produce a "phantom" record with 0 values.
+    /// When `skip_records` fully consumes a v1 data page (setting
+    /// `has_partial=true` in the rep level decoder) and then encounters a
+    /// v2 page eligible for the `num_rows` whole-page-skip shortcut, the
+    /// pending partial record must be flushed and counted *before* the
+    /// shortcut fires. Otherwise:
+    ///
+    /// 1. The skip over-counts (skips N+1 records instead of N), and
+    /// 2. The stale `has_partial` causes a subsequent `read_records` to
+    ///    produce a "phantom" record with 0 values.
     #[test]
-    fn test_skip_records_v2_page_skip_resets_partial_state() {
+    fn test_skip_records_v2_page_skip_accounts_for_partial() {
         use crate::encodings::levels::LevelEncoder;
         use crate::util::test_common::page_util::{DataPageBuilder, DataPageBuilderImpl};
 
@@ -1400,10 +1411,11 @@ mod tests {
         // Page 1 (DataPage v1): 1 record with 2 elements
         //   rep_levels = [0, 1], def_levels = [1, 1], values = [10, 20]
         //
-        // During skip_records, all levels are consumed. count_records sees
-        // no following rep=0 delimiter, so has_partial is set to true.
-        // has_record_delimiter is false (InMemoryPageReader: next page exists)
-        // so flush_partial is NOT called.
+        // During skip_records, all levels on this page are consumed.
+        // count_records sees no following rep=0 delimiter, so has_partial
+        // is set to true. has_record_delimiter is false (InMemoryPageReader
+        // default: next page exists) so flush_partial is NOT called during
+        // level-based processing.
         let page1 = {
             let mut builder = DataPageBuilderImpl::new(desc.clone(), 2, false);
             builder.add_rep_levels(max_rep_level, &[0, 1]);
@@ -1416,9 +1428,12 @@ mod tests {
         //   rep_levels = [0, 1, 0, 1], def_levels = [1, 1, 1, 1]
         //   values = [30, 40, 50, 60], num_rows = 2
         //
-        // Because num_rows (2) <= remaining_records (2), the whole page is
-        // skipped via skip_next_page(). The rep level decoder is NOT touched,
-        // so has_partial remains true from page 1.
+        // This page has num_rows in its metadata, making it eligible for the
+        // whole-page-skip shortcut. The fix flushes the pending partial from
+        // page 1 (counting it as 1 record) before evaluating the shortcut,
+        // so that remaining_records is correctly adjusted. Without the fix,
+        // page 2 would be skipped entirely (2 records), over-counting the
+        // total skip by 1.
         let page2 = {
             let mut rep_enc = LevelEncoder::v2(max_rep_level, 4);
             rep_enc.put(&[0i16, 1, 0, 1]);
@@ -1453,10 +1468,6 @@ mod tests {
 
         // Page 3 (DataPage v1): 1 record with 2 elements
         //   rep_levels = [0, 1], def_levels = [1, 1], values = [70, 80]
-        //
-        // Without the fix, the stale has_partial=true from page 1 causes
-        // the rep=0 at position 0 to be counted as completing a phantom
-        // partial record (1 record, 0 levels, 0 values).
         let page3 = {
             let mut builder = DataPageBuilderImpl::new(desc.clone(), 2, false);
             builder.add_rep_levels(max_rep_level, &[0, 1]);
@@ -1465,19 +1476,22 @@ mod tests {
             builder.consume()
         };
 
+        // 4 records total: [10,20], [30,40], [50,60], [70,80]
         let pages = VecDeque::from(vec![page1, page2, page3]);
         let page_reader = InMemoryPageReader::new(pages);
         let column_reader: ColumnReader = get_column_reader(desc, Box::new(page_reader));
         let mut typed_reader = get_typed_column_reader::<Int32Type>(column_reader);
 
-        // Skip 2 records:
-        //  - Iter 1: load page 1, consume all levels → has_partial=true
-        //  - Iter 2: peek page 2 (v2, num_rows=2 <= 2) → whole-page skip
-        //  - remaining_records = 0, loop exits
+        // Skip 2 records ([10,20] and [30,40]):
+        //  - Iter 1: load page 1, consume all levels → has_partial=true, 0 records
+        //  - Iter 2: peek page 2 (v2, num_rows=2):
+        //       Fix flushes partial → remaining 2→1, page 2 NOT skipped (2 > 1)
+        //       Load page 2, skip 1 record via levels → [30,40] skipped
+        //  - remaining_records = 0
         let skipped = typed_reader.skip_records(2).unwrap();
         assert_eq!(skipped, 2);
 
-        // Read 1 record — should get page 3's data [70, 80]
+        // Read 1 record — should get the 3rd record [50, 60] from page 2
         let mut values = Vec::new();
         let mut def_levels = Vec::new();
         let mut rep_levels = Vec::new();
@@ -1486,12 +1500,12 @@ mod tests {
             .read_records(1, Some(&mut def_levels), Some(&mut rep_levels), &mut values)
             .unwrap();
 
-        // Without the fix: (1, 0, 0) — phantom record from stale has_partial
-        // With the fix:    (1, 2, 2) — correct read of page 3's record
+        // Without the fix: (1, 0, 0) — phantom record, skip over-counted
+        // With the fix:    (1, 2, 2) — correctly reads 3rd record [50, 60]
         assert_eq!(records, 1, "should read exactly 1 record");
         assert_eq!(levels_read, 2, "should read 2 levels for the record");
         assert_eq!(values_read, 2, "should read 2 non-null values");
-        assert_eq!(values, vec![70, 80], "should contain page 3's values");
+        assert_eq!(values, vec![50, 60], "should contain 3rd record's values");
         assert_eq!(rep_levels, vec![0, 1], "rep levels for a 2-element list");
         assert_eq!(def_levels, vec![1, 1], "def levels (all non-null)");
     }
