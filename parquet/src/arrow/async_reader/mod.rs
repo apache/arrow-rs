@@ -220,7 +220,7 @@ pub struct AsyncReader<T>(T);
 ///
 /// # See also:
 /// * [`ParquetPushDecoderBuilder`] for lower level control over buffering and
-/// decoding.
+///   decoding.
 /// * [`ParquetRecordBatchStream::next_row_group`] for I/O prefetching
 ///
 ///
