@@ -42,6 +42,7 @@ use parquet::{
         metadata::{PageIndexPolicy, ParquetMetaDataReader},
         properties::WriterProperties,
     },
+    schema::types::ColumnPath,
 };
 
 #[tokio::test]
@@ -524,4 +525,269 @@ async fn test_predicate_pushdown_with_skipped_pages() {
         );
         assert_eq!(batch.column(0).as_string(), &expected);
     }
+}
+
+/// Regression test for adaptive selection switching to mask materialization while
+/// evaluating a predicate that references multiple columns with different page boundaries.
+#[tokio::test]
+async fn test_complex_predicate_pushdown_with_skipped_pages() {
+    const NUM_ROWS: usize = 240;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("int_flag", DataType::Int8, false),
+        Field::new("text_flag", DataType::Utf8, false),
+    ]));
+
+    let huge_true = "T".repeat(128);
+    let huge_false = "F".repeat(128);
+
+    let ids = Int32Array::from_iter_values(0..NUM_ROWS as i32);
+    let int_flag = Int8Array::from_iter_values((0..NUM_ROWS).map(|i| (i % 2 == 0) as i8));
+    let text_flag = StringArray::from_iter_values((0..NUM_ROWS).map(|i| {
+        if i % 3 == 0 {
+            huge_true.as_str()
+        } else {
+            huge_false.as_str()
+        }
+    }));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(ids), Arc::new(int_flag), Arc::new(text_flag)],
+    )
+    .unwrap();
+
+    let props = WriterProperties::builder()
+        .set_write_batch_size(1)
+        .set_data_page_size_limit(512)
+        .set_data_page_row_count_limit(128)
+        .set_column_data_page_size_limit(ColumnPath::from("text_flag"), 256)
+        .set_column_dictionary_enabled(ColumnPath::from("text_flag"), false)
+        .build();
+
+    let mut buffer = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let data = Bytes::from(buffer);
+
+    let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+        TestReader::new(data),
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+    )
+    .await
+    .unwrap();
+
+    let schema_descr = builder.parquet_schema().clone();
+
+    // Start with a sparse RLE row selection, then apply a predicate that produces
+    // a dense, fragmented mask.
+    let selection = RowSelection::from(vec![
+        RowSelector::select(60),
+        RowSelector::skip(120),
+        RowSelector::select(60),
+    ]);
+
+    let huge_true_scalar = StringArray::from_iter_values([huge_true.as_str()]);
+    let predicate =
+        ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [1, 2]), move |batch| {
+            let int_true = eq(batch.column(0), &Int8Array::new_scalar(1))?;
+            let text_true = eq(batch.column(1), &Scalar::new(&huge_true_scalar))?;
+            or(&int_true, &text_true)
+        });
+
+    let stream = builder
+        .with_row_selection(selection)
+        .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+        .with_projection(ProjectionMask::roots(&schema_descr, [0]))
+        .with_batch_size(NUM_ROWS)
+        .with_row_selection_policy(RowSelectionPolicy::Mask)
+        .build()
+        .unwrap();
+
+    let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+    let result = concat_batches(&batches[0].schema(), &batches).unwrap();
+
+    let expected_ids =
+        Int32Array::from_iter_values((0..60).chain(180..240).filter(|i| i % 2 == 0 || i % 3 == 0));
+
+    assert_eq!(result.num_columns(), 1);
+    assert_eq!(
+        result
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>(),
+        &expected_ids
+    );
+}
+
+/// Regression test for mask materialization when a manual selection skips full pages
+/// and projected columns have different page boundaries.
+#[tokio::test]
+async fn test_mask_selection_projection_with_skipped_pages() {
+    const NUM_ROWS: usize = 240;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("int_flag", DataType::Int8, false),
+        Field::new("text_flag", DataType::Utf8, false),
+    ]));
+
+    let huge_true = "T".repeat(128);
+    let huge_false = "F".repeat(128);
+
+    let ids = Int32Array::from_iter_values(0..NUM_ROWS as i32);
+    let int_flag = Int8Array::from_iter_values((0..NUM_ROWS).map(|i| (i % 2 == 0) as i8));
+    let text_flag = StringArray::from_iter_values((0..NUM_ROWS).map(|i| {
+        if i % 3 == 0 {
+            huge_true.as_str()
+        } else {
+            huge_false.as_str()
+        }
+    }));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(ids), Arc::new(int_flag), Arc::new(text_flag)],
+    )
+    .unwrap();
+
+    let props = WriterProperties::builder()
+        .set_write_batch_size(1)
+        .set_data_page_size_limit(512)
+        .set_data_page_row_count_limit(128)
+        .set_column_data_page_size_limit(ColumnPath::from("text_flag"), 256)
+        .set_column_dictionary_enabled(ColumnPath::from("text_flag"), false)
+        .build();
+
+    let mut buffer = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let data = Bytes::from(buffer);
+
+    let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+        TestReader::new(data),
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+    )
+    .await
+    .unwrap();
+
+    let schema_descr = builder.parquet_schema().clone();
+    let selection = RowSelection::from(vec![
+        RowSelector::select(60),
+        RowSelector::skip(120),
+        RowSelector::select(60),
+    ]);
+
+    let stream = builder
+        .with_row_selection(selection)
+        .with_row_selection_policy(RowSelectionPolicy::Mask)
+        .with_projection(ProjectionMask::roots(&schema_descr, [0, 2]))
+        .with_batch_size(NUM_ROWS)
+        .build()
+        .unwrap();
+
+    let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+    let result = concat_batches(&batches[0].schema(), &batches).unwrap();
+
+    let expected_ids =
+        Int32Array::from_iter_values((0..60).chain(180..240).map(|v| v as i32));
+
+    assert_eq!(result.num_columns(), 2);
+    assert_eq!(
+        result
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>(),
+        &expected_ids
+    );
+    assert_eq!(result.num_rows(), expected_ids.len());
+}
+
+/// Regression test for mask materialization during filtering when predicates span
+/// columns with different page boundaries.
+#[tokio::test]
+async fn test_mask_selection_multi_col_predicate_with_skipped_pages() {
+    const NUM_ROWS: usize = 240;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("int_flag", DataType::Int8, false),
+        Field::new("text_flag", DataType::Utf8, false),
+    ]));
+
+    let huge_true = "T".repeat(128);
+    let huge_false = "F".repeat(128);
+
+    let ids = Int32Array::from_iter_values(0..NUM_ROWS as i32);
+    let int_flag = Int8Array::from_iter_values((0..NUM_ROWS).map(|i| (i % 2 == 0) as i8));
+    let text_flag = StringArray::from_iter_values((0..NUM_ROWS).map(|i| {
+        if i % 3 == 0 {
+            huge_true.as_str()
+        } else {
+            huge_false.as_str()
+        }
+    }));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(ids), Arc::new(int_flag), Arc::new(text_flag)],
+    )
+    .unwrap();
+
+    let props = WriterProperties::builder()
+        .set_write_batch_size(1)
+        .set_data_page_size_limit(512)
+        .set_data_page_row_count_limit(128)
+        .set_column_data_page_size_limit(ColumnPath::from("text_flag"), 256)
+        .set_column_dictionary_enabled(ColumnPath::from("text_flag"), false)
+        .build();
+
+    let mut buffer = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let data = Bytes::from(buffer);
+
+    let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+        TestReader::new(data),
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+    )
+    .await
+    .unwrap();
+
+    let schema_descr = builder.parquet_schema().clone();
+    let selection = RowSelection::from(vec![
+        RowSelector::select(60),
+        RowSelector::skip(120),
+        RowSelector::select(60),
+    ]);
+
+    let huge_true_scalar = StringArray::from_iter_values([huge_true.as_str()]);
+    let predicate =
+        ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [1, 2]), move |batch| {
+            let int_true = eq(batch.column(0), &Int8Array::new_scalar(1))?;
+            let text_true = eq(batch.column(1), &Scalar::new(&huge_true_scalar))?;
+            or(&int_true, &text_true)
+        });
+
+    let stream = builder
+        .with_row_selection(selection)
+        .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+        .with_projection(ProjectionMask::roots(&schema_descr, [0]))
+        .with_row_selection_policy(RowSelectionPolicy::Mask)
+        .with_batch_size(NUM_ROWS)
+        .build()
+        .unwrap();
+
+    let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+    let result = concat_batches(&batches[0].schema(), &batches).unwrap();
+
+    let expected_ids =
+        Int32Array::from_iter_values((0..60).chain(180..240).filter(|i| i % 2 == 0 || i % 3 == 0));
+
+    assert_eq!(result.num_columns(), 1);
+    assert_eq!(
+        result
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>(),
+        &expected_ids
+    );
 }
