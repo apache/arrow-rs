@@ -756,6 +756,41 @@ mod tests {
     }
 
     #[test]
+    fn test_from_bitwise_unary_op_unaligned_fallback() {
+        // Deterministic affine sequence over u8: b[i] = 37*i + 11 (mod 256).
+        // This yields a non-trivial mix of bits (prefix: 11, 48, 85, 122, 159, 196, 233, 14, ...)
+        // so unary bit operations are exercised on varied input patterns.
+        let bytes = (0..80)
+            .map(|i| (i as u8).wrapping_mul(37).wrapping_add(11))
+            .collect::<Vec<_>>();
+        let base = bytes.as_ptr() as usize;
+        let shift = (0..8).find(|s| (base + s) % 8 != 0).unwrap();
+        let misaligned = &bytes[shift..];
+
+        // Case 1: fallback path with `remainder.is_empty() == true`
+        let src = &misaligned[..24];
+        let offset = 7;
+        let len = 96;
+        let result = BooleanBuffer::from_bitwise_unary_op(src, offset, len, |a| !a);
+        let expected = (0..len)
+            .map(|i| !bit_util::get_bit(src, offset + i))
+            .collect::<BooleanBuffer>();
+        assert_eq!(result, expected);
+        assert_eq!(result.offset(), offset % 64);
+
+        // Case 2: fallback path with `remainder.is_empty() == false`
+        let src = &misaligned[..13];
+        let offset = 3;
+        let len = 100;
+        let result = BooleanBuffer::from_bitwise_unary_op(src, offset, len, |a| !a);
+        let expected = (0..len)
+            .map(|i| !bit_util::get_bit(src, offset + i))
+            .collect::<BooleanBuffer>();
+        assert_eq!(result, expected);
+        assert_eq!(result.offset(), offset % 64);
+    }
+
+    #[test]
     fn test_from_bitwise_binary_op() {
         // pick random boolean inputs
         let input_bools_left = (0..1024)
