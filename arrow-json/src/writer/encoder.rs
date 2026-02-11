@@ -20,6 +20,7 @@ use std::sync::Arc;
 use crate::StructMode;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
+use arrow_array::UnionArray;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -413,6 +414,12 @@ pub fn make_encoder<'a>(
             let formatter = JsonArrayFormatter::new(ArrayFormatter::try_new(array, &options)?);
             NullableEncoder::new(Box::new(RawArrayFormatter(formatter)) as Box<dyn Encoder + 'a>, nulls)
         }
+        DataType::Union(_, _) => {
+            let array = array.as_any().downcast_ref::<UnionArray>().unwrap();
+            let encoder = UnionEncoder::try_new(field, array, options)?;
+            let nulls = array.nulls().cloned();
+            NullableEncoder::new(Box::new(encoder), nulls)
+        }
         d => match d.is_temporal() {
             true => {
                 // Note: the implementation of Encoder for ArrayFormatter assumes it does not produce
@@ -783,8 +790,8 @@ impl Encoder for RawArrayFormatter<'_> {
 struct NullEncoder;
 
 impl Encoder for NullEncoder {
-    fn encode(&mut self, _idx: usize, _out: &mut Vec<u8>) {
-        unreachable!()
+    fn encode(&mut self, _idx: usize, out: &mut Vec<u8>) {
+        out.extend_from_slice(b"null");
     }
 }
 
@@ -896,5 +903,135 @@ where
             write!(out, "{byte:02x}").unwrap();
         }
         out.push(b'"');
+    }
+}
+
+/// Configuration for how to encode union values.
+///
+/// Controls whether to encode union values with or without type information.
+/// The format choice impacts the JSON output structure and readability.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum UnionFormat {
+    #[allow(dead_code)]
+    /// Encode as a simple value without type information (e.g., `1` or `"a"`).
+    Simple,
+
+    /// Encode as an object with type_id and value fields (e.g., `{"type_id": 0, "value": 1}`).
+    /// This is the default format and preserves complete type information.
+    WithTypeInfo,
+}
+
+/// Encoder for Union arrays that handles encoding union values according to the specified format.
+/// See [`UnionFormat`] for details on the available formats.
+pub(crate) struct UnionEncoder<'a> {
+    type_ids: &'a ScalarBuffer<i8>,
+    offsets: Option<&'a ScalarBuffer<i32>>,
+    field_encoders: Vec<NullableEncoder<'a>>,
+    format: UnionFormat,
+    type_id_to_index: std::collections::HashMap<i8, usize>,
+}
+
+impl<'a> UnionEncoder<'a> {
+    /// Create a new UnionEncoder for the given UnionArray.
+    ///
+    /// By default, this uses [`UnionFormat::WithTypeInfo`] to preserve complete type information.
+    /// For simpler output without type information, use [`UnionFormat::Simple`].
+    pub fn try_new(
+        field: &'a FieldRef,
+        array: &'a UnionArray,
+        options: &'a EncoderOptions,
+    ) -> Result<Self, ArrowError> {
+        Self::try_new_with_format(field, array, options, UnionFormat::WithTypeInfo)
+    }
+
+    /// Create a new UnionEncoder with a specific format.
+    ///
+    /// This allows explicitly choosing how to encode union values:
+    ///
+    /// - Use [`UnionFormat::Simple`] for cleaner JSON output without type information,
+    ///   producing values like: `1` or `"a"`
+    /// - Use [`UnionFormat::WithTypeInfo`] to preserve type information,
+    ///   producing values like: `{"type_id": 0, "value": 1}`
+    ///
+    /// See [`UnionFormat`] for more details about each format.
+    pub fn try_new_with_format(
+        _field: &'a FieldRef,
+        array: &'a UnionArray,
+        options: &'a EncoderOptions,
+        format: UnionFormat,
+    ) -> Result<Self, ArrowError> {
+        let type_ids = array.type_ids();
+
+        let union_fields = match array.data_type() {
+            DataType::Union(fields, _) => fields,
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Expected UnionArray to have Union data type".to_string(),
+                ))
+            }
+        };
+
+        let mut field_encoders = Vec::new();
+        let mut type_id_to_index = std::collections::HashMap::new();
+
+        for (idx, (type_id, field_ref)) in union_fields.iter().enumerate() {
+            let child = array.child(type_id);
+            let encoder = make_encoder(field_ref, child, options)?;
+            field_encoders.push(encoder);
+            type_id_to_index.insert(type_id, idx);
+        }
+
+        Ok(Self {
+            type_ids,
+            offsets: array.offsets(),
+            field_encoders,
+            format,
+            type_id_to_index,
+        })
+    }
+}
+
+impl Encoder for UnionEncoder<'_> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let type_id = self.type_ids[idx];
+        let value_idx = match self.offsets {
+            Some(offsets) => offsets[idx] as usize,
+            None => idx,
+        };
+
+        match self.format {
+            UnionFormat::Simple => {
+                let encoder_idx = self.type_id_to_index.get(&type_id).unwrap_or_else(|| {
+                    panic!("Invalid type_id {type_id} found in UnionArray, this indicates corrupted data");
+                });
+                if !self.field_encoders[*encoder_idx].is_null(value_idx) {
+                    self.field_encoders[*encoder_idx].encode(value_idx, out);
+                } else {
+                    out.extend_from_slice(b"null");
+                }
+            }
+            UnionFormat::WithTypeInfo => {
+                out.push(b'{');
+
+                encode_string("type_id", out);
+                out.push(b':');
+                write!(out, "{type_id}").unwrap();
+
+                out.push(b',');
+                encode_string("value", out);
+                out.push(b':');
+
+                let encoder_idx = self.type_id_to_index.get(&type_id).unwrap_or_else(|| {
+                    panic!("Invalid type_id {type_id} found in UnionArray, this indicates corrupted data");
+                });
+                if self.field_encoders[*encoder_idx].is_null(value_idx) {
+                    out.extend_from_slice(b"null");
+                } else {
+                    self.field_encoders[*encoder_idx].encode(value_idx, out);
+                }
+
+                out.push(b'}');
+            }
+        }
     }
 }
