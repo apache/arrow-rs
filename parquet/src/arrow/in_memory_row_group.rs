@@ -84,7 +84,8 @@ impl InMemoryRowGroup<'_> {
                     // If the first page does not start at the beginning of the column,
                     // then we need to also fetch a dictionary page.
                     let mut ranges: Vec<Range<u64>> = vec![];
-                    let (start, _len) = chunk_meta.byte_range();
+                    let (start_i64, _len) = chunk_meta.byte_range();
+                    let start = start_i64 as u64;
                     match offset_index[idx].page_locations.first() {
                         Some(first) if first.offset as u64 != start => {
                             ranges.push(start..first.offset as u64);
@@ -120,7 +121,7 @@ impl InMemoryRowGroup<'_> {
                 .map(|(idx, _chunk)| {
                     let column = metadata.column(idx);
                     let (start, length) = column.byte_range();
-                    start..(start + length)
+                    (start as u64)..(start as u64 + length as u64)
                 })
                 .collect();
             FetchRanges {

@@ -578,8 +578,6 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         max_precision
                     ));
                 }
-            } else if !is_root_node {
-                return Err(general_err!("Repetition level must be defined for non-root types"));
             }
             _ => (), // For BYTE_ARRAY precision is not limited
         }

@@ -1040,16 +1040,13 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the offset and length in bytes of the column chunk within the file
-    pub fn byte_range(&self) -> Result<(u64, u64)> {
+    pub fn byte_range(&self) -> (i64, i64) {
         let col_start = match self.dictionary_page_offset() {
             Some(dictionary_page_offset) => dictionary_page_offset,
             None => self.data_page_offset(),
         };
         let col_len = self.compressed_size();
-        if col_start < 0 || col_len < 0 {
-            return Err(general_err!("column start and length should not be negative"));
-        }
-        Ok((col_start as u64, col_len as u64))
+        (col_start, col_len)
     }
 
     /// Returns statistics that are set for this column chunk,

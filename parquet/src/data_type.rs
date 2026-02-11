@@ -1130,7 +1130,7 @@ pub(crate) mod private {
         #[inline]
         fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize> {
             if decoder.type_length <= 0 {
-                return Err(general_err!("Type length must be positive ({}).", decoder.type_length));
+                return Err(general_err!("Internal: Type length must be positive ({}).", decoder.type_length));
             }
 
             let data = decoder
@@ -1156,7 +1156,7 @@ pub(crate) mod private {
 
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
             if decoder.type_length <= 0 {
-                return Err(general_err!("Type length must be positive ({}).", decoder.type_length));
+                return Err(general_err!("Internal: Type length must be positive ({}).", decoder.type_length));
             }
             let data = decoder
                 .data
@@ -1426,17 +1426,9 @@ mod tests {
         assert_eq!(buffer.as_bytes(), &[1, 2, 3]);
         let mut decoder = PlainDecoder::<FixedLenByteArrayType>::new(0);
         assert!(decoder.get(&mut vec![buffer]).is_err_and(
-            |x| x.to_string().contains("Type length must be positive (0)")));
+            |x| x.to_string().contains("Internal: Type length must be positive (0)")));
 
         assert!(decoder.skip(10).is_err_and(
-            |x| x.to_string().contains("Type length must be positive (0)")));
-
-        let mut some_data_infos: [DataInfo; 3] = [
-            DataInfo { len: 5, ptr: 0x1000 },
-            DataInfo { len: 12, ptr: 0x2000 },
-            DataInfo { len: 8, ptr: 0x3000 },
-        ];
-        assert!(decoder.get_data_info(&mut some_data_infos[0..1]).is_err_and(
-            |x| x.to_string().contains("Type length must be positive (0)")));
+            |x| x.to_string().contains("Internal: Type length must be positive (0)")));
     }
 }

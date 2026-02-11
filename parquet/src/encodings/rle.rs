@@ -498,19 +498,24 @@ impl RleDecoder {
                         self.bit_packed_left = 0;
                         break;
                     }
-                    for i in 0..num_values {
-                        let dict_idx = index_buf[i] as usize;
-                        // --- BIT-PACKED FIX 2 (The crash site): Safe dictionary access ---
-                        let dict_val = dict
-                            .get(dict_idx)
-                            .ok_or_else(|| {
-                                ParquetError::General(
-                                    format!(
-                                        "Index out of bounds: the len is {} but the index is {}",
-                                         dict.len(), dict_idx))
+
+                    buffer[values_read..values_read + num_values]
+                        .iter_mut()
+                        .zip(index_buf[..num_values].iter())
+                        .try_for_each(|(b, i)| -> Result<()> {
+                            let dict_idx = *i as usize;
+                            let dict_val = dict
+                                .get(dict_idx)
+                                .ok_or_else(|| {
+                                    ParquetError::General(
+                                        format!(
+                                            "Index out of bounds: the len is {} but the index is {}",
+                                             dict.len(), dict_idx))
                                         })?;
-                        buffer[values_read + i].clone_from(dict_val);
-                    }
+                            b.clone_from(dict_val);
+                            Ok(())
+                        })?;
+
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {
