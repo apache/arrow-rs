@@ -81,7 +81,7 @@ pub(crate) fn try_add_extension_type(
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
             arrow_field
         }
-        _ => arrow_field
+        _ => arrow_field,
     })
 }
 
