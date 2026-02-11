@@ -23,7 +23,9 @@ use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+};
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
@@ -282,9 +284,8 @@ fn interleave_views<T: ByteViewType>(
         })
         .collect();
 
-    let array = unsafe {
-        GenericByteViewArray::<T>::new_unchecked(views, buffers, interleaved.nulls)
-    };
+    let array =
+        unsafe { GenericByteViewArray::<T>::new_unchecked(views, buffers, interleaved.nulls) };
     Ok(Arc::new(array))
 }
 
