@@ -101,7 +101,9 @@ pub struct MutableBuffer {
     data: NonNull<u8>,
     // invariant: len <= capacity
     len: usize,
-    layout: Layout,
+    capacity: usize,
+    // cached alignment, Layout reconstructed when needed
+    align: usize,
 
     /// Memory reservation for tracking memory usage
     #[cfg(feature = "pool")]
@@ -109,6 +111,15 @@ pub struct MutableBuffer {
 }
 
 impl MutableBuffer {
+    /// Reconstruct Layout from cached capacity and alignment.
+    /// Only used in cold paths (alloc/dealloc/realloc).
+    #[inline]
+    fn layout(&self) -> Layout {
+        debug_assert!(self.align.is_power_of_two());
+        // SAFETY: capacity and align always come from a valid Layout
+        unsafe { Layout::from_size_align_unchecked(self.capacity, self.align) }
+    }
+
     /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
     ///
     /// See [`MutableBuffer::with_capacity`].
@@ -139,7 +150,8 @@ impl MutableBuffer {
         Self {
             data,
             len: 0,
-            layout,
+            capacity: layout.size(),
+            align: layout.align(),
             #[cfg(feature = "pool")]
             reservation: std::sync::Mutex::new(None),
         }
@@ -169,7 +181,8 @@ impl MutableBuffer {
         Self {
             data,
             len,
-            layout,
+            capacity: layout.size(),
+            align: layout.align(),
             #[cfg(feature = "pool")]
             reservation: std::sync::Mutex::new(None),
         }
@@ -191,7 +204,8 @@ impl MutableBuffer {
         Ok(Self {
             data,
             len,
-            layout,
+            capacity: layout.size(),
+            align: layout.align(),
             #[cfg(feature = "pool")]
             reservation: Mutex::new(reservation),
         })
@@ -211,7 +225,7 @@ impl MutableBuffer {
     /// the buffer directly (e.g., modifying the buffer by holding a mutable reference
     /// from `data_mut()`).
     pub fn with_bitset(mut self, end: usize, val: bool) -> Self {
-        assert!(end <= self.layout.size());
+        assert!(end <= self.capacity);
         let v = if val { 255 } else { 0 };
         unsafe {
             std::ptr::write_bytes(self.data.as_ptr(), v, end);
@@ -227,10 +241,10 @@ impl MutableBuffer {
     /// `len` to `capacity`.
     pub fn set_null_bits(&mut self, start: usize, count: usize) {
         assert!(
-            start.saturating_add(count) <= self.layout.size(),
+            start.saturating_add(count) <= self.capacity,
             "range start index {start} and count {count} out of bounds for \
             buffer of length {}",
-            self.layout.size(),
+            self.capacity,
         );
 
         // Safety: `self.data[start..][..count]` is in-bounds and well-aligned for `u8`
@@ -255,9 +269,9 @@ impl MutableBuffer {
     #[inline(always)]
     pub fn reserve(&mut self, additional: usize) {
         let required_cap = self.len + additional;
-        if required_cap > self.layout.size() {
+        if required_cap > self.capacity {
             let new_capacity = bit_util::round_upto_multiple_of_64(required_cap);
-            let new_capacity = std::cmp::max(new_capacity, self.layout.size() * 2);
+            let new_capacity = std::cmp::max(new_capacity, self.capacity * 2);
             self.reallocate(new_capacity)
         }
     }
@@ -333,28 +347,32 @@ impl MutableBuffer {
 
     #[cold]
     fn reallocate(&mut self, capacity: usize) {
-        let new_layout = Layout::from_size_align(capacity, self.layout.align()).unwrap();
+        let new_layout = Layout::from_size_align(capacity, self.align).unwrap();
         if new_layout.size() == 0 {
-            if self.layout.size() != 0 {
+            if self.capacity != 0 {
+                let old_layout = self.layout();
                 // Safety: data was allocated with layout
-                unsafe { std::alloc::dealloc(self.as_mut_ptr(), self.layout) };
-                self.layout = new_layout
+                unsafe { std::alloc::dealloc(self.as_mut_ptr(), old_layout) };
+                self.capacity = 0;
             }
             return;
         }
 
-        let data = match self.layout.size() {
+        let data = match self.capacity {
             // Safety: new_layout is not empty
             0 => unsafe { std::alloc::alloc(new_layout) },
             // Safety: verified new layout is valid and not empty
-            _ => unsafe { std::alloc::realloc(self.as_mut_ptr(), self.layout, capacity) },
+            _ => {
+                let old_layout = self.layout();
+                unsafe { std::alloc::realloc(self.as_mut_ptr(), old_layout, capacity) }
+            }
         };
         self.data = NonNull::new(data).unwrap_or_else(|| handle_alloc_error(new_layout));
-        self.layout = new_layout;
+        self.capacity = new_layout.size();
         #[cfg(feature = "pool")]
         {
             if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
-                reservation.resize(self.layout.size());
+                reservation.resize(self.capacity);
             }
         }
     }
@@ -422,7 +440,7 @@ impl MutableBuffer {
     /// ```
     pub fn shrink_to_fit(&mut self) {
         let new_capacity = bit_util::round_upto_multiple_of_64(self.len);
-        if new_capacity < self.layout.size() {
+        if new_capacity < self.capacity {
             self.reallocate(new_capacity)
         }
     }
@@ -445,7 +463,7 @@ impl MutableBuffer {
     /// The invariant `buffer.len() <= buffer.capacity()` is always upheld.
     #[inline]
     pub const fn capacity(&self) -> usize {
-        self.layout.size()
+        self.capacity
     }
 
     /// Clear all existing data from this buffer.
@@ -479,7 +497,8 @@ impl MutableBuffer {
 
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
-        let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
+        let layout = self.layout();
+        let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(layout)) };
         #[cfg(feature = "pool")]
         {
             let reservation = self.reservation.lock().unwrap().take();
@@ -804,7 +823,8 @@ impl<T: ArrowNativeType> From<Vec<T>> for MutableBuffer {
         Self {
             data,
             len,
-            layout,
+            capacity: layout.size(),
+            align: layout.align(),
             #[cfg(feature = "pool")]
             reservation: std::sync::Mutex::new(None),
         }
@@ -825,7 +845,7 @@ impl MutableBuffer {
         // this is necessary because of https://github.com/rust-lang/rust/issues/32155
         let mut len = SetLenOnDrop::new(&mut self.len);
         let mut dst = unsafe { self.data.as_ptr().add(len.local_len) };
-        let capacity = self.layout.size();
+        let capacity = self.capacity;
 
         while len.local_len + item_size <= capacity {
             if let Some(item) = iterator.next() {
@@ -987,9 +1007,10 @@ impl AsRef<[u8]> for &MutableBuffer {
 
 impl Drop for MutableBuffer {
     fn drop(&mut self) {
-        if self.layout.size() != 0 {
+        if self.capacity != 0 {
+            let layout = self.layout();
             // Safety: data was allocated with standard allocator with given layout
-            unsafe { std::alloc::dealloc(self.data.as_ptr() as _, self.layout) };
+            unsafe { std::alloc::dealloc(self.data.as_ptr() as _, layout) };
         }
     }
 }
@@ -999,7 +1020,7 @@ impl PartialEq for MutableBuffer {
         if self.len != other.len {
             return false;
         }
-        if self.layout != other.layout {
+        if self.capacity != other.capacity || self.align != other.align {
             return false;
         }
         self.as_slice() == other.as_slice()

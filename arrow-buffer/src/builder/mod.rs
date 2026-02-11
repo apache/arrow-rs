@@ -199,8 +199,9 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     /// ```
     #[inline]
     pub fn append(&mut self, v: T) {
-        self.reserve(1);
-        self.buffer.push(v);
+        self.buffer.reserve(std::mem::size_of::<T>());
+        // SAFETY: reserve ensures capacity() - len() >= size_of::<T>()
+        unsafe { self.buffer.push_unchecked(v) };
         self.len += 1;
     }
 
@@ -218,8 +219,12 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     /// ```
     #[inline]
     pub fn append_n(&mut self, n: usize, v: T) {
-        self.reserve(n);
-        self.extend(std::iter::repeat_n(v, n))
+        self.buffer.reserve(n * std::mem::size_of::<T>());
+        for _ in 0..n {
+            // SAFETY: reserve ensures enough capacity for n elements
+            unsafe { self.buffer.push_unchecked(v) };
+        }
+        self.len += n;
     }
 
     /// Appends `n`, zero-initialized values
@@ -336,8 +341,11 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
             .size_hint()
             .1
             .expect("append_trusted_len_iter expects upper bound");
-        self.reserve(len);
-        self.extend(iter);
+        self.buffer.reserve(len * std::mem::size_of::<T>());
+        let before = self.buffer.len();
+        self.buffer.extend(iter);
+        let added_bytes = self.buffer.len() - before;
+        self.len += added_bytes / std::mem::size_of::<T>();
     }
 
     /// Resets this builder and returns an immutable [Buffer].
@@ -387,9 +395,11 @@ impl<T: ArrowNativeType> Default for BufferBuilder<T> {
 
 impl<T: ArrowNativeType> Extend<T> for BufferBuilder<T> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
-        self.buffer.extend(iter.into_iter().inspect(|_| {
-            self.len += 1;
-        }))
+        let before = self.buffer.len();
+        self.buffer.extend(iter);
+        let added_bytes = self.buffer.len() - before;
+        debug_assert_eq!(added_bytes % std::mem::size_of::<T>(), 0);
+        self.len += added_bytes / std::mem::size_of::<T>();
     }
 }
 
