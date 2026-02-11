@@ -1954,7 +1954,14 @@ impl<'a> Maker<'a> {
         )?;
         let writer_ns = writer_record.namespace.or(namespace);
         let reader_ns = reader_record.namespace.or(namespace);
-        let reader_md = reader_record.attributes.field_metadata();
+        let mut reader_md = reader_record.attributes.field_metadata();
+        reader_md.insert(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            reader_record.name.to_string(),
+        );
+        if let Some(ns) = reader_ns {
+            reader_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), ns.to_string());
+        }
         // Build writer lookup and ambiguous alias set.
         let (writer_lookup, ambiguous_writer_aliases) = Self::build_writer_lookup(writer_record);
         let mut writer_to_reader: Vec<Option<usize>> = vec![None; writer_record.fields.len()];
