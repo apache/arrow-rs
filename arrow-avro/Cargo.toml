@@ -112,3 +112,7 @@ harness = false
 [[bench]]
 name = "encoder"
 harness = false
+
+[[bench]]
+name = "project_record"
+harness = false
