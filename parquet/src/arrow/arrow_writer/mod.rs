@@ -4830,6 +4830,52 @@ mod tests {
     }
 
     #[test]
+    // If an in-progress row group is already oversized, it should be flushed before writing more.
+    fn test_row_group_limit_bytes_flushes_when_current_group_already_too_large() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "str",
+            ArrowDataType::Utf8,
+            false,
+        )]));
+        let file = tempfile::tempfile().unwrap();
+
+        // Start with no byte limit so we can intentionally build an oversized in-progress row group.
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(None)
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+
+        let first_array = StringArray::from(
+            (0..10)
+                .map(|i| format!("{:0>100}", i))
+                .collect::<Vec<String>>(),
+        );
+        let first_batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(first_array)]).unwrap();
+        writer.write(&first_batch).unwrap();
+        assert_eq!(writer.in_progress_rows(), 10);
+
+        // Tighten the limit below the current in-progress bytes to exercise:
+        // `if current_bytes >= max_bytes { self.flush()?; ... }`
+        writer.max_row_group_bytes = Some(1);
+
+        let second_array = StringArray::from(vec!["x".to_string()]);
+        let second_batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(second_array)]).unwrap();
+        writer.write(&second_batch).unwrap();
+        writer.close().unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+
+        assert_eq!(
+            &row_group_sizes(builder.metadata()),
+            &[10, 1],
+            "The second write should flush an oversized in-progress row group first",
+        );
+    }
+
+    #[test]
     // When both limits are set, the row limit triggers first
     fn test_row_group_limit_both_row_wins_single_batch() {
         let props = WriterProperties::builder()
