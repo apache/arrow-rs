@@ -150,6 +150,15 @@ impl BooleanBuffer {
     /// let input = [0b11001100u8, 0b10111010u8];
     /// // // Copy bits 4..16 from input
     /// let result = BooleanBuffer::from_bits(&input, 4, 12);
+    /// // output is 12 bits long starting from bit offset 4
+    /// assert_eq!(result.len(), 12);
+    /// assert_eq!(result.offset(), 4);
+    /// // the expected 12 bits are 0b101110101100 (bits 4..16 of the input)
+    /// let expected_bits = [false, false, true, true, false, true, false, true, true, true, false, true];
+    /// for (i, v) in expected_bits.into_iter().enumerate() {
+    ///    assert_eq!(result.value(i), v);
+    /// }
+    /// // However, underlying buffer has (ignored) bits set outside the requested range
     /// assert_eq!(result.values(), &[0b11001100u8, 0b10111010, 0, 0, 0, 0, 0, 0]);
     pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
         Self::from_bitwise_unary_op(src, offset_in_bits, len_in_bits, |a| a)
@@ -167,21 +176,32 @@ impl BooleanBuffer {
     ///   on the relevant bits; the input `u64` may contain irrelevant bits
     ///   and may be processed differently on different endian architectures.
     /// * `op` may be called with input bits outside the requested range
-    /// * The output always has zero offset
+    /// * Returned `BooleanBuffer` may have non zero offset
+    /// * Returned `BooleanBuffer` may have bits set outside the requested range
     ///
     /// # See Also
     /// - [`BooleanBuffer::from_bitwise_binary_op`] to create a new buffer from a binary operation
     /// - [`apply_bitwise_unary_op`](bit_util::apply_bitwise_unary_op) for in-place unary bitwise operations
     ///
-    /// # Example: Create new [`BooleanBuffer`] from bitwise `NOT` of a byte slice
+    /// # Example: Create new [`BooleanBuffer`] from bitwise `NOT`
     /// ```
     /// # use arrow_buffer::BooleanBuffer;
     /// let input = [0b11001100u8, 0b10111010u8]; // 2 bytes = 16 bits
-    /// // NOT of the first 12 bits
+    /// // NOT of bits 4..16
     /// let result = BooleanBuffer::from_bitwise_unary_op(
-    ///  &input, 0, 12, |a| !a
+    ///  &input, 4, 12, |a| !a
     /// );
-    /// assert_eq!(result.values(), &[0b00110011u8, 0b01000101u8, 255, 255, 255, 255, 255, 255]);
+    /// // output is 12 bits long starting from bit offset 4
+    /// assert_eq!(result.len(), 12);
+    /// assert_eq!(result.offset(), 4);
+    /// // the expected 12 bits are 0b001100110101, (NOT of the requested bits)
+    /// let expected_bits = [true, true, false, false, true, false, true, false, false, false, true, false];
+    /// for (i, v) in expected_bits.into_iter().enumerate() {
+    ///     assert_eq!(result.value(i), v);
+    /// }
+    /// // However, underlying buffer has (ignored) bits set outside the requested range
+    /// let expected = [0b00110011u8, 0b01000101u8, 255, 255, 255, 255, 255, 255];
+    /// assert_eq!(result.values(), &expected);
     /// ```
     pub fn from_bitwise_unary_op<F>(
         src: impl AsRef<[u8]>,
@@ -705,6 +725,15 @@ mod tests {
 
         let expected = BooleanBuffer::new(Buffer::from(&[255, 254, 254, 255, 255]), offset, len);
         assert_eq!(!boolean_buf, expected);
+
+        // Demonstrate that Non-zero offsets are preserved
+        let sliced = boolean_buf.slice(3, 20);
+        let result = !&sliced;
+        assert_eq!(result.offset(), 3);
+        assert_eq!(result.len(), sliced.len());
+        for i in 0..sliced.len() {
+            assert_eq!(result.value(i), !sliced.value(i));
+        }
     }
 
     #[test]
