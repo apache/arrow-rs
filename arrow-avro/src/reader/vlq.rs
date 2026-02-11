@@ -109,6 +109,8 @@ pub(crate) fn skip_varint(buf: &[u8]) -> Option<usize> {
 }
 
 fn skip_varint_array(buf: [u8; 10]) -> Option<usize> {
+    // Using buf.into_iter().enumerate() regresses performance by 1% on x86-64
+    #[allow(clippy::needless_range_loop)]
     for idx in 0..10 {
         if buf[idx] < 0x80 {
             return Some(idx + 1);
