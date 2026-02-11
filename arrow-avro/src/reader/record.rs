@@ -3722,8 +3722,17 @@ mod tests {
             avro_children.push(AvroDataType::new(codec, Default::default(), None));
             fields.push(arrow_schema::Field::new(name, dt, true));
         }
-        let union_fields = UnionFields::try_new(type_ids, fields).unwrap();
-        let union_codec = Codec::Union(avro_children.into(), union_fields, UnionMode::Dense);
+        let union_fields = UnionFields::try_new(type_ids.clone(), fields).unwrap();
+
+        // UnionFields are sorted by type_id, so we need to reorder avro_children to match
+        let mut sorted_indices: Vec<usize> = (0..type_ids.len()).collect();
+        sorted_indices.sort_by_key(|&i| type_ids[i]);
+        let sorted_avro_children: Vec<AvroDataType> = sorted_indices
+            .iter()
+            .map(|&i| avro_children[i].clone())
+            .collect();
+
+        let union_codec = Codec::Union(sorted_avro_children.into(), union_fields, UnionMode::Dense);
         AvroDataType::new(union_codec, Default::default(), None)
     }
 
@@ -3788,11 +3797,13 @@ mod tests {
             vec![42, 7],
         );
         let mut dec = Decoder::try_new(&union_dt).unwrap();
-        let r1 = encode_avro_long(0);
+        // after sorting by type_id, schema order is [string(7), null(42)]
+        // to encode null, use branch 1; to encode string, use branch 0
+        let r1 = encode_avro_long(1);
         let mut r2 = Vec::new();
-        r2.extend_from_slice(&encode_avro_long(1));
+        r2.extend_from_slice(&encode_avro_long(0));
         r2.extend_from_slice(&encode_avro_bytes(b"abc"));
-        let r3 = encode_avro_long(0);
+        let r3 = encode_avro_long(1);
         dec.decode(&mut AvroCursor::new(&r1)).unwrap();
         dec.decode(&mut AvroCursor::new(&r2)).unwrap();
         dec.decode(&mut AvroCursor::new(&r3)).unwrap();

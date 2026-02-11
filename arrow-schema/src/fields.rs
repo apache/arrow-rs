@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Deref;
 use std::sync::Arc;
+use std::{hash::Hash, ops::Deref};
 
 use crate::{ArrowError, DataType, Field, FieldRef};
 
@@ -318,7 +318,7 @@ impl<'a> IntoIterator for &'a Fields {
 }
 
 /// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding type ids
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct UnionFields(Arc<[(i8, FieldRef)]>);
@@ -402,7 +402,7 @@ impl UnionFields {
 
         loop {
             match (type_ids_iter.next(), fields_iter.next()) {
-                (None, None) => return Ok(Self(out.into())),
+                (None, None) => break,
                 (Some(type_id), Some(field)) => {
                     // check type id is non-negative
                     if type_id < 0 {
@@ -435,6 +435,11 @@ impl UnionFields {
                 }
             }
         }
+
+        // sort by type ids to produce a consistent ordering
+        out.sort_unstable_by_key(|&(i, _)| i);
+
+        Ok(Self(out.into()))
     }
 
     /// Create a new [`UnionFields`] from a collection of fields with automatically
@@ -814,6 +819,33 @@ mod tests {
         // Propagate error
         let r = fields.try_filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_union_field_equality() {
+        let ids = vec![0, 1, 2];
+        let fields = vec![
+            Field::new("a", DataType::Binary, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Int16, true),
+        ];
+
+        let u = UnionFields::try_new(ids.clone(), fields.clone()).unwrap();
+        assert_eq!(u.clone(), u.clone());
+
+        let u_rev =
+            UnionFields::try_new(ids.clone().into_iter().rev(), fields.into_iter().rev()).unwrap();
+        assert_eq!(u, u_rev);
+
+        let fields_2 = vec![
+            Field::new("a", DataType::Binary, true),
+            Field::new("b", DataType::Utf8, true),
+            // everything is the same from `fields` except Field "c" is not nullable
+            Field::new("c", DataType::Int16, false),
+        ];
+
+        let u2 = UnionFields::try_new(ids.clone(), fields_2.clone()).unwrap();
+        assert_ne!(u, u2);
     }
 
     #[test]
