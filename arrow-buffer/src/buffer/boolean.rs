@@ -142,7 +142,8 @@ impl BooleanBuffer {
     /// input buffer.
     ///
     /// # Notes:
-    /// * The new `BooleanBuffer` keeps the non-zero offset if not aligned by byte and may have padding
+    /// * The new `BooleanBuffer` may have non zero offset
+    ///   and/or padding bits outside the logical range.
     ///
     /// # Example: Create a new [`BooleanBuffer`] copying a bit slice from in input slice
     /// ```
@@ -263,7 +264,12 @@ impl BooleanBuffer {
     /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
     ///
     /// # Notes:
-    /// See notes on [Self::from_bitwise_unary_op]
+    /// * `op` takes two `u64` inputs and produces one `u64` output.
+    /// * `op` must only apply bitwise operations
+    ///   on the relevant bits; the input `u64` values may contain irrelevant bits
+    ///   and may be processed differently on different endian architectures.
+    /// * `op` may be called with input bits outside the requested range.
+    /// * The returned `BooleanBuffer` always has zero offset.
     ///
     /// # See Also
     /// - [`BooleanBuffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
