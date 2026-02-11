@@ -689,7 +689,7 @@ async fn test_mask_selection_projection_with_skipped_pages() {
     let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
     let result = concat_batches(&batches[0].schema(), &batches).unwrap();
 
-    let expected_ids = Int32Array::from_iter_values((0..60).chain(180..240).map(|v| v as i32));
+    let expected_ids = Int32Array::from_iter_values((0..60).chain(180..240));
 
     assert_eq!(result.num_columns(), 2);
     assert_eq!(
