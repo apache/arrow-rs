@@ -20,7 +20,8 @@
 //!
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
-use crate::filter::filter_record_batch;
+use crate::filter::{FilterBuilder, FilterPredicate, is_optimize_beneficial_record_batch};
+
 use crate::take::take_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
@@ -212,7 +213,10 @@ impl BatchCoalescer {
     /// Push a batch into the Coalescer after applying a filter
     ///
     /// This is semantically equivalent of calling [`Self::push_batch`]
-    /// with the results from  [`filter_record_batch`]
+    /// with the results from  [`filter_record_batch`], but avoids
+    /// materializing the intermediate filtered batch.
+    ///
+    /// [`filter_record_batch`]: crate::filter::filter_record_batch
     ///
     /// # Example
     /// ```
@@ -238,10 +242,103 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        // TODO: optimize this to avoid materializing (copying the results
-        // of filter to a new batch)
-        let filtered_batch = filter_record_batch(&batch, filter)?;
-        self.push_batch(filtered_batch)
+        // We only support primitve now, fallback to filter_record_batch for other types
+        // Also, skip optimization when filter is not very selectivex§
+
+        // Build an optimized filter predicate that chooses the best iteration strategy
+        // Byteview does use a filter as part of calculating ideal buffer sizes, so optimizing is helpful even for
+        // a single array
+        let is_optimize_beneficial = is_optimize_beneficial_record_batch(&batch)
+            || batch.columns().len() == 1
+                && matches!(
+                    batch.columns()[0].data_type(),
+                    DataType::BinaryView | DataType::Utf8View
+                );
+        let selected_count = filter.true_count();
+        let num_rows = batch.num_rows();
+
+        // Fast path: skip if no rows selected
+        if selected_count == 0 {
+            return Ok(());
+        }
+
+        // Fast path: if all rows selected, just push the batch
+        if selected_count == num_rows {
+            return self.push_batch(batch);
+        }
+
+        let (_schema, arrays, _num_rows) = batch.into_parts();
+
+        let mut filter_builder = FilterBuilder::new(&filter);
+
+        if is_optimize_beneficial {
+            filter_builder = filter_builder.optimize();
+        }
+
+        let filter = filter_builder.build();
+        // Setup input arrays as sources
+        assert_eq!(arrays.len(), self.in_progress_arrays.len());
+        self.in_progress_arrays
+            .iter_mut()
+            .zip(arrays)
+            .for_each(|(in_progress, array)| {
+                in_progress.set_source_from_filter(Some(array), &filter);
+            });
+
+        // Choose iteration strategy based on the optimized predicate
+        self.copy_from_filter(filter, selected_count)?;
+        // Clear sources to allow memory to be freed
+        for in_progress in self.in_progress_arrays.iter_mut() {
+            in_progress.set_source(None);
+        }
+
+        Ok(())
+    }
+
+    /// Helper to copy rows at the given indices, handling batch boundaries efficiently
+    ///
+    /// This method batches the index iteration to avoid per-row batch boundary checks.
+    fn copy_from_filter(
+        &mut self,
+        filter: FilterPredicate,
+        count: usize,
+    ) -> Result<(), ArrowError> {
+        let mut remaining = count;
+        let mut filter_pos = 0; // Position in the filter array
+
+        // Build an optimized filter predicate once for the whole input batch
+
+        // We need to process the filter in chunks that fit the target batch size
+        while remaining > 0 {
+            let space_in_batch = self.target_batch_size - self.buffered_rows;
+            let to_copy = remaining.min(space_in_batch);
+
+            // Find how many filter positions we need to cover `to_copy` set bits
+            // Skip the expensive search if all remaining rows fit in the current batch
+            let chunk_len = if remaining <= space_in_batch {
+                filter.len() - filter_pos
+            } else {
+                filter.find_nth_set_bit_position(filter_pos, to_copy) - filter_pos
+            };
+
+            let chunk_predicate = filter.slice_with_count(filter_pos, chunk_len, to_copy);
+
+            // Copy all collected indices in one call per array
+            for in_progress in self.in_progress_arrays.iter_mut() {
+                in_progress.copy_rows_by_filter(&chunk_predicate, filter_pos, chunk_len)?;
+            }
+
+            self.buffered_rows += to_copy;
+            filter_pos += chunk_len;
+            remaining -= to_copy;
+
+            // If we've filled the batch, finish it
+            if self.buffered_rows >= self.target_batch_size {
+                self.finish_buffered_batch()?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Push a batch into the Coalescer after applying a set of indices
@@ -604,12 +701,30 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     /// current in-progress array
     fn set_source(&mut self, source: Option<ArrayRef>);
 
+    /// Set the source array with a filter, allowing for calculating GC based on filter
+    ///
+    /// Default implementation just calls [`Self::set_source`]
+    fn set_source_from_filter(&mut self, source: Option<ArrayRef>, _filter: &FilterPredicate) {
+        self.set_source(source);
+    }
+
     /// Copy rows from the current source array into the in-progress array
     ///
     /// The source array is set by [`Self::set_source`].
     ///
     /// Return an error if the source array is not set
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
+
+    /// Copy rows from the source array between the specified offset and len that
+    /// match the predicate to the output array
+    ///
+    /// TODO add an example
+    fn copy_rows_by_filter(
+        &mut self,
+        filter: &FilterPredicate,
+        offset: usize,
+        len: usize,
+    ) -> Result<(), ArrowError>;
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
@@ -619,6 +734,7 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
 mod tests {
     use super::*;
     use crate::concat::concat_batches;
+    use crate::filter::filter_record_batch;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
