@@ -429,9 +429,9 @@ pub const ENUM_MAX_TIME_UNIT: i8 = 2;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
 pub const ENUM_VALUES_TIME_UNIT: [TimeUnit; 3] = [
-  TimeUnit::MS,
-  TimeUnit::US,
-  TimeUnit::NS,
+  TimeUnit::Millisecond,
+  TimeUnit::Microsecond,
+  TimeUnit::Nanosecond,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -439,23 +439,23 @@ pub const ENUM_VALUES_TIME_UNIT: [TimeUnit; 3] = [
 pub struct TimeUnit(pub i8);
 #[allow(non_upper_case_globals)]
 impl TimeUnit {
-  pub const MS: Self = Self(0);
-  pub const US: Self = Self(1);
-  pub const NS: Self = Self(2);
+  pub const Millisecond: Self = Self(0);
+  pub const Microsecond: Self = Self(1);
+  pub const Nanosecond: Self = Self(2);
 
   pub const ENUM_MIN: i8 = 0;
   pub const ENUM_MAX: i8 = 2;
   pub const ENUM_VALUES: &'static [Self] = &[
-    Self::MS,
-    Self::US,
-    Self::NS,
+    Self::Millisecond,
+    Self::Microsecond,
+    Self::Nanosecond,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
     match self {
-      Self::MS => Some("MS"),
-      Self::US => Some("US"),
-      Self::NS => Some("NS"),
+      Self::Millisecond => Some("Millisecond"),
+      Self::Microsecond => Some("Microsecond"),
+      Self::Nanosecond => Some("Nanosecond"),
       _ => None,
     }
   }
@@ -1014,35 +1014,35 @@ impl ::core::fmt::Debug for Empty<'_> {
       ds.finish()
   }
 }
-pub enum DecimalOptsOffset {}
+pub enum DecimalOptionsOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
-pub struct DecimalOpts<'a> {
+pub struct DecimalOptions<'a> {
   pub _tab: ::flatbuffers::Table<'a>,
 }
 
-impl<'a> ::flatbuffers::Follow<'a> for DecimalOpts<'a> {
-  type Inner = DecimalOpts<'a>;
+impl<'a> ::flatbuffers::Follow<'a> for DecimalOptions<'a> {
+  type Inner = DecimalOptions<'a>;
   #[inline]
   unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
     Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
   }
 }
 
-impl<'a> DecimalOpts<'a> {
+impl<'a> DecimalOptions<'a> {
   pub const VT_PRECISION: ::flatbuffers::VOffsetT = 4;
   pub const VT_SCALE: ::flatbuffers::VOffsetT = 6;
 
   #[inline]
   pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
-    DecimalOpts { _tab: table }
+    DecimalOptions { _tab: table }
   }
   #[allow(unused_mut)]
   pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
     _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args DecimalOptsArgs
-  ) -> ::flatbuffers::WIPOffset<DecimalOpts<'bldr>> {
-    let mut builder = DecimalOptsBuilder::new(_fbb);
+    args: &'args DecimalOptionsArgs
+  ) -> ::flatbuffers::WIPOffset<DecimalOptions<'bldr>> {
+    let mut builder = DecimalOptionsBuilder::new(_fbb);
     builder.add_scale(args.scale);
     builder.add_precision(args.precision);
     builder.finish()
@@ -1054,18 +1054,18 @@ impl<'a> DecimalOpts<'a> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<i32>(DecimalOpts::VT_PRECISION, Some(0)).unwrap()}
+    unsafe { self._tab.get::<i32>(DecimalOptions::VT_PRECISION, Some(0)).unwrap()}
   }
   #[inline]
   pub fn scale(&self) -> i32 {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<i32>(DecimalOpts::VT_SCALE, Some(0)).unwrap()}
+    unsafe { self._tab.get::<i32>(DecimalOptions::VT_SCALE, Some(0)).unwrap()}
   }
 }
 
-impl ::flatbuffers::Verifiable for DecimalOpts<'_> {
+impl ::flatbuffers::Verifiable for DecimalOptions<'_> {
   #[inline]
   fn run_verifier(
     v: &mut ::flatbuffers::Verifier, pos: usize
@@ -1077,85 +1077,85 @@ impl ::flatbuffers::Verifiable for DecimalOpts<'_> {
     Ok(())
   }
 }
-pub struct DecimalOptsArgs {
+pub struct DecimalOptionsArgs {
     pub precision: i32,
     pub scale: i32,
 }
-impl<'a> Default for DecimalOptsArgs {
+impl<'a> Default for DecimalOptionsArgs {
   #[inline]
   fn default() -> Self {
-    DecimalOptsArgs {
+    DecimalOptionsArgs {
       precision: 0,
       scale: 0,
     }
   }
 }
 
-pub struct DecimalOptsBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+pub struct DecimalOptionsBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
   fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
   start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
 }
-impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> DecimalOptsBuilder<'a, 'b, A> {
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> DecimalOptionsBuilder<'a, 'b, A> {
   #[inline]
   pub fn add_precision(&mut self, precision: i32) {
-    self.fbb_.push_slot::<i32>(DecimalOpts::VT_PRECISION, precision, 0);
+    self.fbb_.push_slot::<i32>(DecimalOptions::VT_PRECISION, precision, 0);
   }
   #[inline]
   pub fn add_scale(&mut self, scale: i32) {
-    self.fbb_.push_slot::<i32>(DecimalOpts::VT_SCALE, scale, 0);
+    self.fbb_.push_slot::<i32>(DecimalOptions::VT_SCALE, scale, 0);
   }
   #[inline]
-  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> DecimalOptsBuilder<'a, 'b, A> {
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> DecimalOptionsBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
-    DecimalOptsBuilder {
+    DecimalOptionsBuilder {
       fbb_: _fbb,
       start_: start,
     }
   }
   #[inline]
-  pub fn finish(self) -> ::flatbuffers::WIPOffset<DecimalOpts<'a>> {
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<DecimalOptions<'a>> {
     let o = self.fbb_.end_table(self.start_);
     ::flatbuffers::WIPOffset::new(o.value())
   }
 }
 
-impl ::core::fmt::Debug for DecimalOpts<'_> {
+impl ::core::fmt::Debug for DecimalOptions<'_> {
   fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-    let mut ds = f.debug_struct("DecimalOpts");
+    let mut ds = f.debug_struct("DecimalOptions");
       ds.field("precision", &self.precision());
       ds.field("scale", &self.scale());
       ds.finish()
   }
 }
-pub enum TimeOptsOffset {}
+pub enum TimeOptionsOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
-pub struct TimeOpts<'a> {
+pub struct TimeOptions<'a> {
   pub _tab: ::flatbuffers::Table<'a>,
 }
 
-impl<'a> ::flatbuffers::Follow<'a> for TimeOpts<'a> {
-  type Inner = TimeOpts<'a>;
+impl<'a> ::flatbuffers::Follow<'a> for TimeOptions<'a> {
+  type Inner = TimeOptions<'a>;
   #[inline]
   unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
     Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
   }
 }
 
-impl<'a> TimeOpts<'a> {
+impl<'a> TimeOptions<'a> {
   pub const VT_IS_ADJUSTED_TO_UTC: ::flatbuffers::VOffsetT = 4;
   pub const VT_UNIT: ::flatbuffers::VOffsetT = 6;
 
   #[inline]
   pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
-    TimeOpts { _tab: table }
+    TimeOptions { _tab: table }
   }
   #[allow(unused_mut)]
   pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
     _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args TimeOptsArgs
-  ) -> ::flatbuffers::WIPOffset<TimeOpts<'bldr>> {
-    let mut builder = TimeOptsBuilder::new(_fbb);
+    args: &'args TimeOptionsArgs
+  ) -> ::flatbuffers::WIPOffset<TimeOptions<'bldr>> {
+    let mut builder = TimeOptionsBuilder::new(_fbb);
     builder.add_unit(args.unit);
     builder.add_is_adjusted_to_utc(args.is_adjusted_to_utc);
     builder.finish()
@@ -1167,18 +1167,18 @@ impl<'a> TimeOpts<'a> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<bool>(TimeOpts::VT_IS_ADJUSTED_TO_UTC, Some(false)).unwrap()}
+    unsafe { self._tab.get::<bool>(TimeOptions::VT_IS_ADJUSTED_TO_UTC, Some(false)).unwrap()}
   }
   #[inline]
   pub fn unit(&self) -> TimeUnit {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<TimeUnit>(TimeOpts::VT_UNIT, Some(TimeUnit::MS)).unwrap()}
+    unsafe { self._tab.get::<TimeUnit>(TimeOptions::VT_UNIT, Some(TimeUnit::Millisecond)).unwrap()}
   }
 }
 
-impl ::flatbuffers::Verifiable for TimeOpts<'_> {
+impl ::flatbuffers::Verifiable for TimeOptions<'_> {
   #[inline]
   fn run_verifier(
     v: &mut ::flatbuffers::Verifier, pos: usize
@@ -1190,85 +1190,85 @@ impl ::flatbuffers::Verifiable for TimeOpts<'_> {
     Ok(())
   }
 }
-pub struct TimeOptsArgs {
+pub struct TimeOptionsArgs {
     pub is_adjusted_to_utc: bool,
     pub unit: TimeUnit,
 }
-impl<'a> Default for TimeOptsArgs {
+impl<'a> Default for TimeOptionsArgs {
   #[inline]
   fn default() -> Self {
-    TimeOptsArgs {
+    TimeOptionsArgs {
       is_adjusted_to_utc: false,
-      unit: TimeUnit::MS,
+      unit: TimeUnit::Millisecond,
     }
   }
 }
 
-pub struct TimeOptsBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+pub struct TimeOptionsBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
   fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
   start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
 }
-impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> TimeOptsBuilder<'a, 'b, A> {
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> TimeOptionsBuilder<'a, 'b, A> {
   #[inline]
   pub fn add_is_adjusted_to_utc(&mut self, is_adjusted_to_utc: bool) {
-    self.fbb_.push_slot::<bool>(TimeOpts::VT_IS_ADJUSTED_TO_UTC, is_adjusted_to_utc, false);
+    self.fbb_.push_slot::<bool>(TimeOptions::VT_IS_ADJUSTED_TO_UTC, is_adjusted_to_utc, false);
   }
   #[inline]
   pub fn add_unit(&mut self, unit: TimeUnit) {
-    self.fbb_.push_slot::<TimeUnit>(TimeOpts::VT_UNIT, unit, TimeUnit::MS);
+    self.fbb_.push_slot::<TimeUnit>(TimeOptions::VT_UNIT, unit, TimeUnit::Millisecond);
   }
   #[inline]
-  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> TimeOptsBuilder<'a, 'b, A> {
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> TimeOptionsBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
-    TimeOptsBuilder {
+    TimeOptionsBuilder {
       fbb_: _fbb,
       start_: start,
     }
   }
   #[inline]
-  pub fn finish(self) -> ::flatbuffers::WIPOffset<TimeOpts<'a>> {
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<TimeOptions<'a>> {
     let o = self.fbb_.end_table(self.start_);
     ::flatbuffers::WIPOffset::new(o.value())
   }
 }
 
-impl ::core::fmt::Debug for TimeOpts<'_> {
+impl ::core::fmt::Debug for TimeOptions<'_> {
   fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-    let mut ds = f.debug_struct("TimeOpts");
+    let mut ds = f.debug_struct("TimeOptions");
       ds.field("is_adjusted_to_utc", &self.is_adjusted_to_utc());
       ds.field("unit", &self.unit());
       ds.finish()
   }
 }
-pub enum IntOptsOffset {}
+pub enum IntOptionsOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
-pub struct IntOpts<'a> {
+pub struct IntOptions<'a> {
   pub _tab: ::flatbuffers::Table<'a>,
 }
 
-impl<'a> ::flatbuffers::Follow<'a> for IntOpts<'a> {
-  type Inner = IntOpts<'a>;
+impl<'a> ::flatbuffers::Follow<'a> for IntOptions<'a> {
+  type Inner = IntOptions<'a>;
   #[inline]
   unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
     Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
   }
 }
 
-impl<'a> IntOpts<'a> {
+impl<'a> IntOptions<'a> {
   pub const VT_BIT_WIDTH: ::flatbuffers::VOffsetT = 4;
   pub const VT_IS_SIGNED: ::flatbuffers::VOffsetT = 6;
 
   #[inline]
   pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
-    IntOpts { _tab: table }
+    IntOptions { _tab: table }
   }
   #[allow(unused_mut)]
   pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
     _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args IntOptsArgs
-  ) -> ::flatbuffers::WIPOffset<IntOpts<'bldr>> {
-    let mut builder = IntOptsBuilder::new(_fbb);
+    args: &'args IntOptionsArgs
+  ) -> ::flatbuffers::WIPOffset<IntOptions<'bldr>> {
+    let mut builder = IntOptionsBuilder::new(_fbb);
     builder.add_is_signed(args.is_signed);
     builder.add_bit_width(args.bit_width);
     builder.finish()
@@ -1280,18 +1280,18 @@ impl<'a> IntOpts<'a> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<i8>(IntOpts::VT_BIT_WIDTH, Some(8)).unwrap()}
+    unsafe { self._tab.get::<i8>(IntOptions::VT_BIT_WIDTH, Some(8)).unwrap()}
   }
   #[inline]
   pub fn is_signed(&self) -> bool {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<bool>(IntOpts::VT_IS_SIGNED, Some(false)).unwrap()}
+    unsafe { self._tab.get::<bool>(IntOptions::VT_IS_SIGNED, Some(false)).unwrap()}
   }
 }
 
-impl ::flatbuffers::Verifiable for IntOpts<'_> {
+impl ::flatbuffers::Verifiable for IntOptions<'_> {
   #[inline]
   fn run_verifier(
     v: &mut ::flatbuffers::Verifier, pos: usize
@@ -1303,51 +1303,51 @@ impl ::flatbuffers::Verifiable for IntOpts<'_> {
     Ok(())
   }
 }
-pub struct IntOptsArgs {
+pub struct IntOptionsArgs {
     pub bit_width: i8,
     pub is_signed: bool,
 }
-impl<'a> Default for IntOptsArgs {
+impl<'a> Default for IntOptionsArgs {
   #[inline]
   fn default() -> Self {
-    IntOptsArgs {
+    IntOptionsArgs {
       bit_width: 8,
       is_signed: false,
     }
   }
 }
 
-pub struct IntOptsBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+pub struct IntOptionsBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
   fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
   start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
 }
-impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntOptsBuilder<'a, 'b, A> {
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntOptionsBuilder<'a, 'b, A> {
   #[inline]
   pub fn add_bit_width(&mut self, bit_width: i8) {
-    self.fbb_.push_slot::<i8>(IntOpts::VT_BIT_WIDTH, bit_width, 8);
+    self.fbb_.push_slot::<i8>(IntOptions::VT_BIT_WIDTH, bit_width, 8);
   }
   #[inline]
   pub fn add_is_signed(&mut self, is_signed: bool) {
-    self.fbb_.push_slot::<bool>(IntOpts::VT_IS_SIGNED, is_signed, false);
+    self.fbb_.push_slot::<bool>(IntOptions::VT_IS_SIGNED, is_signed, false);
   }
   #[inline]
-  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> IntOptsBuilder<'a, 'b, A> {
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> IntOptionsBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
-    IntOptsBuilder {
+    IntOptionsBuilder {
       fbb_: _fbb,
       start_: start,
     }
   }
   #[inline]
-  pub fn finish(self) -> ::flatbuffers::WIPOffset<IntOpts<'a>> {
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<IntOptions<'a>> {
     let o = self.fbb_.end_table(self.start_);
     ::flatbuffers::WIPOffset::new(o.value())
   }
 }
 
-impl ::core::fmt::Debug for IntOpts<'_> {
+impl ::core::fmt::Debug for IntOptions<'_> {
   fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-    let mut ds = f.debug_struct("IntOpts");
+    let mut ds = f.debug_struct("IntOptions");
       ds.field("bit_width", &self.bit_width());
       ds.field("is_signed", &self.is_signed());
       ds.finish()
@@ -1994,13 +1994,13 @@ impl<'a> SchemaElement<'a> {
 
   #[inline]
   #[allow(non_snake_case)]
-  pub fn logical_type_as_decimal_type(&self) -> Option<DecimalOpts<'a>> {
+  pub fn logical_type_as_decimal_type(&self) -> Option<DecimalOptions<'a>> {
     if self.logical_type_type() == LogicalType::DecimalType {
       self.logical_type().map(|t| {
        // Safety:
        // Created from a valid Table for this object
        // Which contains a valid union in this slot
-       unsafe { DecimalOpts::init_from_table(t) }
+       unsafe { DecimalOptions::init_from_table(t) }
      })
     } else {
       None
@@ -2024,13 +2024,13 @@ impl<'a> SchemaElement<'a> {
 
   #[inline]
   #[allow(non_snake_case)]
-  pub fn logical_type_as_time_type(&self) -> Option<TimeOpts<'a>> {
+  pub fn logical_type_as_time_type(&self) -> Option<TimeOptions<'a>> {
     if self.logical_type_type() == LogicalType::TimeType {
       self.logical_type().map(|t| {
        // Safety:
        // Created from a valid Table for this object
        // Which contains a valid union in this slot
-       unsafe { TimeOpts::init_from_table(t) }
+       unsafe { TimeOptions::init_from_table(t) }
      })
     } else {
       None
@@ -2039,13 +2039,13 @@ impl<'a> SchemaElement<'a> {
 
   #[inline]
   #[allow(non_snake_case)]
-  pub fn logical_type_as_timestamp_type(&self) -> Option<TimeOpts<'a>> {
+  pub fn logical_type_as_timestamp_type(&self) -> Option<TimeOptions<'a>> {
     if self.logical_type_type() == LogicalType::TimestampType {
       self.logical_type().map(|t| {
        // Safety:
        // Created from a valid Table for this object
        // Which contains a valid union in this slot
-       unsafe { TimeOpts::init_from_table(t) }
+       unsafe { TimeOptions::init_from_table(t) }
      })
     } else {
       None
@@ -2054,13 +2054,13 @@ impl<'a> SchemaElement<'a> {
 
   #[inline]
   #[allow(non_snake_case)]
-  pub fn logical_type_as_int_type(&self) -> Option<IntOpts<'a>> {
+  pub fn logical_type_as_int_type(&self) -> Option<IntOptions<'a>> {
     if self.logical_type_type() == LogicalType::IntType {
       self.logical_type().map(|t| {
        // Safety:
        // Created from a valid Table for this object
        // Which contains a valid union in this slot
-       unsafe { IntOpts::init_from_table(t) }
+       unsafe { IntOptions::init_from_table(t) }
      })
     } else {
       None
@@ -2219,11 +2219,11 @@ impl ::flatbuffers::Verifiable for SchemaElement<'_> {
           LogicalType::MapType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<Empty>>("LogicalType::MapType", pos),
           LogicalType::ListType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<Empty>>("LogicalType::ListType", pos),
           LogicalType::EnumType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<Empty>>("LogicalType::EnumType", pos),
-          LogicalType::DecimalType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<DecimalOpts>>("LogicalType::DecimalType", pos),
+          LogicalType::DecimalType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<DecimalOptions>>("LogicalType::DecimalType", pos),
           LogicalType::DateType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<Empty>>("LogicalType::DateType", pos),
-          LogicalType::TimeType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<TimeOpts>>("LogicalType::TimeType", pos),
-          LogicalType::TimestampType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<TimeOpts>>("LogicalType::TimestampType", pos),
-          LogicalType::IntType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<IntOpts>>("LogicalType::IntType", pos),
+          LogicalType::TimeType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<TimeOptions>>("LogicalType::TimeType", pos),
+          LogicalType::TimestampType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<TimeOptions>>("LogicalType::TimestampType", pos),
+          LogicalType::IntType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<IntOptions>>("LogicalType::IntType", pos),
           LogicalType::NullType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<Empty>>("LogicalType::NullType", pos),
           LogicalType::JsonType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<Empty>>("LogicalType::JsonType", pos),
           LogicalType::BsonType => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<Empty>>("LogicalType::BsonType", pos),
@@ -2490,35 +2490,35 @@ impl ::core::fmt::Debug for SchemaElement<'_> {
       ds.finish()
   }
 }
-pub enum KVOffset {}
+pub enum KeyValueOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
-pub struct KV<'a> {
+pub struct KeyValue<'a> {
   pub _tab: ::flatbuffers::Table<'a>,
 }
 
-impl<'a> ::flatbuffers::Follow<'a> for KV<'a> {
-  type Inner = KV<'a>;
+impl<'a> ::flatbuffers::Follow<'a> for KeyValue<'a> {
+  type Inner = KeyValue<'a>;
   #[inline]
   unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
     Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
   }
 }
 
-impl<'a> KV<'a> {
+impl<'a> KeyValue<'a> {
   pub const VT_KEY: ::flatbuffers::VOffsetT = 4;
   pub const VT_VAL: ::flatbuffers::VOffsetT = 6;
 
   #[inline]
   pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
-    KV { _tab: table }
+    KeyValue { _tab: table }
   }
   #[allow(unused_mut)]
   pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
     _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args KVArgs<'args>
-  ) -> ::flatbuffers::WIPOffset<KV<'bldr>> {
-    let mut builder = KVBuilder::new(_fbb);
+    args: &'args KeyValueArgs<'args>
+  ) -> ::flatbuffers::WIPOffset<KeyValue<'bldr>> {
+    let mut builder = KeyValueBuilder::new(_fbb);
     if let Some(x) = args.val { builder.add_val(x); }
     if let Some(x) = args.key { builder.add_key(x); }
     builder.finish()
@@ -2530,18 +2530,18 @@ impl<'a> KV<'a> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(KV::VT_KEY, None)}
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(KeyValue::VT_KEY, None)}
   }
   #[inline]
   pub fn val(&self) -> Option<&'a str> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(KV::VT_VAL, None)}
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(KeyValue::VT_VAL, None)}
   }
 }
 
-impl ::flatbuffers::Verifiable for KV<'_> {
+impl ::flatbuffers::Verifiable for KeyValue<'_> {
   #[inline]
   fn run_verifier(
     v: &mut ::flatbuffers::Verifier, pos: usize
@@ -2553,51 +2553,51 @@ impl ::flatbuffers::Verifiable for KV<'_> {
     Ok(())
   }
 }
-pub struct KVArgs<'a> {
+pub struct KeyValueArgs<'a> {
     pub key: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub val: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
-impl<'a> Default for KVArgs<'a> {
+impl<'a> Default for KeyValueArgs<'a> {
   #[inline]
   fn default() -> Self {
-    KVArgs {
+    KeyValueArgs {
       key: None,
       val: None,
     }
   }
 }
 
-pub struct KVBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+pub struct KeyValueBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
   fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
   start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
 }
-impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> KVBuilder<'a, 'b, A> {
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> KeyValueBuilder<'a, 'b, A> {
   #[inline]
   pub fn add_key(&mut self, key: ::flatbuffers::WIPOffset<&'b  str>) {
-    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(KV::VT_KEY, key);
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(KeyValue::VT_KEY, key);
   }
   #[inline]
   pub fn add_val(&mut self, val: ::flatbuffers::WIPOffset<&'b  str>) {
-    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(KV::VT_VAL, val);
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(KeyValue::VT_VAL, val);
   }
   #[inline]
-  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> KVBuilder<'a, 'b, A> {
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> KeyValueBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
-    KVBuilder {
+    KeyValueBuilder {
       fbb_: _fbb,
       start_: start,
     }
   }
   #[inline]
-  pub fn finish(self) -> ::flatbuffers::WIPOffset<KV<'a>> {
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<KeyValue<'a>> {
     let o = self.fbb_.end_table(self.start_);
     ::flatbuffers::WIPOffset::new(o.value())
   }
 }
 
-impl ::core::fmt::Debug for KV<'_> {
+impl ::core::fmt::Debug for KeyValue<'_> {
   fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-    let mut ds = f.debug_struct("KV");
+    let mut ds = f.debug_struct("KeyValue");
       ds.field("key", &self.key());
       ds.field("val", &self.val());
       ds.finish()
@@ -2687,11 +2687,11 @@ impl<'a> ColumnMetadata<'a> {
     unsafe { self._tab.get::<i64>(ColumnMetadata::VT_TOTAL_COMPRESSED_SIZE, Some(0)).unwrap()}
   }
   #[inline]
-  pub fn key_value_metadata(&self) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KV<'a>>>> {
+  pub fn key_value_metadata(&self) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KeyValue<'a>>>> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KV>>>>(ColumnMetadata::VT_KEY_VALUE_METADATA, None)}
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KeyValue>>>>(ColumnMetadata::VT_KEY_VALUE_METADATA, None)}
   }
   #[inline]
   pub fn data_page_offset(&self) -> i64 {
@@ -2754,7 +2754,7 @@ impl ::flatbuffers::Verifiable for ColumnMetadata<'_> {
      .visit_field::<i64>("num_values", Self::VT_NUM_VALUES, false)?
      .visit_field::<i64>("total_uncompressed_size", Self::VT_TOTAL_UNCOMPRESSED_SIZE, false)?
      .visit_field::<i64>("total_compressed_size", Self::VT_TOTAL_COMPRESSED_SIZE, false)?
-     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<KV>>>>("key_value_metadata", Self::VT_KEY_VALUE_METADATA, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<KeyValue>>>>("key_value_metadata", Self::VT_KEY_VALUE_METADATA, false)?
      .visit_field::<i64>("data_page_offset", Self::VT_DATA_PAGE_OFFSET, false)?
      .visit_field::<i64>("index_page_offset", Self::VT_INDEX_PAGE_OFFSET, false)?
      .visit_field::<i64>("dictionary_page_offset", Self::VT_DICTIONARY_PAGE_OFFSET, false)?
@@ -2771,7 +2771,7 @@ pub struct ColumnMetadataArgs<'a> {
     pub num_values: Option<i64>,
     pub total_uncompressed_size: i64,
     pub total_compressed_size: i64,
-    pub key_value_metadata: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KV<'a>>>>>,
+    pub key_value_metadata: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KeyValue<'a>>>>>,
     pub data_page_offset: i64,
     pub index_page_offset: Option<i64>,
     pub dictionary_page_offset: Option<i64>,
@@ -2822,7 +2822,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ColumnMetadataBuilder<'a, 'b,
     self.fbb_.push_slot::<i64>(ColumnMetadata::VT_TOTAL_COMPRESSED_SIZE, total_compressed_size, 0);
   }
   #[inline]
-  pub fn add_key_value_metadata(&mut self, key_value_metadata: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , ::flatbuffers::ForwardsUOffset<KV<'b >>>>) {
+  pub fn add_key_value_metadata(&mut self, key_value_metadata: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , ::flatbuffers::ForwardsUOffset<KeyValue<'b >>>>) {
     self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(ColumnMetadata::VT_KEY_VALUE_METADATA, key_value_metadata);
   }
   #[inline]
@@ -3151,7 +3151,6 @@ impl<'a> RowGroup<'a> {
   pub const VT_SORTING_COLUMNS: ::flatbuffers::VOffsetT = 10;
   pub const VT_FILE_OFFSET: ::flatbuffers::VOffsetT = 12;
   pub const VT_TOTAL_COMPRESSED_SIZE: ::flatbuffers::VOffsetT = 14;
-  pub const VT_ORDINAL: ::flatbuffers::VOffsetT = 16;
 
   #[inline]
   pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -3169,7 +3168,6 @@ impl<'a> RowGroup<'a> {
     builder.add_total_byte_size(args.total_byte_size);
     if let Some(x) = args.sorting_columns { builder.add_sorting_columns(x); }
     if let Some(x) = args.columns { builder.add_columns(x); }
-    if let Some(x) = args.ordinal { builder.add_ordinal(x); }
     builder.finish()
   }
 
@@ -3216,13 +3214,6 @@ impl<'a> RowGroup<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<i64>(RowGroup::VT_TOTAL_COMPRESSED_SIZE, Some(0)).unwrap()}
   }
-  #[inline]
-  pub fn ordinal(&self) -> Option<i16> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<i16>(RowGroup::VT_ORDINAL, None)}
-  }
 }
 
 impl ::flatbuffers::Verifiable for RowGroup<'_> {
@@ -3237,7 +3228,6 @@ impl ::flatbuffers::Verifiable for RowGroup<'_> {
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<SortingColumn>>>>("sorting_columns", Self::VT_SORTING_COLUMNS, false)?
      .visit_field::<i64>("file_offset", Self::VT_FILE_OFFSET, false)?
      .visit_field::<i64>("total_compressed_size", Self::VT_TOTAL_COMPRESSED_SIZE, false)?
-     .visit_field::<i16>("ordinal", Self::VT_ORDINAL, false)?
      .finish();
     Ok(())
   }
@@ -3249,7 +3239,6 @@ pub struct RowGroupArgs<'a> {
     pub sorting_columns: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<SortingColumn<'a>>>>>,
     pub file_offset: i64,
     pub total_compressed_size: i64,
-    pub ordinal: Option<i16>,
 }
 impl<'a> Default for RowGroupArgs<'a> {
   #[inline]
@@ -3261,7 +3250,6 @@ impl<'a> Default for RowGroupArgs<'a> {
       sorting_columns: None,
       file_offset: 0,
       total_compressed_size: 0,
-      ordinal: None,
     }
   }
 }
@@ -3296,10 +3284,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> RowGroupBuilder<'a, 'b, A> {
     self.fbb_.push_slot::<i64>(RowGroup::VT_TOTAL_COMPRESSED_SIZE, total_compressed_size, 0);
   }
   #[inline]
-  pub fn add_ordinal(&mut self, ordinal: i16) {
-    self.fbb_.push_slot_always::<i16>(RowGroup::VT_ORDINAL, ordinal);
-  }
-  #[inline]
   pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> RowGroupBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     RowGroupBuilder {
@@ -3323,7 +3307,6 @@ impl ::core::fmt::Debug for RowGroup<'_> {
       ds.field("sorting_columns", &self.sorting_columns());
       ds.field("file_offset", &self.file_offset());
       ds.field("total_compressed_size", &self.total_compressed_size());
-      ds.field("ordinal", &self.ordinal());
       ds.finish()
   }
 }
@@ -3399,11 +3382,11 @@ impl<'a> FileMetaData<'a> {
     unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<RowGroup>>>>(FileMetaData::VT_ROW_GROUPS, None)}
   }
   #[inline]
-  pub fn kv(&self) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KV<'a>>>> {
+  pub fn kv(&self) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KeyValue<'a>>>> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KV>>>>(FileMetaData::VT_KV, None)}
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KeyValue>>>>(FileMetaData::VT_KV, None)}
   }
   #[inline]
   pub fn created_by(&self) -> Option<&'a str> {
@@ -3424,7 +3407,7 @@ impl ::flatbuffers::Verifiable for FileMetaData<'_> {
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<SchemaElement>>>>("schema", Self::VT_SCHEMA, false)?
      .visit_field::<i64>("num_rows", Self::VT_NUM_ROWS, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<RowGroup>>>>("row_groups", Self::VT_ROW_GROUPS, false)?
-     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<KV>>>>("kv", Self::VT_KV, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<KeyValue>>>>("kv", Self::VT_KV, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("created_by", Self::VT_CREATED_BY, false)?
      .finish();
     Ok(())
@@ -3435,7 +3418,7 @@ pub struct FileMetaDataArgs<'a> {
     pub schema: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<SchemaElement<'a>>>>>,
     pub num_rows: i64,
     pub row_groups: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<RowGroup<'a>>>>>,
-    pub kv: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KV<'a>>>>>,
+    pub kv: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KeyValue<'a>>>>>,
     pub created_by: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for FileMetaDataArgs<'a> {
@@ -3474,7 +3457,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FileMetaDataBuilder<'a, 'b, A
     self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(FileMetaData::VT_ROW_GROUPS, row_groups);
   }
   #[inline]
-  pub fn add_kv(&mut self, kv: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , ::flatbuffers::ForwardsUOffset<KV<'b >>>>) {
+  pub fn add_kv(&mut self, kv: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , ::flatbuffers::ForwardsUOffset<KeyValue<'b >>>>) {
     self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(FileMetaData::VT_KV, kv);
   }
   #[inline]

@@ -19,6 +19,14 @@
 //!
 //! This module provides functionality to convert Parquet metadata to/from
 //! the FlatBuffers format defined in `parquet3.fbs`.
+//!
+//! The FlatBuffers format packs statistics into integral fields for efficient
+//! storage and zero-copy access. See [`pack_statistics`] and [`unpack_statistics`]
+//! for the encoding scheme.
+//!
+//! Related:
+//! - Design doc: <https://github.com/apache/parquet-format/pull/544>
+//! - C++ implementation: <https://github.com/apache/arrow/pull/48431>
 
 use std::sync::Arc;
 
@@ -30,6 +38,7 @@ use crate::file::metadata::{
     ColumnChunkMetaData, ColumnChunkMetaDataBuilder, FileMetaData, KeyValue,
     ParquetMetaData, RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
 };
+use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use crate::file::statistics::Statistics;
 use crate::schema::types::{
     ColumnDescriptor, SchemaDescPtr, SchemaDescriptor, Type as SchemaType,
@@ -252,14 +261,18 @@ fn unpack_statistics(
     }
 }
 
-/// Converter from Parquet metadata to FlatBuffers format
-pub struct ThriftToFlatBufferConverter<'a> {
+/// Converts [`ParquetMetaData`] to the FlatBuffers wire format.
+///
+/// This serializes the schema, row groups, column chunks, statistics, and
+/// key-value metadata into a single FlatBuffer. The result can be embedded
+/// into a Parquet footer via [`append_flatbuffer`].
+pub(super) struct ThriftToFlatBufferConverter<'a> {
     metadata: &'a ParquetMetaData,
     builder: FlatBufferBuilder<'a>,
 }
 
 impl<'a> ThriftToFlatBufferConverter<'a> {
-    /// Create a new converter from ParquetMetaData
+    /// Create a new converter from [`ParquetMetaData`].
     pub fn new(metadata: &'a ParquetMetaData) -> Self {
         Self {
             metadata,
@@ -267,7 +280,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         }
     }
 
-    /// Convert the metadata to FlatBuffers format and return the serialized bytes
+    /// Convert the metadata to FlatBuffers format and return the serialized bytes.
     pub fn convert(mut self) -> Vec<u8> {
         let file_metadata = self.metadata.file_metadata();
         let schema_descr = file_metadata.schema_descr();
@@ -314,6 +327,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         self.builder.finished_data().to_vec()
     }
 
+    /// Build the flattened schema element vector from the schema descriptor.
     fn build_schema(
         &mut self,
         schema_descr: &SchemaDescriptor,
@@ -324,6 +338,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         elements
     }
 
+    /// Recursively build a schema element and its children.
     fn build_schema_element(
         &mut self,
         schema_type: &SchemaType,
@@ -410,6 +425,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         }
     }
 
+    /// Convert a Parquet logical type to its FlatBuffer union representation.
     fn build_logical_type(
         &mut self,
         logical_type: Option<&LogicalType>,
@@ -436,9 +452,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 LogicalType::Decimal { precision, scale } => (
                     fb::LogicalType::DecimalType,
                     Some(
-                        fb::DecimalOpts::create(
+                        fb::DecimalOptions::create(
                             &mut self.builder,
-                            &fb::DecimalOptsArgs {
+                            &fb::DecimalOptionsArgs {
                                 precision: *precision,
                                 scale: *scale,
                             },
@@ -456,9 +472,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 } => (
                     fb::LogicalType::TimeType,
                     Some(
-                        fb::TimeOpts::create(
+                        fb::TimeOptions::create(
                             &mut self.builder,
-                            &fb::TimeOptsArgs {
+                            &fb::TimeOptionsArgs {
                                 is_adjusted_to_utc: *is_adjusted_to_u_t_c,
                                 unit: convert_time_unit_to_fb(unit),
                             },
@@ -472,9 +488,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 } => (
                     fb::LogicalType::TimestampType,
                     Some(
-                        fb::TimeOpts::create(
+                        fb::TimeOptions::create(
                             &mut self.builder,
-                            &fb::TimeOptsArgs {
+                            &fb::TimeOptionsArgs {
                                 is_adjusted_to_utc: *is_adjusted_to_u_t_c,
                                 unit: convert_time_unit_to_fb(unit),
                             },
@@ -488,9 +504,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 } => (
                     fb::LogicalType::IntType,
                     Some(
-                        fb::IntOpts::create(
+                        fb::IntOptions::create(
                             &mut self.builder,
-                            &fb::IntOptsArgs {
+                            &fb::IntOptionsArgs {
                                 bit_width: *bit_width as i8,
                                 is_signed: *is_signed,
                             },
@@ -557,6 +573,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         }
     }
 
+    /// Build a row group, including its column chunks and sorting columns.
     fn build_row_group(
         &mut self,
         rg: &RowGroupMetaData,
@@ -590,11 +607,11 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 sorting_columns,
                 file_offset: rg.file_offset().unwrap_or(0),
                 total_compressed_size,
-                ordinal: rg.ordinal(),
             },
         )
     }
 
+    /// Build a column chunk with its metadata.
     fn build_column_chunk(
         &mut self,
         cc: &ColumnChunkMetaData,
@@ -614,6 +631,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         )
     }
 
+    /// Build column metadata including compression, offsets, and packed statistics.
     fn build_column_metadata(
         &mut self,
         cc: &ColumnChunkMetaData,
@@ -657,6 +675,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         )
     }
 
+    /// Pack statistics into the FlatBuffer format using [`pack_statistics`].
     fn build_statistics(
         &mut self,
         stats: &Statistics,
@@ -714,13 +733,13 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         )
     }
 
-    fn build_kv(&mut self, kv: &KeyValue) -> WIPOffset<fb::KV<'a>> {
+    fn build_kv(&mut self, kv: &KeyValue) -> WIPOffset<fb::KeyValue<'a>> {
         let key = self.builder.create_string(&kv.key);
         let val = kv.value.as_ref().map(|v| self.builder.create_string(v));
 
-        fb::KV::create(
+        fb::KeyValue::create(
             &mut self.builder,
-            &fb::KVArgs {
+            &fb::KeyValueArgs {
                 key: Some(key),
                 val,
             },
@@ -728,11 +747,14 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
     }
 }
 
-/// Converter from FlatBuffers format back to Parquet metadata
-pub struct FlatBufferConverter;
+/// Converts FlatBuffers wire format back to [`ParquetMetaData`].
+///
+/// Requires a pre-existing [`SchemaDescPtr`] since the FlatBuffers format
+/// relies on the schema to interpret column physical types and statistics.
+pub(super) struct FlatBufferConverter;
 
 impl FlatBufferConverter {
-    /// Parse FlatBuffers metadata from bytes and convert to ParquetMetaData
+    /// Parse FlatBuffers bytes and reconstruct [`ParquetMetaData`].
     pub fn convert(buf: &[u8], schema_descr: SchemaDescPtr) -> Result<ParquetMetaData> {
         let fb_meta = fb::root_as_file_meta_data(buf)
             .map_err(|e| ParquetError::General(format!("Invalid FlatBuffer: {}", e)))?;
@@ -743,6 +765,7 @@ impl FlatBufferConverter {
         Ok(ParquetMetaData::new(file_metadata, row_groups))
     }
 
+    /// Convert file-level metadata (version, num_rows, created_by, key-value, column orders).
     fn convert_file_metadata(
         fb_meta: &fb::FileMetaData,
         schema_descr: SchemaDescPtr,
@@ -786,6 +809,7 @@ impl FlatBufferConverter {
         ))
     }
 
+    /// Convert all row groups from the FlatBuffer.
     fn convert_row_groups(
         fb_meta: &fb::FileMetaData,
         schema_descr: SchemaDescPtr,
@@ -800,6 +824,7 @@ impl FlatBufferConverter {
             .collect()
     }
 
+    /// Convert a single row group and its column chunks.
     fn convert_row_group(
         fb_rg: &fb::RowGroup,
         schema_descr: SchemaDescPtr,
@@ -814,10 +839,6 @@ impl FlatBufferConverter {
 
         if fb_rg.file_offset() != 0 {
             builder = builder.set_file_offset(fb_rg.file_offset());
-        }
-
-        if let Some(ordinal) = fb_rg.ordinal() {
-            builder = builder.set_ordinal(ordinal);
         }
 
         // Convert sorting columns
@@ -843,6 +864,7 @@ impl FlatBufferConverter {
         builder.build()
     }
 
+    /// Convert a column chunk including compression, offsets, and statistics.
     fn convert_column_chunk(
         fb_cc: &fb::ColumnChunk,
         fb_rg: &fb::RowGroup,
@@ -892,6 +914,7 @@ impl FlatBufferConverter {
         builder.build()
     }
 
+    /// Unpack statistics from the FlatBuffer format into typed [`Statistics`].
     fn convert_statistics(fb_stats: &fb::Statistics, physical_type: Type) -> Result<Option<Statistics>> {
         let null_count = fb_stats.null_count().map(|n| n as u64);
 
@@ -989,10 +1012,54 @@ impl FlatBufferConverter {
                     return Ok(None);
                 }
             }
-            Type::INT96 | Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
-                // For these types, we don't fully reconstruct statistics
-                // as they require more context
-                return Ok(None);
+            Type::INT96 => {
+                if let (Some(min), Some(max)) = (min_bytes.as_ref(), max_bytes.as_ref()) {
+                    if min.len() >= 12 && max.len() >= 12 {
+                        let mut min_val = Int96::new();
+                        min_val.set_data(
+                            u32::from_le_bytes(min[0..4].try_into().unwrap()),
+                            u32::from_le_bytes(min[4..8].try_into().unwrap()),
+                            u32::from_le_bytes(min[8..12].try_into().unwrap()),
+                        );
+                        let mut max_val = Int96::new();
+                        max_val.set_data(
+                            u32::from_le_bytes(max[0..4].try_into().unwrap()),
+                            u32::from_le_bytes(max[4..8].try_into().unwrap()),
+                            u32::from_le_bytes(max[8..12].try_into().unwrap()),
+                        );
+                        Statistics::int96(Some(min_val), Some(max_val), None, null_count, false)
+                    } else {
+                        return Ok(None);
+                    }
+                } else {
+                    return Ok(None);
+                }
+            }
+            Type::BYTE_ARRAY => {
+                if let (Some(min), Some(max)) = (min_bytes, max_bytes) {
+                    Statistics::byte_array(
+                        Some(ByteArray::from(min)),
+                        Some(ByteArray::from(max)),
+                        None,
+                        null_count,
+                        false,
+                    )
+                } else {
+                    return Ok(None);
+                }
+            }
+            Type::FIXED_LEN_BYTE_ARRAY => {
+                if let (Some(min), Some(max)) = (min_bytes, max_bytes) {
+                    Statistics::fixed_len_byte_array(
+                        Some(FixedLenByteArray::from(min)),
+                        Some(FixedLenByteArray::from(max)),
+                        None,
+                        null_count,
+                        false,
+                    )
+                } else {
+                    return Ok(None);
+                }
             }
         };
 
@@ -1015,7 +1082,7 @@ fn convert_type_to_fb(t: Type) -> fb::Type {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn convert_type_from_fb(t: fb::Type) -> Type {
     match t {
         fb::Type::BOOLEAN => Type::BOOLEAN,
@@ -1035,16 +1102,6 @@ fn convert_repetition_to_fb(r: Repetition) -> fb::FieldRepetitionType {
         Repetition::REQUIRED => fb::FieldRepetitionType::REQUIRED,
         Repetition::OPTIONAL => fb::FieldRepetitionType::OPTIONAL,
         Repetition::REPEATED => fb::FieldRepetitionType::REPEATED,
-    }
-}
-
-#[allow(dead_code)]
-fn convert_repetition_from_fb(r: fb::FieldRepetitionType) -> Repetition {
-    match r {
-        fb::FieldRepetitionType::REQUIRED => Repetition::REQUIRED,
-        fb::FieldRepetitionType::OPTIONAL => Repetition::OPTIONAL,
-        fb::FieldRepetitionType::REPEATED => Repetition::REPEATED,
-        _ => Repetition::OPTIONAL, // Default fallback
     }
 }
 
@@ -1076,9 +1133,9 @@ fn convert_compression_from_fb(c: fb::CompressionCodec) -> Compression {
 
 fn convert_time_unit_to_fb(unit: &crate::basic::TimeUnit) -> fb::TimeUnit {
     match unit {
-        crate::basic::TimeUnit::MILLIS => fb::TimeUnit::MS,
-        crate::basic::TimeUnit::MICROS => fb::TimeUnit::US,
-        crate::basic::TimeUnit::NANOS => fb::TimeUnit::NS,
+        crate::basic::TimeUnit::MILLIS => fb::TimeUnit::Millisecond,
+        crate::basic::TimeUnit::MICROS => fb::TimeUnit::Microsecond,
+        crate::basic::TimeUnit::NANOS => fb::TimeUnit::Nanosecond,
     }
 }
 
@@ -1497,7 +1554,7 @@ mod tests {
     #[test]
     fn test_metadata_roundtrip() {
         use crate::file::metadata::{
-            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaData,
+            ColumnChunkMetaDataBuilder, FileMetaData,
             ParquetMetaDataBuilder, RowGroupMetaDataBuilder,
         };
 

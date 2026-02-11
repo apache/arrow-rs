@@ -15,18 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-namespace parquet.format3;
-
-// Optimization notes
+// FlatBuffers schema for Parquet metadata (format version 3).
+//
+// This schema mirrors the metadata structures defined in parquet.thrift but uses
+// FlatBuffers for more efficient serialization (zero-copy reads, smaller encoding).
+//
+// Key differences from parquet.thrift:
 // 1. Statistics are stored in integral types if their size is fixed, otherwise prefix + suffix
-// 2. ColumnMetaData.encoding_stats are removed, they are replaced with
+// 2. ColumnMetaData.encoding_stats are removed, replaced with
 //    ColumnMetaData.is_fully_dict_encoded.
 // 3. RowGroups are limited to 2GB in size, so we can use int for sizes.
 // 4. ColumnChunk/ColumnMetaData offsets are now relative to the start of the row group, so we can
 //    use int for offsets.
-// 5. Remove ordinal.
+// 5. RowGroup ordinal is removed (derivable from position in the row_groups vector).
 // 6. Restrict RowGroups to 2^31-1 rows.
 // 7. Remove offset/column indexes, they are small and just their offsets are of similar size.
+//
+// Related:
+//   - parquet.thrift: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
+//   - C++ implementation: https://github.com/apache/arrow/pull/48431
+//   - Format proposal: https://github.com/apache/parquet-format/pull/544
+
+namespace parquet.format3;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Physical types.
@@ -56,10 +66,10 @@ enum FieldRepetitionType : byte {
 // Note: Match the thrift enum values so that we can cast between them.
 enum Encoding : byte {
   PLAIN = 0,
-  // GROUP_VAR_INT = 1,
+  // GROUP_VAR_INT = 1,  // deprecated
   PLAIN_DICTIONARY = 2,
   RLE = 3,
-  // BIT_PACKED = 4,
+  // BIT_PACKED = 4,  // deprecated
   DELTA_BINARY_PACKED = 5,
   DELTA_LENGTH_BYTE_ARRAY = 6,
   DELTA_BYTE_ARRAY = 7,
@@ -74,7 +84,7 @@ enum CompressionCodec : byte {
   GZIP = 2,
   LZO = 3,
   BROTLI = 4,
-  // LZ4 = 5,
+  // LZ4 = 5,  // deprecated, use LZ4_RAW instead
   ZSTD = 6,
   LZ4_RAW = 7,
 }
@@ -84,20 +94,20 @@ enum CompressionCodec : byte {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 table Empty {}
-table DecimalOpts {
+table DecimalOptions {
   precision: int;
   scale: int;
 }
 enum TimeUnit : byte {
-  MS = 0,
-  US = 1,
-  NS = 2,
+  Millisecond = 0,
+  Microsecond = 1,
+  Nanosecond = 2,
 }
-table TimeOpts {
+table TimeOptions {
   is_adjusted_to_utc: bool;
   unit: TimeUnit;
 }
-table IntOpts {
+table IntOptions {
   bit_width: byte = 8;
   is_signed: bool;
 }
@@ -120,11 +130,11 @@ union LogicalType {
   MapType:Empty,
   ListType:Empty,
   EnumType:Empty,
-  DecimalType:DecimalOpts,
+  DecimalType:DecimalOptions,
   DateType:Empty,
-  TimeType:TimeOpts,
-  TimestampType:TimeOpts,
-  IntType:IntOpts,
+  TimeType:TimeOptions,
+  TimestampType:TimeOptions,
+  IntType:IntOptions,
   NullType:Empty,
   JsonType:Empty,
   BsonType:Empty,
@@ -135,21 +145,28 @@ union LogicalType {
   GeographyType:GeographyType,
 }
 
+// Statistics for a column chunk, packed into integral fields.
+//
+// Min/max values are stored depending on the physical type:
+// - BOOLEAN: none (no min/max stored)
+// - INT32/FLOAT: lo4 contains the 4-byte little-endian value
+// - INT64/DOUBLE: lo8 contains the 8-byte little-endian value
+// - INT96: lo4 contains bytes [0..4), lo8 contains bytes [4..12) (little-endian)
+// - BYTE_ARRAY / FIXED_LEN_BYTE_ARRAY:
+//     prefix: the longest common prefix of min and max
+//     The suffix (value after removing prefix) is stored as:
+//       lo8+hi8: zero-padded 16 bytes (big-endian) of the suffix
+//       len: the length of the suffix. If abs(len) > 16 then the value is inexact.
+//     A negative len indicates the original value was truncated (inexact).
+//
+// Example for INT32 with min=42, max=100:
+//   min_lo4=42, min_len=4, max_lo4=100, max_len=4
+//
+// Example for BYTE_ARRAY with min="hello", max="help":
+//   prefix="hel", min_lo4=0x6C6F0000 (big-endian "lo"), min_len=2,
+//   max_lo4=0x70000000 (big-endian "p"), max_len=1
 table Statistics {
   null_count: int = null;
-  // Store min/max values fixed sized entities depending on the physical type. If len is present
-  // then the min/max value is present.
-  //
-  // - BOOLEAN: none
-  // - INT32/FLOAT: lo4 (little-endian)
-  // - INT64/DOUBLE: lo8 (little-endian)
-  // - INT96: lo4+lo8 (little-endian)
-  // - FIXED_LEN_BYTE_ARRAY:
-  // - BYTE_ARRAY:
-  //   prefix: the longest common prefix of min/max
-  //   lo8+hi8 zero padded 16 bytes (big-endian) of the suffix
-  //   len: the length for the suffix of the value after removing the prefix. If > 16 then the
-  //        value is inexact
   min_lo4: uint;
   min_lo8: ulong;
   min_hi8: ulong;
@@ -183,7 +200,7 @@ enum PageType : byte {
   DATA_PAGE_V2 = 3,
 }
 
-table KV {
+table KeyValue {
   key: string;
   val: string;
 }
@@ -193,7 +210,7 @@ table ColumnMetadata {
   num_values: long = null;  // only present if not equal to rg.num_rows
   total_uncompressed_size: long;
   total_compressed_size: long;
-  key_value_metadata: [KV];
+  key_value_metadata: [KeyValue];
   data_page_offset: long;
   index_page_offset: long = null;
   dictionary_page_offset: long = null;
@@ -223,7 +240,6 @@ table RowGroup {
   sorting_columns: [SortingColumn];
   file_offset: long;
   total_compressed_size: long;
-  ordinal: short = null;
 }
 
 table FileMetaData {
@@ -231,7 +247,7 @@ table FileMetaData {
   schema: [SchemaElement];
   num_rows: long;
   row_groups: [RowGroup];
-  kv: [KV];
+  kv: [KeyValue];
   created_by: string;
   // column_orders: [ColumnOrder];  // moved to SchemaElement
   // encryption_algorithm: [EncryptionAlgorithm];  // TODO
