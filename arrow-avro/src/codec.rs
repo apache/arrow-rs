@@ -1662,22 +1662,34 @@ impl<'a> Maker<'a> {
         reader_variants: &'s [Schema<'a>],
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
-        let reader_encodings: Vec<AvroDataType> = reader_variants
-            .iter()
-            .map(|reader_schema| self.parse_type(reader_schema, namespace))
-            .collect::<Result<_, _>>()?;
+        let mut resolved_reader_encodings = HashMap::new();
         let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
             .iter()
             .map(|writer| {
                 self.find_best_union_match(writer, reader_variants, namespace)
-                    .map(|(match_idx, match_dt)| {
+                    .map(|(match_idx, mut match_dt)| {
                         let resolution = match_dt
                             .resolution
+                            .take()
                             .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
+                        // TODO: check for overlapping reader variants?
+                        // They should not be possible in a valid schema.
+                        resolved_reader_encodings.insert(match_idx, match_dt);
                         (match_idx, resolution)
                     })
             })
             .collect();
+        let reader_encodings: Vec<AvroDataType> = reader_variants
+            .iter()
+            .enumerate()
+            .map(|(reader_idx, reader_schema)| {
+                if let Some(resolved) = resolved_reader_encodings.remove(&reader_idx) {
+                    Ok(resolved)
+                } else {
+                    self.parse_type(reader_schema, namespace)
+                }
+            })
+            .collect::<Result<_, _>>()?;
         let union_fields = build_union_fields(&reader_encodings)?;
         let mut dt = AvroDataType::new(
             Codec::Union(reader_encodings.into(), union_fields, UnionMode::Dense),
