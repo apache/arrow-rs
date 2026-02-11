@@ -41,40 +41,48 @@ use arrow_schema::Field;
 /// Arrow DataType, and instead are represented by an Arrow ExtensionType.
 /// Extension types are attached to Arrow Fields via metadata.
 pub(crate) fn try_add_extension_type(
-    // `mut` is needed when some features are enabled.
-    #[allow(unused_mut)] mut arrow_field: Field,
+    arrow_field: Field,
     parquet_type: &Type,
 ) -> Result<Field, ParquetError> {
     let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type_ref() else {
         return Ok(arrow_field);
     };
-    match parquet_logical_type {
+    Ok(match parquet_logical_type {
         #[cfg(feature = "variant_experimental")]
         LogicalType::Variant { .. } => {
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_variant_compute::VariantType)?;
+            arrow_field
         }
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Uuid => {
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(arrow_schema::extension::Uuid)?;
+            arrow_field
         }
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Json => {
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(arrow_schema::extension::Json::default())?;
+            arrow_field
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geometry { crs } => {
             let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), None);
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
+            arrow_field
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geography { crs, algorithm } => {
             let algorithm = algorithm.map(|a| a.try_as_edges()).transpose()?;
             let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), algorithm);
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
+            arrow_field
         }
-        _ => {}
-    };
-    Ok(arrow_field)
+        _ => arrow_field
+    })
 }
 
 /// Returns true if [`try_add_extension_type`] would add an extension type
