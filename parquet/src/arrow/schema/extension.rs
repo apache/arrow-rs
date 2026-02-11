@@ -22,6 +22,12 @@
 //!
 //! Extension types are represented using the metadata from Arrow [`Field`]s
 //! with the key "ARROW:extension:name".
+//! Arrow [`ExtensionType`]s.
+//!
+//! Extension types are represented using the metadata from Arrow [`Field`]s
+//! with the key "ARROW:extension:name".
+//!
+//! [`ExtensionType`]: arrow_schema::extension::ExtensionType
 
 use crate::basic::LogicalType;
 use crate::errors::ParquetError;
