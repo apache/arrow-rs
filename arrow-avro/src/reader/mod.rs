@@ -8592,6 +8592,33 @@ mod test {
             ])),
             false,
         ));
+        let person_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Person".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "com.example".to_string(),
+            );
+            m
+        };
+        let maybe_auth_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "MaybeAuth".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        let address_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Address".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
         let rec_a_md = {
             let mut m = HashMap::<String, String>::new();
             m.insert(AVRO_NAME_METADATA_KEY.to_string(), "RecA".to_string());
@@ -8727,11 +8754,18 @@ mod test {
                 true,
             ),
         ]);
-        let kv_item_field = Arc::new(Field::new(
-            item_name,
-            DataType::Struct(kv_fields.clone()),
-            false,
-        ));
+        let kv_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "KV".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        let kv_item_field = Arc::new(
+            Field::new(item_name, DataType::Struct(kv_fields.clone()), false).with_metadata(kv_md),
+        );
         let map_int_entries = Arc::new(Field::new(
             "entries",
             DataType::Struct(Fields::from(vec![
@@ -8803,14 +8837,17 @@ mod test {
         #[cfg(not(feature = "small_decimals"))]
         let dec10_dt = DataType::Decimal128(10, 2);
         let fields: Vec<FieldRef> = vec![
-            Arc::new(Field::new(
-                "person",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("age", DataType::Int32, false),
-                ])),
-                false,
-            )),
+            Arc::new(
+                Field::new(
+                    "person",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("name", DataType::Utf8, false),
+                        Field::new("age", DataType::Int32, false),
+                    ])),
+                    false,
+                )
+                .with_metadata(person_md),
+            ),
             Arc::new(Field::new("old_count", DataType::Int32, false)),
             Arc::new(Field::new(
                 "union_map_or_array_int",
@@ -8842,23 +8879,29 @@ mod test {
                 DataType::Union(uf_union_big.clone(), UnionMode::Dense),
                 false,
             )),
-            Arc::new(Field::new(
-                "maybe_auth",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("user", DataType::Utf8, false),
-                    Field::new("token", DataType::Binary, true), // [bytes,null] -> nullable bytes
-                ])),
-                false,
-            )),
-            Arc::new(Field::new(
-                "address",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("street_name", DataType::Utf8, false),
-                    Field::new("zip", DataType::Int32, false),
-                    Field::new("country", DataType::Utf8, false),
-                ])),
-                false,
-            )),
+            Arc::new(
+                Field::new(
+                    "maybe_auth",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("user", DataType::Utf8, false),
+                        Field::new("token", DataType::Binary, true), // [bytes,null] -> nullable bytes
+                    ])),
+                    false,
+                )
+                .with_metadata(maybe_auth_md),
+            ),
+            Arc::new(
+                Field::new(
+                    "address",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("street_name", DataType::Utf8, false),
+                        Field::new("zip", DataType::Int32, false),
+                        Field::new("country", DataType::Utf8, false),
+                    ])),
+                    false,
+                )
+                .with_metadata(address_md),
+            ),
             Arc::new(Field::new(
                 "map_union",
                 DataType::Map(map_entries_field.clone(), false),
