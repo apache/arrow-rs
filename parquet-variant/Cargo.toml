@@ -44,7 +44,7 @@ bench = false
 [dev-dependencies]
 paste = { version = "1.0" }
 criterion = { workspace = true, default-features = false }
-rand = { version = "0.9", default-features = false, features = [
+rand = { version = "0.10", default-features = false, features = [
     "std",
     "std_rng",
     "thread_rng",
