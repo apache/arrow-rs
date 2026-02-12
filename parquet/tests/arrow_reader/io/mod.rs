@@ -244,8 +244,7 @@ struct TestParquetFile {
     /// The operation log for IO operations performed on this file
     ops: Arc<OperationLog>,
     /// The (pre-parsed) parquet metadata for this file
-    // TODO: this is unused; consider removing it.
-    #[allow(dead_code)]
+    #[cfg(feature = "async")]
     parquet_metadata: Arc<ParquetMetaData>,
 }
 
@@ -290,6 +289,7 @@ impl TestParquetFile {
         TestParquetFile {
             bytes,
             ops,
+            #[cfg(feature = "async")]
             parquet_metadata,
         }
     }
@@ -304,9 +304,7 @@ impl TestParquetFile {
         &self.ops
     }
 
-    /// Return the parquet metadata for this file
-    // TODO: this is unused; consider removing it.
-    #[allow(dead_code)]
+    #[cfg(feature = "async")]
     fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
         &self.parquet_metadata
     }
@@ -578,8 +576,7 @@ impl OperationLog {
     /// accessed by the specified range
     ///
     /// It behaves the same as [`add_entry_for_range`] but for multiple ranges.
-    // TODO: this is unused; consider removing it.
-    #[allow(dead_code)]
+    #[cfg(feature = "async")]
     fn add_entry_for_ranges<'a>(&self, ranges: impl IntoIterator<Item = &'a Range<usize>>) {
         let entries = ranges
             .into_iter()
