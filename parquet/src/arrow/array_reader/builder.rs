@@ -21,7 +21,7 @@ use arrow_schema::{DataType, Fields, SchemaBuilder};
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
-use crate::arrow::array_reader::cached_array_reader::CacheRole;
+use crate::arrow::array_reader::cached_array_reader::{CacheMode, CacheRole};
 use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
@@ -65,6 +65,8 @@ impl<'a> CacheOptionsBuilder<'a> {
             projection_mask: self.projection_mask,
             cache: self.cache,
             role: CacheRole::Producer,
+            mode: CacheMode::Raw,
+            exact_selected_column: None,
         }
     }
 
@@ -74,6 +76,30 @@ impl<'a> CacheOptionsBuilder<'a> {
             projection_mask: self.projection_mask,
             cache: self.cache,
             role: CacheRole::Consumer,
+            mode: CacheMode::Raw,
+            exact_selected_column: None,
+        }
+    }
+
+    /// Return producer cache options for exact-selected single-column mode
+    pub fn producer_exact_selected(self, column_idx: usize) -> CacheOptions<'a> {
+        CacheOptions {
+            projection_mask: self.projection_mask,
+            cache: self.cache,
+            role: CacheRole::Producer,
+            mode: CacheMode::ExactSelected,
+            exact_selected_column: Some(column_idx),
+        }
+    }
+
+    /// Return consumer cache options for exact-selected single-column mode
+    pub fn consumer_exact_selected(self, column_idx: usize) -> CacheOptions<'a> {
+        CacheOptions {
+            projection_mask: self.projection_mask,
+            cache: self.cache,
+            role: CacheRole::Consumer,
+            mode: CacheMode::ExactSelected,
+            exact_selected_column: Some(column_idx),
         }
     }
 }
@@ -84,6 +110,9 @@ pub struct CacheOptions<'a> {
     pub projection_mask: &'a ProjectionMask,
     pub cache: &'a Arc<RwLock<RowGroupCache>>,
     pub role: CacheRole,
+    pub mode: CacheMode,
+    /// Optional target column for exact-selected mode
+    pub exact_selected_column: Option<usize>,
 }
 
 /// Builds [`ArrayReader`]s from parquet schema, projection mask, and RowGroups reader
@@ -154,11 +183,22 @@ impl<'a> ArrayReaderBuilder<'a> {
                 };
 
                 if cache_options.projection_mask.leaf_included(col_idx) {
-                    Ok(Some(Box::new(CachedArrayReader::new(
+                    // ExactSelected mode only applies to the one projected column
+                    // captured from predicate evaluation. Other projected columns
+                    // keep regular Raw cache behavior.
+                    let mode = if cache_options.mode == CacheMode::ExactSelected
+                        && cache_options.exact_selected_column == Some(col_idx)
+                    {
+                        CacheMode::ExactSelected
+                    } else {
+                        CacheMode::Raw
+                    };
+                    Ok(Some(Box::new(CachedArrayReader::new_with_mode(
                         reader,
                         Arc::clone(cache_options.cache),
                         col_idx,
                         cache_options.role,
+                        mode,
                         self.metrics.clone(), // cheap clone
                     ))))
                 } else {

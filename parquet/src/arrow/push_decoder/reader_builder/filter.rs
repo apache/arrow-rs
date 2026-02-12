@@ -18,7 +18,7 @@
 //! [`FilterInfo`] state machine for evaluating row filters
 
 use crate::arrow::ProjectionMask;
-use crate::arrow::array_reader::{CacheOptionsBuilder, RowGroupCache};
+use crate::arrow::array_reader::{CacheMode, CacheOptions, CacheOptionsBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, RwLock};
@@ -52,21 +52,63 @@ pub(super) struct CacheInfo {
     /// if we have a filter like `(a + 10 > 5) AND (a + b = 0)` we cache `a` to avoid re-reading it between evaluating `a + 10 > 5` and `a + b = 0`.
     cache_projection: ProjectionMask,
     row_group_cache: Arc<RwLock<RowGroupCache>>,
+    /// Whether the cache stores raw decoded batches or exact-selected rows.
+    mode: CacheMode,
+    /// Target column index for ExactSelected mode.
+    exact_selected_column: Option<usize>,
+    /// Whether this filter uses projection-driven predicate evaluation.
+    use_projection_filter_eval: bool,
 }
 
 impl CacheInfo {
     pub(super) fn new(
         cache_projection: ProjectionMask,
         row_group_cache: Arc<RwLock<RowGroupCache>>,
+        mode: CacheMode,
+        exact_selected_column: Option<usize>,
+        use_projection_filter_eval: bool,
     ) -> Self {
         Self {
             cache_projection,
             row_group_cache,
+            mode,
+            exact_selected_column,
+            use_projection_filter_eval,
         }
     }
 
     pub(super) fn builder(&self) -> CacheOptionsBuilder<'_> {
         CacheOptionsBuilder::new(&self.cache_projection, &self.row_group_cache)
+    }
+
+    pub(super) fn producer_options(&self) -> CacheOptions<'_> {
+        match (self.mode, self.exact_selected_column) {
+            (CacheMode::ExactSelected, Some(column_idx)) => {
+                self.builder().producer_exact_selected(column_idx)
+            }
+            _ => self.builder().producer(),
+        }
+    }
+
+    pub(super) fn consumer_options(&self) -> CacheOptions<'_> {
+        match (self.mode, self.exact_selected_column) {
+            (CacheMode::ExactSelected, Some(column_idx)) => {
+                self.builder().consumer_exact_selected(column_idx)
+            }
+            _ => self.builder().consumer(),
+        }
+    }
+
+    pub(super) fn exact_selected_column(&self) -> Option<usize> {
+        if self.mode == CacheMode::ExactSelected {
+            self.exact_selected_column
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn use_projection_filter_eval(&self) -> bool {
+        self.use_projection_filter_eval
     }
 }
 
@@ -131,9 +173,16 @@ impl FilterInfo {
         &self.cache_info.cache_projection
     }
 
-    /// Return a cache builder to save the results of predicate evaluation
-    pub(super) fn cache_builder(&self) -> CacheOptionsBuilder<'_> {
-        self.cache_info.builder()
+    pub(super) fn producer_cache_options(&self) -> CacheOptions<'_> {
+        self.cache_info.producer_options()
+    }
+
+    pub(super) fn exact_selected_column(&self) -> Option<usize> {
+        self.cache_info.exact_selected_column()
+    }
+
+    pub(super) fn use_projection_filter_eval(&self) -> bool {
+        self.cache_info.use_projection_filter_eval()
     }
 
     /// Returns the inner filter, consuming this FilterInfo

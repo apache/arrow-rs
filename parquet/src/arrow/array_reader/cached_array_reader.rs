@@ -37,6 +37,15 @@ pub enum CacheRole {
     Consumer,
 }
 
+/// Cache mode for cached readers
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheMode {
+    /// Existing behavior: cache raw decoded batches and filter in consumer
+    Raw,
+    /// Single-filter fast-path: cache selected rows and consume directly
+    ExactSelected,
+}
+
 /// A cached wrapper around an ArrayReader that avoids duplicate decoding
 /// when the same column appears in both filter predicates and output projection.
 ///
@@ -82,9 +91,17 @@ pub struct CachedArrayReader {
     selections: BooleanBufferBuilder,
     /// Role of this reader (Producer or Consumer)
     role: CacheRole,
+    /// Cache mode for this reader
+    mode: CacheMode,
     /// Local cache to store batches between read_records and consume_batch calls
     /// This ensures data is available even if the shared cache evicts items
     local_cache: HashMap<BatchID, ArrayRef>,
+    /// Current selected cached chunk (ExactSelected consumer mode)
+    selected_chunk: Option<(ArrayRef, usize)>,
+    /// Staged selected arrays to return from consume_batch (ExactSelected consumer mode)
+    selected_staged: Vec<ArrayRef>,
+    /// Last batch id (exclusive) already cleaned from shared cache
+    last_cleaned_batch_id: usize,
     /// Statistics to report on the Cache behavior
     metrics: ArrowReaderMetrics,
 }
@@ -98,6 +115,25 @@ impl CachedArrayReader {
         role: CacheRole,
         metrics: ArrowReaderMetrics,
     ) -> Self {
+        Self::new_with_mode(
+            inner,
+            cache,
+            column_idx,
+            role,
+            CacheMode::Raw,
+            metrics,
+        )
+    }
+
+    /// Creates a new cached array reader with an explicit cache mode
+    pub fn new_with_mode(
+        inner: Box<dyn ArrayReader>,
+        cache: Arc<RwLock<RowGroupCache>>,
+        column_idx: usize,
+        role: CacheRole,
+        mode: CacheMode,
+        metrics: ArrowReaderMetrics,
+    ) -> Self {
         let batch_size = cache.read().unwrap().batch_size();
 
         Self {
@@ -109,9 +145,17 @@ impl CachedArrayReader {
             batch_size,
             selections: BooleanBufferBuilder::new(0),
             role,
+            mode,
             local_cache: HashMap::new(),
+            selected_chunk: None,
+            selected_staged: Vec::new(),
+            last_cleaned_batch_id: 0,
             metrics,
         }
+    }
+
+    fn is_exact_selected_consumer(&self) -> bool {
+        self.role == CacheRole::Consumer && self.mode == CacheMode::ExactSelected
     }
 
     fn get_batch_id_from_position(&self, row_id: usize) -> BatchID {
@@ -149,13 +193,15 @@ impl CachedArrayReader {
         // Store in both shared cache and local cache
         // The shared cache is used to reuse results between readers
         // The local cache ensures data is available for our consume_batch call
-        let _cached =
-            self.shared_cache
-                .write()
-                .unwrap()
-                .insert(self.column_idx, batch_id, array.clone());
-        // Note: if the shared cache is full (_cached == false), we continue without caching
-        // The local cache will still store the data for this reader's use
+        if !(self.mode == CacheMode::ExactSelected && self.role == CacheRole::Producer) {
+            let _cached =
+                self.shared_cache
+                    .write()
+                    .unwrap()
+                    .insert(self.column_idx, batch_id, array.clone());
+            // Note: if the shared cache is full (_cached == false), we continue without caching
+            // The local cache will still store the data for this reader's use
+        }
 
         self.local_cache.insert(batch_id, array);
 
@@ -172,8 +218,14 @@ impl CachedArrayReader {
         // This ensures we don't remove batches that might still be needed for the current batch
         // We can safely remove batch_id if current_batch_id > batch_id + 1
         if current_batch_id.val > 1 {
+            // Only clean newly completed ranges. This avoids repeated remove scans
+            // over already-cleaned batch ids.
+            let cleanup_end = current_batch_id.val - 1;
+            if cleanup_end <= self.last_cleaned_batch_id {
+                return;
+            }
             let mut cache = self.shared_cache.write().unwrap();
-            for batch_id_to_remove in 0..(current_batch_id.val - 1) {
+            for batch_id_to_remove in self.last_cleaned_batch_id..cleanup_end {
                 cache.remove(
                     self.column_idx,
                     BatchID {
@@ -181,6 +233,7 @@ impl CachedArrayReader {
                     },
                 );
             }
+            self.last_cleaned_batch_id = cleanup_end;
         }
     }
 }
@@ -195,6 +248,9 @@ impl ArrayReader for CachedArrayReader {
     }
 
     fn read_records(&mut self, num_records: usize) -> Result<usize> {
+        if self.is_exact_selected_consumer() {
+            return self.read_records_exact_selected(num_records);
+        }
         let mut read = 0;
         while read < num_records {
             let batch_id = self.get_batch_id_from_position(self.outer_position);
@@ -257,6 +313,9 @@ impl ArrayReader for CachedArrayReader {
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        if self.is_exact_selected_consumer() {
+            return Ok(num_records);
+        }
         let mut skipped = 0;
         while skipped < num_records {
             let size = std::cmp::min(num_records - skipped, self.batch_size);
@@ -268,6 +327,9 @@ impl ArrayReader for CachedArrayReader {
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
+        if self.is_exact_selected_consumer() {
+            return self.consume_exact_selected_batch();
+        }
         let row_count = self.selections.len();
         if row_count == 0 {
             return Ok(new_empty_array(self.inner.get_data_type()));
@@ -345,6 +407,63 @@ impl ArrayReader for CachedArrayReader {
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         None
+    }
+}
+
+impl CachedArrayReader {
+    fn read_records_exact_selected(&mut self, num_records: usize) -> Result<usize> {
+        // ExactSelected consumer mode receives predicate-selected arrays in FIFO
+        // order from the shared cache and streams them directly.
+        let mut read = 0;
+        while read < num_records {
+            let need_next = match self.selected_chunk.as_ref() {
+                None => true,
+                Some((array, offset)) => *offset >= array.len(),
+            };
+            if need_next {
+                self.selected_chunk = self
+                    .shared_cache
+                    .write()
+                    .unwrap()
+                    .pop_selected(self.column_idx)
+                    .map(|array| (array, 0));
+            }
+
+            let Some((array, offset)) = self.selected_chunk.as_mut() else {
+                break;
+            };
+
+            let available = array.len().saturating_sub(*offset);
+            if available == 0 {
+                self.selected_chunk = None;
+                continue;
+            }
+
+            let take = std::cmp::min(num_records - read, available);
+            self.selected_staged.push(array.slice(*offset, take));
+            *offset += take;
+            read += take;
+            self.metrics.increment_cache_reads(take);
+        }
+        Ok(read)
+    }
+
+    fn consume_exact_selected_batch(&mut self) -> Result<ArrayRef> {
+        if self.selected_staged.is_empty() {
+            return Ok(new_empty_array(self.inner.get_data_type()));
+        }
+
+        if self.selected_staged.len() == 1 {
+            return Ok(self.selected_staged.pop().unwrap());
+        }
+
+        let arrays = self
+            .selected_staged
+            .drain(..)
+            .collect::<Vec<_>>();
+        Ok(arrow_select::concat::concat(
+            &arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
+        )?)
     }
 }
 
