@@ -354,7 +354,7 @@ fn test_list_struct_page_boundary_desync_produces_length_mismatch() {
         for j in 0..num_elems {
             sb.field_builder::<Int32Builder>(0)
                 .unwrap()
-                .append_value(i as i32 * 10 + j as i32);
+                .append_value(i as i32 * 10 + j);
             sb.field_builder::<StringBuilder>(1)
                 .unwrap()
                 .append_value(format!("{long_prefix}_{i}_{j}"));
