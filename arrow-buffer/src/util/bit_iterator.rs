@@ -273,6 +273,7 @@ impl Iterator for BitSliceIterator<'_> {
         }
     }
 
+    #[inline]
     fn fold<B, F>(mut self, init: B, mut f: F) -> B
     where
         Self: Sized,
@@ -368,6 +369,7 @@ impl Iterator for BitIndexIterator<'_> {
         }
     }
 
+    #[inline]
     fn fold<B, F>(mut self, init: B, mut f: F) -> B
     where
         Self: Sized,

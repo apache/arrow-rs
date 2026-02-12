@@ -71,8 +71,18 @@ impl<'a> From<&'a BooleanBuffer> for SlicesIterator<'a> {
 impl Iterator for SlicesIterator<'_> {
     type Item = (usize, usize);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
+    }
+
+    #[inline]
+    fn fold<B, F>(self, init: B, f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        self.0.fold(init, f)
     }
 }
 
@@ -119,6 +129,7 @@ impl<'a> IndexIterator<'a> {
 impl Iterator for IndexIterator<'_> {
     type Item = usize;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.remaining != 0 {
             // Fascinatingly swapping these two lines around results in a 50%
@@ -133,6 +144,19 @@ impl Iterator for IndexIterator<'_> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining, Some(self.remaining))
+    }
+
+    #[inline]
+    fn fold<B, F>(mut self, init: B, f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        if self.remaining == 0 {
+            return init;
+        }
+        self.remaining = 0;
+        self.iter.fold(init, f)
     }
 }
 
