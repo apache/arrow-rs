@@ -38,6 +38,7 @@ use parquet::file::properties::{
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+mod alp;
 mod bad_data;
 mod bloom_filter;
 #[cfg(feature = "crc")]
