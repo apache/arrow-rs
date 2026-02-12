@@ -495,7 +495,7 @@ impl<'a> RecordBatchDecoder<'a> {
             schema,
             dictionaries_by_id,
             compression,
-            decompression_context: DecompressionContext::default(),
+            decompression_context: DecompressionContext::new(),
             version: *metadata,
             data: buf,
             nodes: field_nodes.iter(),
