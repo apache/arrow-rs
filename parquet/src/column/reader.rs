@@ -1378,11 +1378,17 @@ mod tests {
 
     /// Regression test for <https://github.com/apache/arrow-rs/issues/9370>
     ///
-    /// When `skip_records` fully consumes a v1 data page (setting
-    /// `has_partial=true` in the rep level decoder) and then encounters a
-    /// v2 page eligible for the `num_rows` whole-page-skip shortcut, the
-    /// pending partial record must be flushed and counted *before* the
-    /// shortcut fires. Otherwise:
+    /// Reproduces the production scenario: all DataPage v2 pages for a
+    /// list column (rep_level=1) read without an offset index (i.e.
+    /// `at_record_boundary` returns false for non-last pages).
+    ///
+    /// When a prior operation (here `skip_records(1)`) loads a v2 page,
+    /// and a subsequent `skip_records` exhausts the remaining levels on
+    /// that page, the rep level decoder is left with `has_partial=true`.
+    /// Because `has_record_delimiter` is false, the partial is not
+    /// flushed during level-based processing. When the next v2 page is
+    /// then peeked with `num_rows` available, the whole-page-skip
+    /// shortcut must flush the pending partial first. Otherwise:
     ///
     /// 1. The skip over-counts (skips N+1 records instead of N), and
     /// 2. The stale `has_partial` causes a subsequent `read_records` to
@@ -1390,7 +1396,6 @@ mod tests {
     #[test]
     fn test_skip_records_v2_page_skip_accounts_for_partial() {
         use crate::encodings::levels::LevelEncoder;
-        use crate::util::test_common::page_util::{DataPageBuilder, DataPageBuilderImpl};
 
         let max_rep_level: i16 = 1;
         let max_def_level: i16 = 1;
@@ -1407,90 +1412,82 @@ mod tests {
             ColumnPath::new(vec!["list".to_string(), "element".to_string()]),
         ));
 
-        // Page 1 (DataPage v1): 1 record with 2 elements
-        //   rep_levels = [0, 1], def_levels = [1, 1], values = [10, 20]
-        //
-        // During skip_records, all levels on this page are consumed.
-        // count_records sees no following rep=0 delimiter, so has_partial
-        // is set to true. has_record_delimiter is false (InMemoryPageReader
-        // default: next page exists) so flush_partial is NOT called during
-        // level-based processing.
-        let page1 = {
-            let mut builder = DataPageBuilderImpl::new(desc.clone(), 2, false);
-            builder.add_rep_levels(max_rep_level, &[0, 1]);
-            builder.add_def_levels(max_def_level, &[1, 1]);
-            builder.add_values::<Int32Type>(Encoding::PLAIN, &[10, 20]);
-            builder.consume()
-        };
+        // Helper: build a DataPage v2 for this list column.
+        let make_v2_page =
+            |rep_levels: &[i16], def_levels: &[i16], values: &[i32], num_rows: u32| -> Page {
+                let mut rep_enc = LevelEncoder::v2(max_rep_level, rep_levels.len());
+                rep_enc.put(rep_levels);
+                let rep_bytes = rep_enc.consume();
 
-        // Page 2 (DataPage v2): 2 records with 2 elements each
-        //   rep_levels = [0, 1, 0, 1], def_levels = [1, 1, 1, 1]
-        //   values = [30, 40, 50, 60], num_rows = 2
-        //
-        // This page has num_rows in its metadata, making it eligible for the
-        // whole-page-skip shortcut. The fix flushes the pending partial from
-        // page 1 (counting it as 1 record) before evaluating the shortcut,
-        // so that remaining_records is correctly adjusted. Without the fix,
-        // page 2 would be skipped entirely (2 records), over-counting the
-        // total skip by 1.
-        let page2 = {
-            let mut rep_enc = LevelEncoder::v2(max_rep_level, 4);
-            rep_enc.put(&[0i16, 1, 0, 1]);
-            let rep_bytes = rep_enc.consume();
+                let mut def_enc = LevelEncoder::v2(max_def_level, def_levels.len());
+                def_enc.put(def_levels);
+                let def_bytes = def_enc.consume();
 
-            let mut def_enc = LevelEncoder::v2(max_def_level, 4);
-            def_enc.put(&[1i16, 1, 1, 1]);
-            let def_bytes = def_enc.consume();
+                let val_bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
 
-            let val_bytes: Vec<u8> = [30i32, 40, 50, 60]
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect();
+                let mut buf = Vec::new();
+                buf.extend_from_slice(&rep_bytes);
+                buf.extend_from_slice(&def_bytes);
+                buf.extend_from_slice(&val_bytes);
 
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&rep_bytes);
-            buf.extend_from_slice(&def_bytes);
-            buf.extend_from_slice(&val_bytes);
+                Page::DataPageV2 {
+                    buf: Bytes::from(buf),
+                    num_values: rep_levels.len() as u32,
+                    encoding: Encoding::PLAIN,
+                    num_nulls: 0,
+                    num_rows,
+                    def_levels_byte_len: def_bytes.len() as u32,
+                    rep_levels_byte_len: rep_bytes.len() as u32,
+                    is_compressed: false,
+                    statistics: None,
+                }
+            };
 
-            Page::DataPageV2 {
-                buf: Bytes::from(buf),
-                num_values: 4,
-                encoding: Encoding::PLAIN,
-                num_nulls: 0,
-                num_rows: 2,
-                def_levels_byte_len: def_bytes.len() as u32,
-                rep_levels_byte_len: rep_bytes.len() as u32,
-                is_compressed: false,
-                statistics: None,
-            }
-        };
+        // All pages are DataPage v2 (matching the production scenario where
+        // parquet-rs writes only v2 data pages and no offset index is loaded,
+        // so at_record_boundary() returns false for non-last pages).
 
-        // Page 3 (DataPage v1): 1 record with 2 elements
-        //   rep_levels = [0, 1], def_levels = [1, 1], values = [70, 80]
-        let page3 = {
-            let mut builder = DataPageBuilderImpl::new(desc.clone(), 2, false);
-            builder.add_rep_levels(max_rep_level, &[0, 1]);
-            builder.add_def_levels(max_def_level, &[1, 1]);
-            builder.add_values::<Int32Type>(Encoding::PLAIN, &[70, 80]);
-            builder.consume()
-        };
+        // Page 1 (v2): 2 records × 2 elements = [10,20], [30,40]
+        let page1 = make_v2_page(&[0, 1, 0, 1], &[1, 1, 1, 1], &[10, 20, 30, 40], 2);
 
-        // 4 records total: [10,20], [30,40], [50,60], [70,80]
+        // Page 2 (v2): 2 records × 2 elements = [50,60], [70,80]
+        let page2 = make_v2_page(&[0, 1, 0, 1], &[1, 1, 1, 1], &[50, 60, 70, 80], 2);
+
+        // Page 3 (v2): 1 record × 2 elements = [90,100]
+        let page3 = make_v2_page(&[0, 1], &[1, 1], &[90, 100], 1);
+
+        // 5 records total: [10,20], [30,40], [50,60], [70,80], [90,100]
         let pages = VecDeque::from(vec![page1, page2, page3]);
         let page_reader = InMemoryPageReader::new(pages);
         let column_reader: ColumnReader = get_column_reader(desc, Box::new(page_reader));
         let mut typed_reader = get_typed_column_reader::<Int32Type>(column_reader);
 
-        // Skip 2 records ([10,20] and [30,40]):
-        //  - Iter 1: load page 1, consume all levels → has_partial=true, 0 records
-        //  - Iter 2: peek page 2 (v2, num_rows=2):
-        //       Fix flushes partial → remaining 2→1, page 2 NOT skipped (2 > 1)
-        //       Load page 2, skip 1 record via levels → [30,40] skipped
-        //  - remaining_records = 0
+        // Step 1 — skip 1 record:
+        //   Peek page 1: num_rows=2, remaining=1 → rows(2) > remaining(1),
+        //   so the page is LOADED (not whole-page-skipped).
+        //   Level-based skip consumes rep levels [0,1] for record [10,20],
+        //   stopping at the 0 that starts record [30,40].
+        let skipped = typed_reader.skip_records(1).unwrap();
+        assert_eq!(skipped, 1);
+
+        // Step 2 — skip 2 more records ([30,40] and [50,60]):
+        //   Mid-page in page 1 with 2 remaining levels [0,1] for [30,40].
+        //   skip_rep_levels(2, 2): the leading 0 does NOT act as a record
+        //   delimiter (has_partial=false, idx==0), so count_records returns
+        //   (true, 0, 2) — all levels consumed, has_partial=true, 0 records.
+        //
+        //   has_record_delimiter is false → no flush at page boundary.
+        //   Page 1 exhausted → peek page 2 (v2, num_rows=2).
+        //
+        //   With fix: flush_partial → remaining 2→1, page 2 NOT skipped
+        //   (rows=2 > remaining=1). Load page 2, skip 1 record [50,60].
+        //
+        //   Without fix: rows(2) <= remaining(2) → page 2 whole-page-skipped,
+        //   over-counting by 1. has_partial stays true (stale from page 1).
         let skipped = typed_reader.skip_records(2).unwrap();
         assert_eq!(skipped, 2);
 
-        // Read 1 record — should get the 3rd record [50, 60] from page 2
+        // Step 3 — read 1 record:
         let mut values = Vec::new();
         let mut def_levels = Vec::new();
         let mut rep_levels = Vec::new();
@@ -1499,12 +1496,13 @@ mod tests {
             .read_records(1, Some(&mut def_levels), Some(&mut rep_levels), &mut values)
             .unwrap();
 
-        // Without the fix: (1, 0, 0) — phantom record, skip over-counted
-        // With the fix:    (1, 2, 2) — correctly reads 3rd record [50, 60]
+        // Without the fix: (1, 0, 0) — phantom record from stale has_partial;
+        //   the rep=0 on page 3 "completes" the phantom, yielding 0 values.
+        // With the fix:    (1, 2, 2) — correctly reads record [70, 80].
         assert_eq!(records, 1, "should read exactly 1 record");
         assert_eq!(levels_read, 2, "should read 2 levels for the record");
         assert_eq!(values_read, 2, "should read 2 non-null values");
-        assert_eq!(values, vec![50, 60], "should contain 3rd record's values");
+        assert_eq!(values, vec![70, 80], "should contain 4th record's values");
         assert_eq!(rep_levels, vec![0, 1], "rep levels for a 2-element list");
         assert_eq!(def_levels, vec![1, 1], "def levels (all non-null)");
     }
