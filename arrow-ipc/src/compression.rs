@@ -72,8 +72,7 @@ impl Default for DecompressionContext {
     fn default() -> Self {
         DecompressionContext {
             #[cfg(feature = "zstd")]
-            decompressor: zstd::bulk::Decompressor::new()
-                .expect("can create zstd decompressor"),
+            decompressor: zstd::bulk::Decompressor::new().expect("can create zstd decompressor"),
         }
     }
 }
