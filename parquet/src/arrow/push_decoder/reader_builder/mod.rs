@@ -30,7 +30,7 @@ use crate::arrow::arrow_reader::{
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
-use crate::arrow::schema::ParquetField;
+use crate::arrow::schema::{ParquetField, ParquetFieldType};
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
@@ -601,6 +601,12 @@ impl RowGroupReaderBuilder {
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), &predicate_input_projection)?;
 
+                plan_builder = override_selector_strategy_if_needed(
+                    plan_builder,
+                    &predicate_input_projection,
+                    self.row_group_offset_index(row_group_idx),
+                );
+
                 plan_builder = if filter_info.use_projection_filter_eval() {
                     self.with_predicate_from_projection_reader(
                         plan_builder,
@@ -896,6 +902,10 @@ impl RowGroupReaderBuilder {
     }
 
     fn use_projection_filter_eval(&self, row_group_idx: usize, filter: &RowFilter) -> bool {
+        let default_auto_mode = matches!(
+            self.pushdown_filter_eval_mode,
+            PushdownFilterEvalMode::RowSelection
+        );
         let mode_enabled = match self.pushdown_filter_eval_mode {
             PushdownFilterEvalMode::DecodeProjectionThenFilter => true,
             // In default row-selection mode, auto-enable only for single-predicate
@@ -904,6 +914,11 @@ impl RowGroupReaderBuilder {
             PushdownFilterEvalMode::RowSelection => filter.predicates.len() == 1,
         };
         if !mode_enabled {
+            return false;
+        }
+        // Virtual output columns (for example `row_number`) rely on synthetic
+        // readers and currently require the existing row-selection flow.
+        if self.has_virtual_output_columns() {
             return false;
         }
         if !self.is_non_nested_projection(&self.projection) {
@@ -918,11 +933,31 @@ impl RowGroupReaderBuilder {
 
         filter.predicates.iter().all(|predicate| {
             let projection = predicate.projection();
+            let predicate_leaves = Self::leaf_indices(projection, num_leaves);
             self.is_non_nested_projection(projection)
-                && Self::leaf_indices(projection, num_leaves)
-                    .into_iter()
-                    .all(|idx| output_leaves.contains_key(&idx))
+                && predicate_leaves
+                    .iter()
+                    .all(|idx| output_leaves.contains_key(idx))
+                // Default auto-mode should remain conservative: only enable
+                // when predicate/output leaves are exactly the same shape.
+                && (!default_auto_mode
+                    || (predicate_leaves.len() == output_leaves.len()
+                        && output_leaves
+                            .keys()
+                            .all(|idx| predicate_leaves.contains(idx))))
         })
+    }
+
+    fn has_virtual_output_columns(&self) -> bool {
+        fn contains_virtual(field: &ParquetField) -> bool {
+            match &field.field_type {
+                ParquetFieldType::Virtual(_) => true,
+                ParquetFieldType::Group { children } => children.iter().any(contains_virtual),
+                ParquetFieldType::Primitive { .. } => false,
+            }
+        }
+
+        self.fields.as_deref().is_some_and(contains_virtual)
     }
 
     fn compute_projection_filter_eval_cache_projection(
@@ -1016,7 +1051,13 @@ impl RowGroupReaderBuilder {
         filter: &RowFilter,
         cache_projection: &ProjectionMask,
     ) -> Option<usize> {
-        if self.max_predicate_cache_size == 0 || filter.predicates.len() != 1 {
+        // ExactSelected requires all projected outputs to stay synchronized by
+        // row position; virtual columns (for example `row_number`) are produced
+        // by synthetic readers and are not part of this cache stream.
+        if self.has_virtual_output_columns()
+            || self.max_predicate_cache_size == 0
+            || filter.predicates.len() != 1
+        {
             return None;
         }
         let num_cols = self.metadata.row_group(row_group_idx).columns().len();
