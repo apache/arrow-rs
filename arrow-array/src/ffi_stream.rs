@@ -66,6 +66,7 @@ use std::{
 use arrow_data::ffi::FFI_ArrowArray;
 use arrow_schema::{ArrowError, Schema, SchemaRef, ffi::FFI_ArrowSchema};
 
+use crate::RecordBatchOptions;
 use crate::array::Array;
 use crate::array::StructArray;
 use crate::ffi::from_ffi_and_data_type;
@@ -365,7 +366,12 @@ impl Iterator for ArrowArrayStreamReader {
                 from_ffi_and_data_type(array, DataType::Struct(self.schema().fields().clone()))
             };
             Some(result.and_then(|data| {
-                RecordBatch::try_new(self.schema.clone(), StructArray::from(data).into_parts().1)
+                let len = data.len();
+                RecordBatch::try_new_with_options(
+                    self.schema.clone(),
+                    StructArray::from(data).into_parts().1,
+                    &RecordBatchOptions::new().with_row_count(Some(len)),
+                )
             }))
         } else {
             let last_error = self.get_stream_last_error();
