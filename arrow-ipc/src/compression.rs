@@ -33,7 +33,7 @@ pub struct CompressionContext {
 }
 
 impl CompressionContext {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Default::default()
     }
 }
@@ -74,7 +74,7 @@ pub struct DecompressionContext {
 }
 
 impl DecompressionContext {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Default::default()
     }
 }
