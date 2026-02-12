@@ -98,10 +98,6 @@ fn read_varint_slow(buf: &[u8]) -> Option<(u64, usize)> {
 }
 
 pub(crate) fn skip_varint(buf: &[u8]) -> Option<usize> {
-    let first = *buf.first()?;
-    if first < 0x80 {
-        return Some(1);
-    }
     if let Some(array) = buf.get(..10) {
         return skip_varint_array(array.try_into().unwrap());
     }
