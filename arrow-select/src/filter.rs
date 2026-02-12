@@ -105,23 +105,18 @@ impl<'a> IndexIterator<'a> {
     /// Collect this iterator as a [`Vec`]
     /// This is more efficient than the standard `collect` as we can
     /// pre-allocate the entire uninitialized buffer and then fill it (roughly 1.6x faster)
-    pub fn collect(mut self) -> Vec<usize> {
+    pub fn collect(self) -> Vec<usize> {
         let len = self.remaining;
         let mut result = Vec::with_capacity(len);
         let ptr: *mut usize = result.as_mut_ptr();
-        for i in 0..len {
+        self.for_each(|idx| {
             // SAFETY: we have allocated enough space in `result` and remaining
             // correctly tracks the number of elements
-            let next = self.iter.next();
-            debug_assert!(next.is_some(), "IndexIterator exhausted early");
             unsafe {
-                *ptr.add(i) = next.unwrap_unchecked();
+                *ptr.add(result.len()) = idx;
+                result.set_len(result.len() + 1);
             }
-        }
-        // SAFETY: we have initialized `len` elements
-        unsafe {
-            result.set_len(len);
-        }
+        });
         result
     }
 }
