@@ -372,9 +372,11 @@ fn interleave_fallback(
 ) -> Result<ArrayRef, ArrowError> {
     let arrays: Vec<_> = values.iter().map(|x| x.to_data()).collect();
     let arrays: Vec<_> = arrays.iter().collect();
+
     let mut array_data = MutableArrayData::new(arrays, false, indices.len());
 
     let mut cur_array = indices[0].0;
+
     let mut start_row_idx = indices[0].1;
     let mut end_row_idx = start_row_idx + 1;
 
@@ -532,11 +534,15 @@ pub fn interleave_record_batch(
 
 #[cfg(test)]
 mod tests {
+    use std::iter::repeat_n;
+    use std::sync::Arc;
+
     use super::*;
     use arrow_array::Int32RunArray;
     use arrow_array::builder::{GenericListBuilder, Int32Builder, PrimitiveRunBuilder};
     use arrow_array::types::Int8Type;
-    use arrow_schema::Field;
+    use arrow_buffer::ScalarBuffer;
+    use arrow_schema::{Field, Fields};
 
     #[test]
     fn test_primitive() {
@@ -1375,6 +1381,356 @@ mod tests {
         let v = interleave(&[&a], &[(0, 0)]).unwrap();
         assert_eq!(v.len(), 1);
         assert_eq!(v.data_type(), &DataType::Struct(fields));
+    }
+
+    fn create_dict_arr<K: ArrowDictionaryKeyType, V: ArrowDictionaryKeyType>(
+        keys: Vec<K::Native>,
+        null_keys: Option<Vec<bool>>,
+        values: Vec<V::Native>,
+    ) -> ArrayRef {
+        let input_keys =
+            PrimitiveArray::<K>::from_iter_values_with_nulls(keys, null_keys.map(NullBuffer::from));
+        let input_values = PrimitiveArray::<V>::from_iter_values(values);
+        let input = DictionaryArray::new(input_keys, Arc::new(input_values));
+        Arc::new(input) as ArrayRef
+    }
+
+    fn create_dict_list_arr(
+        keys: Vec<u8>,
+        null_keys: Option<Vec<bool>>,
+        values: Vec<u16>,
+        lengths: Vec<usize>,
+        list_nulls: Option<Vec<bool>>,
+    ) -> ArrayRef {
+        let dict_arr = {
+            let input_1_keys =
+                UInt8Array::from_iter_values_with_nulls(keys, null_keys.map(NullBuffer::from));
+            let input_1_values = UInt16Array::from_iter_values(values);
+            DictionaryArray::new(input_1_keys, Arc::new(input_1_values))
+        };
+
+        let offset_buffer = OffsetBuffer::<i32>::from_lengths(lengths);
+        let list_arr = GenericListArray::new(
+            Arc::new(Field::new_dictionary(
+                "item",
+                DataType::UInt8,
+                DataType::UInt16,
+                true,
+            )),
+            offset_buffer,
+            Arc::new(dict_arr) as ArrayRef,
+            list_nulls.map(NullBuffer::from_iter),
+        );
+        Arc::new(list_arr) as ArrayRef
+    }
+
+    #[test]
+    fn test_total_distinct_keys_in_input_arrays_greater_than_key_size() {
+        // Even though the combined cardinality in the input arrays exceed the key size,
+        // The result after calling `interleave` still satisfies this limit, and thus
+        // should cause no error
+        let arr1 = create_dict_arr::<UInt16Type, UInt32Type>(
+            (0..=65535).collect(),
+            None,
+            (0..=65535).collect(),
+        );
+        let arr2 = create_dict_arr::<UInt16Type, UInt32Type>(
+            (0..=65535).collect(),
+            None,
+            (65536..=131071).collect(),
+        );
+        let result =
+            interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
+
+        let dict_arr = result.as_dictionary::<UInt16Type>();
+        let keys = dict_arr.keys();
+        let vals = dict_arr.values().as_primitive::<UInt32Type>();
+        assert_eq!(
+            vals,
+            &UInt32Array::from_iter_values(vec![1, 2, 65536, 65537, 65538])
+        );
+        assert_eq!(keys, &UInt16Array::from_iter_values(vec![1, 0, 2, 4, 3]));
+    }
+
+    #[test]
+    fn test_total_distinct_keys_in_input_arrays_and_after_interleave_are_greater_than_key_size() {
+        let arr1 = create_dict_arr::<UInt8Type, UInt16Type>(
+            (0..=255).collect(),
+            None,
+            (0..=255).collect(),
+        );
+        let arr2 = create_dict_arr::<UInt8Type, UInt16Type>(
+            (0..=255).collect(),
+            None,
+            (0..=511).collect(),
+        );
+        // take all 256 items of each array
+        let indices = (0usize..=255)
+            .map(|i| (0usize, i))
+            .chain((0..=255).map(|i| (1, i)))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            interleave(&[&arr1, &arr2], &indices),
+            Err(ArrowError::DictionaryKeyOverflowError)
+        ));
+    }
+
+    #[test]
+    fn test_struct_list_with_multiple_overflowing_dictionary_fields() {
+        // create a list of structs with f1 -> f4
+        // f1 as dictionary (u8 based key) of u16s
+        // f2 is equivalent to f1, but with reversed nulls array to test null handling
+        // f3 is also equivalent to f1 but having u16 has dict key type
+        // f4 will also have value of f1, but with string type
+
+        // combine two separate columns values to form a "struct list" array
+        let make_struct_list = |columns: Vec<ArrayRef>,
+                                nulls: Option<Vec<bool>>,
+                                lengths: Vec<usize>,
+                                list_nulls: Option<Vec<bool>>| {
+            let fields = Fields::from(
+                columns
+                    .iter()
+                    .enumerate()
+                    .map(|(index, arr)| {
+                        Field::new(format!("f{index}"), arr.data_type().clone(), true)
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            let struct_arr =
+                StructArray::try_new(fields.clone(), columns, nulls.map(NullBuffer::from_iter))
+                    .unwrap();
+            let list_arr = GenericListArray::<i32>::new(
+                Arc::new(Field::new_struct("item", fields, true)),
+                OffsetBuffer::from_lengths(lengths),
+                Arc::new(struct_arr) as ArrayRef,
+                list_nulls.map(|nulls: Vec<bool>| NullBuffer::from(nulls)),
+            );
+            Arc::new(list_arr) as ArrayRef
+        };
+
+        let f1_dict_arr1 = create_dict_arr::<UInt8Type, UInt16Type>(
+            (0..=255).collect(),
+            None,
+            (0..=255).collect(),
+        );
+        let f2_dict_arr1 = create_dict_arr::<UInt8Type, UInt16Type>(
+            (0..=255).collect(),
+            Some(vec![false; 256]),
+            (0..=255).collect(),
+        );
+        let f3_dict_arr1 = create_dict_arr::<UInt16Type, UInt16Type>(
+            (0..=255).collect(),
+            None,
+            (0..=255).collect(),
+        );
+        let arr1 = make_struct_list(
+            vec![
+                f1_dict_arr1,
+                f2_dict_arr1,
+                f3_dict_arr1,
+                Arc::new(StringArray::from_iter_values(
+                    (0..=255).map(|i| i.to_string()),
+                )) as ArrayRef,
+            ],
+            None,
+            repeat_n(1, 256).collect::<Vec<_>>(),
+            None,
+        );
+
+        // Build arr2
+        let mut null_keys = vec![true, false];
+        null_keys.extend(vec![true; 254]);
+
+        let mut null_list = vec![true, true, false];
+        null_list.extend(vec![true; 125]);
+
+        // This force the dictionaries to be merged
+        let f1_dict_arr2 = create_dict_arr::<UInt8Type, UInt16Type>(
+            (0..=255).rev().collect(),
+            Some(null_keys.clone()),
+            (0..=255).collect(),
+        );
+        let f2_dict_arr2 = create_dict_arr::<UInt8Type, UInt16Type>(
+            (0..=255).rev().collect(),
+            Some(null_keys.iter().map(|b| !*b).collect()),
+            (0..=255).collect(),
+        );
+        // u16 key size is still sufficient, so no merge expected
+        let f3_dict_arr2 = create_dict_arr::<UInt16Type, UInt16Type>(
+            (0..=255).rev().collect(),
+            Some(null_keys.clone()),
+            (0..=255).collect(),
+        );
+        let arr2 = make_struct_list(
+            vec![
+                f1_dict_arr2,
+                f2_dict_arr2,
+                f3_dict_arr2,
+                Arc::new(StringArray::from_iter_values(
+                    (0i32..=255).rev().map(|i| i.to_string()),
+                )) as ArrayRef,
+            ],
+            None,
+            repeat_n(2, 128).collect::<Vec<_>>(),
+            Some(null_list),
+        );
+
+        let result =
+            interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
+        // expectation [{2,null, 2, "2"}], [{1,null,1,"1"}], [{255,null,255, "255"}, {null,254, null, "254"}],
+        //  null, [{253,null,253,"253"}, {252,null,252,"252"}]
+
+        let list = result.as_list::<i32>();
+        assert_eq!(list.len(), 5);
+        assert_eq!(
+            list.offsets().iter().cloned().collect::<Vec<_>>(),
+            vec![0i32, 1, 2, 4, 6, 8]
+        );
+        assert_eq!(
+            list.nulls().cloned().unwrap().iter().collect::<Vec<_>>(),
+            vec![true, true, true, false, true],
+        );
+        let struct_arr = list.values().as_struct();
+
+        // col0 is a merged dictionary
+        let f1 = struct_arr.column(0).as_dictionary::<UInt8Type>();
+        let f1keys = f1.keys();
+        let f1vals = f1.values().as_primitive::<UInt16Type>();
+        assert_eq!(f1vals, &UInt16Array::from_iter_values(0u16..=255));
+        assert_eq!(
+            f1keys,
+            &UInt8Array::from_iter_values_with_nulls(
+                vec![2, 1, 255, 0, 251, 250, 253, 252],
+                Some(NullBuffer::from_iter(vec![
+                    true, true, true, false, true, true, true, true
+                ]))
+            )
+        );
+        // col1 is a merged dictionary
+        let f2 = struct_arr.column(1).as_dictionary::<UInt8Type>();
+        let f2keys = f2.keys();
+        let f2vals = f2.values().as_primitive::<UInt16Type>();
+        assert_eq!(
+            f2vals,
+            &UInt16Array::from_iter_values_with_nulls(vec![254], None,)
+        );
+        assert_eq!(
+            f2keys,
+            // [null] [null] [null,254] null [null,null]
+            &UInt8Array::from_iter_values_with_nulls(
+                vec![0, 0, 0, 0, 0, 0, 0, 0],
+                Some(NullBuffer::from_iter(vec![
+                    false, false, false, true, false, false, false, false
+                ]))
+            )
+        );
+
+        // col3 has the values array concat instead of merge
+        let f3 = struct_arr.column(2).as_dictionary::<UInt16Type>();
+        let f3keys = f3.keys();
+        let f3vals = f3.values().as_primitive::<UInt16Type>();
+        assert_eq!(
+            f3vals,
+            &UInt16Array::from_iter_values((0u16..=255).chain(0u16..=255))
+        );
+        assert_eq!(
+            f3keys,
+            &UInt16Array::from_iter_values_with_nulls(
+                // [2], [1] [255 null] [251 250] [253 252]
+                vec![2, 1, 511, 510, 507, 506, 509, 508],
+                Some(NullBuffer::from_iter(vec![
+                    true, true, true, false, true, true, true, true
+                ]))
+            )
+        );
+        // f4 is a interleaved as usual
+        let f4 = struct_arr.column(3).as_string::<i32>();
+
+        assert_eq!(
+            f4,
+            &StringArray::from_iter_values(vec![
+                "2", "1", "255", "254", "251", "250", "253", "252"
+            ])
+        );
+    }
+
+    #[test]
+    fn test_3d_list_of_overflowing_dictionaries() {
+        let arr1 = create_dict_list_arr(
+            (0..=255).collect(),
+            None,
+            (0..=255).collect(),
+            repeat_n(1, 256).collect(),
+            None,
+        );
+        // [[0]] [[1] [2]]
+        let list_arr1 = ListArray::new(
+            Arc::new(Field::new("item", arr1.data_type().clone(), true)),
+            OffsetBuffer::from_lengths(vec![1, 2]),
+            arr1,
+            None,
+        );
+        let mut null_keys = vec![true, false];
+        null_keys.extend(vec![true; 254]);
+
+        let mut null_list = vec![true, true, false];
+        null_list.extend(vec![true; 125]);
+
+        let arr2 = create_dict_list_arr(
+            (0..=255).rev().collect(),
+            Some(null_keys),
+            (0..=255).collect(),
+            repeat_n(2, 128).collect(),
+            Some(null_list),
+        );
+        // [[255 null] [253 252]] [ null [249 248]]
+        let list_arr2 = ListArray::new(
+            Arc::new(Field::new("item", arr2.data_type().clone(), true)),
+            OffsetBuffer::from_lengths(vec![2, 2]),
+            arr2,
+            None,
+        );
+
+        // list_arr1: [[0]] [[1] [2]]
+        // list_arr2: [[255 null] [253 252]] [ null [249 248]]
+        // result: [[255 null] [253 252]] [[0]] [ null [249 248]]
+        let new_arr = interleave(&[&list_arr1, &list_arr2], &[(1, 0), (0, 0), (1, 1)]).unwrap();
+        let new_list_arr = new_arr.as_list::<i32>();
+        assert_eq!(
+            new_list_arr.offsets(),
+            &OffsetBuffer::from_lengths(vec![2, 1, 2])
+        );
+
+        // 2 dimensional
+        let child_list_arr = new_list_arr.values().as_list::<i32>();
+        assert_eq!(
+            child_list_arr.offsets(),
+            &OffsetBuffer::from_lengths(vec![2, 2, 1, 2, 2])
+        );
+        assert_eq!(
+            child_list_arr.nulls(),
+            Some(NullBuffer::from_iter(vec![true, true, true, false, true])).as_ref(),
+        );
+        let dict_arr = child_list_arr.values().as_dictionary::<UInt8Type>();
+        assert_eq!(
+            dict_arr.values().as_primitive::<UInt16Type>(),
+            &UInt16Array::from_iter_values(0u16..=255),
+        );
+
+        // result: [[255 null] [253 252]] [[0]] [ null [249 248]]
+        let keys = dict_arr.keys();
+        assert_eq!(
+            keys.nulls(),
+            Some(NullBuffer::from_iter(vec![
+                true, false, true, true, true, true, true, true, true
+            ]))
+            .as_ref(),
+        );
+        assert_eq!(
+            keys.values(),
+            &ScalarBuffer::<u8>::from(vec![255u8, 0, 253, 252, 0, 251, 250, 249, 248]),
+        );
     }
 
     #[test]
