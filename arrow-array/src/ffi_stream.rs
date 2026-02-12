@@ -425,20 +425,7 @@ mod tests {
         }
     }
 
-    fn _test_round_trip_export(arrays: Vec<Arc<dyn Array>>) -> Result<()> {
-        let metadata = HashMap::from([("foo".to_owned(), "bar".to_owned())]);
-        let schema = Arc::new(Schema::new_with_metadata(
-            vec![
-                Field::new("a", arrays[0].data_type().clone(), true)
-                    .with_metadata(metadata.clone()),
-                Field::new("b", arrays[1].data_type().clone(), true)
-                    .with_metadata(metadata.clone()),
-                Field::new("c", arrays[2].data_type().clone(), true)
-                    .with_metadata(metadata.clone()),
-            ],
-            metadata,
-        ));
-        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+    fn _test_round_trip_export(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
@@ -467,10 +454,12 @@ mod tests {
             }
 
             let array = unsafe { from_ffi(ffi_array, &ffi_schema) }.unwrap();
+            let len = array.len();
 
-            let record_batch = RecordBatch::try_new(
+            let record_batch = RecordBatch::try_new_with_options(
                 SchemaRef::from(exported_schema.clone()),
                 StructArray::from(array).into_parts().1,
+                &RecordBatchOptions::new().with_row_count(Some(len)),
             )
             .unwrap();
             produced_batches.push(record_batch);
@@ -481,20 +470,7 @@ mod tests {
         Ok(())
     }
 
-    fn _test_round_trip_import(arrays: Vec<Arc<dyn Array>>) -> Result<()> {
-        let metadata = HashMap::from([("foo".to_owned(), "bar".to_owned())]);
-        let schema = Arc::new(Schema::new_with_metadata(
-            vec![
-                Field::new("a", arrays[0].data_type().clone(), true)
-                    .with_metadata(metadata.clone()),
-                Field::new("b", arrays[1].data_type().clone(), true)
-                    .with_metadata(metadata.clone()),
-                Field::new("c", arrays[2].data_type().clone(), true)
-                    .with_metadata(metadata.clone()),
-            ],
-            metadata,
-        ));
-        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+    fn _test_round_trip_import(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
@@ -517,19 +493,40 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_round_trip_export() -> Result<()> {
+    fn test_stream_round_trip() {
         let array = Int32Array::from(vec![Some(2), None, Some(1), None]);
         let array: Arc<dyn Array> = Arc::new(array);
+        let metadata = HashMap::from([("foo".to_owned(), "bar".to_owned())]);
 
-        _test_round_trip_export(vec![array.clone(), array.clone(), array])
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("a", array.data_type().clone(), true).with_metadata(metadata.clone()),
+                Field::new("b", array.data_type().clone(), true).with_metadata(metadata.clone()),
+                Field::new("c", array.data_type().clone(), true).with_metadata(metadata.clone()),
+            ],
+            metadata,
+        ));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array.clone(), array.clone(), array])
+            .unwrap();
+
+        _test_round_trip_export(batch.clone(), schema.clone()).unwrap();
+        _test_round_trip_import(batch, schema).unwrap();
     }
 
     #[test]
-    fn test_stream_round_trip_import() -> Result<()> {
-        let array = Int32Array::from(vec![Some(2), None, Some(1), None]);
-        let array: Arc<dyn Array> = Arc::new(array);
+    fn test_stream_round_trip_no_columns() {
+        let metadata = HashMap::from([("foo".to_owned(), "bar".to_owned())]);
 
-        _test_round_trip_import(vec![array.clone(), array.clone(), array])
+        let schema = Arc::new(Schema::new_with_metadata(Vec::<Field>::new(), metadata));
+        let batch = RecordBatch::try_new_with_options(
+            schema.clone(),
+            Vec::<Arc<dyn Array>>::new(),
+            &RecordBatchOptions::new().with_row_count(Some(10)),
+        )
+        .unwrap();
+
+        _test_round_trip_export(batch.clone(), schema.clone()).unwrap();
+        _test_round_trip_import(batch, schema).unwrap();
     }
 
     #[test]
