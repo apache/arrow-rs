@@ -58,7 +58,6 @@ use std::marker::PhantomData;
 #[derive(Debug)]
 pub struct BufferBuilder<T: ArrowNativeType> {
     buffer: MutableBuffer,
-    len: usize,
     _marker: PhantomData<T>,
 }
 
@@ -88,7 +87,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
 
         Self {
             buffer,
-            len: 0,
             _marker: PhantomData,
         }
     }
@@ -99,10 +97,8 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// - `buffer` bytes must be aligned to type `T`
     pub unsafe fn new_from_buffer(buffer: MutableBuffer) -> Self {
-        let buffer_len = buffer.len();
         Self {
             buffer,
-            len: buffer_len / std::mem::size_of::<T>(),
             _marker: PhantomData,
         }
     }
@@ -118,8 +114,9 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// assert_eq!(builder.len(), 1);
     /// ```
+    #[inline]
     pub fn len(&self) -> usize {
-        self.len
+        self.buffer.len() / std::mem::size_of::<T>()
     }
 
     /// Returns whether the internal buffer is empty.
@@ -134,7 +131,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     /// assert_eq!(builder.is_empty(), false);
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.buffer.is_empty()
     }
 
     /// Returns the actual capacity (number of elements) of the internal buffer.
@@ -166,7 +163,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn advance(&mut self, i: usize) {
         self.buffer.extend_zeros(i * std::mem::size_of::<T>());
-        self.len += i;
     }
 
     /// Reserves memory for _at least_ `n` more elements of type `T`.
@@ -202,7 +198,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         self.buffer.reserve(std::mem::size_of::<T>());
         // SAFETY: reserve ensures capacity() - len() >= size_of::<T>()
         unsafe { self.buffer.push_unchecked(v) };
-        self.len += 1;
     }
 
     /// Appends a value of type `T` into the builder N times,
@@ -219,12 +214,11 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     /// ```
     #[inline]
     pub fn append_n(&mut self, n: usize, v: T) {
-        self.buffer.reserve(n * std::mem::size_of::<T>());
+        self.reserve(n);
         for _ in 0..n {
             // SAFETY: reserve ensures enough capacity for n elements
             unsafe { self.buffer.push_unchecked(v) };
         }
-        self.len += n;
     }
 
     /// Appends `n`, zero-initialized values
@@ -242,7 +236,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn append_n_zeroed(&mut self, n: usize) {
         self.buffer.extend_zeros(n * std::mem::size_of::<T>());
-        self.len += n;
     }
 
     /// Appends a slice of type `T`, growing the internal buffer as needed.
@@ -259,7 +252,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn append_slice(&mut self, slice: &[T]) {
         self.buffer.extend_from_slice(slice);
-        self.len += slice.len();
     }
 
     /// View the contents of this buffer as a slice
@@ -279,7 +271,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         // - MutableBuffer is aligned and initialized for len elements of T
         // - MutableBuffer corresponds to a single allocation
         // - MutableBuffer does not support modification whilst active immutable borrows
-        unsafe { std::slice::from_raw_parts(self.buffer.as_ptr() as _, self.len) }
+        unsafe { std::slice::from_raw_parts(self.buffer.as_ptr() as _, self.len()) }
     }
 
     /// View the contents of this buffer as a mutable slice
@@ -303,7 +295,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         // - MutableBuffer is aligned and initialized for len elements of T
         // - MutableBuffer corresponds to a single allocation
         // - MutableBuffer does not support modification whilst active immutable borrows
-        unsafe { std::slice::from_raw_parts_mut(self.buffer.as_mut_ptr() as _, self.len) }
+        unsafe { std::slice::from_raw_parts_mut(self.buffer.as_mut_ptr() as _, self.len()) }
     }
 
     /// Shorten this BufferBuilder to `len` items
@@ -328,7 +320,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         self.buffer.truncate(len * std::mem::size_of::<T>());
-        self.len = self.len.min(len);
     }
 
     /// # Safety
@@ -342,10 +333,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
             .1
             .expect("append_trusted_len_iter expects upper bound");
         self.buffer.reserve(len * std::mem::size_of::<T>());
-        let before = self.buffer.len();
         self.buffer.extend(iter);
-        let added_bytes = self.buffer.len() - before;
-        self.len += added_bytes / std::mem::size_of::<T>();
     }
 
     /// Resets this builder and returns an immutable [Buffer].
@@ -364,7 +352,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn finish(&mut self) -> Buffer {
         let buf = std::mem::take(&mut self.buffer);
-        self.len = 0;
         buf.into()
     }
 
@@ -395,11 +382,7 @@ impl<T: ArrowNativeType> Default for BufferBuilder<T> {
 
 impl<T: ArrowNativeType> Extend<T> for BufferBuilder<T> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
-        let before = self.buffer.len();
         self.buffer.extend(iter);
-        let added_bytes = self.buffer.len() - before;
-        debug_assert_eq!(added_bytes % std::mem::size_of::<T>(), 0);
-        self.len += added_bytes / std::mem::size_of::<T>();
     }
 }
 
