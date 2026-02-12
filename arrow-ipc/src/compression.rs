@@ -32,6 +32,12 @@ pub struct CompressionContext {
     compressor: zstd::bulk::Compressor<'static>,
 }
 
+impl CompressionContext {
+    fn new() -> Self {
+        Default::default()
+    }
+}
+
 // the reason we allow derivable_impls here is because when zstd feature is not enabled, this
 // becomes derivable. however with zstd feature want to be explicit about the compression level.
 #[allow(clippy::derivable_impls)]
@@ -65,6 +71,12 @@ impl std::fmt::Debug for CompressionContext {
 pub struct DecompressionContext {
     #[cfg(feature = "zstd")]
     decompressor: zstd::bulk::Decompressor<'static>,
+}
+
+impl DecompressionContext {
+    fn new() -> Self {
+        Default::default()
+    }
 }
 
 #[allow(clippy::derivable_impls)]
