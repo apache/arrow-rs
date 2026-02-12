@@ -23,9 +23,7 @@ use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
-};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
@@ -157,12 +155,12 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, PrimitiveArray<T>>::new(values, indices);
 
-    let values: ScalarBuffer<T::Native> = indices
+    let values = indices
         .iter()
         .map(|(a, b)| interleaved.arrays[*a].value(*b))
-        .collect();
+        .collect::<Vec<_>>();
 
-    let array = PrimitiveArray::<T>::try_new(values, interleaved.nulls)?;
+    let array = PrimitiveArray::<T>::try_new(values.into(), interleaved.nulls)?;
     Ok(Arc::new(array.with_data_type(data_type.clone())))
 }
 
@@ -263,7 +261,7 @@ fn interleave_views<T: ByteViewType>(
     // contains the mapping from old buffer index to new buffer index
     let mut buffer_to_new_index = vec![None; total_buffers];
 
-    let views: ScalarBuffer<u128> = indices
+    let views: Vec<u128> = indices
         .iter()
         .map(|(array_idx, value_idx)| {
             let array = interleaved.arrays[*array_idx];
@@ -284,8 +282,9 @@ fn interleave_views<T: ByteViewType>(
         })
         .collect();
 
-    let array =
-        unsafe { GenericByteViewArray::<T>::new_unchecked(views, buffers, interleaved.nulls) };
+    let array = unsafe {
+        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers, interleaved.nulls)
+    };
     Ok(Arc::new(array))
 }
 
@@ -427,7 +426,7 @@ fn interleave_fallback_dictionary<K: ArrowDictionaryKeyType>(
     let any_nulls = dictionaries.iter().any(|d| d.keys().nulls().is_some());
     let (new_keys, nulls) = if any_nulls {
         let mut has_nulls = false;
-        let new_keys: ScalarBuffer<K::Native> = indices
+        let new_keys: Vec<K::Native> = indices
             .iter()
             .map(|(array, row)| {
                 let old_keys = dictionaries[*array].keys();
@@ -453,7 +452,7 @@ fn interleave_fallback_dictionary<K: ArrowDictionaryKeyType>(
         };
         (new_keys, nulls)
     } else {
-        let new_keys: ScalarBuffer<K::Native> = indices
+        let new_keys: Vec<K::Native> = indices
             .iter()
             .map(|(array, row)| {
                 let old_key = dictionaries[*array].keys().values()[*row].as_usize();
@@ -464,7 +463,7 @@ fn interleave_fallback_dictionary<K: ArrowDictionaryKeyType>(
         (new_keys, None)
     };
 
-    let keys_array = PrimitiveArray::<K>::new(new_keys, nulls);
+    let keys_array = PrimitiveArray::<K>::new(new_keys.into(), nulls);
     // SAFETY: keys_array is constructed from a valid set of keys.
     let array = unsafe { DictionaryArray::new_unchecked(keys_array, concatenated_values) };
     Ok(Arc::new(array))

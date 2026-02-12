@@ -22,8 +22,8 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_buffer::ArrowNativeType;
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_buffer::{ArrowNativeType, MutableBuffer, ScalarBuffer};
 use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
@@ -74,9 +74,8 @@ where
 {
     let sort_options = options.unwrap_or_default();
 
-    let mut mutable_buffer =
-        MutableBuffer::from_len_zeroed(primitive_values.len() * std::mem::size_of::<T::Native>());
-    let mutable_slice: &mut [T::Native] = mutable_buffer.typed_data_mut();
+    let mut mutable_buffer = vec![T::default_value(); primitive_values.len()];
+    let mutable_slice = &mut mutable_buffer;
 
     let input_values = primitive_values.values().as_ref();
 
@@ -121,7 +120,7 @@ where
     }
 
     Ok(Arc::new(
-        PrimitiveArray::<T>::try_new(ScalarBuffer::from(mutable_buffer), null_bit_buffer)?
+        PrimitiveArray::<T>::try_new(mutable_buffer.into(), null_bit_buffer)?
             .with_data_type(primitive_values.data_type().clone()),
     ))
 }

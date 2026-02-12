@@ -32,7 +32,7 @@
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::{
-    BooleanBuilder, BufferBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
+    BooleanBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -114,14 +114,14 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     let merged = merge_dictionary_values(&dictionaries, None)?;
 
     // Recompute keys
-    let mut key_values = BufferBuilder::<K::Native>::new(output_len);
+    let mut key_values = Vec::with_capacity(output_len);
 
     let mut has_nulls = false;
     for (d, mapping) in dictionaries.iter().zip(merged.key_mappings) {
         has_nulls |= d.null_count() != 0;
         for key in d.keys().values() {
             // Use get to safely handle nulls
-            key_values.append(mapping.get(key.as_usize()).copied().unwrap_or_default())
+            key_values.push(mapping.get(key.as_usize()).copied().unwrap_or_default())
         }
     }
 
