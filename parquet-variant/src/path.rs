@@ -113,12 +113,6 @@ impl<'a> VariantPath<'a> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-
-    /// Parses a path string, panics on invalid input.
-    /// Only use for tests for known-valid input.
-    pub fn from_str_or_panic(s: &'a str) -> Self {
-        VariantPath::try_from(s).unwrap()
-    }
 }
 
 impl<'a> From<Vec<VariantPathElement<'a>>> for VariantPath<'a> {
@@ -229,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_variant_path_empty_str() {
-        let path = VariantPath::from_str_or_panic("");
+        let path = VariantPath::try_from("").unwrap();
         assert!(path.is_empty());
     }
 
@@ -242,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_variant_path_dot_notation_with_array_index() {
-        let path = VariantPath::from_str_or_panic("city.store.books[3].title");
+        let path = VariantPath::try_from("city.store.books[3].title").unwrap();
 
         let expected = VariantPath::try_from("city")
             .unwrap()
