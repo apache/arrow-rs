@@ -397,9 +397,10 @@ impl<T: ArrowNativeType> From<Vec<T>> for BufferBuilder<T> {
 
 impl<T: ArrowNativeType> FromIterator<T> for BufferBuilder<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        let mut builder = Self::default();
-        builder.extend(iter);
-        builder
+        Self {
+            buffer: MutableBuffer::from_iter(iter),
+            _marker: PhantomData,
+        }
     }
 }
 
