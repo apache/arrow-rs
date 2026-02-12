@@ -690,7 +690,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             .iter()
             .map(|v| {
                 let len = *v as u32;
-                len.saturating_sub(MAX_INLINE_VIEW_LEN) as usize
+                (((len > MAX_INLINE_VIEW_LEN) as u32).wrapping_neg() & len) as usize
             })
             .sum()
     }
