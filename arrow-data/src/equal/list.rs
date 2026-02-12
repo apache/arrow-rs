@@ -21,7 +21,7 @@ use num_integer::Integer;
 
 use super::equal_range;
 
-fn lengths_equal<T: ArrowNativeType + Integer>(lhs: &[T], rhs: &[T]) -> bool {
+pub(super) fn lengths_equal<T: ArrowNativeType + Integer>(lhs: &[T], rhs: &[T]) -> bool {
     // invariant from `base_equal`
     debug_assert_eq!(lhs.len(), rhs.len());
 

@@ -39,12 +39,16 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod bad_data;
+mod bloom_filter;
 #[cfg(feature = "crc")]
 mod checksum;
 mod int96_stats_roundtrip;
+mod invalid_utf8;
 mod io;
+mod large_string_overflow;
 #[cfg(feature = "async")]
 mod predicate_cache;
+mod row_filter;
 mod statistics;
 
 // returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values
@@ -1128,7 +1132,7 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .expect("tempfile creation");
 
     let mut builder = WriterProperties::builder()
-        .set_max_row_group_size(row_per_group)
+        .set_max_row_group_row_count(Some(row_per_group))
         .set_bloom_filter_enabled(true)
         .set_statistics_enabled(EnabledStatistics::Page);
     if scenario.truncate_stats() {

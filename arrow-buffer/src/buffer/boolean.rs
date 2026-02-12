@@ -18,7 +18,10 @@
 use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::bit_util::read_u64;
-use crate::{BooleanBufferBuilder, Buffer, MutableBuffer, bit_util};
+use crate::{
+    BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
+    buffer_bin_xor,
+};
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
@@ -139,7 +142,8 @@ impl BooleanBuffer {
     /// input buffer.
     ///
     /// # Notes:
-    /// * The new `BooleanBuffer` has zero offset, even if `offset_in_bits` is non-zero
+    /// * The new `BooleanBuffer` may have non zero offset
+    ///   and/or padding bits outside the logical range.
     ///
     /// # Example: Create a new [`BooleanBuffer`] copying a bit slice from in input slice
     /// ```
@@ -147,7 +151,16 @@ impl BooleanBuffer {
     /// let input = [0b11001100u8, 0b10111010u8];
     /// // // Copy bits 4..16 from input
     /// let result = BooleanBuffer::from_bits(&input, 4, 12);
-    /// assert_eq!(result.values(), &[0b10101100u8, 0b00001011u8]);
+    /// // output is 12 bits long starting from bit offset 4
+    /// assert_eq!(result.len(), 12);
+    /// assert_eq!(result.offset(), 4);
+    /// // the expected 12 bits are 0b101110101100 (bits 4..16 of the input)
+    /// let expected_bits = [false, false, true, true, false, true, false, true, true, true, false, true];
+    /// for (i, v) in expected_bits.into_iter().enumerate() {
+    ///    assert_eq!(result.value(i), v);
+    /// }
+    /// // However, underlying buffer has (ignored) bits set outside the requested range
+    /// assert_eq!(result.values(), &[0b11001100u8, 0b10111010, 0, 0, 0, 0, 0, 0]);
     pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
         let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
         let iter = chunks.iter_padded();
@@ -167,22 +180,32 @@ impl BooleanBuffer {
     ///   on the relevant bits; the input `u64` may contain irrelevant bits
     ///   and may be processed differently on different endian architectures.
     /// * `op` may be called with input bits outside the requested range
-    /// * The output may have a non-zero bit offset IF the source buffer is not 64-bit aligned.
+    /// * Returned `BooleanBuffer` may have non zero offset
+    /// * Returned `BooleanBuffer` may have bits set outside the requested range
     ///
     /// # See Also
     /// - [`BooleanBuffer::from_bitwise_binary_op`] to create a new buffer from a binary operation
     /// - [`apply_bitwise_unary_op`](bit_util::apply_bitwise_unary_op) for in-place unary bitwise operations
     ///
-    /// # Example: Create new [`BooleanBuffer`] from bitwise `NOT` of a byte slice
+    /// # Example: Create new [`BooleanBuffer`] from bitwise `NOT`
     /// ```
     /// # use arrow_buffer::BooleanBuffer;
     /// let input = [0b11001100u8, 0b10111010u8]; // 2 bytes = 16 bits
-    /// // NOT of the first 12 bits
+    /// // NOT of bits 4..16
     /// let result = BooleanBuffer::from_bitwise_unary_op(
-    ///  &input, 0, 12, |a| !a
+    ///  &input, 4, 12, |a| !a
     /// );
-    /// // Values are padded
-    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8, 255, 255, 255, 255, 255, 255]);
+    /// // output is 12 bits long starting from bit offset 4
+    /// assert_eq!(result.len(), 12);
+    /// assert_eq!(result.offset(), 4);
+    /// // the expected 12 bits are 0b001100110101, (NOT of the requested bits)
+    /// let expected_bits = [true, true, false, false, true, false, true, false, false, false, true, false];
+    /// for (i, v) in expected_bits.into_iter().enumerate() {
+    ///     assert_eq!(result.value(i), v);
+    /// }
+    /// // However, underlying buffer has (ignored) bits set outside the requested range
+    /// let expected = [0b00110011u8, 0b01000101u8, 255, 255, 255, 255, 255, 255];
+    /// assert_eq!(result.values(), &expected);
     /// ```
     pub fn from_bitwise_unary_op<F>(
         src: impl AsRef<[u8]>,
@@ -194,11 +217,38 @@ impl BooleanBuffer {
         F: FnMut(u64) -> u64,
     {
         let end = offset_in_bits + len_in_bits;
-        let start_bit = offset_in_bits % 8;
+        // Align start and end to 64 bit (8 byte) boundaries if possible to allow using the
+        // optimized code path as much as possible.
+        let aligned_offset = offset_in_bits & !63;
+        let aligned_end_bytes = bit_util::ceil(end, 64) * 8;
+        let src_len = src.as_ref().len();
+        let slice_end = aligned_end_bytes.min(src_len);
+
+        let aligned_start = &src.as_ref()[aligned_offset / 8..slice_end];
+
+        let (prefix, aligned_u64s, suffix) = unsafe { aligned_start.as_ref().align_to::<u64>() };
+        match (prefix, suffix) {
+            ([], []) => {
+                // the buffer is word (64 bit) aligned, so use optimized Vec code.
+                let result_u64s: Vec<u64> = aligned_u64s.iter().map(|l| op(*l)).collect();
+                return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 64, len_in_bits);
+            }
+            ([], suffix) => {
+                let suffix = read_u64(suffix);
+                let result_u64s: Vec<u64> = aligned_u64s
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(suffix))
+                    .map(&mut op)
+                    .collect();
+                return BooleanBuffer::new(result_u64s.into(), offset_in_bits % 64, len_in_bits);
+            }
+            _ => {}
+        }
+
         // align to byte boundaries
-        let aligned = &src.as_ref()[offset_in_bits / 8..bit_util::ceil(end, 8)];
         // Use unaligned code path, handle remainder bytes
-        let chunks = aligned.chunks_exact(8);
+        let chunks = aligned_start.chunks_exact(8);
         let remainder = chunks.remainder();
         let iter = chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
         let vec_u64s: Vec<u64> = if remainder.is_empty() {
@@ -207,7 +257,7 @@ impl BooleanBuffer {
             iter.chain(Some(read_u64(remainder))).map(&mut op).collect()
         };
 
-        return BooleanBuffer::new(Buffer::from(vec_u64s), start_bit, len_in_bits);
+        BooleanBuffer::new(vec_u64s.into(), offset_in_bits % 64, len_in_bits)
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
@@ -217,7 +267,12 @@ impl BooleanBuffer {
     /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
     ///
     /// # Notes:
-    /// See notes on [Self::from_bitwise_unary_op]
+    /// * `op` takes two `u64` inputs and produces one `u64` output.
+    /// * `op` must only apply bitwise operations
+    ///   on the relevant bits; the input `u64` values may contain irrelevant bits
+    ///   and may be processed differently on different endian architectures.
+    /// * `op` may be called with input bits outside the requested range.
+    /// * The returned `BooleanBuffer` always has zero offset.
     ///
     /// # See Also
     /// - [`BooleanBuffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
@@ -713,6 +768,15 @@ mod tests {
 
         let expected = BooleanBuffer::new(Buffer::from(&[255, 254, 254, 255, 255]), offset, len);
         assert_eq!(!boolean_buf, expected);
+
+        // Demonstrate that Non-zero offsets are preserved
+        let sliced = boolean_buf.slice(3, 20);
+        let result = !&sliced;
+        assert_eq!(result.offset(), 3);
+        assert_eq!(result.len(), sliced.len());
+        for i in 0..sliced.len() {
+            assert_eq!(result.value(i), !sliced.value(i));
+        }
     }
 
     #[test]
@@ -761,6 +825,41 @@ mod tests {
                 .collect::<BooleanBuffer>();
             assert_eq!(result, expected);
         }
+    }
+
+    #[test]
+    fn test_from_bitwise_unary_op_unaligned_fallback() {
+        // Deterministic affine sequence over u8: b[i] = 37*i + 11 (mod 256).
+        // This yields a non-trivial mix of bits (prefix: 11, 48, 85, 122, 159, 196, 233, 14, ...)
+        // so unary bit operations are exercised on varied input patterns.
+        let bytes = (0..80)
+            .map(|i| (i as u8).wrapping_mul(37).wrapping_add(11))
+            .collect::<Vec<_>>();
+        let base = bytes.as_ptr() as usize;
+        let shift = (0..8).find(|s| (base + s) % 8 != 0).unwrap();
+        let misaligned = &bytes[shift..];
+
+        // Case 1: fallback path with `remainder.is_empty() == true`
+        let src = &misaligned[..24];
+        let offset = 7;
+        let len = 96;
+        let result = BooleanBuffer::from_bitwise_unary_op(src, offset, len, |a| !a);
+        let expected = (0..len)
+            .map(|i| !bit_util::get_bit(src, offset + i))
+            .collect::<BooleanBuffer>();
+        assert_eq!(result, expected);
+        assert_eq!(result.offset(), offset % 64);
+
+        // Case 2: fallback path with `remainder.is_empty() == false`
+        let src = &misaligned[..13];
+        let offset = 3;
+        let len = 100;
+        let result = BooleanBuffer::from_bitwise_unary_op(src, offset, len, |a| !a);
+        let expected = (0..len)
+            .map(|i| !bit_util::get_bit(src, offset + i))
+            .collect::<BooleanBuffer>();
+        assert_eq!(result, expected);
+        assert_eq!(result.offset(), offset % 64);
     }
 
     #[test]

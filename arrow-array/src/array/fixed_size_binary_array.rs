@@ -603,9 +603,8 @@ impl std::fmt::Debug for FixedSizeBinaryArray {
     }
 }
 
-impl super::private::Sealed for FixedSizeBinaryArray {}
-
-impl Array for FixedSizeBinaryArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for FixedSizeBinaryArray {
     fn as_any(&self) -> &dyn Any {
         self
     }

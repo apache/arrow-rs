@@ -17,6 +17,7 @@
 
 //! Test for predicate cache in Parquet Arrow reader
 
+use super::io::TestReader;
 use arrow::array::ArrayRef;
 use arrow::array::Int64Array;
 use arrow::compute::and;
@@ -26,16 +27,12 @@ use arrow_array::types::Int64Type;
 use arrow_array::{RecordBatch, StringArray, StringViewArray, StructArray};
 use arrow_schema::{DataType, Field};
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
 use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
-use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
-use std::ops::Range;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -221,7 +218,7 @@ static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
     let mut output = Vec::new();
 
     let writer_options = WriterProperties::builder()
-        .set_max_row_group_size(200)
+        .set_max_row_group_row_count(Some(200))
         .set_data_page_row_count_limit(100)
         .build();
     let mut writer =
@@ -323,50 +320,5 @@ impl<T> ArrowReaderBuilderExt for ArrowReaderBuilder<T> {
 
         self.with_projection(nested_leaf_mask)
             .with_row_filter(row_filter)
-    }
-}
-
-/// Copy paste version of the `AsyncFileReader` trait for testing purposes 🤮
-/// TODO put this in a common place
-#[derive(Clone)]
-struct TestReader {
-    data: Bytes,
-    metadata: Option<Arc<ParquetMetaData>>,
-}
-
-impl TestReader {
-    fn new(data: Bytes) -> Self {
-        Self {
-            data,
-            metadata: Default::default(),
-        }
-    }
-}
-
-impl AsyncFileReader for TestReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        let range = range.clone();
-        futures::future::ready(Ok(self
-            .data
-            .slice(range.start as usize..range.end as usize)))
-        .boxed()
-    }
-
-    fn get_metadata<'a>(
-        &'a mut self,
-        options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        let mut metadata_reader = ParquetMetaDataReader::new();
-
-        if let Some(options) = options {
-            metadata_reader = metadata_reader
-                .with_column_index_policy(options.column_index_policy())
-                .with_offset_index_policy(options.offset_index_policy());
-        }
-
-        self.metadata = Some(Arc::new(
-            metadata_reader.parse_and_finish(&self.data).unwrap(),
-        ));
-        futures::future::ready(Ok(self.metadata.clone().unwrap().clone())).boxed()
     }
 }

@@ -116,7 +116,7 @@ fn build_parquet_file(
         .tempfile()
         .expect("tempfile creation");
 
-    let mut builder = WriterProperties::builder().set_max_row_group_size(row_per_group);
+    let mut builder = WriterProperties::builder().set_max_row_group_row_count(Some(row_per_group));
     if let Some(enable_stats) = enable_stats {
         builder = builder.set_statistics_enabled(enable_stats);
     }
@@ -2357,8 +2357,8 @@ async fn test_struct() {
     .await;
     Test {
         reader: &reader,
-        expected_min: Arc::new(struct_array(vec![(Some(1), Some(6.0), Some(12.0))])),
-        expected_max: Arc::new(struct_array(vec![(Some(2), Some(8.5), Some(14.0))])),
+        expected_min: struct_array(vec![(Some(1), Some(6.0), Some(12.0))]),
+        expected_max: struct_array(vec![(Some(2), Some(8.5), Some(14.0))]),
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: Some(UInt64Array::from(vec![3])),
         expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
@@ -2903,7 +2903,7 @@ mod test {
     fn parquet_metadata(schema: SchemaRef, batch: RecordBatch) -> Arc<ParquetMetaData> {
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Chunk)
-            .set_max_row_group_size(ROWS_PER_ROW_GROUP)
+            .set_max_row_group_row_count(Some(ROWS_PER_ROW_GROUP))
             .build();
 
         let mut buffer = Vec::new();

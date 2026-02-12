@@ -143,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
+    #[should_panic(expected = "Extension type name missing")]
     fn row_number_missing_name() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
@@ -203,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
+    #[should_panic(expected = "Extension type name missing")]
     fn row_group_index_missing_name() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]

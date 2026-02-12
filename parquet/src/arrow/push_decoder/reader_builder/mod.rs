@@ -39,7 +39,7 @@ use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 /// The current row group being read and the read plan
 #[derive(Debug)]
@@ -329,7 +329,7 @@ impl RowGroupReaderBuilder {
 
                 let cache_info = CacheInfo::new(
                     cache_projection,
-                    Arc::new(Mutex::new(RowGroupCache::new(
+                    Arc::new(RwLock::new(RowGroupCache::new(
                         self.batch_size,
                         self.max_predicate_cache_size,
                     ))),
@@ -436,6 +436,16 @@ impl RowGroupReaderBuilder {
                     .with_cache_options(Some(&cache_options))
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+
+                // Prepare to evaluate the filter.
+                // Note: first update the selection strategy to properly handle any pages
+                // pruned during fetch
+                plan_builder = override_selector_strategy_if_needed(
+                    plan_builder,
+                    predicate.projection(),
+                    self.row_group_offset_index(row_group_idx),
+                );
+                // `with_predicate` actually evaluates the filter
 
                 plan_builder =
                     plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
