@@ -18,11 +18,10 @@
 //! Arrow Extension Type Support for Parquet
 //!
 //! This module contains mapping code to map Parquet [`LogicalType`]s to/from
-//! Arrow [`arrow_schema::extension::ExtensionType`]s.
+//! Arrow [`ExtensionType`]s.
 //!
 //! Extension types are represented using the metadata from Arrow [`Field`]s
 //! with the key "ARROW:extension:name".
-//! Arrow [`ExtensionType`]s.
 //!
 //! Extension types are represented using the metadata from Arrow [`Field`]s
 //! with the key "ARROW:extension:name".
