@@ -20,11 +20,12 @@ mod filter;
 
 use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
-use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
+use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder, CacheMode, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
+    ArrowPredicate, ParquetRecordBatchReader, PredicateBatchObserver, PushdownFilterEvalMode,
+    ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -34,10 +35,16 @@ use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::util::push_buffers::PushBuffers;
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, StructArray, new_empty_array};
+use arrow_schema::DataType as ArrowType;
+use arrow_select::filter::{filter, filter_record_batch, prep_null_mask_filter};
 use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
+use std::any::Any;
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
@@ -47,6 +54,31 @@ struct RowGroupInfo {
     row_group_idx: usize,
     row_count: usize,
     plan_builder: ReadPlanBuilder,
+}
+
+/// Observer that stores exact selected values for one cached column.
+struct ExactSelectedObserver {
+    cache: Arc<RwLock<RowGroupCache>>,
+    column_idx: usize,
+}
+
+impl PredicateBatchObserver for ExactSelectedObserver {
+    fn observe(
+        &mut self,
+        batch: &RecordBatch,
+        filter_values: &BooleanArray,
+    ) -> crate::errors::Result<()> {
+        if batch.num_columns() != 1 {
+            return Ok(());
+        }
+        let selected = filter(batch.column(0).as_ref(), filter_values)?;
+        let _inserted = self
+            .cache
+            .write()
+            .unwrap()
+            .insert_selected(self.column_idx, selected);
+        Ok(())
+    }
 }
 
 /// This is the inner state machine for reading a single row group.
@@ -160,6 +192,9 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Strategy for materialising row selections
     row_selection_policy: RowSelectionPolicy,
 
+    /// How pushed-down predicates are evaluated during filtering.
+    pushdown_filter_eval_mode: PushdownFilterEvalMode,
+
     /// Current state of the decoder.
     ///
     /// It is taken when processing, and must be put back before returning
@@ -185,6 +220,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        pushdown_filter_eval_mode: PushdownFilterEvalMode,
     ) -> Self {
         Self {
             batch_size,
@@ -197,6 +233,7 @@ impl RowGroupReaderBuilder {
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
+            pushdown_filter_eval_mode,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -323,9 +360,32 @@ impl RowGroupReaderBuilder {
                     }));
                 };
 
-                // we have predicates to evaluate
-                let cache_projection =
-                    self.compute_cache_projection(row_group_info.row_group_idx, &filter);
+                // We have predicates to evaluate. Decide whether to keep the
+                // existing "predicate->selection->second decode" flow, or use a
+                // projection-driven single-pass flow that can avoid the second decode.
+                let use_projection_filter_eval =
+                    self.use_projection_filter_eval(row_group_info.row_group_idx, &filter);
+                let cache_projection = if use_projection_filter_eval {
+                    self.compute_projection_filter_eval_cache_projection(
+                        row_group_info.row_group_idx,
+                    )
+                } else {
+                    self.compute_cache_projection(row_group_info.row_group_idx, &filter)
+                };
+                let exact_selected_column = if use_projection_filter_eval {
+                    None
+                } else {
+                    self.compute_exact_selected_column(
+                        row_group_info.row_group_idx,
+                        &filter,
+                        &cache_projection,
+                    )
+                };
+                let cache_mode = if exact_selected_column.is_some() {
+                    CacheMode::ExactSelected
+                } else {
+                    CacheMode::Raw
+                };
 
                 let cache_info = CacheInfo::new(
                     cache_projection,
@@ -333,6 +393,9 @@ impl RowGroupReaderBuilder {
                         self.batch_size,
                         self.max_predicate_cache_size,
                     ))),
+                    cache_mode,
+                    exact_selected_column,
+                    use_projection_filter_eval,
                 );
 
                 let filter_info = FilterInfo::new(filter, cache_info);
@@ -366,6 +429,11 @@ impl RowGroupReaderBuilder {
 
                 // Make a request for the data needed to evaluate the current predicate
                 let predicate = filter_info.current();
+                let predicate_input_projection = if filter_info.use_projection_filter_eval() {
+                    self.projection.clone()
+                } else {
+                    predicate.projection().clone()
+                };
 
                 // need to fetch pages the column needs for decoding, figure
                 // that out based on the current selection and projection
@@ -374,10 +442,10 @@ impl RowGroupReaderBuilder {
                     row_count,
                     self.batch_size,
                     &self.metadata,
-                    predicate.projection(), // use the predicate's projection
+                    &predicate_input_projection,
                 )
                 .with_selection(plan_builder.selection())
-                // Fetch predicate columns; expand selection only for cached predicate columns
+                // Expand the fetched selection for cache columns when caching is enabled.
                 .with_cache_projection(Some(filter_info.cache_projection()))
                 .with_column_chunks(column_chunks)
                 .build();
@@ -421,34 +489,138 @@ impl RowGroupReaderBuilder {
                 } = row_group_info;
 
                 let predicate = filter_info.current();
+                let predicate_input_projection = if filter_info.use_projection_filter_eval() {
+                    self.projection.clone()
+                } else {
+                    predicate.projection().clone()
+                };
 
                 let row_group = data_request.try_into_in_memory_row_group(
                     row_group_idx,
                     row_count,
                     &self.metadata,
-                    predicate.projection(),
+                    &predicate_input_projection,
                     &mut self.buffers,
                 )?;
 
-                let cache_options = filter_info.cache_builder().producer();
+                if filter_info.use_projection_filter_eval() {
+                    // Single-pass path:
+                    // 1) decode the output projection once
+                    // 2) evaluate predicates against that decoded batch
+                    // 3) keep only selected rows and return directly
+                    //
+                    // Rationale: for overlap-heavy shapes (for example, filtering and
+                    // projecting the same column), this avoids the second decode pass and
+                    // can remove substantial cache/selection orchestration overhead.
+                    let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                        .with_parquet_metadata(&self.metadata)
+                        .build_array_reader(self.fields.as_deref(), &self.projection)?;
+                    let predicate_rows_reader =
+                        ParquetRecordBatchReader::new(array_reader, plan_builder.clone().build());
+                    let mut filter = filter_info.into_filter();
+                    let predicate_column_indices: Vec<Option<Vec<usize>>> = filter
+                        .predicates
+                        .iter()
+                        .map(|predicate| {
+                            self.projection_indices_for_predicate(
+                                &self.projection,
+                                predicate.projection(),
+                            )
+                        })
+                        .collect::<Result<_, _>>()?;
+
+                    let mut selected_batches = Vec::new();
+                    for maybe_batch in predicate_rows_reader {
+                        let mut batch = maybe_batch?;
+                        for (predicate, projection_indices) in filter
+                            .predicates
+                            .iter_mut()
+                            .zip(predicate_column_indices.iter())
+                        {
+                            if batch.num_rows() == 0 {
+                                break;
+                            }
+                            let predicate_batch = match projection_indices.as_ref() {
+                                Some(indices) => {
+                                    self.project_batch_for_predicate(&batch, indices)?
+                                }
+                                None => batch.clone(),
+                            };
+                            let mut mask = predicate.evaluate(predicate_batch)?;
+                            if mask.len() != batch.num_rows() {
+                                return Err(ParquetError::General(format!(
+                                    "ArrowPredicate returned {} rows, expected {}",
+                                    mask.len(),
+                                    batch.num_rows()
+                                )));
+                            }
+                            if mask.null_count() > 0 {
+                                mask = prep_null_mask_filter(&mask);
+                            }
+                            if mask.true_count() == 0 {
+                                batch = batch.slice(0, 0);
+                                break;
+                            }
+                            if mask.true_count() != batch.num_rows() {
+                                batch = filter_record_batch(&batch, &mask)?;
+                            }
+                        }
+                        if batch.num_rows() > 0 {
+                            selected_batches.push(batch);
+                        }
+                    }
+
+                    self.filter = Some(filter);
+                    // Apply global offset/limit here because this path bypasses StartData,
+                    // where those are normally enforced.
+                    let selected_batches =
+                        self.apply_offset_limit_to_selected_batches(selected_batches);
+                    if selected_batches.is_empty() {
+                        return Ok(NextState::result(
+                            RowGroupDecoderState::Finished,
+                            DecodeResult::Finished,
+                        ));
+                    }
+
+                    let array_reader =
+                        Box::new(PrecomputedStructArrayReader::try_new(selected_batches)?);
+                    let reader = ParquetRecordBatchReader::new(
+                        array_reader,
+                        ReadPlanBuilder::new(self.batch_size).build(),
+                    );
+                    return Ok(NextState::result(
+                        RowGroupDecoderState::Finished,
+                        DecodeResult::Data(reader),
+                    ));
+                }
+
+                let cache_options = filter_info.producer_cache_options();
 
                 let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_cache_options(Some(&cache_options))
                     .with_parquet_metadata(&self.metadata)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                    .build_array_reader(self.fields.as_deref(), &predicate_input_projection)?;
 
-                // Prepare to evaluate the filter.
-                // Note: first update the selection strategy to properly handle any pages
-                // pruned during fetch
-                plan_builder = override_selector_strategy_if_needed(
-                    plan_builder,
-                    predicate.projection(),
-                    self.row_group_offset_index(row_group_idx),
-                );
-                // `with_predicate` actually evaluates the filter
-
-                plan_builder =
-                    plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
+                plan_builder = if filter_info.use_projection_filter_eval() {
+                    self.with_predicate_from_projection_reader(
+                        plan_builder,
+                        array_reader,
+                        filter_info.current_mut(),
+                        &predicate_input_projection,
+                    )?
+                } else if let Some(column_idx) = filter_info.exact_selected_column() {
+                    let mut observer = ExactSelectedObserver {
+                        cache: cache_options.cache.clone(),
+                        column_idx,
+                    };
+                    plan_builder.with_predicate_with_observer(
+                        array_reader,
+                        filter_info.current_mut(),
+                        Some(&mut observer),
+                    )?
+                } else {
+                    plan_builder.with_predicate(array_reader, filter_info.current_mut())?
+                };
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
@@ -544,7 +716,16 @@ impl RowGroupReaderBuilder {
                 // so don't call with_cache_projection here
                 .build();
 
-                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+                plan_builder = if cache_info
+                    .as_ref()
+                    .and_then(|c| c.exact_selected_column())
+                    .is_some()
+                {
+                    // ExactSelected cache stream is selected-row-only and requires selectors.
+                    plan_builder.with_row_selection_policy(RowSelectionPolicy::Selectors)
+                } else {
+                    plan_builder.with_row_selection_policy(self.row_selection_policy)
+                };
 
                 plan_builder = override_selector_strategy_if_needed(
                     plan_builder,
@@ -604,7 +785,7 @@ impl RowGroupReaderBuilder {
                 let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_parquet_metadata(&self.metadata);
                 let array_reader = if let Some(cache_info) = cache_info.as_ref() {
-                    let cache_options = cache_info.builder().consumer();
+                    let cache_options = cache_info.consumer_options();
                     array_reader_builder
                         .with_cache_options(Some(&cache_options))
                         .build_array_reader(self.fields.as_deref(), &self.projection)
@@ -624,6 +805,193 @@ impl RowGroupReaderBuilder {
         Ok(result)
     }
 
+    fn with_predicate_from_projection_reader(
+        &self,
+        mut plan_builder: ReadPlanBuilder,
+        array_reader: Box<dyn ArrayReader>,
+        predicate: &mut dyn ArrowPredicate,
+        reader_projection: &ProjectionMask,
+    ) -> Result<ReadPlanBuilder, ParquetError> {
+        let projection_indices =
+            self.projection_indices_for_predicate(reader_projection, predicate.projection())?;
+        let reader = ParquetRecordBatchReader::new(array_reader, plan_builder.clone().build());
+        let mut filters = Vec::new();
+        for maybe_batch in reader {
+            let batch = maybe_batch?;
+            let input_rows = batch.num_rows();
+            let predicate_batch = match projection_indices.as_ref() {
+                Some(indices) => self.project_batch_for_predicate(&batch, indices)?,
+                None => batch.clone(),
+            };
+            let filter = predicate.evaluate(predicate_batch)?;
+            if filter.len() != input_rows {
+                return Err(ParquetError::General(format!(
+                    "ArrowPredicate returned {} rows, expected {input_rows}",
+                    filter.len()
+                )));
+            }
+            let filter = match filter.null_count() {
+                0 => filter,
+                _ => prep_null_mask_filter(&filter),
+            };
+            filters.push(filter);
+        }
+
+        let raw = RowSelection::from_filters(&filters);
+        let selection = match plan_builder.selection().cloned() {
+            Some(selection) => selection.and_then(&raw),
+            None => raw,
+        };
+        plan_builder = plan_builder.with_selection(Some(selection));
+        Ok(plan_builder)
+    }
+
+    fn projection_indices_for_predicate(
+        &self,
+        reader_projection: &ProjectionMask,
+        predicate_projection: &ProjectionMask,
+    ) -> Result<Option<Vec<usize>>, ParquetError> {
+        if reader_projection == predicate_projection {
+            return Ok(None);
+        }
+
+        let num_leaves = self.metadata.file_metadata().schema_descr().num_columns();
+        let reader_leaves = Self::leaf_indices(reader_projection, num_leaves);
+        let predicate_leaves = Self::leaf_indices(predicate_projection, num_leaves);
+
+        let mut index_by_leaf = HashMap::with_capacity(reader_leaves.len());
+        for (idx, leaf_idx) in reader_leaves.iter().enumerate() {
+            index_by_leaf.insert(*leaf_idx, idx);
+        }
+
+        let mut projection_indices = Vec::with_capacity(predicate_leaves.len());
+        for leaf_idx in predicate_leaves {
+            let Some(idx) = index_by_leaf.get(&leaf_idx).copied() else {
+                return Err(ParquetError::General(format!(
+                    "Predicate leaf {leaf_idx} not present in reader projection"
+                )));
+            };
+            projection_indices.push(idx);
+        }
+        Ok(Some(projection_indices))
+    }
+
+    fn project_batch_for_predicate(
+        &self,
+        batch: &RecordBatch,
+        projection_indices: &[usize],
+    ) -> Result<RecordBatch, ParquetError> {
+        let projected_schema = Arc::new(batch.schema().project(projection_indices)?);
+        let projected_columns = projection_indices
+            .iter()
+            .map(|idx| batch.column(*idx).clone())
+            .collect();
+        Ok(RecordBatch::try_new(projected_schema, projected_columns)?)
+    }
+
+    fn leaf_indices(mask: &ProjectionMask, num_leaves: usize) -> Vec<usize> {
+        (0..num_leaves)
+            .filter(|idx| mask.leaf_included(*idx))
+            .collect()
+    }
+
+    fn use_projection_filter_eval(&self, row_group_idx: usize, filter: &RowFilter) -> bool {
+        let mode_enabled = match self.pushdown_filter_eval_mode {
+            PushdownFilterEvalMode::DecodeProjectionThenFilter => true,
+            // In default row-selection mode, auto-enable only for single-predicate
+            // queries. This keeps behavior conservative while still unlocking the
+            // no-second-decode optimization for common regression shapes.
+            PushdownFilterEvalMode::RowSelection => filter.predicates.len() == 1,
+        };
+        if !mode_enabled {
+            return false;
+        }
+        if !self.is_non_nested_projection(&self.projection) {
+            return false;
+        }
+
+        let num_leaves = self.metadata.row_group(row_group_idx).columns().len();
+        let output_leaves: HashMap<usize, ()> = Self::leaf_indices(&self.projection, num_leaves)
+            .into_iter()
+            .map(|idx| (idx, ()))
+            .collect();
+
+        filter.predicates.iter().all(|predicate| {
+            let projection = predicate.projection();
+            self.is_non_nested_projection(projection)
+                && Self::leaf_indices(projection, num_leaves)
+                    .into_iter()
+                    .all(|idx| output_leaves.contains_key(&idx))
+        })
+    }
+
+    fn compute_projection_filter_eval_cache_projection(
+        &self,
+        row_group_idx: usize,
+    ) -> ProjectionMask {
+        let meta = self.metadata.row_group(row_group_idx);
+        self.exclude_nested_columns_from_cache(&self.projection)
+            .unwrap_or_else(|| ProjectionMask::none(meta.columns().len()))
+    }
+
+    fn is_non_nested_projection(&self, mask: &ProjectionMask) -> bool {
+        self.exclude_nested_columns_from_cache(mask)
+            .as_ref()
+            .is_some_and(|non_nested| non_nested == mask)
+    }
+
+    fn apply_offset_limit_to_selected_batches(
+        &mut self,
+        batches: Vec<RecordBatch>,
+    ) -> Vec<RecordBatch> {
+        // This helper mirrors the row-group level offset/limit behavior used by
+        // ReadPlanBuilder, but operates on already materialized filtered batches.
+        let mut batches = batches;
+        if let Some(offset_remaining) = self.offset.as_mut() {
+            if *offset_remaining > 0 {
+                let mut to_skip = *offset_remaining;
+                let mut after_offset = Vec::new();
+                for batch in batches {
+                    if to_skip == 0 {
+                        after_offset.push(batch);
+                        continue;
+                    }
+                    if to_skip >= batch.num_rows() {
+                        to_skip -= batch.num_rows();
+                    } else {
+                        let sliced = batch.slice(to_skip, batch.num_rows() - to_skip);
+                        after_offset.push(sliced);
+                        to_skip = 0;
+                    }
+                }
+                *offset_remaining = to_skip;
+                batches = after_offset;
+            }
+        }
+
+        if let Some(limit_remaining) = self.limit.as_mut() {
+            let mut keep = *limit_remaining;
+            let mut limited = Vec::new();
+            for batch in batches {
+                if keep == 0 {
+                    break;
+                }
+                if batch.num_rows() <= keep {
+                    keep -= batch.num_rows();
+                    limited.push(batch);
+                } else {
+                    limited.push(batch.slice(0, keep));
+                    keep = 0;
+                    break;
+                }
+            }
+            *limit_remaining = keep;
+            batches = limited;
+        }
+
+        batches
+    }
+
     /// Which columns should be cached?
     ///
     /// Returns the columns that are used by the filters *and* then used in the
@@ -634,6 +1002,37 @@ impl RowGroupReaderBuilder {
             Some(projection) => projection,
             None => ProjectionMask::none(meta.columns().len()),
         }
+    }
+
+    /// Returns the cached column index for ExactSelected mode, if applicable.
+    ///
+    /// This prototype is intentionally conservative:
+    /// - exactly one predicate
+    /// - exactly one cached leaf
+    /// - predicate projection contains exactly that same leaf
+    fn compute_exact_selected_column(
+        &self,
+        row_group_idx: usize,
+        filter: &RowFilter,
+        cache_projection: &ProjectionMask,
+    ) -> Option<usize> {
+        if self.max_predicate_cache_size == 0 || filter.predicates.len() != 1 {
+            return None;
+        }
+        let num_cols = self.metadata.row_group(row_group_idx).columns().len();
+        let cached_cols: Vec<usize> = (0..num_cols)
+            .filter(|idx| cache_projection.leaf_included(*idx))
+            .collect();
+        if cached_cols.len() != 1 {
+            return None;
+        }
+        let predicate_cols: Vec<usize> = (0..num_cols)
+            .filter(|idx| filter.predicates[0].projection().leaf_included(*idx))
+            .collect();
+        if predicate_cols.len() != 1 || predicate_cols[0] != cached_cols[0] {
+            return None;
+        }
+        Some(cached_cols[0])
     }
 
     fn compute_cache_projection_inner(&self, filter: &RowFilter) -> Option<ProjectionMask> {
@@ -661,6 +1060,135 @@ impl RowGroupReaderBuilder {
             .filter(|index| !index.is_empty())
             .and_then(|index| index.get(row_group_idx))
             .map(|columns| columns.as_slice())
+    }
+}
+
+/// ArrayReader backed by precomputed filtered batches.
+///
+/// This is used by the single-pass filter path to return already-selected rows
+/// through the same `ParquetRecordBatchReader` interface without re-decoding.
+#[derive(Debug)]
+struct PrecomputedStructArrayReader {
+    data_type: ArrowType,
+    remaining: VecDeque<ArrayRef>,
+    current: Option<(ArrayRef, usize)>,
+    staged: Vec<ArrayRef>,
+}
+
+impl PrecomputedStructArrayReader {
+    fn try_new(batches: Vec<RecordBatch>) -> Result<Self, ParquetError> {
+        if batches.is_empty() {
+            return Err(ParquetError::General(
+                "Precomputed reader requires at least one batch".to_string(),
+            ));
+        }
+
+        let schema = batches[0].schema();
+        for batch in batches.iter().skip(1) {
+            if batch.schema() != schema {
+                return Err(ParquetError::General(
+                    "Precomputed reader requires consistent batch schemas".to_string(),
+                ));
+            }
+        }
+
+        let remaining = batches
+            .into_iter()
+            .map(|batch| Arc::new(StructArray::from(batch)) as ArrayRef)
+            .collect();
+
+        Ok(Self {
+            data_type: ArrowType::Struct(schema.fields().clone()),
+            remaining,
+            current: None,
+            staged: Vec::new(),
+        })
+    }
+}
+
+impl ArrayReader for PrecomputedStructArrayReader {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn get_data_type(&self) -> &ArrowType {
+        &self.data_type
+    }
+
+    fn read_records(&mut self, num_records: usize) -> Result<usize, ParquetError> {
+        let mut read = 0;
+        while read < num_records {
+            if self.current.is_none() {
+                self.current = self.remaining.pop_front().map(|array| (array, 0));
+            }
+            let Some((array, offset)) = self.current.as_mut() else {
+                break;
+            };
+
+            let available = array.len().saturating_sub(*offset);
+            if available == 0 {
+                self.current = None;
+                continue;
+            }
+
+            let take = (num_records - read).min(available);
+            self.staged.push(array.slice(*offset, take));
+            *offset += take;
+            read += take;
+
+            if *offset >= array.len() {
+                self.current = None;
+            }
+        }
+        Ok(read)
+    }
+
+    fn skip_records(&mut self, num_records: usize) -> Result<usize, ParquetError> {
+        let mut skipped = 0;
+        while skipped < num_records {
+            if self.current.is_none() {
+                self.current = self.remaining.pop_front().map(|array| (array, 0));
+            }
+            let Some((array, offset)) = self.current.as_mut() else {
+                break;
+            };
+
+            let available = array.len().saturating_sub(*offset);
+            if available == 0 {
+                self.current = None;
+                continue;
+            }
+
+            let take = (num_records - skipped).min(available);
+            *offset += take;
+            skipped += take;
+
+            if *offset >= array.len() {
+                self.current = None;
+            }
+        }
+        Ok(skipped)
+    }
+
+    fn consume_batch(&mut self) -> Result<ArrayRef, ParquetError> {
+        if self.staged.is_empty() {
+            return Ok(new_empty_array(&self.data_type));
+        }
+        if self.staged.len() == 1 {
+            return Ok(self.staged.pop().expect("len checked"));
+        }
+        let arrays = self.staged.drain(..).collect::<Vec<_>>();
+        Ok(arrow_select::concat::concat(
+            &arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
+        )?)
+    }
+
+    fn get_def_levels(&self) -> Option<&[i16]> {
+        None
+    }
+
+    fn get_rep_levels(&self) -> Option<&[i16]> {
+        None
     }
 }
 
@@ -722,6 +1250,6 @@ mod tests {
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 224);
     }
 }

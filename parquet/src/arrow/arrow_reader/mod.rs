@@ -49,13 +49,25 @@ use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 // Exposed so integration tests and benchmarks can temporarily override the threshold.
-pub use read_plan::{ReadPlan, ReadPlanBuilder};
+pub use read_plan::{PredicateBatchObserver, ReadPlan, ReadPlanBuilder};
 
 mod filter;
 pub mod metrics;
 mod read_plan;
 pub(crate) mod selection;
 pub mod statistics;
+
+/// How pushed-down predicates are evaluated during async / push decoding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PushdownFilterEvalMode {
+    /// Existing behavior: evaluate predicates on predicate-specific projections
+    /// and materialize the final output using row selections.
+    #[default]
+    RowSelection,
+    /// Decode full output projection during predicate evaluation, then apply
+    /// predicates from that decoded data (FilterExec-like behavior).
+    DecodeProjectionThenFilter,
+}
 
 /// Builder for constructing Parquet readers that decode into [Apache Arrow]
 /// arrays.
@@ -139,6 +151,8 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) metrics: ArrowReaderMetrics,
 
     pub(crate) max_predicate_cache_size: usize,
+
+    pub(crate) pushdown_filter_eval_mode: PushdownFilterEvalMode,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -157,6 +171,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("limit", &self.limit)
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
+            .field("pushdown_filter_eval_mode", &self.pushdown_filter_eval_mode)
             .finish()
     }
 }
@@ -178,6 +193,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
+            pushdown_filter_eval_mode: PushdownFilterEvalMode::default(),
         }
     }
 
@@ -427,6 +443,17 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_max_predicate_cache_size(self, max_predicate_cache_size: usize) -> Self {
         Self {
             max_predicate_cache_size,
+            ..self
+        }
+    }
+
+    /// Configure how pushed-down predicates are evaluated during async / push decoding.
+    pub fn with_pushdown_filter_eval_mode(
+        self,
+        pushdown_filter_eval_mode: PushdownFilterEvalMode,
+    ) -> Self {
+        Self {
+            pushdown_filter_eval_mode,
             ..self
         }
     }
@@ -1188,6 +1215,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
+            // Not used for the sync reader
+            pushdown_filter_eval_mode: _,
         } = self;
 
         // Try to avoid allocate large buffer

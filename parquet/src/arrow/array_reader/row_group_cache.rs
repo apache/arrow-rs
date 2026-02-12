@@ -17,7 +17,7 @@
 
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Starting row ID for this batch
 ///
@@ -61,9 +61,20 @@ fn get_array_memory_size_for_cache(array: &ArrayRef) -> usize {
 /// This cache is designed to avoid duplicate decoding when the same column
 /// appears in both filter predicates and output projection.
 #[derive(Debug)]
+struct CacheEntry {
+    array: ArrayRef,
+    size: usize,
+}
+
+#[derive(Debug)]
 pub struct RowGroupCache {
     /// Cache storage mapping (column_idx, row_id) -> ArrayRef
-    cache: HashMap<CacheKey, ArrayRef>,
+    cache: HashMap<CacheKey, CacheEntry>,
+    /// Exact-selected cache stream per column (single-filter fast-path).
+    ///
+    /// Entries are queued in producer order and consumed FIFO by the matching
+    /// projection reader, so no additional row filtering is required.
+    selected_cache: HashMap<usize, VecDeque<CacheEntry>>,
     /// Cache granularity
     batch_size: usize,
     /// Maximum cache size in bytes
@@ -77,6 +88,7 @@ impl RowGroupCache {
     pub fn new(batch_size: usize, max_cache_bytes: usize) -> Self {
         Self {
             cache: HashMap::new(),
+            selected_cache: HashMap::new(),
             batch_size,
             max_cache_bytes,
             current_cache_size: 0,
@@ -98,7 +110,13 @@ impl RowGroupCache {
             batch_id,
         };
 
-        let existing = self.cache.insert(key, array);
+        let existing = self.cache.insert(
+            key,
+            CacheEntry {
+                array,
+                size: array_size,
+            },
+        );
         assert!(existing.is_none());
         self.current_cache_size += array_size;
         true
@@ -111,7 +129,7 @@ impl RowGroupCache {
             column_idx,
             batch_id,
         };
-        self.cache.get(&key).cloned()
+        self.cache.get(&key).map(|entry| entry.array.clone())
     }
 
     /// Gets the batch size for this cache
@@ -126,12 +144,40 @@ impl RowGroupCache {
             column_idx,
             batch_id,
         };
-        if let Some(array) = self.cache.remove(&key) {
-            self.current_cache_size -= get_array_memory_size_for_cache(&array);
+        if let Some(entry) = self.cache.remove(&key) {
+            self.current_cache_size = self.current_cache_size.saturating_sub(entry.size);
             true
         } else {
             false
         }
+    }
+
+    /// Inserts selected rows for a cached column (ExactSelected mode)
+    pub fn insert_selected(&mut self, column_idx: usize, array: ArrayRef) -> bool {
+        let array_size = get_array_memory_size_for_cache(&array);
+        if self.current_cache_size + array_size > self.max_cache_bytes {
+            return false;
+        }
+        self.selected_cache
+            .entry(column_idx)
+            .or_default()
+            .push_back(CacheEntry {
+                array,
+                size: array_size,
+            });
+        self.current_cache_size += array_size;
+        true
+    }
+
+    /// Pops the next selected batch for a column (ExactSelected mode)
+    pub fn pop_selected(&mut self, column_idx: usize) -> Option<ArrayRef> {
+        let queue = self.selected_cache.get_mut(&column_idx)?;
+        let entry = queue.pop_front()?;
+        self.current_cache_size = self.current_cache_size.saturating_sub(entry.size);
+        if queue.is_empty() {
+            self.selected_cache.remove(&column_idx);
+        }
+        Some(entry.array)
     }
 }
 

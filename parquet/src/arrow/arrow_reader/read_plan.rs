@@ -25,9 +25,18 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
-use arrow_array::Array;
+use arrow_array::{Array, BooleanArray, RecordBatch};
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
+
+/// Optional observer hook for predicate evaluation batches
+pub trait PredicateBatchObserver {
+    /// Observe each predicate evaluation batch and its normalized boolean filter.
+    ///
+    /// This is used by specialized fast-paths to capture predicate-selected
+    /// values during filtering, so a later projection pass can be avoided.
+    fn observe(&mut self, batch: &RecordBatch, filter: &BooleanArray) -> Result<()>;
+}
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]
@@ -144,16 +153,26 @@ impl ReadPlanBuilder {
     /// or if the [`ParquetRecordBatchReader`] specified an explicit
     /// [`RowSelection`] in addition to one or more predicates.
     pub fn with_predicate(
+        self,
+        array_reader: Box<dyn ArrayReader>,
+        predicate: &mut dyn ArrowPredicate,
+    ) -> Result<Self> {
+        self.with_predicate_with_observer(array_reader, predicate, None)
+    }
+
+    /// Same as [`Self::with_predicate`] but allows observing each predicate batch.
+    pub fn with_predicate_with_observer(
         mut self,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
+        mut observer: Option<&mut dyn PredicateBatchObserver>,
     ) -> Result<Self> {
         let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
         let mut filters = vec![];
         for maybe_batch in reader {
             let maybe_batch = maybe_batch?;
             let input_rows = maybe_batch.num_rows();
-            let filter = predicate.evaluate(maybe_batch)?;
+            let filter = predicate.evaluate(maybe_batch.clone())?;
             // Since user supplied predicate, check error here to catch bugs quickly
             if filter.len() != input_rows {
                 return Err(arrow_err!(
@@ -161,10 +180,14 @@ impl ReadPlanBuilder {
                     filter.len()
                 ));
             }
-            match filter.null_count() {
-                0 => filters.push(filter),
-                _ => filters.push(prep_null_mask_filter(&filter)),
+            let filter = match filter.null_count() {
+                0 => filter,
+                _ => prep_null_mask_filter(&filter),
             };
+            if let Some(observer) = observer.as_deref_mut() {
+                observer.observe(&maybe_batch, &filter)?;
+            }
+            filters.push(filter);
         }
 
         let raw = RowSelection::from_filters(&filters);
