@@ -535,7 +535,7 @@ impl ShreddedSchemaBuilder {
     ///
     /// # Arguments
     ///
-    /// * `path` - Anything convertible to [`VariantPath`]
+    /// * `path` - Anything convertible to [`VariantPath`] (e.g., a `&str`)
     /// * `field` - Anything convertible via [`IntoShreddingField`] (e.g. `FieldRef`,
     ///   `&DataType`, or `(&DataType, bool)` to control nullability)
     pub fn with_path<'a, P, F>(mut self, path: P, field: F) -> Result<Self>
