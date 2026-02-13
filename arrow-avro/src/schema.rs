@@ -78,6 +78,16 @@ pub(crate) enum Nullability {
     NullSecond,
 }
 
+impl Nullability {
+    /// Returns the index of the non-null variant in the union.
+    pub(crate) fn non_null_index(&self) -> usize {
+        match self {
+            Nullability::NullFirst => 1,
+            Nullability::NullSecond => 0,
+        }
+    }
+}
+
 /// Either a [`PrimitiveType`] or a reference to a previously defined named type
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#names>
@@ -2927,7 +2937,11 @@ mod tests {
                 false,
             )])),
             false,
-        );
+        )
+        .with_metadata(HashMap::from_iter([(
+            "avro.name".to_owned(),
+            "R".to_owned(),
+        )]));
         assert_eq!(resolved.field(), expected);
     }
 
@@ -2989,7 +3003,11 @@ mod tests {
                 false,
             )])),
             false,
-        );
+        )
+        .with_metadata(HashMap::from_iter([(
+            "avro.name".to_owned(),
+            "R".to_owned(),
+        )]));
         assert_eq!(resolved.field(), expected);
     }
 
@@ -3026,7 +3044,11 @@ mod tests {
                 )])),
             ])),
             false,
-        );
+        )
+        .with_metadata(HashMap::from_iter([(
+            "avro.name".to_owned(),
+            "R".to_owned(),
+        )]));
         assert_eq!(resolved.field(), expected);
     }
 
