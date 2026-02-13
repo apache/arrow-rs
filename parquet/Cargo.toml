@@ -233,7 +233,7 @@ harness = false
 
 [[bench]]
 name = "arrow_reader_clickbench"
-required-features = ["arrow", "async"]
+required-features = ["arrow", "async", "object_store"]
 harness = false
 
 [[bench]]
