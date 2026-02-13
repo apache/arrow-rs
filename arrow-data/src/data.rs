@@ -1659,6 +1659,30 @@ impl ArrayData {
     pub fn into_builder(self) -> ArrayDataBuilder {
         self.into()
     }
+
+    /// Claim memory used by this ArrayData in the provided memory pool.
+    ///
+    /// This claims memory for:
+    /// - All buffers in self.buffers
+    /// - All child ArrayData recursively  
+    /// - The null buffer if present
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        // Claim all data buffers
+        for buffer in &self.buffers {
+            buffer.claim(pool);
+        }
+
+        // Claim null buffer if present
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+
+        // Recursively claim child data
+        for child in &self.child_data {
+            child.claim(pool);
+        }
+    }
 }
 
 /// Return the expected [`DataTypeLayout`] Arrays of this data
