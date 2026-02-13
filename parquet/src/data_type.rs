@@ -21,6 +21,7 @@ use bytes::Bytes;
 use half::f16;
 use std::cmp::Ordering;
 use std::fmt;
+use std::io::Error;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::str::from_utf8;
@@ -28,6 +29,8 @@ use std::str::from_utf8;
 use crate::basic::Type;
 use crate::column::reader::{ColumnReader, ColumnReaderImpl};
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
+use crate::encodings::decoding::PlainDecoder;
+use crate::encodings::decoding::Decoder;
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::FromBytes;
 
@@ -1126,7 +1129,9 @@ pub(crate) mod private {
 
         #[inline]
         fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize> {
-            assert!(decoder.type_length > 0);
+            if decoder.type_length <= 0 {
+                return Err(general_err!("Internal: Type length must be positive ({}).", decoder.type_length));
+            }
 
             let data = decoder
                 .data
@@ -1150,8 +1155,9 @@ pub(crate) mod private {
         }
 
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
-            assert!(decoder.type_length > 0);
-
+            if decoder.type_length <= 0 {
+                return Err(general_err!("Internal: Type length must be positive ({}).", decoder.type_length));
+            }
             let data = decoder
                 .data
                 .as_mut()
@@ -1412,5 +1418,17 @@ mod tests {
         assert!(ba1 > ba4);
         assert_eq!(ba1, ba11);
         assert!(ba5 > ba1);
+    }
+
+    #[test]
+    fn test_fixed_len_byte_array_zero_type_length_is_error() {
+        let buffer = FixedLenByteArray::from(vec![1, 2, 3]);
+        assert_eq!(buffer.as_bytes(), &[1, 2, 3]);
+        let mut decoder = PlainDecoder::<FixedLenByteArrayType>::new(0);
+        assert!(decoder.get(&mut vec![buffer]).is_err_and(
+            |x| x.to_string().contains("Internal: Type length must be positive (0)")));
+
+        assert!(decoder.skip(10).is_err_and(
+            |x| x.to_string().contains("Internal: Type length must be positive (0)")));
     }
 }
