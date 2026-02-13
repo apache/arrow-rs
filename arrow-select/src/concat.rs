@@ -1973,28 +1973,6 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_returns_error_not_panic() {
-        // Verify that overflow returns an error instead of panicking
-        let values1 = StringArray::from((0..200).map(|i| format!("a{}", i)).collect::<Vec<_>>());
-        let keys1 = UInt8Array::from((0..200).map(|i| i as u8).collect::<Vec<_>>());
-        let dict1 = DictionaryArray::<UInt8Type>::try_new(keys1, Arc::new(values1)).unwrap();
-
-        let values2 = StringArray::from((0..200).map(|i| format!("b{}", i)).collect::<Vec<_>>());
-        let keys2 = UInt8Array::from((0..200).map(|i| i as u8).collect::<Vec<_>>());
-        let dict2 = DictionaryArray::<UInt8Type>::try_new(keys2, Arc::new(values2)).unwrap();
-
-        // This should return an error, NOT panic
-        let result = concat(&[&dict1 as &dyn Array, &dict2 as &dyn Array]);
-
-        // The key test: we successfully got here without panicking!
-        // If there was a panic, the test would have failed before reaching this assertion
-        assert!(
-            result.is_err(),
-            "Should return error for overflow, not panic"
-        );
-    }
-
-    #[test]
     fn test_concat_u8_dictionary_257_values_fails() {
         // Test the exact boundary: 257 values should fail for u8 keys
         // This is the test that was mentioned in the maintainer's comment

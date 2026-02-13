@@ -671,6 +671,52 @@ mod tests {
         assert_eq!(string_result, vec!["v0", "v0", "v49"]);
     }
 
+    #[test]
+    fn test_interleave_u8_dictionary_256_values() {
+        // Test the exact boundary: 256 unique values should work with u8 keys (0..255)
+        // This verifies that the full range of u8 keys can be used during interleave
+        use arrow_array::FixedSizeBinaryArray;
+
+        // Create a shared values array with 256 unique FixedSizeBinary(1) values
+        let shared_values: ArrayRef = Arc::new(
+            FixedSizeBinaryArray::try_from_iter((0..256_u16).map(|i| vec![i as u8])).unwrap(),
+        );
+
+        // Dictionary 1: uses keys 0..128 from the shared values
+        let keys1 = UInt8Array::from((0..128).map(|i| i as u8).collect::<Vec<_>>());
+        let dict1 = DictionaryArray::<UInt8Type>::new(keys1, shared_values.clone());
+
+        // Dictionary 2: uses keys 128..256 from the shared values
+        let keys2 = UInt8Array::from((128..=255).map(|i| i as u8).collect::<Vec<_>>());
+        let dict2 = DictionaryArray::<UInt8Type>::new(keys2, shared_values.clone());
+
+        // Interleave - since dictionaries share the same values array with exactly 256 values,
+        // this should work and demonstrate the fix allows the full range
+        let indices = &[(0, 0), (1, 0), (0, 127), (1, 127)];
+        let result = interleave(&[&dict1 as &dyn Array, &dict2 as &dyn Array], indices).unwrap();
+
+        // Verify the result is still a dictionary (because values are shared)
+        assert!(
+            matches!(result.data_type(), DataType::Dictionary(_, _)),
+            "Should remain a dictionary when values are shared"
+        );
+
+        // Verify the data is correct
+        let dict_result = result.as_dictionary::<UInt8Type>();
+        let fixed_binary_result = dict_result.values().as_fixed_size_binary();
+
+        // Check the interleaved values
+        let key_0 = dict_result.keys().value(0) as usize;
+        let key_1 = dict_result.keys().value(1) as usize;
+        let key_2 = dict_result.keys().value(2) as usize;
+        let key_3 = dict_result.keys().value(3) as usize;
+
+        assert_eq!(fixed_binary_result.value(key_0), &[0_u8]);
+        assert_eq!(fixed_binary_result.value(key_1), &[128_u8]);
+        assert_eq!(fixed_binary_result.value(key_2), &[127_u8]);
+        assert_eq!(fixed_binary_result.value(key_3), &[255_u8]);
+    }
+
     fn test_interleave_lists<O: OffsetSizeTrait>() {
         // [[1, 2], null, [3]]
         let mut a = GenericListBuilder::<O, _>::new(Int32Builder::new());
