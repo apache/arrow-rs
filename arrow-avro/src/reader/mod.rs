@@ -478,7 +478,7 @@
 //!   descriptive error. Populate the store up front to avoid this.
 //!
 //! ---
-use crate::codec::AvroFieldBuilder;
+use crate::codec::{AvroFieldBuilder, Tz};
 use crate::errors::AvroError;
 use crate::reader::header::read_header;
 use crate::schema::{
@@ -967,6 +967,7 @@ pub struct ReaderBuilder {
     batch_size: usize,
     strict_mode: bool,
     utf8_view: bool,
+    use_tz: Tz,
     reader_schema: Option<AvroSchema>,
     projection: Option<Vec<usize>>,
     writer_schema_store: Option<SchemaStore>,
@@ -979,6 +980,7 @@ impl Default for ReaderBuilder {
             batch_size: 1024,
             strict_mode: false,
             utf8_view: false,
+            use_tz: Default::default(),
             reader_schema: None,
             projection: None,
             writer_schema_store: None,
@@ -993,6 +995,7 @@ impl ReaderBuilder {
     /// * `batch_size = 1024`
     /// * `strict_mode = false`
     /// * `utf8_view = false`
+    /// * `use_tz = Tz::OffsetZero`
     /// * `reader_schema = None`
     /// * `projection = None`
     /// * `writer_schema_store = None`
@@ -1013,6 +1016,7 @@ impl ReaderBuilder {
         let root = builder
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
+            .use_tz(self.use_tz)
             .build()?;
         RecordDecoder::try_new_with_options(root.data_type())
     }
@@ -1170,6 +1174,12 @@ impl ReaderBuilder {
     /// produce a descriptive error. Use this to catch schema issues early during ingestion.
     pub fn with_strict_mode(mut self, strict_mode: bool) -> Self {
         self.strict_mode = strict_mode;
+        self
+    }
+
+    /// Sets the timezone representation for Avro timestamp fields.
+    pub fn with_tz(mut self, tz: Tz) -> Self {
+        self.use_tz = tz;
         self
     }
 
