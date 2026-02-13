@@ -301,28 +301,22 @@ where
 
                 // If page has less rows than the remaining records to
                 // be skipped, skip entire page
-                let rows = metadata.num_rows.or_else(|| {
-                    // If no repetition levels, num_levels == num_rows
-                    self.rep_level_decoder
-                        .is_none()
-                        .then_some(metadata.num_levels)?
-                });
+                let rows = match (metadata.num_rows, metadata.num_levels) {
+                    // if num_rows is set, but num_levels is None, then we've skipped a page
+                    // based on the offset index. we must skip it here.
+                    (Some(rows), None) => Some(rows),
+                    // we have no row info (unlikely)
+                    (None, None) => None,
+                    // either both are set, or only num_levels. in either case we'll only skip
+                    // if it's safe to assume we're on a record boundary, which will only be true
+                    // if there are no repetition levels
+                    _ => match self.rep_level_decoder {
+                        None => metadata.num_levels,
+                        _ => None,
+                    }
+                };
 
                 if let Some(rows) = rows {
-                    // If there is a pending partial record from a previous page,
-                    // count it before considering the whole-page skip. When the
-                    // next page provides num_rows (e.g. a V2 data page or via
-                    // offset index), its records are self-contained, so the
-                    // partial from the previous page is complete at this boundary.
-                    if let Some(decoder) = self.rep_level_decoder.as_mut() {
-                        if decoder.flush_partial() {
-                            remaining_records -= 1;
-                            if remaining_records == 0 {
-                                return Ok(num_records);
-                            }
-                        }
-                    }
-
                     if rows <= remaining_records {
                         self.page_reader.skip_next_page()?;
                         remaining_records -= rows;
