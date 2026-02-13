@@ -22,8 +22,7 @@
 use arrow_array::builder::BufferBuilder;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::ArrayData;
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::Zero;
 use std::cmp::Ordering;
@@ -212,18 +211,16 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
         }
         new_offsets.append(OffsetSize::from_usize(vals.len()).unwrap());
     });
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            GenericStringArray::<OffsetSize>::DATA_TYPE,
-            array.len(),
-            None,
-            array.nulls().map(|b| b.inner().sliced()),
-            0,
-            vec![new_offsets.finish(), vals.finish()],
-            vec![],
-        )
-    };
-    Ok(GenericStringArray::<OffsetSize>::from(data))
+    let offsets = OffsetBuffer::new(new_offsets.finish().into());
+    let values = vals.finish();
+    let nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
+        .filter(|n| n.null_count() > 0);
+    Ok(GenericStringArray::<OffsetSize>::new(
+        offsets, values, nulls,
+    ))
 }
 
 /// * `val` - string
@@ -316,18 +313,14 @@ where
         })
         .for_each(|slice| new_values.extend_from_slice(slice));
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            GenericByteArray::<T>::DATA_TYPE,
-            array.len(),
-            None,
-            array.nulls().map(|b| b.inner().sliced()),
-            0,
-            vec![Buffer::from_vec(new_offsets), new_values.into()],
-            vec![],
-        )
-    };
-    Ok(make_array(data))
+    let offsets = OffsetBuffer::new(new_offsets.into());
+    let values = new_values.into();
+    let nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
+        .filter(|n| n.null_count() > 0);
+    Ok(Arc::new(GenericByteArray::<T>::new(offsets, values, nulls)))
 }
 
 fn fixed_size_binary_substring(
@@ -360,24 +353,29 @@ fn fixed_size_binary_substring(
         })
         .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
 
-    let array_data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::FixedSizeBinary(new_len),
-            num_of_elements,
-            None,
-            array.nulls().map(|b| b.inner().sliced()),
-            0,
-            vec![new_values.into()],
-            vec![],
-        )
-    };
-
-    Ok(make_array(array_data))
+    let mut nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, num_of_elements)))
+        .filter(|n| n.null_count() > 0);
+    if new_len == 0 && nulls.is_none() {
+        // FixedSizeBinaryArray::new takes length from the values buffer, except when size == 0.
+        // In that case it uses the null buffer length, so preserve the original length here.
+        // Example: ["", "", ""] -> substring(..., 1, Some(2)) should keep len=3;
+        // otherwise it collapses to an empty array (len=0).
+        nulls = Some(NullBuffer::new_valid(num_of_elements));
+    }
+    Ok(Arc::new(FixedSizeBinaryArray::new(
+        new_len,
+        new_values.into(),
+        nulls,
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::Buffer;
 
     /// A helper macro to generate test cases.
     /// # Arguments
@@ -521,16 +519,15 @@ mod tests {
         // set the first and third element to be valid
         let bitmap = [0b101_u8];
 
-        let data = ArrayData::builder(GenericBinaryArray::<O>::DATA_TYPE)
-            .len(2)
-            .add_buffer(Buffer::from_slice_ref(offsets))
-            .add_buffer(Buffer::from_iter(values))
-            .null_bit_buffer(Some(Buffer::from(bitmap)))
-            .offset(1)
-            .build()
-            .unwrap();
+        let offsets = OffsetBuffer::new(Buffer::from_slice_ref(offsets).into());
+        let values = Buffer::from_iter(values);
+        let nulls = Some(NullBuffer::new(BooleanBuffer::new(
+            Buffer::from(bitmap),
+            0,
+            3,
+        )));
         // array is `[null, [10, 11, 12, 13, 14]]`
-        let array = GenericBinaryArray::<O>::from(data);
+        let array = GenericBinaryArray::<O>::new(offsets, values, nulls).slice(1, 2);
         // result is `[null, [11, 12, 13, 14]]`
         let result = substring(&array, 1, None).unwrap();
         let result = result
@@ -634,15 +631,13 @@ mod tests {
         // set the first and third element to be valid
         let bits_v = [0b101_u8];
 
-        let data = ArrayData::builder(DataType::FixedSizeBinary(5))
-            .len(2)
-            .add_buffer(Buffer::from(&values))
-            .offset(1)
-            .null_bit_buffer(Some(Buffer::from(bits_v)))
-            .build()
-            .unwrap();
+        let nulls = Some(NullBuffer::new(BooleanBuffer::new(
+            Buffer::from(bits_v),
+            0,
+            3,
+        )));
         // array is `[null, "arrow"]`
-        let array = FixedSizeBinaryArray::from(data);
+        let array = FixedSizeBinaryArray::new(5, Buffer::from(&values), nulls).slice(1, 2);
         // result is `[null, "rrow"]`
         let result = substring(&array, 1, None).unwrap();
         let result = result
@@ -748,16 +743,15 @@ mod tests {
         // set the first and third element to be valid
         let bitmap = [0b101_u8];
 
-        let data = ArrayData::builder(GenericStringArray::<O>::DATA_TYPE)
-            .len(2)
-            .add_buffer(Buffer::from_slice_ref(offsets))
-            .add_buffer(Buffer::from(values))
-            .null_bit_buffer(Some(Buffer::from(bitmap)))
-            .offset(1)
-            .build()
-            .unwrap();
+        let offsets = OffsetBuffer::new(Buffer::from_slice_ref(offsets).into());
+        let values = Buffer::from(values);
+        let nulls = Some(NullBuffer::new(BooleanBuffer::new(
+            Buffer::from(bitmap),
+            0,
+            3,
+        )));
         // array is `[null, "arrow"]`
-        let array = GenericStringArray::<O>::from(data);
+        let array = GenericStringArray::<O>::new(offsets, values, nulls).slice(1, 2);
         // result is `[null, "rrow"]`
         let result = substring(&array, 1, None).unwrap();
         let result = result
@@ -870,16 +864,15 @@ mod tests {
         // set the first and third element to be valid
         let bitmap = [0b101_u8];
 
-        let data = ArrayData::builder(GenericStringArray::<O>::DATA_TYPE)
-            .len(2)
-            .add_buffer(Buffer::from_slice_ref(offsets))
-            .add_buffer(Buffer::from(values.as_bytes()))
-            .null_bit_buffer(Some(Buffer::from(bitmap)))
-            .offset(1)
-            .build()
-            .unwrap();
+        let offsets = OffsetBuffer::new(Buffer::from_slice_ref(offsets).into());
+        let values = Buffer::from(values.as_bytes());
+        let nulls = Some(NullBuffer::new(BooleanBuffer::new(
+            Buffer::from(bitmap),
+            0,
+            3,
+        )));
         // array is `[null, "Πx:S.T"]`
-        let array = GenericStringArray::<O>::from(data);
+        let array = GenericStringArray::<O>::new(offsets, values, nulls).slice(1, 2);
         // result is `[null, "x:S.T"]`
         let result = substring_by_char(&array, 1, None).unwrap();
         let expected = GenericStringArray::<O>::from(vec![None, Some("x:S.T")]);

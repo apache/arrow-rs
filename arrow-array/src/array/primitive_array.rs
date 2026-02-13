@@ -25,7 +25,9 @@ use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer, i256};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder, ScalarBuffer, i256,
+};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -1449,15 +1451,15 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr> for P
         let iter = iter.into_iter();
         let (lower, _) = iter.size_hint();
 
-        let mut null_builder = BooleanBufferBuilder::new(lower);
+        let mut null_builder = NullBufferBuilder::new(lower);
 
         let buffer: Buffer = iter
             .map(|item| {
                 if let Some(a) = item.into().native {
-                    null_builder.append(true);
+                    null_builder.append_non_null();
                     a
                 } else {
-                    null_builder.append(false);
+                    null_builder.append_null();
                     // this ensures that null items on the buffer are not arbitrary.
                     // This is important because fallible operations can use null values (e.g. a vectorized "add")
                     // which may panic (e.g. overflow if the number on the slots happen to be very large).
@@ -1466,20 +1468,8 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr> for P
             })
             .collect();
 
-        let len = null_builder.len();
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                T::DATA_TYPE,
-                len,
-                None,
-                Some(null_builder.into()),
-                0,
-                vec![buffer],
-                vec![],
-            )
-        };
-        PrimitiveArray::from(data)
+        let maybe_nulls = null_builder.finish();
+        PrimitiveArray::new(ScalarBuffer::from(buffer), maybe_nulls)
     }
 }
 
@@ -1500,10 +1490,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         let (null, buffer) = unsafe { trusted_len_unzip(iterator) };
 
-        let data = unsafe {
-            ArrayData::new_unchecked(T::DATA_TYPE, len, None, Some(null), 0, vec![buffer], vec![])
-        };
-        PrimitiveArray::from(data)
+        let nulls =
+            Some(NullBuffer::new(BooleanBuffer::new(null, 0, len))).filter(|n| n.null_count() > 0);
+        PrimitiveArray::new(ScalarBuffer::from(buffer), nulls)
     }
 }
 
@@ -1514,11 +1503,9 @@ macro_rules! def_numeric_from_vec {
     ( $ty:ident ) => {
         impl From<Vec<<$ty as ArrowPrimitiveType>::Native>> for PrimitiveArray<$ty> {
             fn from(data: Vec<<$ty as ArrowPrimitiveType>::Native>) -> Self {
-                let array_data = ArrayData::builder($ty::DATA_TYPE)
-                    .len(data.len())
-                    .add_buffer(Buffer::from_vec(data));
-                let array_data = unsafe { array_data.build_unchecked() };
-                PrimitiveArray::from(array_data)
+                let buffer = ScalarBuffer::from(Buffer::from_vec(data));
+                let nulls = None;
+                PrimitiveArray::new(buffer, nulls)
             }
         }
 

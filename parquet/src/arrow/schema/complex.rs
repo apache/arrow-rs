@@ -436,6 +436,8 @@ impl Visitor {
             Some(DataType::List(f)) => Some(f.as_ref()),
             Some(DataType::LargeList(f)) => Some(f.as_ref()),
             Some(DataType::FixedSizeList(f, _)) => Some(f.as_ref()),
+            Some(DataType::ListView(f)) => Some(f.as_ref()),
+            Some(DataType::LargeListView(f)) => Some(f.as_ref()),
             Some(d) => {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected list got {}",
@@ -519,6 +521,8 @@ impl Visitor {
                     Some(DataType::FixedSizeList(_, len)) => {
                         DataType::FixedSizeList(item_field, len)
                     }
+                    Some(DataType::ListView(_)) => DataType::ListView(item_field),
+                    Some(DataType::LargeListView(_)) => DataType::LargeListView(item_field),
                     _ => DataType::List(item_field),
                 };
 

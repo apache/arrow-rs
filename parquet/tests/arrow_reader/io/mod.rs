@@ -41,13 +41,21 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringViewArray};
 use bytes::Bytes;
+#[cfg(feature = "async")]
+use futures::FutureExt;
+#[cfg(feature = "async")]
+use futures::future::BoxFuture;
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter,
 };
+#[cfg(feature = "async")]
+use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
 use parquet::file::FOOTER_SIZE;
 use parquet::file::metadata::PageIndexPolicy;
+#[cfg(feature = "async")]
+use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::file::metadata::{FooterTail, ParquetMetaData, ParquetOffsetIndex};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
@@ -75,6 +83,62 @@ fn test_file() -> TestParquetFile {
 /// Note these tests use the PageIndex to reduce IO
 fn test_options() -> ArrowReaderOptions {
     ArrowReaderOptions::default().with_page_index_policy(PageIndexPolicy::from(true))
+}
+
+/// In-memory [`AsyncFileReader`] implementation for tests.
+#[cfg(feature = "async")]
+#[derive(Clone)]
+pub(crate) struct TestReader {
+    data: Bytes,
+    metadata: Option<Arc<ParquetMetaData>>,
+    requests: Arc<Mutex<Vec<Range<usize>>>>,
+}
+
+#[cfg(feature = "async")]
+impl TestReader {
+    pub(crate) fn new(data: Bytes) -> Self {
+        Self {
+            data,
+            metadata: Default::default(),
+            requests: Default::default(),
+        }
+    }
+
+    pub(crate) fn requests(&self) -> Arc<Mutex<Vec<Range<usize>>>> {
+        Arc::clone(&self.requests)
+    }
+}
+
+#[cfg(feature = "async")]
+impl AsyncFileReader for TestReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(range.start as usize..range.end as usize);
+        futures::future::ready(Ok(self
+            .data
+            .slice(range.start as usize..range.end as usize)))
+        .boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        let mut metadata_reader = ParquetMetaDataReader::new();
+
+        if let Some(options) = options {
+            metadata_reader = metadata_reader
+                .with_column_index_policy(options.column_index_policy())
+                .with_offset_index_policy(options.offset_index_policy());
+        }
+
+        self.metadata = Some(Arc::new(
+            metadata_reader.parse_and_finish(&self.data).unwrap(),
+        ));
+        futures::future::ready(Ok(self.metadata.clone().unwrap())).boxed()
+    }
 }
 
 /// Return a row filter that evaluates "b > 575" AND "b < 625"
@@ -155,7 +219,7 @@ static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
     let mut output = Vec::new();
 
     let writer_options = WriterProperties::builder()
-        .set_max_row_group_size(200)
+        .set_max_row_group_row_count(Some(200))
         .set_data_page_row_count_limit(100)
         .build();
     let mut writer =
@@ -180,6 +244,7 @@ struct TestParquetFile {
     /// The operation log for IO operations performed on this file
     ops: Arc<OperationLog>,
     /// The (pre-parsed) parquet metadata for this file
+    #[cfg(feature = "async")]
     parquet_metadata: Arc<ParquetMetaData>,
 }
 
@@ -224,6 +289,7 @@ impl TestParquetFile {
         TestParquetFile {
             bytes,
             ops,
+            #[cfg(feature = "async")]
             parquet_metadata,
         }
     }
@@ -238,7 +304,7 @@ impl TestParquetFile {
         &self.ops
     }
 
-    /// Return the parquet metadata for this file
+    #[cfg(feature = "async")]
     fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
         &self.parquet_metadata
     }
@@ -413,10 +479,12 @@ enum LogEntry {
     /// Read the metadata of the parquet file
     ReadMetadata(Range<usize>),
     /// Access previously parsed metadata
+    #[allow(dead_code)]
     GetProvidedMetadata,
     /// Read a single logical data object
     ReadData(ReadInfo),
     /// Read one or more logical data objects in a single operation
+    #[allow(dead_code)]
     ReadMultipleData(Vec<LogEntry>),
     /// Not known where the read came from
     Unknown(Range<usize>),
@@ -508,6 +576,7 @@ impl OperationLog {
     /// accessed by the specified range
     ///
     /// It behaves the same as [`add_entry_for_range`] but for multiple ranges.
+    #[cfg(feature = "async")]
     fn add_entry_for_ranges<'a>(&self, ranges: impl IntoIterator<Item = &'a Range<usize>>) {
         let entries = ranges
             .into_iter()
