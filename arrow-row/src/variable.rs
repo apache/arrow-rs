@@ -45,6 +45,9 @@ pub const EMPTY_SENTINEL: u8 = 1;
 /// Indicates a non-empty string
 pub const NON_EMPTY_SENTINEL: u8 = 2;
 
+/// Indicates a Null value (for DataType::Null)
+pub const NULL_VALUE_SENTINEL: u8 = 3;
+
 /// Returns the padded length of the encoded length of the given length
 #[inline]
 pub fn padded_length(a: Option<usize>) -> usize {
@@ -141,6 +144,19 @@ pub fn encode_empty(out: &mut [u8], opts: SortOptions) -> usize {
         false => EMPTY_SENTINEL,
     };
     1
+}
+
+/// Ensure `NullArray`s don't get encoded as empty lists which can lose their length
+pub fn encode_null_value(out: &mut [u8], opts: SortOptions) -> usize {
+    out[0] = match opts.descending {
+        true => !NON_EMPTY_SENTINEL,
+        false => NON_EMPTY_SENTINEL,
+    };
+    out[1] = match opts.descending {
+        true => !NULL_VALUE_SENTINEL,
+        false => NULL_VALUE_SENTINEL,
+    };
+    2
 }
 
 #[inline]
@@ -420,4 +436,16 @@ pub unsafe fn decode_string_view(
 ) -> StringViewArray {
     let view = decode_binary_view_inner(rows, options, validate_utf8);
     unsafe { view.to_string_view_unchecked() }
+}
+
+pub fn decode_null_value(rows: &mut [&[u8]], options: SortOptions) {
+    for row in rows.iter_mut() {
+        let (sentinel1, sentinel2) = match options.descending {
+            true => (!NON_EMPTY_SENTINEL, !NULL_VALUE_SENTINEL),
+            false => (NON_EMPTY_SENTINEL, NULL_VALUE_SENTINEL),
+        };
+        debug_assert_eq!(row[0], sentinel1, "Expected NULL_VALUE_SENTINEL at byte 0");
+        debug_assert_eq!(row[1], sentinel2, "Expected NULL_VALUE_SENTINEL at byte 1");
+        *row = &row[2..];
+    }
 }

@@ -116,7 +116,7 @@ fn build_parquet_file(
         .tempfile()
         .expect("tempfile creation");
 
-    let mut builder = WriterProperties::builder().set_max_row_group_size(row_per_group);
+    let mut builder = WriterProperties::builder().set_max_row_group_row_count(Some(row_per_group));
     if let Some(enable_stats) = enable_stats {
         builder = builder.set_statistics_enabled(enable_stats);
     }
@@ -2903,7 +2903,7 @@ mod test {
     fn parquet_metadata(schema: SchemaRef, batch: RecordBatch) -> Arc<ParquetMetaData> {
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Chunk)
-            .set_max_row_group_size(ROWS_PER_ROW_GROUP)
+            .set_max_row_group_row_count(Some(ROWS_PER_ROW_GROUP))
             .build();
 
         let mut buffer = Vec::new();
