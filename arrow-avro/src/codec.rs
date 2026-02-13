@@ -357,27 +357,57 @@ impl AvroDataType {
             | Codec::DurationMillis
             | Codec::DurationSeconds => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
             #[cfg(feature = "avro_custom_types")]
-            Codec::Int8 | Codec::Int16 => {
+            Codec::Int8 => {
                 let i = parse_json_i64(default_json, "int")?;
-                if i < i32::MIN as i64 || i > i32::MAX as i64 {
+                if i < i8::MIN as i64 || i > i8::MAX as i64 {
                     return Err(ArrowError::SchemaError(format!(
-                        "Default int {i} out of i32 range"
+                        "Default int8 {i} out of i8 range"
                     )));
                 }
                 AvroLiteral::Int(i as i32)
             }
             #[cfg(feature = "avro_custom_types")]
-            Codec::UInt8 | Codec::UInt16 => {
+            Codec::Int16 => {
                 let i = parse_json_i64(default_json, "int")?;
-                if i < 0 || i > i32::MAX as i64 {
+                if i < i16::MIN as i64 || i > i16::MAX as i64 {
                     return Err(ArrowError::SchemaError(format!(
-                        "Default unsigned int {i} out of range"
+                        "Default int16 {i} out of i16 range"
                     )));
                 }
                 AvroLiteral::Int(i as i32)
             }
             #[cfg(feature = "avro_custom_types")]
-            Codec::UInt32 | Codec::Date64 | Codec::TimeNanos | Codec::TimestampSecs(_) => {
+            Codec::UInt8 => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < 0 || i > u8::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default uint8 {i} out of u8 range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt16 => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < 0 || i > u16::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default uint16 {i} out of u16 range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt32 => {
+                let i = parse_json_i64(default_json, "long")?;
+                if i < 0 || i > u32::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default uint32 {i} out of u32 range"
+                    )));
+                }
+                AvroLiteral::Long(i)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Date64 | Codec::TimeNanos | Codec::TimestampSecs(_) => {
                 AvroLiteral::Long(parse_json_i64(default_json, "long")?)
             }
             #[cfg(feature = "avro_custom_types")]
@@ -3015,6 +3045,80 @@ mod tests {
             .parse_and_store_default(&serde_json::json!(456))
             .unwrap();
         assert_eq!(l2, AvroLiteral::Long(456));
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_validate_and_store_default_custom_integer_ranges() {
+        let mut dt_i8 = AvroDataType::new(Codec::Int8, HashMap::new(), None);
+        let lit_i8 = dt_i8
+            .parse_and_store_default(&serde_json::json!(i8::MAX))
+            .unwrap();
+        assert_eq!(lit_i8, AvroLiteral::Int(i8::MAX as i32));
+        let err_i8_high = dt_i8
+            .parse_and_store_default(&serde_json::json!(i8::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_i8_high.to_string().contains("out of i8 range"));
+        let err_i8_low = dt_i8
+            .parse_and_store_default(&serde_json::json!(i8::MIN as i64 - 1))
+            .unwrap_err();
+        assert!(err_i8_low.to_string().contains("out of i8 range"));
+
+        let mut dt_i16 = AvroDataType::new(Codec::Int16, HashMap::new(), None);
+        let lit_i16 = dt_i16
+            .parse_and_store_default(&serde_json::json!(i16::MIN))
+            .unwrap();
+        assert_eq!(lit_i16, AvroLiteral::Int(i16::MIN as i32));
+        let err_i16_high = dt_i16
+            .parse_and_store_default(&serde_json::json!(i16::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_i16_high.to_string().contains("out of i16 range"));
+        let err_i16_low = dt_i16
+            .parse_and_store_default(&serde_json::json!(i16::MIN as i64 - 1))
+            .unwrap_err();
+        assert!(err_i16_low.to_string().contains("out of i16 range"));
+
+        let mut dt_u8 = AvroDataType::new(Codec::UInt8, HashMap::new(), None);
+        let lit_u8 = dt_u8
+            .parse_and_store_default(&serde_json::json!(u8::MAX))
+            .unwrap();
+        assert_eq!(lit_u8, AvroLiteral::Int(u8::MAX as i32));
+        let err_u8_neg = dt_u8
+            .parse_and_store_default(&serde_json::json!(-1))
+            .unwrap_err();
+        assert!(err_u8_neg.to_string().contains("out of u8 range"));
+        let err_u8_high = dt_u8
+            .parse_and_store_default(&serde_json::json!(u8::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_u8_high.to_string().contains("out of u8 range"));
+
+        let mut dt_u16 = AvroDataType::new(Codec::UInt16, HashMap::new(), None);
+        let lit_u16 = dt_u16
+            .parse_and_store_default(&serde_json::json!(u16::MAX))
+            .unwrap();
+        assert_eq!(lit_u16, AvroLiteral::Int(u16::MAX as i32));
+        let err_u16_neg = dt_u16
+            .parse_and_store_default(&serde_json::json!(-1))
+            .unwrap_err();
+        assert!(err_u16_neg.to_string().contains("out of u16 range"));
+        let err_u16_high = dt_u16
+            .parse_and_store_default(&serde_json::json!(u16::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_u16_high.to_string().contains("out of u16 range"));
+
+        let mut dt_u32 = AvroDataType::new(Codec::UInt32, HashMap::new(), None);
+        let lit_u32 = dt_u32
+            .parse_and_store_default(&serde_json::json!(u32::MAX as i64))
+            .unwrap();
+        assert_eq!(lit_u32, AvroLiteral::Long(u32::MAX as i64));
+        let err_u32_neg = dt_u32
+            .parse_and_store_default(&serde_json::json!(-1))
+            .unwrap_err();
+        assert!(err_u32_neg.to_string().contains("out of u32 range"));
+        let err_u32_high = dt_u32
+            .parse_and_store_default(&serde_json::json!(u32::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_u32_high.to_string().contains("out of u32 range"));
     }
 
     #[test]

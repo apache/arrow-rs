@@ -733,7 +733,12 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::Int8(v) => match lit {
                 AvroLiteral::Int(i) => {
-                    v.push(*i as i8);
+                    let x = i8::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for int8 out of range for i8: {i}"
+                        ))
+                    })?;
+                    v.push(x);
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -743,7 +748,12 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::Int16(v) => match lit {
                 AvroLiteral::Int(i) => {
-                    v.push(*i as i16);
+                    let x = i16::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for int16 out of range for i16: {i}"
+                        ))
+                    })?;
+                    v.push(x);
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -753,7 +763,12 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::UInt8(v) => match lit {
                 AvroLiteral::Int(i) => {
-                    v.push(*i as u8);
+                    let x = u8::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for uint8 out of range for u8: {i}"
+                        ))
+                    })?;
+                    v.push(x);
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -763,7 +778,12 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::UInt16(v) => match lit {
                 AvroLiteral::Int(i) => {
-                    v.push(*i as u16);
+                    let x = u16::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for uint16 out of range for u16: {i}"
+                        ))
+                    })?;
+                    v.push(x);
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -773,7 +793,12 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::UInt32(v) => match lit {
                 AvroLiteral::Long(i) => {
-                    v.push(*i as u32);
+                    let x = u32::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for uint32 out of range for u32: {i}"
+                        ))
+                    })?;
+                    v.push(x);
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -1112,15 +1137,45 @@ impl Decoder {
             | Self::DurationMicrosecond(values)
             | Self::DurationNanosecond(values) => values.push(buf.get_long()?),
             #[cfg(feature = "avro_custom_types")]
-            Self::Int8(values) => values.push(buf.get_int()? as i8),
+            Self::Int8(values) => {
+                let raw = buf.get_int()?;
+                let x = i8::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("int8 value {raw} out of range for i8"))
+                })?;
+                values.push(x);
+            }
             #[cfg(feature = "avro_custom_types")]
-            Self::Int16(values) => values.push(buf.get_int()? as i16),
+            Self::Int16(values) => {
+                let raw = buf.get_int()?;
+                let x = i16::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("int16 value {raw} out of range for i16"))
+                })?;
+                values.push(x);
+            }
             #[cfg(feature = "avro_custom_types")]
-            Self::UInt8(values) => values.push(buf.get_int()? as u8),
+            Self::UInt8(values) => {
+                let raw = buf.get_int()?;
+                let x = u8::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("uint8 value {raw} out of range for u8"))
+                })?;
+                values.push(x);
+            }
             #[cfg(feature = "avro_custom_types")]
-            Self::UInt16(values) => values.push(buf.get_int()? as u16),
+            Self::UInt16(values) => {
+                let raw = buf.get_int()?;
+                let x = u16::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("uint16 value {raw} out of range for u16"))
+                })?;
+                values.push(x);
+            }
             #[cfg(feature = "avro_custom_types")]
-            Self::UInt32(values) => values.push(buf.get_long()? as u32),
+            Self::UInt32(values) => {
+                let raw = buf.get_long()?;
+                let x = u32::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("uint32 value {raw} out of range for u32"))
+                })?;
+                values.push(x);
+            }
             #[cfg(feature = "avro_custom_types")]
             Self::UInt64(values) => {
                 let b = buf.get_fixed(8)?;
@@ -1258,28 +1313,26 @@ impl Decoder {
                 inner.decode(buf)?;
             }
             Self::Union(u) => u.decode(buf)?,
-            Self::Nullable(order, nb, encoding, plan) => {
-                match *plan {
-                    NullablePlan::FromSingle { promotion } => {
-                        encoding.decode_with_promotion(buf, promotion)?;
-                        nb.append(true);
-                    }
-                    NullablePlan::ReadTag => {
-                        let branch = buf.read_vlq()?;
-                        let is_not_null = match *order {
-                            Nullability::NullFirst => branch != 0,
-                            Nullability::NullSecond => branch == 0,
-                        };
-                        if is_not_null {
-                            // It is important to decode before appending to null buffer in case of decode error
-                            encoding.decode(buf)?;
-                        } else {
-                            encoding.append_null()?;
-                        }
-                        nb.append(is_not_null);
-                    }
+            Self::Nullable(order, nb, encoding, plan) => match *plan {
+                NullablePlan::FromSingle { promotion } => {
+                    encoding.decode_with_promotion(buf, promotion)?;
+                    nb.append(true);
                 }
-            }
+                NullablePlan::ReadTag => {
+                    let branch = buf.read_vlq()?;
+                    let is_not_null = match *order {
+                        Nullability::NullFirst => branch != 0,
+                        Nullability::NullSecond => branch == 0,
+                    };
+                    if is_not_null {
+                        // It is important to decode before appending to null buffer in case of decode error
+                        encoding.decode(buf)?;
+                    } else {
+                        encoding.append_null()?;
+                    }
+                    nb.append(is_not_null);
+                }
+            },
         }
         Ok(())
     }
@@ -4325,6 +4378,185 @@ mod tests {
             default_injections: Arc::from(default_injections),
         };
         Decoder::Record(fields, encodings, Some(projector))
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_default_append_custom_integer_range_validation() {
+        let mut d_i8 = Decoder::Int8(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_i8.append_default(&AvroLiteral::Int(i8::MIN as i32))
+            .unwrap();
+        d_i8.append_default(&AvroLiteral::Int(i8::MAX as i32))
+            .unwrap();
+        let err_i8_high = d_i8
+            .append_default(&AvroLiteral::Int(i8::MAX as i32 + 1))
+            .unwrap_err();
+        assert!(err_i8_high.to_string().contains("out of range for i8"));
+        let err_i8_low = d_i8
+            .append_default(&AvroLiteral::Int(i8::MIN as i32 - 1))
+            .unwrap_err();
+        assert!(err_i8_low.to_string().contains("out of range for i8"));
+        let arr_i8 = d_i8.flush(None).unwrap();
+        let values_i8 = arr_i8.as_any().downcast_ref::<Int8Array>().unwrap();
+        assert_eq!(values_i8.values(), &[i8::MIN, i8::MAX]);
+
+        let mut d_i16 = Decoder::Int16(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_i16
+            .append_default(&AvroLiteral::Int(i16::MIN as i32))
+            .unwrap();
+        d_i16
+            .append_default(&AvroLiteral::Int(i16::MAX as i32))
+            .unwrap();
+        let err_i16_high = d_i16
+            .append_default(&AvroLiteral::Int(i16::MAX as i32 + 1))
+            .unwrap_err();
+        assert!(err_i16_high.to_string().contains("out of range for i16"));
+        let err_i16_low = d_i16
+            .append_default(&AvroLiteral::Int(i16::MIN as i32 - 1))
+            .unwrap_err();
+        assert!(err_i16_low.to_string().contains("out of range for i16"));
+        let arr_i16 = d_i16.flush(None).unwrap();
+        let values_i16 = arr_i16.as_any().downcast_ref::<Int16Array>().unwrap();
+        assert_eq!(values_i16.values(), &[i16::MIN, i16::MAX]);
+
+        let mut d_u8 = Decoder::UInt8(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_u8.append_default(&AvroLiteral::Int(0)).unwrap();
+        d_u8.append_default(&AvroLiteral::Int(u8::MAX as i32))
+            .unwrap();
+        let err_u8_neg = d_u8.append_default(&AvroLiteral::Int(-1)).unwrap_err();
+        assert!(err_u8_neg.to_string().contains("out of range for u8"));
+        let err_u8_high = d_u8
+            .append_default(&AvroLiteral::Int(u8::MAX as i32 + 1))
+            .unwrap_err();
+        assert!(err_u8_high.to_string().contains("out of range for u8"));
+        let arr_u8 = d_u8.flush(None).unwrap();
+        let values_u8 = arr_u8.as_any().downcast_ref::<UInt8Array>().unwrap();
+        assert_eq!(values_u8.values(), &[0, u8::MAX]);
+
+        let mut d_u16 = Decoder::UInt16(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_u16.append_default(&AvroLiteral::Int(0)).unwrap();
+        d_u16
+            .append_default(&AvroLiteral::Int(u16::MAX as i32))
+            .unwrap();
+        let err_u16_neg = d_u16.append_default(&AvroLiteral::Int(-1)).unwrap_err();
+        assert!(err_u16_neg.to_string().contains("out of range for u16"));
+        let err_u16_high = d_u16
+            .append_default(&AvroLiteral::Int(u16::MAX as i32 + 1))
+            .unwrap_err();
+        assert!(err_u16_high.to_string().contains("out of range for u16"));
+        let arr_u16 = d_u16.flush(None).unwrap();
+        let values_u16 = arr_u16.as_any().downcast_ref::<UInt16Array>().unwrap();
+        assert_eq!(values_u16.values(), &[0, u16::MAX]);
+
+        let mut d_u32 = Decoder::UInt32(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_u32.append_default(&AvroLiteral::Long(0)).unwrap();
+        d_u32
+            .append_default(&AvroLiteral::Long(u32::MAX as i64))
+            .unwrap();
+        let err_u32_neg = d_u32.append_default(&AvroLiteral::Long(-1)).unwrap_err();
+        assert!(err_u32_neg.to_string().contains("out of range for u32"));
+        let err_u32_high = d_u32
+            .append_default(&AvroLiteral::Long(u32::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_u32_high.to_string().contains("out of range for u32"));
+        let arr_u32 = d_u32.flush(None).unwrap();
+        let values_u32 = arr_u32.as_any().downcast_ref::<UInt32Array>().unwrap();
+        assert_eq!(values_u32.values(), &[0, u32::MAX]);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_decode_custom_integer_range_validation() {
+        let mut d_i8 = Decoder::try_new(&avro_from_codec(Codec::Int8)).unwrap();
+        d_i8.decode(&mut AvroCursor::new(&encode_avro_int(i8::MIN as i32)))
+            .unwrap();
+        d_i8.decode(&mut AvroCursor::new(&encode_avro_int(i8::MAX as i32)))
+            .unwrap();
+        let err_i8_high = d_i8
+            .decode(&mut AvroCursor::new(&encode_avro_int(i8::MAX as i32 + 1)))
+            .unwrap_err();
+        assert!(err_i8_high.to_string().contains("out of range for i8"));
+        let err_i8_low = d_i8
+            .decode(&mut AvroCursor::new(&encode_avro_int(i8::MIN as i32 - 1)))
+            .unwrap_err();
+        assert!(err_i8_low.to_string().contains("out of range for i8"));
+        let arr_i8 = d_i8.flush(None).unwrap();
+        let values_i8 = arr_i8.as_any().downcast_ref::<Int8Array>().unwrap();
+        assert_eq!(values_i8.values(), &[i8::MIN, i8::MAX]);
+
+        let mut d_i16 = Decoder::try_new(&avro_from_codec(Codec::Int16)).unwrap();
+        d_i16
+            .decode(&mut AvroCursor::new(&encode_avro_int(i16::MIN as i32)))
+            .unwrap();
+        d_i16
+            .decode(&mut AvroCursor::new(&encode_avro_int(i16::MAX as i32)))
+            .unwrap();
+        let err_i16_high = d_i16
+            .decode(&mut AvroCursor::new(&encode_avro_int(i16::MAX as i32 + 1)))
+            .unwrap_err();
+        assert!(err_i16_high.to_string().contains("out of range for i16"));
+        let err_i16_low = d_i16
+            .decode(&mut AvroCursor::new(&encode_avro_int(i16::MIN as i32 - 1)))
+            .unwrap_err();
+        assert!(err_i16_low.to_string().contains("out of range for i16"));
+        let arr_i16 = d_i16.flush(None).unwrap();
+        let values_i16 = arr_i16.as_any().downcast_ref::<Int16Array>().unwrap();
+        assert_eq!(values_i16.values(), &[i16::MIN, i16::MAX]);
+
+        let mut d_u8 = Decoder::try_new(&avro_from_codec(Codec::UInt8)).unwrap();
+        d_u8.decode(&mut AvroCursor::new(&encode_avro_int(0)))
+            .unwrap();
+        d_u8.decode(&mut AvroCursor::new(&encode_avro_int(u8::MAX as i32)))
+            .unwrap();
+        let err_u8_neg = d_u8
+            .decode(&mut AvroCursor::new(&encode_avro_int(-1)))
+            .unwrap_err();
+        assert!(err_u8_neg.to_string().contains("out of range for u8"));
+        let err_u8_high = d_u8
+            .decode(&mut AvroCursor::new(&encode_avro_int(u8::MAX as i32 + 1)))
+            .unwrap_err();
+        assert!(err_u8_high.to_string().contains("out of range for u8"));
+        let arr_u8 = d_u8.flush(None).unwrap();
+        let values_u8 = arr_u8.as_any().downcast_ref::<UInt8Array>().unwrap();
+        assert_eq!(values_u8.values(), &[0, u8::MAX]);
+
+        let mut d_u16 = Decoder::try_new(&avro_from_codec(Codec::UInt16)).unwrap();
+        d_u16
+            .decode(&mut AvroCursor::new(&encode_avro_int(0)))
+            .unwrap();
+        d_u16
+            .decode(&mut AvroCursor::new(&encode_avro_int(u16::MAX as i32)))
+            .unwrap();
+        let err_u16_neg = d_u16
+            .decode(&mut AvroCursor::new(&encode_avro_int(-1)))
+            .unwrap_err();
+        assert!(err_u16_neg.to_string().contains("out of range for u16"));
+        let err_u16_high = d_u16
+            .decode(&mut AvroCursor::new(&encode_avro_int(u16::MAX as i32 + 1)))
+            .unwrap_err();
+        assert!(err_u16_high.to_string().contains("out of range for u16"));
+        let arr_u16 = d_u16.flush(None).unwrap();
+        let values_u16 = arr_u16.as_any().downcast_ref::<UInt16Array>().unwrap();
+        assert_eq!(values_u16.values(), &[0, u16::MAX]);
+
+        let mut d_u32 = Decoder::try_new(&avro_from_codec(Codec::UInt32)).unwrap();
+        d_u32
+            .decode(&mut AvroCursor::new(&encode_avro_long(0)))
+            .unwrap();
+        d_u32
+            .decode(&mut AvroCursor::new(&encode_avro_long(u32::MAX as i64)))
+            .unwrap();
+        let err_u32_neg = d_u32
+            .decode(&mut AvroCursor::new(&encode_avro_long(-1)))
+            .unwrap_err();
+        assert!(err_u32_neg.to_string().contains("out of range for u32"));
+        let err_u32_high = d_u32
+            .decode(&mut AvroCursor::new(&encode_avro_long(u32::MAX as i64 + 1)))
+            .unwrap_err();
+        assert!(err_u32_high.to_string().contains("out of range for u32"));
+        let arr_u32 = d_u32.flush(None).unwrap();
+        let values_u32 = arr_u32.as_any().downcast_ref::<UInt32Array>().unwrap();
+        assert_eq!(values_u32.values(), &[0, u32::MAX]);
     }
 
     #[test]

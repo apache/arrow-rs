@@ -334,10 +334,6 @@ impl<'a> FieldEncoder<'a> {
                 DataType::Date64 => {
                     Encoder::Date64(LongEncoder(array.as_primitive::<Date64Type>()))
                 }
-                #[cfg(not(feature = "avro_custom_types"))]
-                DataType::Time32(TimeUnit::Second) => Encoder::Time32SecsToMillis(
-                    Time32SecondsToMillisEncoder(array.as_primitive::<Time32SecondType>()),
-                ),
                 #[cfg(feature = "avro_custom_types")]
                 DataType::Time32(TimeUnit::Second) => {
                     Encoder::Time32Secs(IntEncoder(array.as_primitive::<Time32SecondType>()))
@@ -403,16 +399,20 @@ impl<'a> FieldEncoder<'a> {
                     Encoder::Fixed(FixedEncoder(arr))
                 }
                 DataType::Timestamp(unit, _) => match unit {
-                    #[cfg(not(feature = "avro_custom_types"))]
                     TimeUnit::Second => {
-                        Encoder::TimestampSecsToMillis(TimestampSecondsToMillisEncoder(
-                            array.as_primitive::<TimestampSecondType>(),
-                        ))
+                        #[cfg(not(feature = "avro_custom_types"))]
+                        {
+                            Encoder::TimestampSecsToMillis(TimestampSecondsToMillisEncoder(
+                                array.as_primitive::<TimestampSecondType>(),
+                            ))
+                        }
+                        #[cfg(feature = "avro_custom_types")]
+                        {
+                            Encoder::TimestampSecs(LongEncoder(
+                                array.as_primitive::<TimestampSecondType>(),
+                            ))
+                        }
                     }
-                    #[cfg(feature = "avro_custom_types")]
-                    TimeUnit::Second => Encoder::TimestampSecs(LongEncoder(
-                        array.as_primitive::<TimestampSecondType>(),
-                    )),
                     TimeUnit::Millisecond => Encoder::TimestampMillis(LongEncoder(
                         array.as_primitive::<TimestampMillisecondType>(),
                     )),
@@ -423,32 +423,18 @@ impl<'a> FieldEncoder<'a> {
                         array.as_primitive::<TimestampNanosecondType>(),
                     )),
                 },
+                #[cfg(feature = "avro_custom_types")]
                 DataType::Interval(unit) => match unit {
-                    #[cfg(not(feature = "avro_custom_types"))]
-                    IntervalUnit::MonthDayNano => Encoder::IntervalMonthDayNano(DurationEncoder(
-                        array.as_primitive::<IntervalMonthDayNanoType>(),
-                    )),
-                    #[cfg(feature = "avro_custom_types")]
                     IntervalUnit::MonthDayNano => {
                         Encoder::IntervalMonthDayNanoFixed(IntervalMonthDayNanoFixedEncoder(
                             array.as_primitive::<IntervalMonthDayNanoType>(),
                         ))
                     }
-                    #[cfg(not(feature = "avro_custom_types"))]
-                    IntervalUnit::YearMonth => Encoder::IntervalYearMonth(DurationEncoder(
-                        array.as_primitive::<IntervalYearMonthType>(),
-                    )),
-                    #[cfg(feature = "avro_custom_types")]
                     IntervalUnit::YearMonth => {
                         Encoder::IntervalYearMonthFixed(IntervalYearMonthFixedEncoder(
                             array.as_primitive::<IntervalYearMonthType>(),
                         ))
                     }
-                    #[cfg(not(feature = "avro_custom_types"))]
-                    IntervalUnit::DayTime => Encoder::IntervalDayTime(DurationEncoder(
-                        array.as_primitive::<IntervalDayTimeType>(),
-                    )),
-                    #[cfg(feature = "avro_custom_types")]
                     IntervalUnit::DayTime => Encoder::IntervalDayTimeFixed(
                         IntervalDayTimeFixedEncoder(array.as_primitive::<IntervalDayTimeType>()),
                     ),
@@ -711,6 +697,34 @@ impl<'a> FieldEncoder<'a> {
                 };
                 build(array)?
             }
+            FieldPlan::Duration => match array.data_type() {
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    Encoder::IntervalMonthDayNanoDuration(DurationEncoder(
+                        array.as_primitive::<IntervalMonthDayNanoType>(),
+                    ))
+                }
+                DataType::Interval(IntervalUnit::YearMonth) => Encoder::IntervalYearMonthDuration(
+                    DurationEncoder(array.as_primitive::<IntervalYearMonthType>()),
+                ),
+                DataType::Interval(IntervalUnit::DayTime) => Encoder::IntervalDayTimeDuration(
+                    DurationEncoder(array.as_primitive::<IntervalDayTimeType>()),
+                ),
+                other => {
+                    return Err(AvroError::SchemaError(format!(
+                        "Avro duration requires Arrow Interval type, found: {other:?}"
+                    )));
+                }
+            },
+            FieldPlan::TimeMillisFromSecs => match array.data_type() {
+                DataType::Time32(TimeUnit::Second) => Encoder::Time32SecsToMillis(
+                    Time32SecondsToMillisEncoder(array.as_primitive::<Time32SecondType>()),
+                ),
+                other => {
+                    return Err(AvroError::SchemaError(format!(
+                        "Avro time-millis-from-seconds requires Arrow Time32(Second), found: {other:?}"
+                    )));
+                }
+            },
         };
         // Compute the effective null state from writer-declared nullability and data nulls.
         let null_state = match nullability {
@@ -784,6 +798,14 @@ enum FieldPlan {
         values_nullability: Option<Nullability>,
         value_plan: Box<FieldPlan>,
     },
+    /// Standard Avro `duration` logical type (`fixed(12)`, three LE u32 values).
+    /// Used when `Codec::Interval` is resolved, ensuring the 12-byte duration encoder
+    /// is selected regardless of the `avro_custom_types` feature flag.
+    Duration,
+    /// Arrow `Time32(Second)` mapped to Avro `time-millis` — values must be scaled × 1000.
+    /// Used when `Codec::TimeMillis` is resolved for a `Time32(Second)` Arrow column,
+    /// ensuring the scaling encoder is selected regardless of the `avro_custom_types` feature flag.
+    TimeMillisFromSecs,
 }
 
 #[derive(Debug, Clone)]
@@ -1165,7 +1187,7 @@ impl FieldPlan {
             Codec::Interval => match arrow_field.data_type() {
                 DataType::Interval(
                     IntervalUnit::MonthDayNano | IntervalUnit::YearMonth | IntervalUnit::DayTime,
-                ) => Ok(FieldPlan::Scalar),
+                ) => Ok(FieldPlan::Duration),
                 other => Err(AvroError::SchemaError(format!(
                     "Avro 'duration' logical type requires an Arrow Interval (MonthDayNano, YearMonth, or DayTime), found: {other:?}"
                 ))),
@@ -1224,6 +1246,10 @@ impl FieldPlan {
                     value_plan: Box::new(FieldPlan::build(values_dt.as_ref(), values_field)?),
                 })
             }
+            Codec::TimeMillis => match arrow_field.data_type() {
+                DataType::Time32(TimeUnit::Second) => Ok(FieldPlan::TimeMillisFromSecs),
+                _ => Ok(FieldPlan::Scalar),
+            },
             _ => Ok(FieldPlan::Scalar),
         }
     }
@@ -1239,7 +1265,6 @@ enum Encoder<'a> {
     #[cfg(not(feature = "avro_custom_types"))]
     TimestampSecsToMillis(TimestampSecondsToMillisEncoder<'a>),
     Date32(IntEncoder<'a, Date32Type>),
-    #[cfg(not(feature = "avro_custom_types"))]
     Time32SecsToMillis(Time32SecondsToMillisEncoder<'a>),
     Time32Millis(IntEncoder<'a, Time32MillisecondType>),
     Time64Micros(LongEncoder<'a, Time64MicrosecondType>),
@@ -1265,20 +1290,15 @@ enum Encoder<'a> {
     Fixed(FixedEncoder<'a>),
     /// Avro `uuid` logical type encoder (string with RFC‑4122 hyphenated text)
     Uuid(UuidEncoder<'a>),
-    /// Avro `duration` logical type encoder (`fixed(12)` months/days/millis).
-    ///
-    /// This is the interop-first representation used when `avro_custom_types` is disabled.
-    #[cfg(not(feature = "avro_custom_types"))]
-    IntervalMonthDayNano(DurationEncoder<'a, IntervalMonthDayNanoType>),
+    /// Avro `duration` logical type encoder (`fixed(12)` months/days/millis) for MonthDayNano.
+    IntervalMonthDayNanoDuration(DurationEncoder<'a, IntervalMonthDayNanoType>),
     /// Arrow Interval(MonthDayNano) custom logical type encoder (`fixed(16)` months/days/nanos)
     #[cfg(feature = "avro_custom_types")]
     IntervalMonthDayNanoFixed(IntervalMonthDayNanoFixedEncoder<'a>),
-    /// Avro `duration` logical type (Arrow Interval(YearMonth)) encoder
-    #[cfg(not(feature = "avro_custom_types"))]
-    IntervalYearMonth(DurationEncoder<'a, IntervalYearMonthType>),
-    /// Avro `duration` logical type (Arrow Interval(DayTime)) encoder
-    #[cfg(not(feature = "avro_custom_types"))]
-    IntervalDayTime(DurationEncoder<'a, IntervalDayTimeType>),
+    /// Avro `duration` logical type encoder (`fixed(12)` months/days/millis) for YearMonth.
+    IntervalYearMonthDuration(DurationEncoder<'a, IntervalYearMonthType>),
+    /// Avro `duration` logical type encoder (`fixed(12)` months/days/millis) for DayTime.
+    IntervalDayTimeDuration(DurationEncoder<'a, IntervalDayTimeType>),
     #[cfg(feature = "small_decimals")]
     Decimal32(Decimal32Encoder<'a>),
     #[cfg(feature = "small_decimals")]
@@ -1353,7 +1373,6 @@ impl<'a> Encoder<'a> {
             #[cfg(not(feature = "avro_custom_types"))]
             Encoder::TimestampSecsToMillis(e) => e.encode(out, idx),
             Encoder::Date32(e) => e.encode(out, idx),
-            #[cfg(not(feature = "avro_custom_types"))]
             Encoder::Time32SecsToMillis(e) => e.encode(out, idx),
             Encoder::Time32Millis(e) => e.encode(out, idx),
             Encoder::Time64Micros(e) => e.encode(out, idx),
@@ -1377,14 +1396,11 @@ impl<'a> Encoder<'a> {
             Encoder::Struct(e) => e.encode(out, idx),
             Encoder::Fixed(e) => (e).encode(out, idx),
             Encoder::Uuid(e) => (e).encode(out, idx),
-            #[cfg(not(feature = "avro_custom_types"))]
-            Encoder::IntervalMonthDayNano(e) => (e).encode(out, idx),
+            Encoder::IntervalMonthDayNanoDuration(e) => e.encode(out, idx),
             #[cfg(feature = "avro_custom_types")]
             Encoder::IntervalMonthDayNanoFixed(e) => e.encode(out, idx),
-            #[cfg(not(feature = "avro_custom_types"))]
-            Encoder::IntervalYearMonth(e) => (e).encode(out, idx),
-            #[cfg(not(feature = "avro_custom_types"))]
-            Encoder::IntervalDayTime(e) => (e).encode(out, idx),
+            Encoder::IntervalYearMonthDuration(e) => e.encode(out, idx),
+            Encoder::IntervalDayTimeDuration(e) => e.encode(out, idx),
             #[cfg(feature = "small_decimals")]
             Encoder::Decimal32(e) => (e).encode(out, idx),
             #[cfg(feature = "small_decimals")]
@@ -1470,9 +1486,7 @@ impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
 }
 
 /// Time32(Second) to Avro time-millis (int), via safe scaling by 1000
-#[cfg(not(feature = "avro_custom_types"))]
 struct Time32SecondsToMillisEncoder<'a>(&'a PrimitiveArray<Time32SecondType>);
-#[cfg(not(feature = "avro_custom_types"))]
 impl<'a> Time32SecondsToMillisEncoder<'a> {
     #[inline]
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
@@ -2149,7 +2163,6 @@ impl UuidEncoder<'_> {
     }
 }
 
-#[cfg(not(feature = "avro_custom_types"))]
 #[derive(Copy, Clone)]
 struct DurationParts {
     months: u32,
@@ -2157,11 +2170,9 @@ struct DurationParts {
     millis: u32,
 }
 /// Trait mapping an Arrow interval native value to Avro duration `(months, days, millis)`.
-#[cfg(not(feature = "avro_custom_types"))]
 trait IntervalToDurationParts: ArrowPrimitiveType {
     fn duration_parts(native: Self::Native) -> Result<DurationParts, AvroError>;
 }
-#[cfg(not(feature = "avro_custom_types"))]
 impl IntervalToDurationParts for IntervalMonthDayNanoType {
     fn duration_parts(native: Self::Native) -> Result<DurationParts, AvroError> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(native);
@@ -2189,7 +2200,6 @@ impl IntervalToDurationParts for IntervalMonthDayNanoType {
         })
     }
 }
-#[cfg(not(feature = "avro_custom_types"))]
 impl IntervalToDurationParts for IntervalYearMonthType {
     fn duration_parts(native: Self::Native) -> Result<DurationParts, AvroError> {
         if native < 0 {
@@ -2204,7 +2214,6 @@ impl IntervalToDurationParts for IntervalYearMonthType {
         })
     }
 }
-#[cfg(not(feature = "avro_custom_types"))]
 impl IntervalToDurationParts for IntervalDayTimeType {
     fn duration_parts(native: Self::Native) -> Result<DurationParts, AvroError> {
         let (days, millis) = IntervalDayTimeType::to_parts(native);
@@ -2223,9 +2232,7 @@ impl IntervalToDurationParts for IntervalDayTimeType {
 
 /// Single generic encoder used for all three interval units.
 /// Writes Avro `fixed(12)` as three little-endian u32 values in one call.
-#[cfg(not(feature = "avro_custom_types"))]
 struct DurationEncoder<'a, P: ArrowPrimitiveType + IntervalToDurationParts>(&'a PrimitiveArray<P>);
-#[cfg(not(feature = "avro_custom_types"))]
 impl<'a, P: ArrowPrimitiveType + IntervalToDurationParts> DurationEncoder<'a, P> {
     #[inline(always)]
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
@@ -2419,7 +2426,6 @@ mod tests {
         out
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     fn duration_fixed12(months: u32, days: u32, millis: u32) -> [u8; 12] {
         let m = months.to_le_bytes();
         let d = days.to_le_bytes();
@@ -3136,7 +3142,6 @@ mod tests {
         assert_bytes_eq(&got, &expected);
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_encoder_year_month_happy_path() {
         let arr: PrimitiveArray<IntervalYearMonthType> = vec![0i32, 1i32, 25i32].into();
@@ -3144,15 +3149,14 @@ mod tests {
         for m in [0u32, 1u32, 25u32] {
             expected.extend_from_slice(&duration_fixed12(m, 0, 0));
         }
-        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        let got = encode_all(&arr, &FieldPlan::Duration, None);
         assert_bytes_eq(&got, &expected);
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_encoder_year_month_rejects_negative() {
         let arr: PrimitiveArray<IntervalYearMonthType> = vec![-1i32].into();
-        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Duration, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -3163,7 +3167,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_encoder_day_time_happy_path() {
         let v0 = IntervalDayTimeType::make_value(2, 500); // days=2, millis=500
@@ -3172,16 +3175,15 @@ mod tests {
         let mut expected = Vec::new();
         expected.extend_from_slice(&duration_fixed12(0, 2, 500));
         expected.extend_from_slice(&duration_fixed12(0, 0, 0));
-        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        let got = encode_all(&arr, &FieldPlan::Duration, None);
         assert_bytes_eq(&got, &expected);
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_encoder_day_time_rejects_negative() {
         let bad = IntervalDayTimeType::make_value(-1, 0);
         let arr: PrimitiveArray<IntervalDayTimeType> = vec![bad].into();
-        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Duration, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -3207,7 +3209,6 @@ mod tests {
         assert_bytes_eq(&got, &expected);
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_encoder_month_day_nano_happy_path() {
         let v0 = IntervalMonthDayNanoType::make_value(1, 2, 3_000_000); // -> millis = 3
@@ -3216,16 +3217,15 @@ mod tests {
         let mut expected = Vec::new();
         expected.extend_from_slice(&duration_fixed12(1, 2, 3));
         expected.extend_from_slice(&duration_fixed12(0, 0, 0));
-        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        let got = encode_all(&arr, &FieldPlan::Duration, None);
         assert_bytes_eq(&got, &expected);
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_encoder_month_day_nano_rejects_non_ms_multiple() {
         let bad = IntervalMonthDayNanoType::make_value(0, 0, 1);
         let arr: PrimitiveArray<IntervalMonthDayNanoType> = vec![bad].into();
-        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Duration, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -3267,14 +3267,13 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn duration_month_day_nano_overflow_millis() {
         // nanos leading to millis > u32::MAX
         let nanos = ((u64::from(u32::MAX) + 1) * 1_000_000) as i64;
         let v = IntervalMonthDayNanoType::make_value(0, 0, nanos);
         let arr: PrimitiveArray<IntervalMonthDayNanoType> = vec![v].into();
-        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Duration, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -3421,13 +3420,12 @@ mod tests {
         assert_bytes_eq(&got, &expected);
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn time32_seconds_to_millis_encoder() {
         // Time32(Second) must encode as Avro time-millis (ms since midnight).
         let arr: arrow_array::PrimitiveArray<arrow_array::types::Time32SecondType> =
             vec![0i32, 1, -2, 12_345].into();
-        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        let got = encode_all(&arr, &FieldPlan::TimeMillisFromSecs, None);
         let mut expected = Vec::new();
         for secs in [0i32, 1, -2, 12_345] {
             let millis = (secs as i64) * 1000;
@@ -3436,13 +3434,13 @@ mod tests {
         assert_bytes_eq(&got, &expected);
     }
 
-    #[cfg(not(feature = "avro_custom_types"))]
     #[test]
     fn time32_seconds_to_millis_overflow() {
         // Choose a value that will overflow i32 when multiplied by 1000.
         let overflow_secs: i32 = i32::MAX / 1000 + 1;
         let arr: PrimitiveArray<Time32SecondType> = vec![overflow_secs].into();
-        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
+        let mut enc =
+            FieldEncoder::make_encoder(&arr, &FieldPlan::TimeMillisFromSecs, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -3453,6 +3451,54 @@ mod tests {
                 )
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn time32_seconds_to_millis_type_mismatch_returns_schema_error() {
+        let arr = Int32Array::from(vec![1, 2, 3]);
+        match FieldEncoder::make_encoder(&arr, &FieldPlan::TimeMillisFromSecs, None) {
+            Err(AvroError::SchemaError(msg)) => {
+                assert!(msg.contains("Time32(Second)"), "unexpected message: {msg}");
+                assert!(msg.contains("Int32"), "unexpected message: {msg}");
+            }
+            Ok(_) => panic!("expected SchemaError"),
+            Err(other) => panic!("expected SchemaError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_rows_time32_seconds_plan_rejects_millisecond_column() {
+        let schema = ArrowSchema::new(vec![Field::new(
+            "t",
+            DataType::Time32(TimeUnit::Millisecond),
+            false,
+        )]);
+        let arr: PrimitiveArray<Time32MillisecondType> = vec![1i32].into();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(arr)]).unwrap();
+        let encoder = RecordEncoder {
+            columns: vec![FieldBinding {
+                arrow_index: 0,
+                nullability: None,
+                plan: FieldPlan::TimeMillisFromSecs,
+            }],
+            prefix: None,
+        };
+
+        let mut out = BytesMut::new();
+        let mut offsets = vec![0usize];
+        let err = encoder
+            .encode_rows(&batch, 16, &mut out, &mut offsets)
+            .unwrap_err();
+        match err {
+            AvroError::SchemaError(msg) => {
+                assert!(msg.contains("Time32(Second)"), "unexpected message: {msg}");
+                assert!(
+                    msg.contains("Time32(Millisecond)"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!("expected SchemaError, got {other:?}"),
         }
     }
 

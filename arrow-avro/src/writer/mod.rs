@@ -784,13 +784,16 @@ mod tests {
     use crate::test_util::arrow_test_data;
     use arrow::datatypes::TimeUnit;
     use arrow::util::pretty::pretty_format_batches;
+    #[cfg(not(feature = "avro_custom_types"))]
+    use arrow_array::Float32Array;
     #[cfg(feature = "avro_custom_types")]
     use arrow_array::RunArray;
     use arrow_array::builder::{Int32Builder, ListBuilder};
+    use arrow_array::cast::AsArray;
     #[cfg(feature = "avro_custom_types")]
-    use arrow_array::types::{Int16Type, Int32Type, Int64Type};
+    use arrow_array::types::{Int16Type, Int64Type};
     use arrow_array::types::{
-        Time32MillisecondType, Time64MicrosecondType, TimestampMicrosecondType,
+        Int32Type, Time32MillisecondType, Time64MicrosecondType, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType,
     };
     use arrow_array::{
@@ -875,11 +878,7 @@ mod tests {
             .expect("expected at least one batch from decoder");
         assert_eq!(decoded.num_columns(), 1);
         assert_eq!(decoded.num_rows(), 2);
-        let col = decoded
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("int column");
+        let col = decoded.column(0).as_primitive::<Int32Type>();
         assert_eq!(col, &Int32Array::from(vec![10, 20]));
         Ok(())
     }
@@ -1140,11 +1139,7 @@ mod tests {
             .expect("expected at least one batch from decoder");
         assert_eq!(decoded.num_columns(), 1);
         assert_eq!(decoded.num_rows(), 3);
-        let col = decoded
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("int column");
+        let col = decoded.column(0).as_primitive::<Int32Type>();
         assert_eq!(col, &Int32Array::from(vec![1, 2, 3]));
         Ok(())
     }
@@ -1174,11 +1169,7 @@ mod tests {
             .expect("expected at least one batch from decoder");
         assert_eq!(decoded.num_columns(), 1);
         assert_eq!(decoded.num_rows(), 3);
-        let col = decoded
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("int column");
+        let col = decoded.column(0).as_primitive::<Int32Type>();
         assert_eq!(col, &Int32Array::from(vec![1, 2, 3]));
         Ok(())
     }
@@ -2227,11 +2218,7 @@ mod tests {
         let base = RunArray::<Int32Type>::try_new(&run_ends, &run_values)?;
         let offset = 1usize;
         let length = 6usize;
-        let base_values = base
-            .values()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("REE values as Int32Array");
+        let base_values = base.values().as_primitive::<Int32Type>();
         let mut logical_window: Vec<Option<i32>> = Vec::with_capacity(length);
         for i in offset..offset + length {
             let phys = base.get_physical_index(i);
@@ -2299,11 +2286,7 @@ mod tests {
                     .downcast_ref::<RunArray<Int32Type>>()
                     .expect("RunArray<Int32Type>");
                 fn expand_ree_to_int32(a: &RunArray<Int32Type>) -> Int32Array {
-                    let vals = a
-                        .values()
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .expect("REE values as Int32Array");
+                    let vals = a.values().as_primitive::<Int32Type>();
                     let mut out: Vec<Option<i32>> = Vec::with_capacity(a.len());
                     for i in 0..a.len() {
                         let phys = a.get_physical_index(i);
@@ -2352,11 +2335,7 @@ mod tests {
         assert_eq!(out.num_columns(), 1);
         assert_eq!(out.num_rows(), 8);
         assert_eq!(out.schema().field(0).data_type(), &DataType::Int32);
-        let got = out
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Int32Array");
+        let got = out.column(0).as_primitive::<Int32Type>();
         let expected = Int32Array::from(vec![
             Some(1),
             Some(1),
@@ -2441,11 +2420,7 @@ mod tests {
         assert_eq!(out.num_columns(), 1);
         assert_eq!(out.num_rows(), 8);
         assert_eq!(out.schema().field(0).data_type(), &DataType::Int32);
-        let got = out
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Int32Array");
+        let got = out.column(0).as_primitive::<Int32Type>();
         let expected = Int32Array::from(vec![
             Some(999),
             Some(999),
@@ -2485,11 +2460,7 @@ mod tests {
         assert_eq!(out.num_columns(), 1);
         assert_eq!(out.num_rows(), 6);
         assert_eq!(out.schema().field(0).data_type(), &DataType::Int32);
-        let got = out
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Int32Array");
+        let got = out.column(0).as_primitive::<Int32Type>();
         let expected = Int32Array::from(vec![Some(1), Some(1), Some(2), Some(2), None, None]);
         assert_eq!(got, &expected);
         Ok(())
@@ -3293,366 +3264,230 @@ mod tests {
         Ok(arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip"))
     }
 
+    /// Assert that an array roundtrips through Avro OCF and comes back identical.
+    #[cfg(feature = "avro_custom_types")]
+    fn assert_round_trip(array: ArrayRef) {
+        assert_round_trip_widened(array.clone(), array);
+    }
+
+    /// Assert that an input array roundtrips through Avro OCF and produces the expected output.
+    fn assert_round_trip_widened(input: ArrayRef, expected: ArrayRef) {
+        let schema = Schema::new(vec![Field::new("val", input.data_type().clone(), true)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![input]).expect("failed to create batch");
+        let roundtrip = roundtrip_ocf(&batch).expect("roundtrip failed");
+        assert_eq!(
+            roundtrip.column(0).data_type(),
+            expected.data_type(),
+            "output data type mismatch"
+        );
+        assert_eq!(
+            roundtrip.column(0).to_data(),
+            expected.to_data(),
+            "output data mismatch"
+        );
+    }
+
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_int8_custom_types() -> Result<(), AvroError> {
-        use arrow_array::Int8Array;
-
-        let schema = Schema::new(vec![Field::new("val", DataType::Int8, true)]);
-        let values: Vec<Option<i8>> = vec![
+    fn test_roundtrip_int8_custom_types() {
+        assert_round_trip(Arc::new(Int8Array::from(vec![
             Some(i8::MIN),
             Some(-1),
             Some(0),
             None,
             Some(1),
             Some(i8::MAX),
-        ];
-        let array = Int8Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        // With avro_custom_types: expect exact Int8 type
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Int8,
-            "Expected Int8 type with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int8Array>()
-            .expect("Int8Array");
-        assert_eq!(got, &Int8Array::from(values));
-        Ok(())
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_int8_no_custom_widens_to_int32() -> Result<(), AvroError> {
-        use arrow_array::Int8Array;
-
-        let schema = Schema::new(vec![Field::new("val", DataType::Int8, true)]);
-        let values: Vec<Option<i8>> = vec![
-            Some(i8::MIN),
-            Some(-1),
-            Some(0),
-            None,
-            Some(1),
-            Some(i8::MAX),
-        ];
-        let array = Int8Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        // Without avro_custom_types: expect Int32 (widened)
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Int32,
-            "Expected Int32 type without avro_custom_types (widened from Int8)"
+    fn test_roundtrip_int8_no_custom_widens_to_int32() {
+        assert_round_trip_widened(
+            Arc::new(Int8Array::from(vec![
+                Some(i8::MIN),
+                Some(-1),
+                Some(0),
+                None,
+                Some(1),
+                Some(i8::MAX),
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(i8::MIN as i32),
+                Some(-1),
+                Some(0),
+                None,
+                Some(1),
+                Some(i8::MAX as i32),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Int32Array");
-        let expected: Vec<Option<i32>> = values.iter().map(|v| v.map(|x| x as i32)).collect();
-        assert_eq!(got, &Int32Array::from(expected));
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_int16_custom_types() -> Result<(), AvroError> {
-        let schema = Schema::new(vec![Field::new("val", DataType::Int16, true)]);
-        let values: Vec<Option<i16>> = vec![
+    fn test_roundtrip_int16_custom_types() {
+        assert_round_trip(Arc::new(Int16Array::from(vec![
             Some(i16::MIN),
             Some(-1),
             Some(0),
             None,
             Some(1),
             Some(i16::MAX),
-        ];
-        let array = Int16Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Int16,
-            "Expected Int16 type with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int16Array>()
-            .expect("Int16Array");
-        assert_eq!(got, &Int16Array::from(values));
-        Ok(())
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_int16_no_custom_widens_to_int32() -> Result<(), AvroError> {
-        use arrow_array::Int16Array;
+    fn test_roundtrip_int16_no_custom_widens_to_int32() {
+        assert_round_trip_widened(
+            Arc::new(Int16Array::from(vec![
+                Some(i16::MIN),
+                Some(-1),
+                Some(0),
+                None,
+                Some(1),
+                Some(i16::MAX),
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(i16::MIN as i32),
+                Some(-1),
+                Some(0),
+                None,
+                Some(1),
+                Some(i16::MAX as i32),
+            ])),
+        );
+    }
 
-        let schema = Schema::new(vec![Field::new("val", DataType::Int16, true)]);
-        let values: Vec<Option<i16>> = vec![
-            Some(i16::MIN),
-            Some(-1),
-            Some(0),
-            None,
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_roundtrip_uint8_custom_types() {
+        assert_round_trip(Arc::new(UInt8Array::from(vec![
+            Some(0u8),
             Some(1),
-            Some(i16::MAX),
-        ];
-        let array = Int16Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Int32,
-            "Expected Int32 type without avro_custom_types (widened from Int16)"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Int32Array");
-        let expected: Vec<Option<i32>> = values.iter().map(|v| v.map(|x| x as i32)).collect();
-        assert_eq!(got, &Int32Array::from(expected));
-        Ok(())
-    }
-
-    #[cfg(feature = "avro_custom_types")]
-    #[test]
-    fn test_roundtrip_uint8_custom_types() -> Result<(), AvroError> {
-        use arrow_array::UInt8Array;
-
-        let schema = Schema::new(vec![Field::new("val", DataType::UInt8, true)]);
-        let values: Vec<Option<u8>> = vec![Some(0), Some(1), None, Some(127), Some(u8::MAX)];
-        let array = UInt8Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::UInt8,
-            "Expected UInt8 type with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt8Array>()
-            .expect("UInt8Array");
-        assert_eq!(got, &UInt8Array::from(values));
-        Ok(())
+            None,
+            Some(127),
+            Some(u8::MAX),
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_uint8_no_custom_widens_to_int32() -> Result<(), AvroError> {
-        use arrow_array::UInt8Array;
-
-        let schema = Schema::new(vec![Field::new("val", DataType::UInt8, true)]);
-        let values: Vec<Option<u8>> = vec![Some(0), Some(1), None, Some(127), Some(u8::MAX)];
-        let array = UInt8Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Int32,
-            "Expected Int32 type without avro_custom_types (widened from UInt8)"
+    fn test_roundtrip_uint8_no_custom_widens_to_int32() {
+        assert_round_trip_widened(
+            Arc::new(UInt8Array::from(vec![
+                Some(0u8),
+                Some(1),
+                None,
+                Some(127),
+                Some(u8::MAX),
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(0i32),
+                Some(1),
+                None,
+                Some(127),
+                Some(u8::MAX as i32),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Int32Array");
-        let expected: Vec<Option<i32>> = values.iter().map(|v| v.map(|x| x as i32)).collect();
-        assert_eq!(got, &Int32Array::from(expected));
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_uint16_custom_types() -> Result<(), AvroError> {
-        use arrow_array::UInt16Array;
-
-        let schema = Schema::new(vec![Field::new("val", DataType::UInt16, true)]);
-        let values: Vec<Option<u16>> = vec![Some(0), Some(1), None, Some(32767), Some(u16::MAX)];
-        let array = UInt16Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::UInt16,
-            "Expected UInt16 type with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt16Array>()
-            .expect("UInt16Array");
-        assert_eq!(got, &UInt16Array::from(values));
-        Ok(())
+    fn test_roundtrip_uint16_custom_types() {
+        assert_round_trip(Arc::new(UInt16Array::from(vec![
+            Some(0u16),
+            Some(1),
+            None,
+            Some(32767),
+            Some(u16::MAX),
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_uint16_no_custom_widens_to_int32() -> Result<(), AvroError> {
-        use arrow_array::UInt16Array;
-
-        let schema = Schema::new(vec![Field::new("val", DataType::UInt16, true)]);
-        let values: Vec<Option<u16>> = vec![Some(0), Some(1), None, Some(32767), Some(u16::MAX)];
-        let array = UInt16Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Int32,
-            "Expected Int32 type without avro_custom_types (widened from UInt16)"
+    fn test_roundtrip_uint16_no_custom_widens_to_int32() {
+        assert_round_trip_widened(
+            Arc::new(UInt16Array::from(vec![
+                Some(0u16),
+                Some(1),
+                None,
+                Some(32767),
+                Some(u16::MAX),
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(0i32),
+                Some(1),
+                None,
+                Some(32767),
+                Some(u16::MAX as i32),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Int32Array");
-        let expected: Vec<Option<i32>> = values.iter().map(|v| v.map(|x| x as i32)).collect();
-        assert_eq!(got, &Int32Array::from(expected));
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_uint32_custom_types() -> Result<(), AvroError> {
-        use arrow_array::UInt32Array;
-
-        let schema = Schema::new(vec![Field::new("val", DataType::UInt32, true)]);
-        let values: Vec<Option<u32>> = vec![
-            Some(0),
+    fn test_roundtrip_uint32_custom_types() {
+        assert_round_trip(Arc::new(UInt32Array::from(vec![
+            Some(0u32),
             Some(1),
             None,
             Some(i32::MAX as u32),
             Some(u32::MAX),
-        ];
-        let array = UInt32Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::UInt32,
-            "Expected UInt32 type with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .expect("UInt32Array");
-        assert_eq!(got, &UInt32Array::from(values));
-        Ok(())
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_uint32_no_custom_widens_to_int64() -> Result<(), AvroError> {
-        use arrow_array::UInt32Array;
-
-        let schema = Schema::new(vec![Field::new("val", DataType::UInt32, true)]);
-        let values: Vec<Option<u32>> = vec![
-            Some(0),
-            Some(1),
-            None,
-            Some(i32::MAX as u32),
-            Some(u32::MAX),
-        ];
-        let array = UInt32Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Int64,
-            "Expected Int64 type without avro_custom_types (widened from UInt32)"
+    fn test_roundtrip_uint32_no_custom_widens_to_int64() {
+        assert_round_trip_widened(
+            Arc::new(UInt32Array::from(vec![
+                Some(0u32),
+                Some(1),
+                None,
+                Some(i32::MAX as u32),
+                Some(u32::MAX),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(0i64),
+                Some(1),
+                None,
+                Some(i32::MAX as i64),
+                Some(u32::MAX as i64),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("Int64Array");
-        let expected: Vec<Option<i64>> = values.iter().map(|v| v.map(|x| x as i64)).collect();
-        assert_eq!(got, &Int64Array::from(expected));
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_uint64_custom_types() -> Result<(), AvroError> {
-        use arrow_array::UInt64Array;
-
-        let schema = Schema::new(vec![Field::new("val", DataType::UInt64, true)]);
-        // Include values > i64::MAX to test full u64 range
-        let values: Vec<Option<u64>> = vec![
-            Some(0),
+    fn test_roundtrip_uint64_custom_types() {
+        assert_round_trip(Arc::new(UInt64Array::from(vec![
+            Some(0u64),
             Some(1),
             None,
             Some(i64::MAX as u64),
             Some(u64::MAX),
-        ];
-        let array = UInt64Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-
-        let roundtrip = roundtrip_ocf(&batch)?;
-
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::UInt64,
-            "Expected UInt64 type with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .expect("UInt64Array");
-        assert_eq!(got, &UInt64Array::from(values));
-        Ok(())
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_uint64_no_custom_widens_to_int64() -> Result<(), AvroError> {
-        use arrow_array::UInt64Array;
-        let schema = Schema::new(vec![Field::new("val", DataType::UInt64, true)]);
-        let values: Vec<Option<u64>> = vec![Some(0), Some(1), None, Some(i64::MAX as u64)];
-        let array = UInt64Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Int64,
-            "Expected Int64 type without avro_custom_types (widened from UInt64)"
+    fn test_roundtrip_uint64_no_custom_widens_to_int64() {
+        assert_round_trip_widened(
+            Arc::new(UInt64Array::from(vec![
+                Some(0u64),
+                Some(1),
+                None,
+                Some(i64::MAX as u64),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(0i64),
+                Some(1),
+                None,
+                Some(i64::MAX),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("Int64Array");
-        let expected: Vec<Option<i64>> = values.iter().map(|v| v.map(|x| x as i64)).collect();
-        assert_eq!(got, &Int64Array::from(expected));
-        Ok(())
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
@@ -3673,512 +3508,252 @@ mod tests {
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_float16_custom_types() -> Result<(), AvroError> {
-        use arrow_array::Float16Array;
-        use half::f16;
-        let schema = Schema::new(vec![Field::new("val", DataType::Float16, true)]);
-        let values: Vec<Option<f16>> = vec![
+    fn test_roundtrip_float16_custom_types() {
+        assert_round_trip(Arc::new(Float16Array::from(vec![
             Some(f16::ZERO),
             Some(f16::ONE),
             None,
             Some(f16::NEG_ONE),
             Some(f16::MAX),
             Some(f16::MIN),
-        ];
-        let array = Float16Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Float16,
-            "Expected Float16 type with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Float16Array>()
-            .expect("Float16Array");
-        assert_eq!(got, &Float16Array::from(values));
-        Ok(())
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_float16_no_custom_widens_to_float32() -> Result<(), AvroError> {
-        use arrow_array::{Float16Array, Float32Array};
-        use half::f16;
-        let schema = Schema::new(vec![Field::new("val", DataType::Float16, true)]);
-        let values: Vec<Option<f16>> =
-            vec![Some(f16::ZERO), Some(f16::ONE), None, Some(f16::NEG_ONE)];
-        let array = Float16Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Float32,
-            "Expected Float32 type without avro_custom_types (widened from Float16)"
+    fn test_roundtrip_float16_no_custom_widens_to_float32() {
+        assert_round_trip_widened(
+            Arc::new(Float16Array::from(vec![
+                Some(f16::ZERO),
+                Some(f16::ONE),
+                None,
+                Some(f16::NEG_ONE),
+            ])),
+            Arc::new(Float32Array::from(vec![
+                Some(0.0f32),
+                Some(1.0),
+                None,
+                Some(-1.0),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .expect("Float32Array");
-        let expected: Vec<Option<f32>> = values.iter().map(|v| v.map(|x| x.to_f32())).collect();
-        assert_eq!(got, &Float32Array::from(expected));
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_date64_custom_types() -> Result<(), AvroError> {
-        use arrow_array::Date64Array;
-        let schema = Schema::new(vec![Field::new("val", DataType::Date64, true)]);
-        // Date64 is milliseconds since epoch
-        let values: Vec<Option<i64>> = vec![
-            Some(0),
-            Some(86_400_000), // 1 day
+    fn test_roundtrip_date64_custom_types() {
+        assert_round_trip(Arc::new(Date64Array::from(vec![
+            Some(0i64),
+            Some(86_400_000),
             None,
-            Some(1_609_459_200_000), // 2021-01-01
-        ];
-        let array = Date64Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Date64,
-            "Expected Date64 type with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Date64Array>()
-            .expect("Date64Array");
-        assert_eq!(got, &Date64Array::from(values));
-        Ok(())
+            Some(1_609_459_200_000),
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_date64_no_custom_as_timestamp_millis() -> Result<(), AvroError> {
-        use arrow_array::{Date64Array, TimestampMillisecondArray};
-        let schema = Schema::new(vec![Field::new("val", DataType::Date64, true)]);
-        let values: Vec<Option<i64>> =
-            vec![Some(0), Some(86_400_000), None, Some(1_609_459_200_000)];
-        let array = Date64Array::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        // Date64 without custom types maps to local-timestamp-millis which reads as Timestamp(Millisecond, None)
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Timestamp(TimeUnit::Millisecond, None),
-            "Expected Timestamp(Millisecond, None) without avro_custom_types"
+    fn test_roundtrip_date64_no_custom_as_timestamp_millis() {
+        assert_round_trip_widened(
+            Arc::new(Date64Array::from(vec![
+                Some(0i64),
+                Some(86_400_000),
+                None,
+                Some(1_609_459_200_000),
+            ])),
+            Arc::new(TimestampMillisecondArray::from(vec![
+                Some(0i64),
+                Some(86_400_000),
+                None,
+                Some(1_609_459_200_000),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .expect("TimestampMillisecondArray");
-        // Values should be identical (both are i64 millis)
-        assert_eq!(got, &TimestampMillisecondArray::from(values));
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_time64_nanosecond_custom_types() -> Result<(), AvroError> {
-        use arrow_array::Time64NanosecondArray;
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Time64(TimeUnit::Nanosecond),
-            true,
-        )]);
-        let values: Vec<Option<i64>> = vec![
-            Some(0),
-            Some(1_000_000_000), // 1 second in nanos
+    fn test_roundtrip_time64_nanosecond_custom_types() {
+        assert_round_trip(Arc::new(Time64NanosecondArray::from(vec![
+            Some(0i64),
+            Some(1_000_000_000),
             None,
-            Some(86_399_999_999_999), // 23:59:59.999999999
-        ];
-        let array = Time64NanosecondArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Time64(TimeUnit::Nanosecond),
-            "Expected Time64(Nanosecond) with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Time64NanosecondArray>()
-            .expect("Time64NanosecondArray");
-        assert_eq!(got, &Time64NanosecondArray::from(values));
-        Ok(())
+            Some(86_399_999_999_999),
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_time64_nanos_no_custom_truncates_to_micros() -> Result<(), AvroError> {
-        use arrow_array::{Time64MicrosecondArray, Time64NanosecondArray};
-
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Time64(TimeUnit::Nanosecond),
-            true,
-        )]);
+    fn test_roundtrip_time64_nanos_no_custom_truncates_to_micros() {
         // Use values evenly divisible by 1000 to avoid truncation issues
-        let values: Vec<Option<i64>> = vec![
-            Some(0),
-            Some(1_000_000_000), // 1 second
-            None,
-            Some(86_399_999_000_000), // 23:59:59.999000
-        ];
-        let array = Time64NanosecondArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Time64(TimeUnit::Microsecond),
-            "Expected Time64(Microsecond) without avro_custom_types (truncated from nanoseconds)"
+        assert_round_trip_widened(
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(0i64),
+                Some(1_000_000_000),
+                None,
+                Some(86_399_999_000_000),
+            ])),
+            Arc::new(Time64MicrosecondArray::from(vec![
+                Some(0i64),
+                Some(1_000_000),
+                None,
+                Some(86_399_999_000),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Time64MicrosecondArray>()
-            .expect("Time64MicrosecondArray");
-        let expected: Vec<Option<i64>> = values.iter().map(|v| v.map(|x| x / 1000)).collect();
-        assert_eq!(got, &Time64MicrosecondArray::from(expected));
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_time32_second_custom_types() -> Result<(), AvroError> {
-        use arrow_array::Time32SecondArray;
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Time32(TimeUnit::Second),
-            true,
-        )]);
-        let values: Vec<Option<i32>> = vec![
-            Some(0),
-            Some(3600), // 1 hour
+    fn test_roundtrip_time32_second_custom_types() {
+        assert_round_trip(Arc::new(Time32SecondArray::from(vec![
+            Some(0i32),
+            Some(3600),
             None,
-            Some(86399), // 23:59:59
-        ];
-        let array = Time32SecondArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Time32(TimeUnit::Second),
-            "Expected Time32(Second) with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Time32SecondArray>()
-            .expect("Time32SecondArray");
-        assert_eq!(got, &Time32SecondArray::from(values));
-        Ok(())
+            Some(86399),
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_time32_second_no_custom_scales_to_millis() -> Result<(), AvroError> {
-        use arrow_array::{Time32MillisecondArray, Time32SecondArray};
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Time32(TimeUnit::Second),
-            true,
-        )]);
-        let values: Vec<Option<i32>> = vec![Some(0), Some(3600), None, Some(86399)];
-        let array = Time32SecondArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Time32(TimeUnit::Millisecond),
-            "Expected Time32(Millisecond) without avro_custom_types (scaled from seconds)"
+    fn test_roundtrip_time32_second_no_custom_scales_to_millis() {
+        assert_round_trip_widened(
+            Arc::new(Time32SecondArray::from(vec![
+                Some(0i32),
+                Some(3600),
+                None,
+                Some(86399),
+            ])),
+            Arc::new(Time32MillisecondArray::from(vec![
+                Some(0i32),
+                Some(3_600_000),
+                None,
+                Some(86_399_000),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<Time32MillisecondArray>()
-            .expect("Time32MillisecondArray");
-        let expected: Vec<Option<i32>> = values.iter().map(|v| v.map(|x| x * 1000)).collect();
-        assert_eq!(got, &Time32MillisecondArray::from(expected));
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_timestamp_second_custom_types() -> Result<(), AvroError> {
-        use arrow_array::TimestampSecondArray;
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
-            true,
-        )]);
-        let values: Vec<Option<i64>> = vec![
-            Some(0),
-            Some(1609459200), // 2021-01-01 00:00:00 UTC
-            None,
-            Some(1735689600), // 2025-01-01 00:00:00 UTC
-        ];
-        let array = TimestampSecondArray::from(values.clone()).with_timezone("+00:00");
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
-            "Expected Timestamp(Second, UTC) with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<TimestampSecondArray>()
-            .expect("TimestampSecondArray");
-        let expected = TimestampSecondArray::from(values).with_timezone("+00:00");
-        assert_eq!(got, &expected);
-        Ok(())
+    fn test_roundtrip_timestamp_second_custom_types() {
+        assert_round_trip(Arc::new(
+            TimestampSecondArray::from(vec![Some(0i64), Some(1609459200), None, Some(1735689600)])
+                .with_timezone("+00:00"),
+        ));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_timestamp_second_no_custom_scales_to_millis() -> Result<(), AvroError> {
-        use arrow_array::{TimestampMillisecondArray, TimestampSecondArray};
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
-            true,
-        )]);
-        let values: Vec<Option<i64>> = vec![Some(0), Some(1609459200), None, Some(1735689600)];
-        let array = TimestampSecondArray::from(values.clone()).with_timezone("+00:00");
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
-            "Expected Timestamp(Millisecond, UTC) without avro_custom_types (scaled from seconds)"
+    fn test_roundtrip_timestamp_second_no_custom_scales_to_millis() {
+        assert_round_trip_widened(
+            Arc::new(
+                TimestampSecondArray::from(vec![
+                    Some(0i64),
+                    Some(1609459200),
+                    None,
+                    Some(1735689600),
+                ])
+                .with_timezone("+00:00"),
+            ),
+            Arc::new(
+                TimestampMillisecondArray::from(vec![
+                    Some(0i64),
+                    Some(1_609_459_200_000),
+                    None,
+                    Some(1_735_689_600_000),
+                ])
+                .with_timezone("+00:00"),
+            ),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .expect("TimestampMillisecondArray");
-        let expected: Vec<Option<i64>> = values.iter().map(|v| v.map(|x| x * 1000)).collect();
-        let expected_array = TimestampMillisecondArray::from(expected).with_timezone("+00:00");
-        assert_eq!(got, &expected_array);
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_interval_year_month_custom_types() -> Result<(), AvroError> {
-        use arrow_array::IntervalYearMonthArray;
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Interval(IntervalUnit::YearMonth),
-            true,
-        )]);
-        let values: Vec<Option<i32>> = vec![
-            Some(0),
-            Some(12), // 1 year
+    fn test_roundtrip_interval_year_month_custom_types() {
+        assert_round_trip(Arc::new(IntervalYearMonthArray::from(vec![
+            Some(0i32),
+            Some(12),
             None,
-            Some(-6), // -6 months
-            Some(25), // 2 years 1 month
-        ];
-        let array = IntervalYearMonthArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Interval(IntervalUnit::YearMonth),
-            "Expected Interval(YearMonth) with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<IntervalYearMonthArray>()
-            .expect("IntervalYearMonthArray");
-        assert_eq!(got, &IntervalYearMonthArray::from(values));
-        Ok(())
+            Some(-6),
+            Some(25),
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_interval_year_month_no_custom() -> Result<(), AvroError> {
-        use arrow_array::{IntervalMonthDayNanoArray, IntervalYearMonthArray};
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Interval(IntervalUnit::YearMonth),
-            true,
-        )]);
+    fn test_roundtrip_interval_year_month_no_custom() {
         // Only non-negative values for standard Avro duration
-        let values: Vec<Option<i32>> = vec![Some(0), Some(12), None, Some(25)];
-        let array = IntervalYearMonthArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        // Without custom types, reads as Interval(MonthDayNano) via Avro duration
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Interval(IntervalUnit::MonthDayNano),
-            "Expected Interval(MonthDayNano) without avro_custom_types"
+        assert_round_trip_widened(
+            Arc::new(IntervalYearMonthArray::from(vec![
+                Some(0i32),
+                Some(12),
+                None,
+                Some(25),
+            ])),
+            Arc::new(IntervalMonthDayNanoArray::from(vec![
+                Some(IntervalMonthDayNano::new(0, 0, 0)),
+                Some(IntervalMonthDayNano::new(12, 0, 0)),
+                None,
+                Some(IntervalMonthDayNano::new(25, 0, 0)),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .expect("IntervalMonthDayNanoArray");
-        // Convert expected values to MonthDayNano format
-        let expected: Vec<Option<IntervalMonthDayNano>> = values
-            .iter()
-            .map(|v| v.map(|months| IntervalMonthDayNano::new(months, 0, 0)))
-            .collect();
-        assert_eq!(got, &IntervalMonthDayNanoArray::from(expected));
-        Ok(())
     }
 
     #[cfg(feature = "avro_custom_types")]
     #[test]
-    fn test_roundtrip_interval_day_time_custom_types() -> Result<(), AvroError> {
-        use arrow_array::IntervalDayTimeArray;
-        use arrow_buffer::IntervalDayTime;
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Interval(IntervalUnit::DayTime),
-            true,
-        )]);
-        let values: Vec<Option<IntervalDayTime>> = vec![
-            Some(IntervalDayTime::new(0, 0)),
-            Some(IntervalDayTime::new(1, 1000)), // 1 day, 1 second
-            None,
-            Some(IntervalDayTime::new(30, 3600000)), // 30 days, 1 hour
-        ];
-        let array = IntervalDayTimeArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Interval(IntervalUnit::DayTime),
-            "Expected Interval(DayTime) with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<IntervalDayTimeArray>()
-            .expect("IntervalDayTimeArray");
-        assert_eq!(got, &IntervalDayTimeArray::from(values));
-        Ok(())
-    }
-
-    #[cfg(not(feature = "avro_custom_types"))]
-    #[test]
-    fn test_roundtrip_interval_day_time_no_custom() -> Result<(), AvroError> {
-        use arrow_array::{IntervalDayTimeArray, IntervalMonthDayNanoArray};
-        use arrow_buffer::IntervalDayTime;
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Interval(IntervalUnit::DayTime),
-            true,
-        )]);
-        let values: Vec<Option<IntervalDayTime>> = vec![
+    fn test_roundtrip_interval_day_time_custom_types() {
+        assert_round_trip(Arc::new(IntervalDayTimeArray::from(vec![
             Some(IntervalDayTime::new(0, 0)),
             Some(IntervalDayTime::new(1, 1000)),
             None,
             Some(IntervalDayTime::new(30, 3600000)),
-        ];
-        let array = IntervalDayTimeArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Interval(IntervalUnit::MonthDayNano),
-            "Expected Interval(MonthDayNano) without avro_custom_types"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .expect("IntervalMonthDayNanoArray");
-        let expected: Vec<Option<IntervalMonthDayNano>> = values
-            .iter()
-            .map(|v| {
-                v.map(|dt| {
-                    let nanos = (dt.milliseconds as i64) * 1_000_000;
-                    IntervalMonthDayNano::new(0, dt.days, nanos)
-                })
-            })
-            .collect();
-        assert_eq!(got, &IntervalMonthDayNanoArray::from(expected));
-        Ok(())
-    }
-
-    #[cfg(feature = "avro_custom_types")]
-    #[test]
-    fn test_roundtrip_interval_month_day_nano_custom_types() -> Result<(), AvroError> {
-        use arrow_array::IntervalMonthDayNanoArray;
-        use arrow_buffer::IntervalMonthDayNano;
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            true,
-        )]);
-        let values: Vec<Option<IntervalMonthDayNano>> = vec![
-            Some(IntervalMonthDayNano::new(0, 0, 0)),
-            Some(IntervalMonthDayNano::new(1, 2, 3)), // sub-millisecond nanos ok
-            None,
-            Some(IntervalMonthDayNano::new(-4, -5, -6)),
-        ];
-        let array = IntervalMonthDayNanoArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Interval(IntervalUnit::MonthDayNano),
-            "Expected Interval(MonthDayNano) with avro_custom_types enabled"
-        );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .expect("IntervalMonthDayNanoArray");
-        assert_eq!(got, &IntervalMonthDayNanoArray::from(values));
-        Ok(())
+        ])));
     }
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
-    fn test_roundtrip_interval_month_day_nano_no_custom() -> Result<(), AvroError> {
-        use arrow_array::IntervalMonthDayNanoArray;
-        use arrow_buffer::IntervalMonthDayNano;
-        let schema = Schema::new(vec![Field::new(
-            "val",
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            true,
-        )]);
-        // Only representable values for Avro duration: non-negative and whole milliseconds
-        let values: Vec<Option<IntervalMonthDayNano>> = vec![
-            Some(IntervalMonthDayNano::new(0, 0, 0)),
-            Some(IntervalMonthDayNano::new(1, 2, 3_000_000)),
-            None,
-            Some(IntervalMonthDayNano::new(4, 5, 6_000_000)),
-        ];
-        let array = IntervalMonthDayNanoArray::from(values.clone());
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])?;
-        let roundtrip = roundtrip_ocf(&batch)?;
-        assert_eq!(
-            roundtrip.schema().field(0).data_type(),
-            &DataType::Interval(IntervalUnit::MonthDayNano),
-            "Expected Interval(MonthDayNano) without avro_custom_types"
+    fn test_roundtrip_interval_day_time_no_custom() {
+        assert_round_trip_widened(
+            Arc::new(IntervalDayTimeArray::from(vec![
+                Some(IntervalDayTime::new(0, 0)),
+                Some(IntervalDayTime::new(1, 1000)),
+                None,
+                Some(IntervalDayTime::new(30, 3600000)),
+            ])),
+            Arc::new(IntervalMonthDayNanoArray::from(vec![
+                Some(IntervalMonthDayNano::new(0, 0, 0)),
+                Some(IntervalMonthDayNano::new(0, 1, 1_000_000_000)),
+                None,
+                Some(IntervalMonthDayNano::new(0, 30, 3_600_000_000_000)),
+            ])),
         );
-        let got = roundtrip
-            .column(0)
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .expect("IntervalMonthDayNanoArray");
-        assert_eq!(got, &IntervalMonthDayNanoArray::from(values));
-        Ok(())
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_roundtrip_interval_month_day_nano_custom_types() {
+        assert_round_trip(Arc::new(IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(0, 0, 0)),
+            Some(IntervalMonthDayNano::new(1, 2, 3)),
+            None,
+            Some(IntervalMonthDayNano::new(-4, -5, -6)),
+        ])));
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn test_roundtrip_interval_month_day_nano_no_custom() {
+        // Only representable values for Avro duration: non-negative and whole milliseconds
+        assert_round_trip_widened(
+            Arc::new(IntervalMonthDayNanoArray::from(vec![
+                Some(IntervalMonthDayNano::new(0, 0, 0)),
+                Some(IntervalMonthDayNano::new(1, 2, 3_000_000)),
+                None,
+                Some(IntervalMonthDayNano::new(4, 5, 6_000_000)),
+            ])),
+            Arc::new(IntervalMonthDayNanoArray::from(vec![
+                Some(IntervalMonthDayNano::new(0, 0, 0)),
+                Some(IntervalMonthDayNano::new(1, 2, 3_000_000)),
+                None,
+                Some(IntervalMonthDayNano::new(4, 5, 6_000_000)),
+            ])),
+        );
     }
 
     fn schemas_equal_ignoring_metadata(left: &Schema, right: &Schema) -> bool {
@@ -4354,6 +3929,9 @@ mod tests {
                 );
             }
         } else {
+            // Without avro_custom_types, Avro's type system is narrower than Arrow's.
+            // Each field below shows the expected type AFTER round-tripping through Avro,
+            // which differs from the original `schema` above:
             let exp_schema = Schema::new(vec![
                 Field::new("i8", DataType::Int32, false),
                 Field::new("i16", DataType::Int32, false),

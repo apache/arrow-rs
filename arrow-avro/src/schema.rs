@@ -1384,12 +1384,16 @@ fn datatype_to_avro(
                 .get(AVRO_NAME_METADATA_KEY)
                 .map(|s| sanitise_avro_name(s))
                 .unwrap_or_else(|| name_gen.make_unique(field_name));
-            json!({
-                "type": "fixed",
-                "name": chosen_name,
-                "size": 8,
-                "logicalType": "arrow.uint64"
-            })
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(8)),
+                ("logicalType".into(), json!("arrow.uint64")),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
         }
         #[cfg(not(feature = "avro_custom_types"))]
         DataType::Float16 => Value::String("float".into()),
@@ -1400,12 +1404,16 @@ fn datatype_to_avro(
                 .get(AVRO_NAME_METADATA_KEY)
                 .map(|s| sanitise_avro_name(s))
                 .unwrap_or_else(|| name_gen.make_unique(field_name));
-            json!({
-                "type": "fixed",
-                "name": chosen_name,
-                "size": 2,
-                "logicalType": "arrow.float16"
-            })
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(2)),
+                ("logicalType".into(), json!("arrow.float16")),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
         }
         DataType::Float32 => Value::String("float".into()),
         DataType::Float64 => Value::String("double".into()),
@@ -1614,12 +1622,16 @@ fn datatype_to_avro(
                 .get(AVRO_NAME_METADATA_KEY)
                 .map(|s| sanitise_avro_name(s))
                 .unwrap_or_else(|| name_gen.make_unique(field_name));
-            json!({
-                "type": "fixed",
-                "name": chosen_name,
-                "size": 4,
-                "logicalType": "arrow.interval-year-month"
-            })
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(4)),
+                ("logicalType".into(), json!("arrow.interval-year-month")),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
         }
         #[cfg(not(feature = "avro_custom_types"))]
         DataType::Interval(IntervalUnit::DayTime) => {
@@ -1648,12 +1660,16 @@ fn datatype_to_avro(
                 .get(AVRO_NAME_METADATA_KEY)
                 .map(|s| sanitise_avro_name(s))
                 .unwrap_or_else(|| name_gen.make_unique(field_name));
-            json!({
-                "type": "fixed",
-                "name": chosen_name,
-                "size": 8,
-                "logicalType": "arrow.interval-day-time"
-            })
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(8)),
+                ("logicalType".into(), json!("arrow.interval-day-time")),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
         }
         DataType::List(child) | DataType::LargeList(child) => {
             if matches!(dt, DataType::LargeList(_)) && !strip {
@@ -2722,6 +2738,150 @@ mod tests {
             let arrow_schema = single_field_schema(field);
             let avro = AvroSchema::try_from(&arrow_schema).unwrap();
             assert_json_contains(&avro.json_string, avro_token);
+        }
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_custom_fixed_logical_types_preserve_namespace_metadata() {
+        let namespace = "com.example.types";
+
+        let mut md_u64 = HashMap::new();
+        md_u64.insert(AVRO_NAME_METADATA_KEY.to_string(), "U64Type".to_string());
+        md_u64.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            namespace.to_string(),
+        );
+
+        let mut md_f16 = HashMap::new();
+        md_f16.insert(AVRO_NAME_METADATA_KEY.to_string(), "F16Type".to_string());
+        md_f16.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            namespace.to_string(),
+        );
+
+        let mut md_iv_ym = HashMap::new();
+        md_iv_ym.insert(AVRO_NAME_METADATA_KEY.to_string(), "IvYmType".to_string());
+        md_iv_ym.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            namespace.to_string(),
+        );
+
+        let mut md_iv_dt = HashMap::new();
+        md_iv_dt.insert(AVRO_NAME_METADATA_KEY.to_string(), "IvDtType".to_string());
+        md_iv_dt.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            namespace.to_string(),
+        );
+
+        let arrow_schema = ArrowSchema::new(vec![
+            ArrowField::new("u64_col", DataType::UInt64, false).with_metadata(md_u64),
+            ArrowField::new("f16_col", DataType::Float16, false).with_metadata(md_f16),
+            ArrowField::new(
+                "iv_ym_col",
+                DataType::Interval(IntervalUnit::YearMonth),
+                false,
+            )
+            .with_metadata(md_iv_ym),
+            ArrowField::new(
+                "iv_dt_col",
+                DataType::Interval(IntervalUnit::DayTime),
+                false,
+            )
+            .with_metadata(md_iv_dt),
+        ]);
+
+        let avro = AvroSchema::try_from(&arrow_schema).unwrap();
+        let root: Value = serde_json::from_str(&avro.json_string).unwrap();
+        let fields = root
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("record fields array");
+
+        let expected = [
+            ("u64_col", "arrow.uint64"),
+            ("f16_col", "arrow.float16"),
+            ("iv_ym_col", "arrow.interval-year-month"),
+            ("iv_dt_col", "arrow.interval-day-time"),
+        ];
+
+        for (field_name, logical_type) in expected {
+            let field = fields
+                .iter()
+                .find(|f| f.get("name").and_then(Value::as_str) == Some(field_name))
+                .unwrap_or_else(|| panic!("missing field {field_name}"));
+            let ty = field
+                .get("type")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("field {field_name} type must be object"));
+
+            assert_eq!(ty.get("type").and_then(Value::as_str), Some("fixed"));
+            assert_eq!(
+                ty.get("logicalType").and_then(Value::as_str),
+                Some(logical_type)
+            );
+            assert_eq!(
+                ty.get("namespace").and_then(Value::as_str),
+                Some(namespace),
+                "field {field_name} must preserve avro.namespace metadata"
+            );
+        }
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_custom_fixed_logical_types_omit_namespace_without_metadata() {
+        let mut md_u64 = HashMap::new();
+        md_u64.insert(AVRO_NAME_METADATA_KEY.to_string(), "U64Type".to_string());
+
+        let mut md_f16 = HashMap::new();
+        md_f16.insert(AVRO_NAME_METADATA_KEY.to_string(), "F16Type".to_string());
+
+        let mut md_iv_ym = HashMap::new();
+        md_iv_ym.insert(AVRO_NAME_METADATA_KEY.to_string(), "IvYmType".to_string());
+
+        let mut md_iv_dt = HashMap::new();
+        md_iv_dt.insert(AVRO_NAME_METADATA_KEY.to_string(), "IvDtType".to_string());
+
+        let arrow_schema = ArrowSchema::new(vec![
+            ArrowField::new("u64_col", DataType::UInt64, false).with_metadata(md_u64),
+            ArrowField::new("f16_col", DataType::Float16, false).with_metadata(md_f16),
+            ArrowField::new(
+                "iv_ym_col",
+                DataType::Interval(IntervalUnit::YearMonth),
+                false,
+            )
+            .with_metadata(md_iv_ym),
+            ArrowField::new(
+                "iv_dt_col",
+                DataType::Interval(IntervalUnit::DayTime),
+                false,
+            )
+            .with_metadata(md_iv_dt),
+        ]);
+
+        let avro = AvroSchema::try_from(&arrow_schema).unwrap();
+        let root: Value = serde_json::from_str(&avro.json_string).unwrap();
+        let fields = root
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("record fields array");
+
+        for field_name in ["u64_col", "f16_col", "iv_ym_col", "iv_dt_col"] {
+            let field = fields
+                .iter()
+                .find(|f| f.get("name").and_then(Value::as_str) == Some(field_name))
+                .unwrap_or_else(|| panic!("missing field {field_name}"));
+            let ty = field
+                .get("type")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("field {field_name} type must be object"));
+
+            assert_eq!(ty.get("type").and_then(Value::as_str), Some("fixed"));
+            assert!(
+                !ty.contains_key("namespace"),
+                "field {field_name} should not include namespace when metadata lacks avro.namespace"
+            );
         }
     }
 
