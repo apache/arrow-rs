@@ -222,6 +222,14 @@ impl NullBuffer {
     pub fn buffer(&self) -> &Buffer {
         self.buffer.inner()
     }
+    /// Create a [`NullBuffer`] from an *unsliced* validity bitmap (`offset = 0`) of length `len`.
+    ///
+    /// Returns `None` if there are no nulls (all values valid).
+    pub fn try_from_unsliced(buffer: impl Into<Buffer>, len: usize) -> Option<Self> {
+        let bb = BooleanBuffer::new(buffer.into(), 0, len);
+        let nb = NullBuffer::new(bb);
+        (nb.null_count() > 0).then_some(nb)
+    }
 }
 
 impl<'a> IntoIterator for &'a NullBuffer {
@@ -266,6 +274,7 @@ impl FromIterator<bool> for NullBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_size() {
         // This tests that the niche optimisation eliminates the overhead of an option
@@ -273,5 +282,50 @@ mod tests {
             std::mem::size_of::<NullBuffer>(),
             std::mem::size_of::<Option<NullBuffer>>()
         );
+    }
+
+    #[test]
+    fn test_try_from_unsliced_with_nulls() {
+        // Buffer with some nulls: 0b10110010 = valid, null, valid, valid, null, null, valid, null
+        let buf = Buffer::from([0b10110010u8]);
+        let result = NullBuffer::try_from_unsliced(buf, 8);
+        assert!(result.is_some());
+        let nb = result.unwrap();
+        assert_eq!(nb.len(), 8);
+        assert_eq!(nb.null_count(), 4);
+        assert!(nb.is_valid(0));
+        assert!(nb.is_null(1));
+        assert!(nb.is_valid(2));
+        assert!(nb.is_valid(3));
+        assert!(nb.is_null(4));
+        assert!(nb.is_null(5));
+        assert!(nb.is_valid(6));
+        assert!(nb.is_null(7));
+    }
+
+    #[test]
+    fn test_try_from_unsliced_all_valid() {
+        // All bits set = all valid, no nulls
+        let buf = Buffer::from([0b11111111u8]);
+        let result = NullBuffer::try_from_unsliced(buf, 8);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_try_from_unsliced_all_null() {
+        // No bits set = all null
+        let buf = Buffer::from([0b00000000u8]);
+        let result = NullBuffer::try_from_unsliced(buf, 8);
+        assert!(result.is_some());
+        let nb = result.unwrap();
+        assert_eq!(nb.len(), 8);
+        assert_eq!(nb.null_count(), 8);
+    }
+
+    #[test]
+    fn test_try_from_unsliced_empty() {
+        let buf = Buffer::from([]);
+        let result = NullBuffer::try_from_unsliced(buf, 0);
+        assert!(result.is_none());
     }
 }
