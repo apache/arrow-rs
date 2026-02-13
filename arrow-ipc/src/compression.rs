@@ -18,6 +18,10 @@
 use crate::CompressionType;
 use arrow_buffer::Buffer;
 use arrow_schema::ArrowError;
+#[cfg(feature = "lz4_direct")]
+use std::hash::Hasher;
+#[cfg(feature = "lz4_direct")]
+use twox_hash::XxHash32;
 
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
@@ -245,12 +249,233 @@ fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> 
     ))
 }
 
-#[cfg(feature = "lz4")]
+#[cfg(all(feature = "lz4", not(feature = "lz4_direct")))]
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     use std::io::Read;
     let mut output = Vec::with_capacity(decompressed_size);
     lz4_flex::frame::FrameDecoder::new(input).read_to_end(&mut output)?;
     Ok(output)
+}
+
+#[cfg(feature = "lz4_direct")]
+fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
+    const MAGIC: u32 = 0x184D2204;
+    const INCOMPRESSIBLE_MASK: u32 = 0x8000_0000;
+    const FLG_RESERVED_MASK: u8 = 0b0000_0010;
+    const FLG_DICTIONARY_ID: u8 = 0b0000_0001;
+    const BD_BLOCK_SIZE_MASK: u8 = 0b0111_0000;
+    const BD_RESERVED_MASK: u8 = !BD_BLOCK_SIZE_MASK;
+
+    let mut offset = 0usize;
+    let magic = read_u32_le(input, &mut offset)?;
+    if magic != MAGIC {
+        return Err(ArrowError::IpcError(
+            "Invalid LZ4 frame magic (lz4_direct does not support legacy or skippable frames)"
+                .to_string(),
+        ));
+    }
+
+    let header_start = offset;
+    let flg = read_u8(input, &mut offset)?;
+    let bd = read_u8(input, &mut offset)?;
+
+    let reserved = flg & FLG_RESERVED_MASK;
+    let content_checksum = (flg >> 2) & 0b1;
+    let content_size = (flg >> 3) & 0b1;
+    let block_checksum = (flg >> 4) & 0b1;
+    let block_independence = (flg >> 5) & 0b1;
+    let version = (flg >> 6) & 0b11;
+    let dict_id_flag = (flg & FLG_DICTIONARY_ID) != 0;
+
+    if reserved != 0 || (bd & BD_RESERVED_MASK) != 0 || block_independence != 1 || version != 1 {
+        return Err(ArrowError::IpcError(
+            "Unsupported LZ4 frame flags (lz4_direct requires version=1, independent blocks, and no reserved bits)".to_string(),
+        ));
+    }
+
+    let block_size_value = (bd >> 4) & 0b111;
+    let max_block_size = match block_size_value {
+        4 => 64 * 1024,
+        5 => 256 * 1024,
+        6 => 1024 * 1024,
+        7 => 4 * 1024 * 1024,
+        _ => {
+            return Err(ArrowError::IpcError("Invalid LZ4 block size".to_string()));
+        }
+    };
+
+    let mut expected_content_size = None;
+    if content_size == 1 {
+        expected_content_size = Some(read_u64_le(input, &mut offset)?);
+    }
+
+    let dict_id = if dict_id_flag {
+        Some(read_u32_le(input, &mut offset)?)
+    } else {
+        None
+    };
+
+    let header_checksum_offset = offset;
+    let expected_header_checksum = read_u8(input, &mut offset)?;
+    let mut header_hasher = XxHash32::with_seed(0);
+    header_hasher.write(&input[header_start..header_checksum_offset]);
+    let header_checksum = (header_hasher.finish() >> 8) as u8;
+    if header_checksum != expected_header_checksum {
+        return Err(ArrowError::IpcError("Invalid LZ4 header checksum".to_string()));
+    }
+
+    if dict_id.is_some() {
+        return Err(ArrowError::IpcError(
+            "LZ4 dictionary IDs are not supported (lz4_direct does not support dictionaries)"
+                .to_string(),
+        ));
+    }
+
+    let mut output = vec![0u8; decompressed_size];
+    let mut write_offset = 0usize;
+    let mut content_hasher = if content_checksum == 1 {
+        Some(XxHash32::with_seed(0))
+    } else {
+        None
+    };
+    let mut content_len = 0u64;
+
+    loop {
+        let raw_block_size = read_u32_le(input, &mut offset)?;
+        if raw_block_size == 0 {
+            break;
+        }
+
+        let compressed = (raw_block_size & INCOMPRESSIBLE_MASK) == 0;
+        let block_size = (raw_block_size & !INCOMPRESSIBLE_MASK) as usize;
+        if block_size > max_block_size {
+            return Err(ArrowError::IpcError("LZ4 block too large".to_string()));
+        }
+        let block = read_slice(input, &mut offset, block_size)?;
+
+        if block_checksum == 1 {
+            let expected_checksum = read_u32_le(input, &mut offset)?;
+            let mut block_hasher = XxHash32::with_seed(0);
+            block_hasher.write(block);
+            let block_hash = block_hasher.finish() as u32;
+            if block_hash != expected_checksum {
+                return Err(ArrowError::IpcError(
+                    "Invalid LZ4 block checksum".to_string(),
+                ));
+            }
+        }
+
+        if compressed {
+            let dst = output
+                .get_mut(write_offset..)
+                .ok_or_else(|| ArrowError::IpcError("Output buffer overflow".to_string()))?;
+            let wrote = lz4_flex::block::decompress_into(block, dst)
+                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+            if write_offset + wrote > output.len() {
+                return Err(ArrowError::IpcError("Output buffer overflow".to_string()));
+            }
+            let out_slice = &output[write_offset..write_offset + wrote];
+            if let Some(ref mut hasher) = content_hasher {
+                hasher.write(out_slice);
+            }
+            content_len = content_len.saturating_add(wrote as u64);
+            write_offset = write_offset
+                .checked_add(wrote)
+                .ok_or_else(|| ArrowError::IpcError("Output size overflow".to_string()))?;
+        } else {
+            let end = write_offset
+                .checked_add(block.len())
+                .ok_or_else(|| ArrowError::IpcError("Output size overflow".to_string()))?;
+            if end > output.len() {
+                return Err(ArrowError::IpcError("Output buffer overflow".to_string()));
+            }
+            output[write_offset..end].copy_from_slice(block);
+            let out_slice = &output[write_offset..end];
+            if let Some(ref mut hasher) = content_hasher {
+                hasher.write(out_slice);
+            }
+            content_len = content_len.saturating_add(block.len() as u64);
+            write_offset = end;
+        }
+    }
+
+    if content_checksum == 1 {
+        let expected_content_checksum = read_u32_le(input, &mut offset)?;
+        let content_hash = content_hasher
+            .as_ref()
+            .map(|hasher| hasher.finish() as u32)
+            .unwrap_or(0);
+        if content_hash != expected_content_checksum {
+            return Err(ArrowError::IpcError(
+                "Invalid LZ4 content checksum".to_string(),
+            ));
+        }
+    }
+
+    if let Some(expected) = expected_content_size {
+        if content_len != expected {
+            return Err(ArrowError::IpcError(
+                "LZ4 content size mismatch".to_string(),
+            ));
+        }
+    }
+
+    if write_offset != output.len() {
+        output.truncate(write_offset);
+    }
+    Ok(output)
+}
+
+#[cfg(feature = "lz4_direct")]
+fn read_u8(input: &[u8], offset: &mut usize) -> Result<u8, ArrowError> {
+    if *offset >= input.len() {
+        return Err(ArrowError::IpcError("Unexpected end of LZ4 frame".to_string()));
+    }
+    let value = input[*offset];
+    *offset += 1;
+    Ok(value)
+}
+
+#[cfg(feature = "lz4_direct")]
+fn read_u32_le(input: &[u8], offset: &mut usize) -> Result<u32, ArrowError> {
+    if *offset + 4 > input.len() {
+        return Err(ArrowError::IpcError("Unexpected end of LZ4 frame".to_string()));
+    }
+    let value = u32::from_le_bytes(
+        input[*offset..*offset + 4]
+            .try_into()
+            .expect("slice length checked"),
+    );
+    *offset += 4;
+    Ok(value)
+}
+
+#[cfg(feature = "lz4_direct")]
+fn read_u64_le(input: &[u8], offset: &mut usize) -> Result<u64, ArrowError> {
+    if *offset + 8 > input.len() {
+        return Err(ArrowError::IpcError("Unexpected end of LZ4 frame".to_string()));
+    }
+    let value = u64::from_le_bytes(
+        input[*offset..*offset + 8]
+            .try_into()
+            .expect("slice length checked"),
+    );
+    *offset += 8;
+    Ok(value)
+}
+
+#[cfg(feature = "lz4_direct")]
+fn read_slice<'a>(
+    input: &'a [u8],
+    offset: &mut usize,
+    len: usize,
+) -> Result<&'a [u8], ArrowError> {
+    if *offset + len > input.len() {
+        return Err(ArrowError::IpcError("Unexpected end of LZ4 frame".to_string()));
+    }
+    let slice = &input[*offset..*offset + len];
+    *offset += len;
+    Ok(slice)
 }
 
 #[cfg(not(feature = "lz4"))]
@@ -320,6 +545,13 @@ fn read_uncompressed_size(buffer: &[u8]) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "lz4_direct")]
+    use lz4_flex::frame::{BlockMode, BlockSize, FrameEncoder, FrameInfo};
+    #[cfg(feature = "lz4_direct")]
+    use std::io::Write;
+    #[cfg(feature = "lz4_direct")]
+    use twox_hash::XxHash32;
+
     #[test]
     #[cfg(feature = "lz4")]
     fn test_lz4_compression() {
@@ -337,6 +569,173 @@ mod tests {
             )
             .unwrap();
         assert_eq!(input_bytes, result.as_slice());
+    }
+
+    #[cfg(feature = "lz4_direct")]
+    struct FrameLayout {
+        header_start: usize,
+        header_checksum_offset: usize,
+        block_start: usize,
+        block_checksums: bool,
+        content_checksum: bool,
+        content_size_offset: Option<usize>,
+    }
+
+    #[cfg(feature = "lz4_direct")]
+    fn parse_frame_layout(frame: &[u8]) -> FrameLayout {
+        let mut offset = 0usize;
+        let magic = super::read_u32_le(frame, &mut offset).unwrap();
+        assert_eq!(magic, 0x184D2204);
+
+        let header_start = offset;
+        let flg = super::read_u8(frame, &mut offset).unwrap();
+        let _bd = super::read_u8(frame, &mut offset).unwrap();
+
+        let block_checksums = ((flg >> 4) & 0b1) == 1;
+        let content_checksum = ((flg >> 2) & 0b1) == 1;
+        let content_size_flag = ((flg >> 3) & 0b1) == 1;
+        let dict_id_flag = (flg & 0b1) == 1;
+
+        let mut content_size_offset = None;
+        if content_size_flag {
+            content_size_offset = Some(offset);
+            offset += 8;
+        }
+        if dict_id_flag {
+            offset += 4;
+        }
+
+        let header_checksum_offset = offset;
+        offset += 1;
+
+        FrameLayout {
+            header_start,
+            header_checksum_offset,
+            block_start: offset,
+            block_checksums,
+            content_checksum,
+            content_size_offset,
+        }
+    }
+
+    #[cfg(feature = "lz4_direct")]
+    fn content_checksum_offset(frame: &[u8], layout: &FrameLayout) -> Option<usize> {
+        if !layout.content_checksum {
+            return None;
+        }
+        let mut offset = layout.block_start;
+        loop {
+            let raw_block_size = super::read_u32_le(frame, &mut offset).unwrap();
+            if raw_block_size == 0 {
+                break;
+            }
+            let block_size = (raw_block_size & !0x8000_0000) as usize;
+            offset += block_size;
+            if layout.block_checksums {
+                offset += 4;
+            }
+        }
+        Some(offset)
+    }
+
+    #[cfg(feature = "lz4_direct")]
+    fn encode_frame(info: FrameInfo, input: &[u8]) -> Vec<u8> {
+        let mut output = Vec::new();
+        let mut encoder = FrameEncoder::with_frame_info(info, &mut output);
+        encoder.write_all(input).unwrap();
+        encoder.finish().unwrap();
+        output
+    }
+
+    #[test]
+    #[cfg(feature = "lz4_direct")]
+    fn test_lz4_header_checksum_mismatch() {
+        let input_bytes = b"hello lz4 checksum";
+        let info = FrameInfo::new()
+            .block_mode(BlockMode::Independent)
+            .block_size(BlockSize::Max64KB);
+        let mut frame = encode_frame(info, input_bytes);
+        let layout = parse_frame_layout(&frame);
+        frame[layout.header_checksum_offset] ^= 0xFF;
+
+        let codec = super::CompressionCodec::Lz4Frame;
+        let err = codec
+            .decompress(frame.as_slice(), input_bytes.len())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Invalid LZ4 header checksum"));
+    }
+
+    #[test]
+    #[cfg(feature = "lz4_direct")]
+    fn test_lz4_block_checksum_mismatch() {
+        let input_bytes = b"block checksum should fail";
+        let info = FrameInfo::new()
+            .block_mode(BlockMode::Independent)
+            .block_size(BlockSize::Max64KB)
+            .block_checksums(true)
+            .content_size(Some(input_bytes.len() as u64));
+        let mut frame = encode_frame(info, input_bytes);
+        let layout = parse_frame_layout(&frame);
+
+        let block_data_start = layout.block_start + 4;
+        frame[block_data_start] ^= 0xFF;
+
+        let codec = super::CompressionCodec::Lz4Frame;
+        let err = codec
+            .decompress(frame.as_slice(), input_bytes.len())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Invalid LZ4 block checksum"));
+    }
+
+    #[test]
+    #[cfg(feature = "lz4_direct")]
+    fn test_lz4_content_checksum_mismatch() {
+        let input_bytes = b"content checksum should fail";
+        let info = FrameInfo::new()
+            .block_mode(BlockMode::Independent)
+            .block_size(BlockSize::Max64KB)
+            .content_checksum(true)
+            .content_size(Some(input_bytes.len() as u64));
+        let mut frame = encode_frame(info, input_bytes);
+        let layout = parse_frame_layout(&frame);
+        let checksum_offset = content_checksum_offset(&frame, &layout).unwrap();
+        frame[checksum_offset] ^= 0xFF;
+
+        let codec = super::CompressionCodec::Lz4Frame;
+        let err = codec
+            .decompress(frame.as_slice(), input_bytes.len())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Invalid LZ4 content checksum"));
+    }
+
+    #[test]
+    #[cfg(feature = "lz4_direct")]
+    fn test_lz4_content_size_mismatch() {
+        let input_bytes = b"content size mismatch";
+        let info = FrameInfo::new()
+            .block_mode(BlockMode::Independent)
+            .block_size(BlockSize::Max64KB)
+            .content_size(Some(input_bytes.len() as u64));
+        let mut frame = encode_frame(info, input_bytes);
+        let layout = parse_frame_layout(&frame);
+        let size_offset = layout.content_size_offset.expect("content size present");
+        let wrong_size = (input_bytes.len() as u64).saturating_add(1);
+        frame[size_offset..size_offset + 8].copy_from_slice(&wrong_size.to_le_bytes());
+
+        let mut hasher = XxHash32::with_seed(0);
+        hasher.write(&frame[layout.header_start..layout.header_checksum_offset]);
+        let header_checksum = (hasher.finish() >> 8) as u8;
+        frame[layout.header_checksum_offset] = header_checksum;
+
+        let codec = super::CompressionCodec::Lz4Frame;
+        let err = codec
+            .decompress(frame.as_slice(), input_bytes.len())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("LZ4 content size mismatch"));
     }
 
     #[test]
