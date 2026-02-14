@@ -563,8 +563,10 @@ impl DataType {
     /// Returns true if this type is floating: (Float*).
     #[inline]
     pub fn is_floating(&self) -> bool {
-        use DataType::*;
-        matches!(self, Float16 | Float32 | Float64)
+        matches!(
+            self,
+            DataType::Float16 | DataType::Float32 | DataType::Float64
+        )
     }
 
     /// Returns true if this type is integer: (Int*, UInt*).
