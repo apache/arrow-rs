@@ -454,10 +454,7 @@ mod tests {
     #[test]
     fn test_merge_deferred_no_prior_selection() {
         // Deferred selection with no main selection: result = deferred
-        let deferred = RowSelection::from(vec![
-            RowSelector::select(90),
-            RowSelector::skip(10),
-        ]);
+        let deferred = RowSelection::from(vec![RowSelector::select(90), RowSelector::skip(10)]);
         let mut builder = builder_with_deferred(None, deferred);
         builder.merge_deferred();
         let sel = builder.selection.unwrap();
@@ -470,10 +467,7 @@ mod tests {
     fn test_merge_deferred_with_prior_selection() {
         // Main selects first 50, deferred selects rows 0..40 and 50..100
         // Intersection should select rows 0..40 (first 40 of 100)
-        let main_sel = RowSelection::from(vec![
-            RowSelector::select(50),
-            RowSelector::skip(50),
-        ]);
+        let main_sel = RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]);
         let deferred = RowSelection::from(vec![
             RowSelector::select(40),
             RowSelector::skip(10),
@@ -488,10 +482,7 @@ mod tests {
     #[test]
     fn test_merge_deferred_in_build() {
         // Verify that build() merges deferred before creating the ReadPlan
-        let deferred = RowSelection::from(vec![
-            RowSelector::select(80),
-            RowSelector::skip(20),
-        ]);
+        let deferred = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
         let builder = builder_with_deferred(None, deferred);
         // build() should merge and produce a plan that selects 80 rows
         let _plan = builder.build();
@@ -501,15 +492,9 @@ mod tests {
     #[test]
     fn test_merge_deferred_in_build_limited() {
         // Verify that build_limited() merges deferred before applying offset/limit
-        let deferred = RowSelection::from(vec![
-            RowSelector::select(80),
-            RowSelector::skip(20),
-        ]);
+        let deferred = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
         let builder = builder_with_deferred(None, deferred);
-        let limited = builder
-            .limited(100)
-            .with_limit(Some(50))
-            .build_limited();
+        let limited = builder.limited(100).with_limit(Some(50)).build_limited();
         let sel = limited.selection.unwrap();
         // After merge: 80 selected, 20 skipped. After limit(50): 50 selected.
         assert_eq!(sel.row_count(), 50);
@@ -536,10 +521,7 @@ mod tests {
     #[test]
     fn test_multiple_deferred_selections_intersected() {
         // Two deferred selections should be intersected
-        let deferred1 = RowSelection::from(vec![
-            RowSelector::select(80),
-            RowSelector::skip(20),
-        ]);
+        let deferred1 = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
         let deferred2 = RowSelection::from(vec![
             RowSelector::skip(10),
             RowSelector::select(70),
@@ -547,12 +529,8 @@ mod tests {
         ]);
         // intersection: only rows 10..80 (70 rows)
         let mut builder = builder_with_deferred(None, deferred1);
-        builder.deferred_selection = Some(
-            builder
-                .deferred_selection
-                .unwrap()
-                .intersection(&deferred2),
-        );
+        builder.deferred_selection =
+            Some(builder.deferred_selection.unwrap().intersection(&deferred2));
         builder.merge_deferred();
         let sel = builder.selection.unwrap();
         assert_eq!(sel.row_count(), 70);

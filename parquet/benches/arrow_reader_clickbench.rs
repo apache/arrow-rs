@@ -40,14 +40,13 @@ use futures::StreamExt;
 use object_store::local::LocalFileSystem;
 use parquet::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
-    ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
+    ParquetRecordBatchReaderBuilder, RowFilter,
 };
 use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::schema::types::SchemaDescriptor;
 use std::fmt::{Display, Formatter};
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -529,7 +528,6 @@ impl ClickBenchPredicate {
             let literal = PrimitiveArray::<T>::new_scalar(literal_value);
             Box::new(move |col| eq(col, &literal))
         })
-
     }
 
     /// Create Predicate: col IN (lit1, lit2)
@@ -639,7 +637,6 @@ fn find_file_if_exists(mut current_dir: PathBuf, file_name: &str) -> Option<Path
     }
     None
 }
-
 
 /// Encapsulates the test parameters for a single benchmark
 struct ReadTest {
