@@ -206,7 +206,6 @@ fn test_row_filter_full_page_skip_is_handled() {
 /// Without the fix, the list column over-skips by one record, causing
 /// struct children to disagree on record counts.
 #[test]
-#[should_panic(expected = "StructArrayReader out of sync in read_records, expected 1 read, got 0")]
 fn test_row_selection_list_column_v2_page_boundary_skip() {
     use arrow_array::builder::{Int32Builder, ListBuilder};
 
@@ -327,7 +326,6 @@ fn test_row_selection_list_column_v2_page_boundary_skip() {
 /// bug causes one leaf to over-skip by one record while the other stays
 /// correct.
 #[test]
-#[should_panic(expected = "Not all children array length are the same!")]
 fn test_list_struct_page_boundary_desync_produces_length_mismatch() {
     use arrow_array::Array;
     use arrow_array::builder::{Int32Builder, ListBuilder, StringBuilder, StructBuilder};
