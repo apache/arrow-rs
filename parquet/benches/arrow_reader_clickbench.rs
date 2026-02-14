@@ -30,23 +30,25 @@
 //!
 //! [ClickBench]: https://benchmark.clickhouse.com/
 
-use arrow::compute::kernels::cmp::{eq, neq};
-use arrow::compute::{like, nlike, or};
+use arrow::compute::kernels::cmp::{eq, gt_eq, lt_eq, neq};
+use arrow::compute::{and, like, nlike, or};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 use arrow_array::{ArrayRef, ArrowPrimitiveType, BooleanArray, PrimitiveArray, StringViewArray};
 use arrow_schema::{ArrowError, DataType, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
 use object_store::local::LocalFileSystem;
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
-    ParquetRecordBatchReaderBuilder, RowFilter,
+    ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
 };
 use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::schema::types::SchemaDescriptor;
 use std::fmt::{Display, Formatter};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -482,6 +484,14 @@ fn all_queries() -> Vec<Query> {
     ]
 }
 
+/// An equality literal value that can be used for page-level pruning
+/// using min/max statistics from the page index.
+#[derive(Clone)]
+enum PagePruningLiteral {
+    Int32(i32),
+    Int64(i64),
+}
+
 /// Evaluate a predicate the input column specified offset relative to
 /// the provided filter column
 ///
@@ -495,6 +505,9 @@ struct ClickBenchPredicate {
     /// This is necessary (and awkward) because  `ArrowPredicateFn` does not
     /// implement `Clone`, so it must be created for each reader instance.
     predicate_factory: Box<dyn Fn() -> Box<ColumnPredicateFn>>,
+    /// If set, this predicate is an equality check that can use page-level
+    /// min/max statistics to skip pages that cannot contain the literal.
+    page_pruning_literal: Option<PagePruningLiteral>,
 }
 
 impl ClickBenchPredicate {
@@ -510,6 +523,7 @@ impl ClickBenchPredicate {
         Self {
             column_index,
             predicate_factory: Box::new(predicate_factory),
+            page_pruning_literal: None,
         }
     }
 
@@ -524,10 +538,23 @@ impl ClickBenchPredicate {
 
     /// Create Predicate: col = literal
     fn eq_literal<T: ArrowPrimitiveType>(column_index: usize, literal_value: T::Native) -> Self {
-        Self::new(column_index, move || {
+        let mut pred = Self::new(column_index, move || {
             let literal = PrimitiveArray::<T>::new_scalar(literal_value);
             Box::new(move |col| eq(col, &literal))
-        })
+        });
+        // Set page pruning literal for types we can prune on.
+        // Note: Int16 is stored as Int32 in parquet, so we widen to i32.
+        if std::any::TypeId::of::<T::Native>() == std::any::TypeId::of::<i32>() {
+            let val: i32 = unsafe { *(&literal_value as *const T::Native as *const i32) };
+            pred.page_pruning_literal = Some(PagePruningLiteral::Int32(val));
+        } else if std::any::TypeId::of::<T::Native>() == std::any::TypeId::of::<i64>() {
+            let val: i64 = unsafe { *(&literal_value as *const T::Native as *const i64) };
+            pred.page_pruning_literal = Some(PagePruningLiteral::Int64(val));
+        } else if std::any::TypeId::of::<T::Native>() == std::any::TypeId::of::<i16>() {
+            let val: i16 = unsafe { *(&literal_value as *const T::Native as *const i16) };
+            pred.page_pruning_literal = Some(PagePruningLiteral::Int32(val as i32));
+        }
+        pred
     }
 
     /// Create Predicate: col IN (lit1, lit2)
@@ -706,15 +733,17 @@ impl ReadTest {
         };
 
         // setup the reader
-        let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
+        let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
             parquet_file,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
-        .with_row_filter(self.row_filter())
-        .build()
-        .unwrap();
+        .with_row_filter(self.row_filter());
+        if let Some(selection) = self.compute_page_selection() {
+            builder = builder.with_row_selection(selection);
+        }
+        let mut stream = builder.build().unwrap();
 
         // run the stream to its end
         let mut row_count = 0;
@@ -737,15 +766,17 @@ impl ReadTest {
         let reader = ParquetObjectReader::new(store, location);
 
         // setup the reader
-        let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
+        let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
             reader,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
-        .with_row_filter(self.row_filter())
-        .build()
-        .unwrap();
+        .with_row_filter(self.row_filter());
+        if let Some(selection) = self.compute_page_selection() {
+            builder = builder.with_row_selection(selection);
+        }
+        let mut stream = builder.build().unwrap();
 
         // run the stream to its end
         let mut row_count = 0;
@@ -764,15 +795,17 @@ impl ReadTest {
         };
 
         // setup the reader
-        let reader = ParquetRecordBatchReaderBuilder::new_with_metadata(
+        let mut builder = ParquetRecordBatchReaderBuilder::new_with_metadata(
             parquet_file,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
-        .with_row_filter(self.row_filter())
-        .build()
-        .unwrap();
+        .with_row_filter(self.row_filter());
+        if let Some(selection) = self.compute_page_selection() {
+            builder = builder.with_row_selection(selection);
+        }
+        let reader = builder.build().unwrap();
 
         // run the stream to its end
         let mut row_count = 0;
@@ -810,6 +843,102 @@ impl ReadTest {
             .collect();
 
         RowFilter::new(arrow_predicates)
+    }
+
+    /// Compute a `RowSelection` based on page-level min/max statistics.
+    ///
+    /// For equality predicates, pages where `literal < min OR literal > max` are
+    /// skipped entirely, avoiding decoding them at all.
+    fn compute_page_selection(&self) -> Option<RowSelection> {
+        let metadata = self.arrow_reader_metadata.metadata();
+        let arrow_schema = self.arrow_reader_metadata.schema();
+        let parquet_schema = metadata.file_metadata().schema_descr();
+        let column_index = metadata.column_index()?;
+        let offset_index = metadata.offset_index()?;
+        let row_group_metadatas = metadata.row_groups();
+        let row_groups: Vec<usize> = (0..metadata.num_row_groups()).collect();
+
+        let total_rows: usize = row_group_metadatas.iter().map(|rg| rg.num_rows() as usize).sum();
+        let mut combined_selection: Option<RowSelection> = None;
+
+        for pred in &self.predicates {
+            let literal = match &pred.page_pruning_literal {
+                Some(lit) => lit,
+                None => continue,
+            };
+
+            let schema_index = self.filter_schema_indices[pred.column_index()];
+            let col_name = parquet_schema
+                .root_schema()
+                .get_fields()[schema_index]
+                .name();
+
+            let converter = match StatisticsConverter::try_new(col_name, arrow_schema, parquet_schema) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let page_mins = match converter.data_page_mins(column_index, offset_index, row_groups.iter()) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let page_maxes = match converter.data_page_maxes(column_index, offset_index, row_groups.iter()) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let page_row_counts = match converter.data_page_row_counts(offset_index, row_group_metadatas, row_groups.iter()) {
+                Ok(Some(c)) => c,
+                _ => continue,
+            };
+
+            // For an equality predicate `col = literal`:
+            // A page can contain matching rows only if min <= literal <= max
+            let pages_match = match literal {
+                PagePruningLiteral::Int32(val) => {
+                    let scalar = PrimitiveArray::<Int32Type>::new_scalar(*val);
+                    let min_ok = lt_eq(&page_mins, &scalar).ok();
+                    let max_ok = gt_eq(&page_maxes, &scalar).ok();
+                    match (min_ok, max_ok) {
+                        (Some(min_check), Some(max_check)) => and(&min_check, &max_check).ok(),
+                        _ => None,
+                    }
+                }
+                PagePruningLiteral::Int64(val) => {
+                    let scalar = PrimitiveArray::<Int64Type>::new_scalar(*val);
+                    let min_ok = lt_eq(&page_mins, &scalar).ok();
+                    let max_ok = gt_eq(&page_maxes, &scalar).ok();
+                    match (min_ok, max_ok) {
+                        (Some(min_check), Some(max_check)) => and(&min_check, &max_check).ok(),
+                        _ => None,
+                    }
+                }
+            };
+
+            let pages_match = match pages_match {
+                Some(m) => m,
+                None => continue,
+            };
+
+            // Build row ranges for pages that match
+            let mut ranges: Vec<Range<usize>> = Vec::new();
+            let mut row_offset = 0usize;
+            for (i, count) in page_row_counts.values().iter().enumerate() {
+                let count = *count as usize;
+                if i < pages_match.len() && pages_match.value(i) {
+                    ranges.push(row_offset..row_offset + count);
+                }
+                row_offset += count;
+            }
+
+            let page_selection = RowSelection::from_consecutive_ranges(ranges.into_iter(), total_rows);
+
+            combined_selection = Some(match combined_selection {
+                Some(existing) => existing.intersection(&page_selection),
+                None => page_selection,
+            });
+        }
+
+        combined_selection
     }
 
     fn check_row_count(&self, row_count: usize) {
