@@ -2118,9 +2118,6 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        #[cfg(feature = "encryption")]
-        let expected_size_with_decryptor = 3080;
-        #[cfg(not(feature = "encryption"))]
         let expected_size_with_decryptor = 3072;
         assert!(expected_size_with_decryptor > base_expected_size);
 

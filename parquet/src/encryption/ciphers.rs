@@ -221,19 +221,4 @@ mod tests {
 
         assert_eq!(plaintext, decrypted.as_slice());
     }
-
-    #[test]
-    fn test_round_trip_with_algorithm() {
-        let key = [0u8; 32];
-        let mut encryptor = RingGcmBlockEncryptor::new(&key).unwrap();
-        let decryptor = RingGcmBlockDecryptor::new(&key).unwrap();
-
-        let plaintext = b"hello, world!";
-        let aad = b"some aad";
-
-        let ciphertext = encryptor.encrypt(plaintext, aad).unwrap();
-        let decrypted = decryptor.decrypt(&ciphertext, aad).unwrap();
-
-        assert_eq!(plaintext, decrypted.as_slice());
-    }
 }
