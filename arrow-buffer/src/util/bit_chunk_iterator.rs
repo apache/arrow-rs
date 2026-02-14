@@ -226,7 +226,6 @@ impl<'a> Iterator for UnalignedBitChunkIterator<'a> {
     }
 }
 
-
 impl ExactSizeIterator for UnalignedBitChunkIterator<'_> {
     #[inline]
     fn len(&self) -> usize {
