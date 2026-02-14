@@ -370,6 +370,16 @@ pub fn make_encoder<'a>(
             _ => unreachable!()
         }
 
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            array => {
+                NullableEncoder::new(
+                    Box::new(RunEndEncodedEncoder::try_new(field, array, options)?),
+                    array.logical_nulls(),
+                )
+            },
+            _ => unreachable!()
+        }
+
         DataType::Map(_, _) => {
             let array = array.as_map();
             NullableEncoder::new(Box::new(MapEncoder::try_new(field, array, options)?), array.nulls().cloned())
@@ -747,6 +757,32 @@ impl<'a, K: ArrowDictionaryKeyType> DictionaryEncoder<'a, K> {
 impl<K: ArrowDictionaryKeyType> Encoder for DictionaryEncoder<'_, K> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         self.encoder.encode(self.keys[idx].as_usize(), out)
+    }
+}
+
+struct RunEndEncodedEncoder<'a, R: RunEndIndexType> {
+    run_array: &'a RunArray<R>,
+    encoder: NullableEncoder<'a>,
+}
+
+impl<'a, R: RunEndIndexType> RunEndEncodedEncoder<'a, R> {
+    fn try_new(
+        field: &'a FieldRef,
+        array: &'a RunArray<R>,
+        options: &'a EncoderOptions,
+    ) -> Result<Self, ArrowError> {
+        let encoder = make_encoder(field, array.values().as_ref(), options)?;
+        Ok(Self {
+            run_array: array,
+            encoder,
+        })
+    }
+}
+
+impl<R: RunEndIndexType> Encoder for RunEndEncodedEncoder<'_, R> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let physical_idx = self.run_array.get_physical_index(idx);
+        self.encoder.encode(physical_idx, out)
     }
 }
 
