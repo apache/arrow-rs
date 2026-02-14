@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["TripletIter"],"macro":["triplet_enum_func"],"struct":["TypedTripletIter"]};

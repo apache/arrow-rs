@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["decode_metadata","parse_column_index","parse_offset_index"],"mod":["inner"]};

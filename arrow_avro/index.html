@@ -1,0 +1,166 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Convert data to / from the Apache Arrow memory format and Apache Avro."><title>arrow_avro - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="arrow_avro" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0-nightly (a423f68a0 2026-02-13)" data-channel="nightly" data-search-js="search-fb33671b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../static.files/storage-f9617a14.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-12f88f4f.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-f7c3ffd8.css"></noscript><link rel="icon" href="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"></head><body class="rustdoc mod crate"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Crate arrow_avro</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../arrow_avro/index.html"><img src="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg" alt="logo"></a><h2><a href="../arrow_avro/index.html">arrow_<wbr>avro</a><span class="version">57.3.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example-ocf-object-container-file-roundtrip-runnable" title="Example: OCF (Object Container File) round‑trip (runnable)">Example: OCF (Object Container File) round‑trip (runnable)</a></li><li><a href="#quickstart-soe-singleobject-encoding-roundtrip-runnable" title="Quickstart: SOE (Single‑Object Encoding) round‑trip (runnable)">Quickstart: SOE (Single‑Object Encoding) round‑trip (runnable)</a></li><li><a href="#async-reading-async-feature" title="`async` Reading (`async` feature)"><code>async</code> Reading (<code>async</code> feature)</a><ul><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#features" title="Features">Features</a></li></ul></li></ul><h3><a href="#modules-1">Crate Items</a></h3><ul class="block"><li><a href="#modules-1" title="Modules">Modules</a></li><li><a href="#traits" title="Traits">Traits</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1>Crate <span>arrow_<wbr>avro</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/arrow_avro/lib.rs.html#18-272">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Convert data to / from the <a href="https://arrow.apache.org/">Apache Arrow</a> memory format and <a href="https://avro.apache.org/">Apache Avro</a>.</p>
+<p>This crate provides:</p>
+<ul>
+<li>a <a href="reader/index.html" title="mod arrow_avro::reader"><code>reader</code></a> that decodes Avro (Object Container Files, Avro Single‑Object encoding,
+and Confluent Schema Registry wire format) into Arrow <code>RecordBatch</code>es,</li>
+<li>and a <a href="writer/index.html" title="mod arrow_avro::writer"><code>writer</code></a> that encodes Arrow <code>RecordBatch</code>es into Avro (OCF or SOE).</li>
+</ul>
+<p>If you’re new to Arrow or Avro, see:</p>
+<ul>
+<li>Arrow project site: <a href="https://arrow.apache.org/">https://arrow.apache.org/</a></li>
+<li>Avro 1.11.1 specification: <a href="https://avro.apache.org/docs/1.11.1/specification/">https://avro.apache.org/docs/1.11.1/specification/</a></li>
+</ul>
+<h3 id="example-ocf-object-container-file-roundtrip-runnable"><a class="doc-anchor" href="#example-ocf-object-container-file-roundtrip-runnable">§</a>Example: OCF (Object Container File) round‑trip <em>(runnable)</em></h3>
+<p>The example below creates an Arrow table, writes an <strong>Avro OCF</strong> fully in memory,
+and then reads it back. OCF is a self‑describing file format that embeds the Avro
+schema in a header with optional compression and block sync markers.
+Spec: <a href="https://avro.apache.org/docs/1.11.1/specification/#object-container-files">https://avro.apache.org/docs/1.11.1/specification/#object-container-files</a></p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::io::Cursor;
+<span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>arrow_array::{ArrayRef, Int32Array, RecordBatch};
+<span class="kw">use </span>arrow_schema::{DataType, Field, Schema};
+<span class="kw">use </span>arrow_avro::writer::AvroWriter;
+<span class="kw">use </span>arrow_avro::reader::ReaderBuilder;
+
+<span class="comment">// Build a tiny Arrow batch
+</span><span class="kw">let </span>schema = Schema::new(<span class="macro">vec!</span>[Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>)]);
+<span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(schema.clone()),
+    <span class="macro">vec!</span>[Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])) <span class="kw">as </span>ArrayRef],
+)<span class="question-mark">?</span>;
+
+<span class="comment">// Write an Avro **Object Container File** (OCF) to a Vec&lt;u8&gt;
+</span><span class="kw">let </span>sink: Vec&lt;u8&gt; = Vec::new();
+<span class="kw">let </span><span class="kw-2">mut </span>w = AvroWriter::new(sink, schema.clone())<span class="question-mark">?</span>;
+w.write(<span class="kw-2">&amp;</span>batch)<span class="question-mark">?</span>;
+w.finish()<span class="question-mark">?</span>;
+<span class="kw">let </span>bytes = w.into_inner();
+<span class="macro">assert!</span>(!bytes.is_empty());
+
+<span class="comment">// Read it back
+</span><span class="kw">let </span><span class="kw-2">mut </span>r = ReaderBuilder::new().build(Cursor::new(bytes))<span class="question-mark">?</span>;
+<span class="kw">let </span>out = r.next().unwrap()<span class="question-mark">?</span>;
+<span class="macro">assert_eq!</span>(out.num_rows(), <span class="number">3</span>);</code></pre></div><h3 id="quickstart-soe-singleobject-encoding-roundtrip-runnable"><a class="doc-anchor" href="#quickstart-soe-singleobject-encoding-roundtrip-runnable">§</a>Quickstart: SOE (Single‑Object Encoding) round‑trip <em>(runnable)</em></h3>
+<p>Avro <strong>Single‑Object Encoding (SOE)</strong> wraps an Avro body with a 2‑byte marker
+<code>0xC3 0x01</code> and an <strong>8‑byte little‑endian CRC‑64‑AVRO Rabin fingerprint</strong> of the
+writer schema, then the Avro body. Spec:
+<a href="https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding">https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding</a></p>
+<p>This example registers the writer schema (computing a Rabin fingerprint), writes a
+single‑row Avro body (using <code>AvroStreamWriter</code>), constructs the SOE frame, and decodes it back to Arrow.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::collections::HashMap;
+<span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>arrow_array::{ArrayRef, Int64Array, RecordBatch};
+<span class="kw">use </span>arrow_schema::{DataType, Field, Schema};
+<span class="kw">use </span>arrow_avro::writer::{AvroStreamWriter, WriterBuilder};
+<span class="kw">use </span>arrow_avro::reader::ReaderBuilder;
+<span class="kw">use </span>arrow_avro::schema::{AvroSchema, SchemaStore, FingerprintStrategy, SCHEMA_METADATA_KEY};
+
+<span class="comment">// Writer schema: { "type":"record","name":"User","fields":[{"name":"x","type":"long"}] }
+</span><span class="kw">let </span>writer_json = <span class="string">r#"{"type":"record","name":"User","fields":[{"name":"x","type":"long"}]}"#</span>;
+<span class="kw">let </span><span class="kw-2">mut </span>store = SchemaStore::new(); <span class="comment">// Rabin CRC‑64‑AVRO by default
+</span><span class="kw">let </span>_fp = store.register(AvroSchema::new(writer_json.to_string()))<span class="question-mark">?</span>;
+
+<span class="comment">// Build an Arrow schema that references the same Avro JSON
+</span><span class="kw">let </span><span class="kw-2">mut </span>md = HashMap::new();
+md.insert(SCHEMA_METADATA_KEY.to_string(), writer_json.to_string());
+<span class="kw">let </span>schema = Schema::new_with_metadata(
+    <span class="macro">vec!</span>[Field::new(<span class="string">"x"</span>, DataType::Int64, <span class="bool-val">false</span>)],
+    md,
+);
+
+<span class="comment">// One‑row batch: { x: 7 }
+</span><span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(schema.clone()),
+    <span class="macro">vec!</span>[Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="number">7</span>])) <span class="kw">as </span>ArrayRef],
+)<span class="question-mark">?</span>;
+
+<span class="comment">// Stream‑write a single record; the writer adds **SOE** (C3 01 + Rabin) automatically.
+</span><span class="kw">let </span>sink: Vec&lt;u8&gt; = Vec::new();
+<span class="kw">let </span><span class="kw-2">mut </span>w: AvroStreamWriter&lt;Vec&lt;u8&gt;&gt; = WriterBuilder::new(schema.clone())
+    .with_fingerprint_strategy(FingerprintStrategy::Rabin)
+    .build(sink)<span class="question-mark">?</span>;
+w.write(<span class="kw-2">&amp;</span>batch)<span class="question-mark">?</span>;
+w.finish()<span class="question-mark">?</span>;
+<span class="kw">let </span>frame = w.into_inner(); <span class="comment">// already: C3 01 + 8B LE Rabin + Avro body
+</span><span class="macro">assert!</span>(frame.len() &gt; <span class="number">10</span>);
+
+<span class="comment">// Decode
+</span><span class="kw">let </span><span class="kw-2">mut </span>dec = ReaderBuilder::new()
+  .with_writer_schema_store(store)
+  .build_decoder()<span class="question-mark">?</span>;
+dec.decode(<span class="kw-2">&amp;</span>frame)<span class="question-mark">?</span>;
+<span class="kw">let </span>out = dec.flush()<span class="question-mark">?</span>.expect(<span class="string">"one row"</span>);
+<span class="macro">assert_eq!</span>(out.num_rows(), <span class="number">1</span>);</code></pre></div><h3 id="async-reading-async-feature"><a class="doc-anchor" href="#async-reading-async-feature">§</a><code>async</code> Reading (<code>async</code> feature)</h3>
+<p>The <a href="reader/index.html" title="mod arrow_avro::reader"><code>reader</code></a> module provides async APIs for reading Avro files when the <code>async</code>
+feature is enabled.</p>
+<p><a href="reader/struct.AsyncAvroFileReader.html" title="struct arrow_avro::reader::AsyncAvroFileReader"><code>AsyncAvroFileReader</code></a> implements <code>Stream&lt;Item = Result&lt;RecordBatch, ArrowError&gt;&gt;</code>,
+allowing efficient async streaming of record batches. When the <code>object_store</code> feature
+is enabled, <a href="reader/struct.AvroObjectReader.html" title="struct arrow_avro::reader::AvroObjectReader"><code>AvroObjectReader</code></a> provides integration with object storage services
+such as S3 via the <a href="https://docs.rs/object_store/latest/object_store/">object_store</a> crate.</p>
+
+<div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>arrow_avro::reader::{AsyncAvroFileReader, AvroObjectReader};
+<span class="kw">use </span>futures::TryStreamExt;
+<span class="kw">use </span>object_store::ObjectStore;
+<span class="kw">use </span>object_store::local::LocalFileSystem;
+<span class="kw">use </span>object_store::path::Path;
+
+<span class="kw">let </span>store: Arc&lt;<span class="kw">dyn </span>ObjectStore&gt; = Arc::new(LocalFileSystem::new());
+<span class="kw">let </span>path = Path::from(<span class="string">"data/example.avro"</span>);
+<span class="kw">let </span>meta = store.head(<span class="kw-2">&amp;</span>path).<span class="kw">await</span><span class="question-mark">?</span>;
+
+<span class="kw">let </span>reader = AvroObjectReader::new(store, path);
+<span class="kw">let </span>stream = AsyncAvroFileReader::builder(reader, meta.size, <span class="number">1024</span>)
+    .try_build()
+    .<span class="kw">await</span><span class="question-mark">?</span>;
+
+<span class="kw">let </span>batches: Vec&lt;<span class="kw">_</span>&gt; = stream.try_collect().<span class="kw">await</span><span class="question-mark">?</span>;</code></pre></div>
+<hr />
+<h4 id="modules"><a class="doc-anchor" href="#modules">§</a>Modules</h4>
+<ul>
+<li><a href="reader/index.html" title="mod arrow_avro::reader"><code>reader</code></a>: read Avro (OCF, SOE, Confluent) into Arrow <code>RecordBatch</code>es.
+<ul>
+<li>With the <code>async</code> feature: <a href="reader/struct.AsyncAvroFileReader.html" title="struct arrow_avro::reader::AsyncAvroFileReader"><code>AsyncAvroFileReader</code></a> for async streaming reads.</li>
+<li>With the <code>object_store</code> feature: <a href="reader/struct.AvroObjectReader.html" title="struct arrow_avro::reader::AvroObjectReader"><code>AvroObjectReader</code></a> for reading from cloud storage.</li>
+</ul>
+</li>
+<li><a href="writer/index.html" title="mod arrow_avro::writer"><code>writer</code></a>: write Arrow <code>RecordBatch</code>es as Avro (OCF, SOE, Confluent, Apicurio).</li>
+<li><a href="schema/index.html" title="mod arrow_avro::schema"><code>schema</code></a>: Avro schema parsing / fingerprints / registries.</li>
+<li><a href="compression/index.html" title="mod arrow_avro::compression"><code>compression</code></a>: codecs used for <strong>OCF block compression</strong> (i.e., Deflate, Snappy, Zstandard, BZip2, and XZ).</li>
+<li><a href="codec/index.html" title="mod arrow_avro::codec"><code>codec</code></a>: internal Avro-Arrow type conversion and row decode/encode plans.</li>
+</ul>
+<h4 id="features"><a class="doc-anchor" href="#features">§</a>Features</h4>
+<p><strong>OCF compression (enabled by default)</strong></p>
+<ul>
+<li><code>deflate</code> — enable DEFLATE block compression (via <code>flate2</code>).</li>
+<li><code>snappy</code> — enable Snappy block compression with 4‑byte BE CRC32 (per Avro).</li>
+<li><code>zstd</code> — enable Zstandard block compression.</li>
+<li><code>bzip2</code> — enable BZip2 block compression.</li>
+<li><code>xz</code> — enable XZ/LZMA block compression.</li>
+</ul>
+<p><strong>Async &amp; Object Store (opt‑in)</strong></p>
+<ul>
+<li><code>async</code> — enable async APIs for reading Avro (<code>AsyncAvroFileReader</code>, <code>AsyncFileReader</code> trait).</li>
+<li><code>object_store</code> — enable integration with the <a href="https://docs.rs/object_store/latest/object_store/"><code>object_store</code></a> crate for reading Avro
+from cloud storage (S3, GCS, Azure Blob, etc.) via <code>AvroObjectReader</code>. Implies <code>async</code>.</li>
+</ul>
+<p><strong>Schema fingerprints &amp; helpers (opt‑in)</strong></p>
+<ul>
+<li><code>md5</code> — enable MD5 writer‑schema fingerprints.</li>
+<li><code>sha256</code> — enable SHA‑256 writer‑schema fingerprints.</li>
+<li><code>small_decimals</code> — support for compact Arrow representations of small Avro decimals (<code>Decimal32</code> and <code>Decimal64</code>).</li>
+<li><code>avro_custom_types</code> — interpret Avro fields annotated with Arrow‑specific logical
+types such as <code>arrow.duration-nanos</code>, <code>arrow.duration-micros</code>,
+<code>arrow.duration-millis</code>, or <code>arrow.duration-seconds</code> as Arrow <code>Duration(TimeUnit)</code>.</li>
+<li><code>canonical_extension_types</code> — enable support for Arrow <a href="https://arrow.apache.org/docs/format/CanonicalExtensions.html">canonical extension types</a>
+from <code>arrow-schema</code> so <code>arrow-avro</code> can respect them during Avro↔Arrow mapping.</li>
+</ul>
+<p><strong>Notes</strong></p>
+<ul>
+<li>OCF compression codecs apply only to <strong>Object Container Files</strong>; they do not affect Avro
+single object encodings.</li>
+</ul>
+</div></details><h2 id="modules-1" class="section-header">Modules<a href="#modules-1" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="codec/index.html" title="mod arrow_avro::codec">codec</a></dt><dd>Data type conversions between Avro and Arrow types</dd><dt><a class="mod" href="compression/index.html" title="mod arrow_avro::compression">compression</a></dt><dd>Compression codec implementations for Avro</dd><dt><a class="mod" href="errors/index.html" title="mod arrow_avro::errors">errors</a></dt><dd>AvroError variants
+Common Avro errors and macros.</dd><dt><a class="mod" href="reader/index.html" title="mod arrow_avro::reader">reader</a></dt><dd>Core functionality for reading Avro data into Arrow arrays</dd><dt><a class="mod" href="schema/index.html" title="mod arrow_avro::schema">schema</a></dt><dd>Avro schema parsing and representation</dd><dt><a class="mod" href="writer/index.html" title="mod arrow_avro::writer">writer</a></dt><dd>Core functionality for writing Arrow arrays as Avro data</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.AvroFieldExt.html" title="trait arrow_avro::AvroFieldExt">Avro<wbr>Field<wbr>Ext</a></dt><dd>Extension trait for AvroField to add Utf8View support</dd></dl></section></div></main></body></html>

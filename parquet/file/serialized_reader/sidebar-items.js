@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["SerializedPageReaderState"],"fn":["decode_page","get_midpoint_offset","verify_page_header_len","verify_page_size"],"struct":["ReadOptions","ReadOptionsBuilder","SerializedFileReader","SerializedPageReader","SerializedPageReaderContext","SerializedRowGroupReader"],"type":["ReadGroupPredicate"]};

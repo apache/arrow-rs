@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_scalar_pattern_flag","get_scalar_pattern_flag_utf8view","regexp_array_match","regexp_array_match_utf8view","regexp_is_match","regexp_is_match_scalar","regexp_match","regexp_scalar_match","regexp_scalar_match_utf8view"],"macro":["process_regexp_array_match","process_regexp_match"]};

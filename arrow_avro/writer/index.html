@@ -1,0 +1,105 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Core functionality for writing Arrow arrays as Avro data"><title>arrow_avro::writer - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="arrow_avro" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0-nightly (a423f68a0 2026-02-13)" data-channel="nightly" data-search-js="search-fb33671b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-f9617a14.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-12f88f4f.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="icon" href="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module writer</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../arrow_avro/index.html"><img src="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg" alt="logo"></a><h2><a href="../../arrow_avro/index.html">arrow_<wbr>avro</a><span class="version">57.3.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module writer</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#overview" title="Overview">Overview</a><ul><li><a href="#which-writer-should-you-use" title="Which writer should you use?">Which writer should you use?</a></li><li><a href="#per-record-prefix-formats" title="Per-Record Prefix Formats">Per-Record Prefix Formats</a></li><li><a href="#choosing-the-avro-schema" title="Choosing the Avro Schema">Choosing the Avro Schema</a></li><li><a href="#compression" title="Compression">Compression</a></li></ul></li><li><a href="#examples" title="Examples">Examples</a><ul><li><a href="#writing-an-ocf-file" title="Writing an OCF File">Writing an OCF File</a></li><li><a href="#using-the-row-by-row-encoder-for-message-queues" title="Using the Row-by-Row Encoder for Message Queues">Using the Row-by-Row Encoder for Message Queues</a></li></ul></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#types" title="Type Aliases">Type Aliases</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate arrow_<wbr>avro</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">arrow_avro</a></div><h1>Module <span>writer</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/arrow_avro/writer/mod.rs.html#18-4468">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Core functionality for writing Arrow arrays as Avro data</p>
+<p>Implements the primary writer interface and record encoding logic.
+Avro writer implementation for the <code>arrow-avro</code> crate.</p>
+<h2 id="overview"><a class="doc-anchor" href="#overview">§</a>Overview</h2>
+<p>Use this module to serialize Arrow [<code>arrow_array::RecordBatch</code>] values into Avro. Three output
+modes are supported:</p>
+<ul>
+<li>
+<p><strong><a href="type.AvroWriter.html" title="type arrow_avro::writer::AvroWriter"><code>crate::writer::AvroWriter</code></a></strong> — writes an <strong>Object Container File (OCF)</strong>: a self‑describing
+file with header (schema JSON and metadata), optional compression, data blocks, and
+sync markers. See Avro 1.11.1 “Object Container Files.”
+<a href="https://avro.apache.org/docs/1.11.1/specification/#object-container-files">https://avro.apache.org/docs/1.11.1/specification/#object-container-files</a></p>
+</li>
+<li>
+<p><strong><a href="type.AvroStreamWriter.html" title="type arrow_avro::writer::AvroStreamWriter"><code>crate::writer::AvroStreamWriter</code></a></strong> — writes a <strong>Single Object Encoding (SOE) Stream</strong> without
+any container framing. This is useful when the schema is known out‑of‑band (i.e.,
+via a registry) and you want minimal overhead.</p>
+</li>
+<li>
+<p><strong><a href="struct.Encoder.html" title="struct arrow_avro::writer::Encoder"><code>crate::writer::Encoder</code></a></strong> — a row-by-row encoder that buffers encoded records into a single
+contiguous byte buffer and returns per-row [<code>bytes::Bytes</code>] slices.
+Ideal for publishing individual messages to Kafka, Pulsar, or other message queues
+where each message must be a self-contained Avro payload.</p>
+</li>
+</ul>
+<h3 id="which-writer-should-you-use"><a class="doc-anchor" href="#which-writer-should-you-use">§</a>Which writer should you use?</h3><div><table><thead><tr><th>Use Case</th><th>Recommended Type</th></tr></thead><tbody>
+<tr><td>Write an OCF file to disk</td><td><a href="type.AvroWriter.html" title="type arrow_avro::writer::AvroWriter"><code>crate::writer::AvroWriter</code></a></td></tr>
+<tr><td>Stream records continuously to a file/socket</td><td><a href="type.AvroStreamWriter.html" title="type arrow_avro::writer::AvroStreamWriter"><code>crate::writer::AvroStreamWriter</code></a></td></tr>
+<tr><td>Publish individual records to Kafka/Pulsar</td><td><a href="struct.Encoder.html" title="struct arrow_avro::writer::Encoder"><code>crate::writer::Encoder</code></a></td></tr>
+<tr><td>Need per-row byte slices for custom framing</td><td><a href="struct.Encoder.html" title="struct arrow_avro::writer::Encoder"><code>crate::writer::Encoder</code></a></td></tr>
+</tbody></table>
+</div><h3 id="per-record-prefix-formats"><a class="doc-anchor" href="#per-record-prefix-formats">§</a>Per-Record Prefix Formats</h3>
+<p>For <a href="type.AvroStreamWriter.html" title="type arrow_avro::writer::AvroStreamWriter"><code>crate::writer::AvroStreamWriter</code></a> and <a href="struct.Encoder.html" title="struct arrow_avro::writer::Encoder"><code>crate::writer::Encoder</code></a>, each record is automatically prefixed
+based on the fingerprint strategy:</p>
+<div><table><thead><tr><th>Strategy</th><th>Prefix</th><th>Use Case</th></tr></thead><tbody>
+<tr><td><code>FingerprintStrategy::Rabin</code> (default)</td><td><code>0xC3 0x01</code> + 8-byte LE Rabin fingerprint</td><td>Standard Avro SOE</td></tr>
+<tr><td><code>FingerprintStrategy::Id(id)</code></td><td><code>0x00</code> + 4-byte BE schema ID</td><td><a href="https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format">Confluent Schema Registry</a></td></tr>
+<tr><td><code>FingerprintStrategy::Id64(id)</code></td><td><code>0x00</code> + 8-byte BE schema ID</td><td><a href="https://www.apicur.io/registry/docs/apicurio-registry/1.3.3.Final/getting-started/assembly-using-kafka-client-serdes.html#registry-serdes-types-avro-registry">Apicurio Registry</a></td></tr>
+</tbody></table>
+</div><h3 id="choosing-the-avro-schema"><a class="doc-anchor" href="#choosing-the-avro-schema">§</a>Choosing the Avro Schema</h3>
+<p>By default, the writer converts your Arrow schema to Avro (including a top‑level record
+name). If you already have an Avro schema JSON you want to use verbatim, put it into the
+Arrow schema metadata under the <a href="../schema/constant.SCHEMA_METADATA_KEY.html" title="constant arrow_avro::schema::SCHEMA_METADATA_KEY"><code>SCHEMA_METADATA_KEY</code></a>
+key before constructing the writer. The builder will use that schema instead of generating
+a new one.</p>
+<h3 id="compression"><a class="doc-anchor" href="#compression">§</a>Compression</h3>
+<p>For OCF (<a href="type.AvroWriter.html" title="type arrow_avro::writer::AvroWriter"><code>crate::writer::AvroWriter</code></a>), you may enable a compression codec via
+<a href="struct.WriterBuilder.html#method.with_compression" title="method arrow_avro::writer::WriterBuilder::with_compression"><code>crate::writer::WriterBuilder::with_compression</code></a>. The chosen codec is written into the file header
+and used for subsequent blocks. SOE stream writing (<a href="type.AvroStreamWriter.html" title="type arrow_avro::writer::AvroStreamWriter"><code>crate::writer::AvroStreamWriter</code></a>, <a href="struct.Encoder.html" title="struct arrow_avro::writer::Encoder"><code>crate::writer::Encoder</code></a>)
+does not apply container‑level compression.</p>
+<h2 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h2><h3 id="writing-an-ocf-file"><a class="doc-anchor" href="#writing-an-ocf-file">§</a>Writing an OCF File</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
+<span class="kw">use </span>arrow_schema::{DataType, Field, Schema};
+<span class="kw">use </span>arrow_avro::writer::AvroWriter;
+
+<span class="kw">let </span>schema = Schema::new(<span class="macro">vec!</span>[
+    Field::new(<span class="string">"id"</span>, DataType::Int64, <span class="bool-val">false</span>),
+    Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+]);
+
+<span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(schema.clone()),
+    <span class="macro">vec!</span>[
+        Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>])) <span class="kw">as </span>ArrayRef,
+        Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"alice"</span>, <span class="string">"bob"</span>])) <span class="kw">as </span>ArrayRef,
+    ],
+)<span class="question-mark">?</span>;
+
+<span class="kw">let </span><span class="kw-2">mut </span>writer = AvroWriter::new(Vec::&lt;u8&gt;::new(), schema)<span class="question-mark">?</span>;
+writer.write(<span class="kw-2">&amp;</span>batch)<span class="question-mark">?</span>;
+writer.finish()<span class="question-mark">?</span>;
+<span class="kw">let </span>bytes = writer.into_inner();
+<span class="macro">assert!</span>(!bytes.is_empty());</code></pre></div><h3 id="using-the-row-by-row-encoder-for-message-queues"><a class="doc-anchor" href="#using-the-row-by-row-encoder-for-message-queues">§</a>Using the Row-by-Row Encoder for Message Queues</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>arrow_array::{ArrayRef, Int32Array, RecordBatch};
+<span class="kw">use </span>arrow_schema::{DataType, Field, Schema};
+<span class="kw">use </span>arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
+<span class="kw">use </span>arrow_avro::schema::FingerprintStrategy;
+
+<span class="kw">let </span>schema = Schema::new(<span class="macro">vec!</span>[Field::new(<span class="string">"x"</span>, DataType::Int32, <span class="bool-val">false</span>)]);
+<span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(schema.clone()),
+    <span class="macro">vec!</span>[Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])) <span class="kw">as </span>ArrayRef],
+)<span class="question-mark">?</span>;
+
+<span class="comment">// Build an Encoder with Confluent wire format (schema ID = 42)
+</span><span class="kw">let </span><span class="kw-2">mut </span>encoder = WriterBuilder::new(schema)
+    .with_fingerprint_strategy(FingerprintStrategy::Id(<span class="number">42</span>))
+    .build_encoder::&lt;AvroSoeFormat&gt;()<span class="question-mark">?</span>;
+
+encoder.encode(<span class="kw-2">&amp;</span>batch)<span class="question-mark">?</span>;
+
+<span class="comment">// Get the buffered rows (zero-copy views into a single backing buffer)
+</span><span class="kw">let </span>rows = encoder.flush();
+<span class="macro">assert_eq!</span>(rows.len(), <span class="number">3</span>);
+
+<span class="comment">// Each row has Confluent wire format: magic byte + 4-byte schema ID + body
+</span><span class="kw">for </span>row <span class="kw">in </span>rows.iter() {
+    <span class="macro">assert_eq!</span>(row[<span class="number">0</span>], <span class="number">0x00</span>); <span class="comment">// Confluent magic byte
+</span>}</code></pre></div>
+<hr />
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="encoder/index.html" title="mod arrow_avro::writer::encoder">encoder</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Encodes <code>RecordBatch</code> into the Avro binary format.
+Avro Encoder for Arrow types.</dd><dt><a class="mod" href="format/index.html" title="mod arrow_avro::writer::format">format</a></dt><dd>Logic for different Avro container file formats.
+Avro Writer Formats for Arrow.</dd></dl><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.EncodedRows.html" title="struct arrow_avro::writer::EncodedRows">Encoded<wbr>Rows</a></dt><dd>A contiguous set of Avro encoded rows.</dd><dt><a class="struct" href="struct.Encoder.html" title="struct arrow_avro::writer::Encoder">Encoder</a></dt><dd>A row-by-row encoder for Avro <em>stream/message</em> formats (SOE / registry wire formats / raw binary).</dd><dt><a class="struct" href="struct.Writer.html" title="struct arrow_avro::writer::Writer">Writer</a></dt><dd>Generic Avro writer.</dd><dt><a class="struct" href="struct.WriterBuilder.html" title="struct arrow_avro::writer::WriterBuilder">Writer<wbr>Builder</a></dt><dd>Builder to configure and create a <code>Writer</code>.</dd></dl><h2 id="types" class="section-header">Type Aliases<a href="#types" class="anchor">§</a></h2><dl class="item-table"><dt><a class="type" href="type.AvroStreamWriter.html" title="type arrow_avro::writer::AvroStreamWriter">Avro<wbr>Stream<wbr>Writer</a></dt><dd>Alias for an Avro <strong>Single Object Encoding</strong> stream writer.</dd><dt><a class="type" href="type.AvroWriter.html" title="type arrow_avro::writer::AvroWriter">Avro<wbr>Writer</a></dt><dd>Alias for an Avro <strong>Object Container File</strong> writer.</dd></dl></section></div></main></body></html>

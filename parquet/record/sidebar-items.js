@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Field"],"mod":["api","reader","record_reader","record_writer","triplet"],"struct":["List","Map","Row","RowColumnIter"],"trait":["ListAccessor","MapAccessor","RecordReader","RecordWriter","RowAccessor","RowFormatter"]};

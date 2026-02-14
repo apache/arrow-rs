@@ -1,0 +1,428 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Core functionality for reading Avro data into Arrow arrays"><title>arrow_avro::reader - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="arrow_avro" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0-nightly (a423f68a0 2026-02-13)" data-channel="nightly" data-search-js="search-fb33671b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-f9617a14.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-12f88f4f.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="icon" href="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module reader</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../arrow_avro/index.html"><img src="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg" alt="logo"></a><h2><a href="../../arrow_avro/index.html">arrow_<wbr>avro</a><span class="version">57.3.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module reader</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#limitations" title="Limitations">Limitations</a></li><li><a href="#encodings-and-when-to-use-which-type" title="Encodings and when to use which type">Encodings and when to use which type</a></li><li><a href="#basic-file-usage-ocf" title="Basic file usage (OCF)">Basic file usage (OCF)</a></li><li><a href="#streaming-usage-singleobject--confluent--apicurio" title="Streaming usage (single‑object / Confluent / Apicurio)">Streaming usage (single‑object / Confluent / Apicurio)</a><ul><li><a href="#building-and-using-a-decoder-for-singleobject-encoding-rabin-fingerprints" title="Building and using a `Decoder` for single‑object encoding (Rabin fingerprints)">Building and using a <code>Decoder</code> for single‑object encoding (Rabin fingerprints)</a></li><li><a href="#building-and-using-a-decoder-for-confluent-schema-registry-framing" title="Building and using a `Decoder` for Confluent Schema Registry framing">Building and using a <code>Decoder</code> for Confluent Schema Registry framing</a></li></ul></li><li><a href="#schema-resolution-reader-vs-writer-schemas" title="Schema resolution (reader vs. writer schemas)">Schema resolution (reader vs. writer schemas)</a><ul><li><a href="#ocf-example-rename-a-field-and-add-a-default-via-a-reader-schema" title="OCF example: rename a field and add a default via a reader schema">OCF example: rename a field and add a default via a reader schema</a></li><li><a href="#confluent-singleobject-example-resolve-past-writer-versions-to-the-topics-current-reader-schema" title="Confluent single‑object example: resolve past writer versions to the topic’s current reader schema">Confluent single‑object example: resolve past writer versions to the topic’s current reader schema</a></li></ul></li><li><a href="#schema-evolution-and-batch-boundaries" title="Schema evolution and batch boundaries">Schema evolution and batch boundaries</a></li><li><a href="#performance--memory" title="Performance &#38; memory">Performance &amp; memory</a></li><li><a href="#error-handling" title="Error handling">Error handling</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate arrow_<wbr>avro</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">arrow_avro</a></div><h1>Module <span>reader</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/arrow_avro/reader/mod.rs.html#18-9134">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Core functionality for reading Avro data into Arrow arrays</p>
+<p>Implements the primary reader interface and record decoding logic.
+Avro reader</p>
+<p>Facilities to read Apache Avro–encoded data into Arrow’s <code>RecordBatch</code> format.</p>
+<h4 id="limitations"><a class="doc-anchor" href="#limitations">§</a>Limitations</h4>
+<ul>
+<li>
+<p><strong>Avro unions with &gt; 127 branches are not supported.</strong>
+When decoding Avro unions to Arrow <code>UnionArray</code>, Arrow stores the union
+type identifiers in an <strong>8‑bit signed</strong> buffer (<code>i8</code>). This implies a
+practical limit of <strong>127</strong> distinct branch ids. Inputs that resolve to
+more than 127 branches will return an error. If you truly need more,
+model the schema as a <strong>union of unions</strong>, per the Arrow format spec.</p>
+<p>See: Arrow Columnar Format — Dense Union (“types buffer: 8‑bit signed;
+a union with more than 127 possible types can be modeled as a union of
+unions”).</p>
+</li>
+</ul>
+<p>This module exposes three layers of the API surface, from highest to lowest-level:</p>
+<ul>
+<li><a href="struct.ReaderBuilder.html" title="struct arrow_avro::reader::ReaderBuilder"><code>ReaderBuilder</code></a>: configures how Avro is read (batch size, strict union handling,
+string representation, reader schema, etc.) and produces either:
+<ul>
+<li>a <code>Reader</code> for <strong>Avro Object Container Files (OCF)</strong> read from any <code>BufRead</code>, or</li>
+<li>a low-level <code>Decoder</code> for <strong>single‑object encoded</strong> Avro bytes and Confluent
+<strong>Schema Registry</strong> framed messages.</li>
+</ul>
+</li>
+<li><a href="struct.Reader.html" title="struct arrow_avro::reader::Reader"><code>Reader</code></a>: a convenient, synchronous iterator over <code>RecordBatch</code> decoded from an OCF
+input. Implements <a href="https://doc.rust-lang.org/nightly/core/iter/traits/iterator/trait.Iterator.html" title="trait core::iter::traits::iterator::Iterator"><code>Iterator&lt;Item = Result&lt;RecordBatch, ArrowError&gt;&gt;</code></a> and
+<code>RecordBatchReader</code>.</li>
+<li><a href="struct.Decoder.html" title="struct arrow_avro::reader::Decoder"><code>Decoder</code></a>: a push‑based row decoder that consumes SOE framed Avro bytes and yields ready
+<code>RecordBatch</code> values when batches fill. This is suitable for integrating with async
+byte streams, network protocols, or other custom data sources.</li>
+</ul>
+<h3 id="encodings-and-when-to-use-which-type"><a class="doc-anchor" href="#encodings-and-when-to-use-which-type">§</a>Encodings and when to use which type</h3>
+<ul>
+<li><strong>Object Container File (OCF)</strong>: A self‑describing file format with a header containing
+the writer schema, optional compression codec, and a sync marker, followed by one or
+more data blocks. Use <code>Reader</code> for this format. See the Avro 1.11.1 specification
+(“Object Container Files”). <a href="https://avro.apache.org/docs/1.11.1/specification/#object-container-files">https://avro.apache.org/docs/1.11.1/specification/#object-container-files</a></li>
+<li><strong>Single‑Object Encoding</strong>: A stream‑friendly framing that prefixes each record body with
+the 2‑byte marker <code>0xC3 0x01</code> followed by the <strong>8‑byte little‑endian CRC‑64‑AVRO Rabin
+fingerprint</strong> of the writer schema, then the Avro binary body. Use <code>Decoder</code> with a
+populated <code>SchemaStore</code> to resolve fingerprints to full schemas.
+See “Single object encoding” in the Avro 1.11.1 spec.
+<a href="https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding">https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding</a></li>
+<li><strong>Confluent Schema Registry wire format</strong>: A 1‑byte magic <code>0x00</code>, a <strong>4‑byte big‑endian</strong>
+schema ID, then the Avro‑encoded body. Use <code>Decoder</code> with a <code>SchemaStore</code> configured
+for <code>FingerprintAlgorithm::Id</code> and entries keyed by <code>Fingerprint::Id</code>. See
+Confluent’s “Wire format” documentation.
+<a href="https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format">https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format</a></li>
+<li><strong>Apicurio Schema Registry wire format</strong>: A 1‑byte magic <code>0x00</code>, a <strong>8‑byte big‑endian</strong>
+global schema ID, then the Avro‑encoded body. Use <code>Decoder</code> with a <code>SchemaStore</code> configured
+for <code>FingerprintAlgorithm::Id64</code> and entries keyed by <code>Fingerprint::Id64</code>. See
+Apicurio’s “Avro SerDe” documentation.
+<a href="https://www.apicur.io/registry/docs/apicurio-registry/1.3.3.Final/getting-started/assembly-using-kafka-client-serdes.html#registry-serdes-types-avro-registry">https://www.apicur.io/registry/docs/apicurio-registry/1.3.3.Final/getting-started/assembly-using-kafka-client-serdes.html#registry-serdes-types-avro-registry</a></li>
+</ul>
+<h3 id="basic-file-usage-ocf"><a class="doc-anchor" href="#basic-file-usage-ocf">§</a>Basic file usage (OCF)</h3>
+<p>Use <code>ReaderBuilder::build</code> to construct a <code>Reader</code> from any <code>BufRead</code>. The doctest below
+creates a tiny OCF in memory using <code>AvroWriter</code> and then reads it back.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::io::Cursor;
+<span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>arrow_array::{ArrayRef, Int32Array, RecordBatch};
+<span class="kw">use </span>arrow_schema::{DataType, Field, Schema};
+<span class="kw">use </span>arrow_avro::writer::AvroWriter;
+<span class="kw">use </span>arrow_avro::reader::ReaderBuilder;
+
+<span class="comment">// Build a minimal Arrow schema and batch
+</span><span class="kw">let </span>schema = Schema::new(<span class="macro">vec!</span>[Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>)]);
+<span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(schema.clone()),
+    <span class="macro">vec!</span>[Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])) <span class="kw">as </span>ArrayRef],
+)<span class="question-mark">?</span>;
+
+<span class="comment">// Write an Avro OCF to memory
+</span><span class="kw">let </span>buffer: Vec&lt;u8&gt; = Vec::new();
+<span class="kw">let </span><span class="kw-2">mut </span>writer = AvroWriter::new(buffer, schema.clone())<span class="question-mark">?</span>;
+writer.write(<span class="kw-2">&amp;</span>batch)<span class="question-mark">?</span>;
+writer.finish()<span class="question-mark">?</span>;
+<span class="kw">let </span>bytes = writer.into_inner();
+
+<span class="comment">// Read it back with ReaderBuilder
+</span><span class="kw">let </span><span class="kw-2">mut </span>reader = ReaderBuilder::new().build(Cursor::new(bytes))<span class="question-mark">?</span>;
+<span class="kw">let </span>out = reader.next().unwrap()<span class="question-mark">?</span>;
+<span class="macro">assert_eq!</span>(out.num_rows(), <span class="number">3</span>);</code></pre></div><h3 id="streaming-usage-singleobject--confluent--apicurio"><a class="doc-anchor" href="#streaming-usage-singleobject--confluent--apicurio">§</a>Streaming usage (single‑object / Confluent / Apicurio)</h3>
+<p>The <code>Decoder</code> lets you integrate Avro decoding with <strong>any</strong> source of bytes by
+periodically calling <code>Decoder::decode</code> with new data and calling <code>Decoder::flush</code>
+to get a <code>RecordBatch</code> once at least one row is complete.</p>
+<p>The example below shows how to decode from an arbitrary stream of <code>bytes::Bytes</code> using
+<code>futures</code> utilities. Note: this is illustrative and keeps a single in‑memory <code>Bytes</code>
+buffer for simplicity—real applications typically maintain a rolling buffer.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>bytes::{Buf, Bytes};
+<span class="kw">use </span>futures::{Stream, StreamExt};
+<span class="kw">use </span>std::task::{Poll, ready};
+<span class="kw">use </span>arrow_array::RecordBatch;
+<span class="kw">use </span>arrow_avro::{reader::Decoder, errors::AvroError};
+
+<span class="doccomment">/// Decode a stream of Avro-framed bytes into RecordBatch values.
+</span><span class="kw">fn </span>decode_stream&lt;S: Stream&lt;Item = Bytes&gt; + Unpin&gt;(
+    <span class="kw-2">mut </span>decoder: Decoder,
+    <span class="kw-2">mut </span>input: S,
+) -&gt; <span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;RecordBatch, AvroError&gt;&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>buffered = Bytes::new();
+    futures::stream::poll_fn(<span class="kw">move </span>|cx| {
+        <span class="kw">loop </span>{
+            <span class="kw">if </span>buffered.is_empty() {
+                buffered = <span class="kw">match </span><span class="macro">ready!</span>(input.poll_next_unpin(cx)) {
+                    <span class="prelude-val">Some</span>(b) =&gt; b,
+                    <span class="prelude-val">None </span>=&gt; <span class="kw">break</span>, <span class="comment">// EOF
+                </span>};
+            }
+            <span class="comment">// Feed as much as possible
+            </span><span class="kw">let </span>decoded = <span class="kw">match </span>decoder.decode(buffered.as_ref()) {
+                <span class="prelude-val">Ok</span>(n) =&gt; n,
+                <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e))),
+            };
+            <span class="kw">let </span>read = buffered.len();
+            buffered.advance(decoded);
+            <span class="kw">if </span>decoded != read {
+                <span class="comment">// decoder made partial progress; request more bytes
+                </span><span class="kw">break
+            </span>}
+        }
+        <span class="comment">// Return a batch if one or more rows are complete
+        </span>Poll::Ready(decoder.flush().transpose())
+    })
+}</code></pre></div><h4 id="building-and-using-a-decoder-for-singleobject-encoding-rabin-fingerprints"><a class="doc-anchor" href="#building-and-using-a-decoder-for-singleobject-encoding-rabin-fingerprints">§</a>Building and using a <code>Decoder</code> for <strong>single‑object encoding</strong> (Rabin fingerprints)</h4>
+<p>The doctest below <strong>writes</strong> a single‑object framed record using the Avro writer
+(no manual varints) for the writer schema
+(<code>{"type":"record","name":"User","fields":[{"name":"id","type":"long"}]}</code>)
+and then decodes it into a <code>RecordBatch</code>.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>std::collections::HashMap;
+<span class="kw">use </span>arrow_array::{ArrayRef, Int64Array, RecordBatch};
+<span class="kw">use </span>arrow_schema::{DataType, Field, Schema};
+<span class="kw">use </span>arrow_avro::schema::{AvroSchema, SchemaStore, SCHEMA_METADATA_KEY, FingerprintStrategy};
+<span class="kw">use </span>arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
+<span class="kw">use </span>arrow_avro::reader::ReaderBuilder;
+
+<span class="comment">// Register the writer schema (Rabin fingerprint by default).
+</span><span class="kw">let </span><span class="kw-2">mut </span>store = SchemaStore::new();
+<span class="kw">let </span>avro_schema = AvroSchema::new(<span class="string">r#"{"type":"record","name":"User","fields":[
+  {"name":"id","type":"long"}]}"#</span>.to_string());
+<span class="kw">let </span>_fp = store.register(avro_schema.clone())<span class="question-mark">?</span>;
+
+<span class="comment">// Create a single-object framed record { id: 42 } with the Avro writer.
+</span><span class="kw">let </span><span class="kw-2">mut </span>md = HashMap::new();
+md.insert(SCHEMA_METADATA_KEY.to_string(), avro_schema.json_string.clone());
+<span class="kw">let </span>arrow = Schema::new_with_metadata(<span class="macro">vec!</span>[Field::new(<span class="string">"id"</span>, DataType::Int64, <span class="bool-val">false</span>)], md);
+<span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(arrow.clone()),
+    <span class="macro">vec!</span>[Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="number">42</span>])) <span class="kw">as </span>ArrayRef],
+)<span class="question-mark">?</span>;
+<span class="kw">let </span><span class="kw-2">mut </span>w = WriterBuilder::new(arrow)
+    .with_fingerprint_strategy(FingerprintStrategy::Rabin) <span class="comment">// SOE prefix
+    </span>.build::&lt;<span class="kw">_</span>, AvroSoeFormat&gt;(Vec::new())<span class="question-mark">?</span>;
+w.write(<span class="kw-2">&amp;</span>batch)<span class="question-mark">?</span>;
+w.finish()<span class="question-mark">?</span>;
+<span class="kw">let </span>frame = w.into_inner(); <span class="comment">// C3 01 + fp + Avro body
+
+// Decode with a `Decoder`
+</span><span class="kw">let </span><span class="kw-2">mut </span>dec = ReaderBuilder::new()
+  .with_writer_schema_store(store)
+  .with_batch_size(<span class="number">1024</span>)
+  .build_decoder()<span class="question-mark">?</span>;
+
+dec.decode(<span class="kw-2">&amp;</span>frame)<span class="question-mark">?</span>;
+<span class="kw">let </span>out = dec.flush()<span class="question-mark">?</span>.expect(<span class="string">"one batch"</span>);
+<span class="macro">assert_eq!</span>(out.num_rows(), <span class="number">1</span>);</code></pre></div>
+<p>See Avro 1.11.1 “Single object encoding” for details of the 2‑byte marker
+and little‑endian CRC‑64‑AVRO fingerprint:
+<a href="https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding">https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding</a></p>
+<h4 id="building-and-using-a-decoder-for-confluent-schema-registry-framing"><a class="doc-anchor" href="#building-and-using-a-decoder-for-confluent-schema-registry-framing">§</a>Building and using a <code>Decoder</code> for <strong>Confluent Schema Registry</strong> framing</h4>
+<p>The Confluent wire format is: 1‑byte magic <code>0x00</code>, then a <strong>4‑byte big‑endian</strong> schema ID,
+then the Avro body. The doctest below crafts two messages for the same schema ID and
+decodes them into a single <code>RecordBatch</code> with two rows.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>std::collections::HashMap;
+<span class="kw">use </span>arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
+<span class="kw">use </span>arrow_schema::{DataType, Field, Schema};
+<span class="kw">use </span>arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY, FingerprintStrategy};
+<span class="kw">use </span>arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
+<span class="kw">use </span>arrow_avro::reader::ReaderBuilder;
+
+<span class="comment">// Set up a store keyed by numeric IDs (Confluent).
+</span><span class="kw">let </span><span class="kw-2">mut </span>store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
+<span class="kw">let </span>schema_id = <span class="number">7u32</span>;
+<span class="kw">let </span>avro_schema = AvroSchema::new(<span class="string">r#"{"type":"record","name":"User","fields":[
+  {"name":"id","type":"long"}, {"name":"name","type":"string"}]}"#</span>.to_string());
+store.set(Fingerprint::Id(schema_id), avro_schema.clone())<span class="question-mark">?</span>;
+
+<span class="comment">// Write two Confluent-framed messages {id:1,name:"a"} and {id:2,name:"b"}.
+</span><span class="kw">fn </span>msg(id: i64, name: <span class="kw-2">&amp;</span>str, schema: <span class="kw-2">&amp;</span>AvroSchema, schema_id: u32) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, Box&lt;<span class="kw">dyn </span>std::error::Error&gt;&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>md = HashMap::new();
+    md.insert(SCHEMA_METADATA_KEY.to_string(), schema.json_string.clone());
+    <span class="kw">let </span>arrow = Schema::new_with_metadata(
+        <span class="macro">vec!</span>[Field::new(<span class="string">"id"</span>, DataType::Int64, <span class="bool-val">false</span>), Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>)],
+        md,
+    );
+    <span class="kw">let </span>batch = RecordBatch::try_new(
+        Arc::new(arrow.clone()),
+        <span class="macro">vec!</span>[
+          Arc::new(Int64Array::from(<span class="macro">vec!</span>[id])) <span class="kw">as </span>ArrayRef,
+          Arc::new(StringArray::from(<span class="macro">vec!</span>[name])) <span class="kw">as </span>ArrayRef,
+        ],
+    )<span class="question-mark">?</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>w = WriterBuilder::new(arrow)
+        .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id)) <span class="comment">// 0x00 + ID + body
+        </span>.build::&lt;<span class="kw">_</span>, AvroSoeFormat&gt;(Vec::new())<span class="question-mark">?</span>;
+    w.write(<span class="kw-2">&amp;</span>batch)<span class="question-mark">?</span>; w.finish()<span class="question-mark">?</span>;
+    <span class="prelude-val">Ok</span>(w.into_inner())
+}
+<span class="kw">let </span>m1 = msg(<span class="number">1</span>, <span class="string">"a"</span>, <span class="kw-2">&amp;</span>avro_schema, schema_id)<span class="question-mark">?</span>;
+<span class="kw">let </span>m2 = msg(<span class="number">2</span>, <span class="string">"b"</span>, <span class="kw-2">&amp;</span>avro_schema, schema_id)<span class="question-mark">?</span>;
+
+<span class="comment">// Decode both into a single batch.
+</span><span class="kw">let </span><span class="kw-2">mut </span>dec = ReaderBuilder::new()
+  .with_writer_schema_store(store)
+  .with_batch_size(<span class="number">1024</span>)
+  .build_decoder()<span class="question-mark">?</span>;
+dec.decode(<span class="kw-2">&amp;</span>m1)<span class="question-mark">?</span>;
+dec.decode(<span class="kw-2">&amp;</span>m2)<span class="question-mark">?</span>;
+<span class="kw">let </span>batch = dec.flush()<span class="question-mark">?</span>.expect(<span class="string">"batch"</span>);
+<span class="macro">assert_eq!</span>(batch.num_rows(), <span class="number">2</span>);</code></pre></div>
+<p>See Confluent’s “Wire format” notes: magic byte <code>0x00</code>, 4‑byte <strong>big‑endian</strong> schema ID,
+then the Avro‑encoded payload.
+<a href="https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format">https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format</a></p>
+<h3 id="schema-resolution-reader-vs-writer-schemas"><a class="doc-anchor" href="#schema-resolution-reader-vs-writer-schemas">§</a>Schema resolution (reader vs. writer schemas)</h3>
+<p>Avro supports resolving data written with one schema (“writer”) into another (“reader”)
+using rules like <strong>field aliases</strong>, <strong>default values</strong>, and <strong>numeric promotions</strong>.
+In practice this lets you evolve schemas over time while remaining compatible with old data.</p>
+<p><em>Spec background:</em> See Avro’s <strong>Schema Resolution</strong> (aliases, defaults) and the Confluent
+<strong>Wire format</strong> (magic <code>0x00</code> + big‑endian schema id + Avro body).
+<a href="https://avro.apache.org/docs/1.11.1/specification/#schema-resolution">https://avro.apache.org/docs/1.11.1/specification/#schema-resolution</a>
+<a href="https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format">https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format</a></p>
+<h4 id="ocf-example-rename-a-field-and-add-a-default-via-a-reader-schema"><a class="doc-anchor" href="#ocf-example-rename-a-field-and-add-a-default-via-a-reader-schema">§</a>OCF example: rename a field and add a default via a reader schema</h4>
+<p>Below we write an OCF with a <em>writer schema</em> having fields <code>id: long</code>, <code>name: string</code>.
+We then read it with a <em>reader schema</em> that:</p>
+<ul>
+<li><strong>renames</strong> <code>name</code> to <code>full_name</code> via <code>aliases</code>, and</li>
+<li><strong>adds</strong> <code>is_active: boolean</code> with a <strong>default</strong> value <code>true</code>.</li>
+</ul>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::io::Cursor;
+<span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
+<span class="kw">use </span>arrow_schema::{DataType, Field, Schema};
+<span class="kw">use </span>arrow_avro::writer::AvroWriter;
+<span class="kw">use </span>arrow_avro::reader::ReaderBuilder;
+<span class="kw">use </span>arrow_avro::schema::AvroSchema;
+
+<span class="comment">// Writer (past version): { id: long, name: string }
+</span><span class="kw">let </span>writer_arrow = Schema::new(<span class="macro">vec!</span>[
+    Field::new(<span class="string">"id"</span>, DataType::Int64, <span class="bool-val">false</span>),
+    Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+]);
+<span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(writer_arrow.clone()),
+    <span class="macro">vec!</span>[
+        Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>])) <span class="kw">as </span>ArrayRef,
+        Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"a"</span>, <span class="string">"b"</span>])) <span class="kw">as </span>ArrayRef,
+    ],
+)<span class="question-mark">?</span>;
+
+<span class="comment">// Write an OCF entirely in memory
+</span><span class="kw">let </span><span class="kw-2">mut </span>w = AvroWriter::new(Vec::&lt;u8&gt;::new(), writer_arrow)<span class="question-mark">?</span>;
+w.write(<span class="kw-2">&amp;</span>batch)<span class="question-mark">?</span>;
+w.finish()<span class="question-mark">?</span>;
+<span class="kw">let </span>bytes = w.into_inner();
+
+<span class="comment">// Reader (current version):
+//  - record name "topLevelRecord" matches the crate's default for OCF
+//  - rename `name` -&gt; `full_name` using aliases (optional)
+</span><span class="kw">let </span>reader_json = <span class="string">r#"
+{
+  "type": "record",
+  "name": "topLevelRecord",
+  "fields": [
+    { "name": "id", "type": "long" },
+    { "name": "full_name", "type": ["null","string"], "aliases": ["name"], "default": null },
+    { "name": "is_active", "type": "boolean", "default": true }
+  ]
+}"#</span>;
+
+<span class="kw">let </span><span class="kw-2">mut </span>reader = ReaderBuilder::new()
+  .with_reader_schema(AvroSchema::new(reader_json.to_string()))
+  .build(Cursor::new(bytes))<span class="question-mark">?</span>;
+
+<span class="kw">let </span>out = reader.next().unwrap()<span class="question-mark">?</span>;
+<span class="macro">assert_eq!</span>(out.num_rows(), <span class="number">2</span>);</code></pre></div><h4 id="confluent-singleobject-example-resolve-past-writer-versions-to-the-topics-current-reader-schema"><a class="doc-anchor" href="#confluent-singleobject-example-resolve-past-writer-versions-to-the-topics-current-reader-schema">§</a>Confluent single‑object example: resolve <em>past</em> writer versions to the topic’s <strong>current</strong> reader schema</h4>
+<p>In this scenario, the <strong>reader schema</strong> is the topic’s <em>current</em> schema, while the two
+<strong>writer schemas</strong> registered under Confluent IDs <strong>1</strong> and <strong>2</strong> represent <em>past versions</em>.
+The decoder uses the reader schema to resolve both versions.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>std::collections::HashMap;
+<span class="kw">use </span>arrow_avro::reader::ReaderBuilder;
+<span class="kw">use </span>arrow_avro::schema::{
+    AvroSchema, Fingerprint, FingerprintAlgorithm, SchemaStore,
+    SCHEMA_METADATA_KEY, FingerprintStrategy,
+};
+<span class="kw">use </span>arrow_array::{ArrayRef, Int32Array, Int64Array, StringArray, RecordBatch};
+<span class="kw">use </span>arrow_schema::{DataType, Field, Schema};
+
+<span class="kw">fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;(), Box&lt;<span class="kw">dyn </span>std::error::Error&gt;&gt; {
+    <span class="comment">// Reader: current topic schema (no reader-added fields)
+    //   {"type":"record","name":"User","fields":[
+    //     {"name":"id","type":"long"},
+    //     {"name":"name","type":"string"}]}
+    </span><span class="kw">let </span>reader_schema = AvroSchema::new(
+        <span class="string">r#"{"type":"record","name":"User",
+            "fields":[{"name":"id","type":"long"},{"name":"name","type":"string"}]}"#
+            </span>.to_string(),
+    );
+
+    <span class="comment">// Register two *writer* schemas under Confluent IDs 0 and 1
+    </span><span class="kw">let </span>writer_v0 = AvroSchema::new(
+        <span class="string">r#"{"type":"record","name":"User",
+            "fields":[{"name":"id","type":"int"},{"name":"name","type":"string"}]}"#
+            </span>.to_string(),
+    );
+    <span class="kw">let </span>writer_v1 = AvroSchema::new(
+        <span class="string">r#"{"type":"record","name":"User",
+            "fields":[{"name":"id","type":"long"},{"name":"name","type":"string"},
+                      {"name":"email","type":["null","string"],"default":null}]}"#
+            </span>.to_string(),
+    );
+
+    <span class="kw">let </span>id_v0: u32 = <span class="number">0</span>;
+    <span class="kw">let </span>id_v1: u32 = <span class="number">1</span>;
+
+    <span class="kw">let </span><span class="kw-2">mut </span>store = SchemaStore::new_with_type(FingerprintAlgorithm::Id); <span class="comment">// integer IDs
+    </span>store.set(Fingerprint::Id(id_v0), writer_v0.clone())<span class="question-mark">?</span>;
+    store.set(Fingerprint::Id(id_v1), writer_v1.clone())<span class="question-mark">?</span>;
+
+    <span class="comment">// Write two Confluent-framed messages using each writer version
+    // frame0: writer v0 body {id:1001_i32, name:"v0-alice"}
+    </span><span class="kw">let </span><span class="kw-2">mut </span>md0 = HashMap::new();
+    md0.insert(SCHEMA_METADATA_KEY.to_string(), writer_v0.json_string.clone());
+    <span class="kw">let </span>arrow0 = Schema::new_with_metadata(
+        <span class="macro">vec!</span>[Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>),
+             Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>)], md0);
+    <span class="kw">let </span>batch0 = RecordBatch::try_new(
+        Arc::new(arrow0.clone()),
+        <span class="macro">vec!</span>[Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1001</span>])) <span class="kw">as </span>ArrayRef,
+             Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"v0-alice"</span>])) <span class="kw">as </span>ArrayRef])<span class="question-mark">?</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>w0 = arrow_avro::writer::WriterBuilder::new(arrow0)
+        .with_fingerprint_strategy(FingerprintStrategy::Id(id_v0))
+        .build::&lt;<span class="kw">_</span>, arrow_avro::writer::format::AvroSoeFormat&gt;(Vec::new())<span class="question-mark">?</span>;
+    w0.write(<span class="kw-2">&amp;</span>batch0)<span class="question-mark">?</span>; w0.finish()<span class="question-mark">?</span>;
+    <span class="kw">let </span>frame0 = w0.into_inner(); <span class="comment">// 0x00 + id_v0 + body
+
+    // frame1: writer v1 body {id:2002_i64, name:"v1-bob", email: Some("bob@example.com")}
+    </span><span class="kw">let </span><span class="kw-2">mut </span>md1 = HashMap::new();
+   md1.insert(SCHEMA_METADATA_KEY.to_string(), writer_v1.json_string.clone());
+    <span class="kw">let </span>arrow1 = Schema::new_with_metadata(
+        <span class="macro">vec!</span>[Field::new(<span class="string">"id"</span>, DataType::Int64, <span class="bool-val">false</span>),
+             Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+             Field::new(<span class="string">"email"</span>, DataType::Utf8, <span class="bool-val">true</span>)], md1);
+    <span class="kw">let </span>batch1 = RecordBatch::try_new(
+        Arc::new(arrow1.clone()),
+        <span class="macro">vec!</span>[Arc::new(Int64Array::from(<span class="macro">vec!</span>[<span class="number">2002</span>])) <span class="kw">as </span>ArrayRef,
+             Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"v1-bob"</span>])) <span class="kw">as </span>ArrayRef,
+             Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="string">"bob@example.com"</span>)])) <span class="kw">as </span>ArrayRef])<span class="question-mark">?</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>w1 = arrow_avro::writer::WriterBuilder::new(arrow1)
+        .with_fingerprint_strategy(FingerprintStrategy::Id(id_v1))
+        .build::&lt;<span class="kw">_</span>, arrow_avro::writer::format::AvroSoeFormat&gt;(Vec::new())<span class="question-mark">?</span>;
+    w1.write(<span class="kw-2">&amp;</span>batch1)<span class="question-mark">?</span>; w1.finish()<span class="question-mark">?</span>;
+    <span class="kw">let </span>frame1 = w1.into_inner(); <span class="comment">// 0x00 + id_v1 + body
+
+    // Build a streaming Decoder that understands Confluent framing
+    </span><span class="kw">let </span><span class="kw-2">mut </span>decoder = ReaderBuilder::new()
+        .with_reader_schema(reader_schema)
+        .with_writer_schema_store(store)
+        .with_batch_size(<span class="number">8</span>) <span class="comment">// small demo batches
+        </span>.build_decoder()<span class="question-mark">?</span>;
+
+    <span class="comment">// Decode each whole frame, then drain completed rows with flush()
+    </span><span class="kw">let </span><span class="kw-2">mut </span>total_rows = <span class="number">0usize</span>;
+
+    <span class="kw">let </span>consumed0 = decoder.decode(<span class="kw-2">&amp;</span>frame0)<span class="question-mark">?</span>;
+    <span class="macro">assert_eq!</span>(consumed0, frame0.len(), <span class="string">"decoder must consume the whole frame"</span>);
+    <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = decoder.flush()<span class="question-mark">? </span>{ total_rows += batch.num_rows(); }
+
+    <span class="kw">let </span>consumed1 = decoder.decode(<span class="kw-2">&amp;</span>frame1)<span class="question-mark">?</span>;
+    <span class="macro">assert_eq!</span>(consumed1, frame1.len(), <span class="string">"decoder must consume the whole frame"</span>);
+    <span class="kw">while let </span><span class="prelude-val">Some</span>(batch) = decoder.flush()<span class="question-mark">? </span>{ total_rows += batch.num_rows(); }
+
+    <span class="comment">// We sent 2 records so we should get 2 rows (possibly one per flush)
+    </span><span class="macro">assert_eq!</span>(total_rows, <span class="number">2</span>);
+    <span class="prelude-val">Ok</span>(())
+}</code></pre></div><h3 id="schema-evolution-and-batch-boundaries"><a class="doc-anchor" href="#schema-evolution-and-batch-boundaries">§</a>Schema evolution and batch boundaries</h3>
+<p><code>Decoder</code> supports mid‑stream schema changes when the input framing carries a schema
+fingerprint (single‑object or Confluent). When a new fingerprint is observed:</p>
+<ul>
+<li>If the current <code>RecordBatch</code> is <strong>empty</strong>, the decoder switches to the new schema
+immediately.</li>
+<li>If not, the decoder finishes the current batch first and only then switches.</li>
+</ul>
+<p>Consequently, the schema of batches produced by <code>Decoder::flush</code> may change over time,
+and <code>Decoder</code> intentionally does <strong>not</strong> implement <code>RecordBatchReader</code>. In contrast,
+<code>Reader</code> (OCF) has a single writer schema for the entire file and therefore implements
+<code>RecordBatchReader</code>.</p>
+<h3 id="performance--memory"><a class="doc-anchor" href="#performance--memory">§</a>Performance &amp; memory</h3>
+<ul>
+<li><code>batch_size</code> controls the maximum number of rows per <code>RecordBatch</code>. Larger batches
+amortize per‑batch overhead; smaller batches reduce peak memory usage and latency.</li>
+<li>When <code>utf8_view</code> is enabled, string columns use Arrow’s <code>StringViewArray</code>, which can
+reduce allocations for short strings.</li>
+<li>For OCF, blocks may be compressed; <code>Reader</code> will decompress using the codec specified
+in the file header and feed uncompressed bytes to the row <code>Decoder</code>.</li>
+</ul>
+<h3 id="error-handling"><a class="doc-anchor" href="#error-handling">§</a>Error handling</h3>
+<ul>
+<li>Incomplete inputs return parse errors with “Unexpected EOF”; callers typically provide
+more bytes and try again.</li>
+<li>If a fingerprint is unknown to the provided <code>SchemaStore</code>, decoding fails with a
+descriptive error. Populate the store up front to avoid this.</li>
+</ul>
+<hr />
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="async_reader/index.html" title="mod arrow_avro::reader::async_reader">async_<wbr>reader</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="mod" href="block/index.html" title="mod arrow_avro::reader::block">block</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Decoder for <a href="block/struct.Block.html" title="struct arrow_avro::reader::block::Block"><code>Block</code></a></dd><dt><a class="mod" href="cursor/index.html" title="mod arrow_avro::reader::cursor">cursor</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="mod" href="header/index.html" title="mod arrow_avro::reader::header">header</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Decoder for <a href="header/struct.Header.html" title="struct arrow_avro::reader::header::Header"><code>Header</code></a></dd><dt><a class="mod" href="record/index.html" title="mod arrow_avro::reader::record">record</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Avro Decoder for Arrow types.</dd><dt><a class="mod" href="vlq/index.html" title="mod arrow_avro::reader::vlq">vlq</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.AsyncAvroFileReader.html" title="struct arrow_avro::reader::AsyncAvroFileReader">Async<wbr>Avro<wbr>File<wbr>Reader</a></dt><dd>An asynchronous Avro file reader that implements <code>Stream&lt;Item = Result&lt;RecordBatch, ArrowError&gt;&gt;</code>.
+This uses an <a href="trait.AsyncFileReader.html" title="trait arrow_avro::reader::AsyncFileReader"><code>AsyncFileReader</code></a> to fetch data ranges as needed, starting with fetching the header,
+then reading all the blocks in the provided range where:</dd><dt><a class="struct" href="struct.AvroObjectReader.html" title="struct arrow_avro::reader::AvroObjectReader">Avro<wbr>Object<wbr>Reader</a></dt><dd>An implementation of an AsyncFileReader using the [<code>ObjectStore</code>] API.</dd><dt><a class="struct" href="struct.Decoder.html" title="struct arrow_avro::reader::Decoder">Decoder</a></dt><dd>A low‑level, push‑based decoder from Avro bytes to Arrow <code>RecordBatch</code>.</dd><dt><a class="struct" href="struct.Reader.html" title="struct arrow_avro::reader::Reader">Reader</a></dt><dd>A high‑level Avro <strong>Object Container File</strong> reader.</dd><dt><a class="struct" href="struct.ReaderBuilder.html" title="struct arrow_avro::reader::ReaderBuilder">Reader<wbr>Builder</a></dt><dd>A builder that configures and constructs Avro readers and decoders.</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.AsyncFileReader.html" title="trait arrow_avro::reader::AsyncFileReader">Async<wbr>File<wbr>Reader</a></dt><dd>The asynchronous interface used by <a href="struct.AsyncAvroFileReader.html" title="struct arrow_avro::reader::AsyncAvroFileReader"><code>super::AsyncAvroFileReader</code></a> to read avro files</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.is_incomplete_data.html" title="fn arrow_avro::reader::is_incomplete_data">is_<wbr>incomplete_<wbr>data</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl></section></div></main></body></html>

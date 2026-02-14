@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Statistics"],"fn":["from_thrift_page_stats","page_stats_to_thrift"],"macro":["statistics_enum_func","statistics_new_func"],"mod":["private"],"struct":["ValueStatistics"],"type":["TypedStatistics"]};

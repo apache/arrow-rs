@@ -1,0 +1,87 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Allows creating a new `ArrayFormatter` for a given `Array` and an optional `Field`."><title>ArrayFormatterFactory in arrow::util::display - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="arrow" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0-nightly (a423f68a0 2026-02-13)" data-channel="nightly" data-search-js="search-fb33671b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-f9617a14.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-12f88f4f.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="icon" href="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"></head><body class="rustdoc trait"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">ArrayFormatterFactory</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../../arrow/index.html"><img src="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg" alt="logo"></a><h2><a href="../../../arrow/index.html">arrow</a><span class="version">57.3.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Array<wbr>Formatter<wbr>Factory</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example" title="Example">Example</a></li></ul><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.create_array_formatter" title="create_array_formatter">create_array_formatter</a></li></ul><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In arrow::<wbr>util::<wbr>display</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">arrow</a>::<wbr><a href="../index.html">util</a>::<wbr><a href="index.html">display</a></div><h1>Trait <span class="trait">Array<wbr>Formatter<wbr>Factory</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"></span></div><pre class="rust item-decl"><code>pub trait ArrayFormatterFactory:
+    <a class="trait" href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a>
+    + <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a>
+    + <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> {
+    // Required method
+    fn <a href="#tymethod.create_array_formatter" class="fn">create_array_formatter</a>&lt;'formatter&gt;(
+        &amp;self,
+        array: &amp;'formatter dyn <a class="trait" href="../../array/trait.Array.html" title="trait arrow::array::Array">Array</a>,
+        options: &amp;<a class="struct" href="struct.FormatOptions.html" title="struct arrow::util::display::FormatOptions">FormatOptions</a>&lt;'formatter&gt;,
+        field: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;'formatter <a class="struct" href="../../datatypes/struct.Field.html" title="struct arrow::datatypes::Field">Field</a>&gt;,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="struct.ArrayFormatter.html" title="struct arrow::util::display::ArrayFormatter">ArrayFormatter</a>&lt;'formatter&gt;&gt;, <a class="enum" href="../../error/enum.ArrowError.html" title="enum arrow::error::ArrowError">ArrowError</a>&gt;;
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Allows creating a new <a href="struct.ArrayFormatter.html" title="struct arrow::util::display::ArrayFormatter"><code>ArrayFormatter</code></a> for a given <a href="../../array/trait.Array.html" title="trait arrow::array::Array"><code>Array</code></a> and an optional <a href="../../datatypes/struct.Field.html" title="struct arrow::datatypes::Field"><code>Field</code></a>.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<p>The example below shows how to create a custom formatter for a custom type <code>my_money</code>. Note that
+this example requires the <code>prettyprint</code> feature.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::fmt::Write;
+<span class="kw">use </span>arrow_array::{cast::AsArray, Array, Int32Array};
+<span class="kw">use </span>arrow_cast::display::{ArrayFormatter, ArrayFormatterFactory, DisplayIndex, FormatOptions, FormatResult};
+<span class="kw">use </span>arrow_cast::pretty::pretty_format_batches_with_options;
+<span class="kw">use </span>arrow_schema::{ArrowError, Field};
+
+<span class="doccomment">/// A custom formatter factory that can create a formatter for the special type `my_money`.
+///
+/// This struct could have access to some kind of extension type registry that can lookup the
+/// correct formatter for an extension type on-demand.
+</span><span class="attr">#[derive(Debug)]
+</span><span class="kw">struct </span>MyFormatters {}
+
+<span class="kw">impl </span>ArrayFormatterFactory <span class="kw">for </span>MyFormatters {
+    <span class="kw">fn </span>create_array_formatter&lt;<span class="lifetime">'formatter</span>&gt;(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        array: <span class="kw-2">&amp;</span><span class="lifetime">'formatter </span><span class="kw">dyn </span>Array,
+        options: <span class="kw-2">&amp;</span>FormatOptions&lt;<span class="lifetime">'formatter</span>&gt;,
+        field: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'formatter </span>Field&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;ArrayFormatter&lt;<span class="lifetime">'formatter</span>&gt;&gt;, ArrowError&gt; {
+        <span class="comment">// check if this is the money type
+        </span><span class="kw">if </span>field
+            .map(|f| f.extension_type_name() == <span class="prelude-val">Some</span>(<span class="string">"my_money"</span>))
+            .unwrap_or(<span class="bool-val">false</span>)
+        {
+            <span class="comment">// We assume that my_money always is an Int32.
+            </span><span class="kw">let </span>array = array.as_primitive();
+            <span class="kw">let </span>display_index = Box::new(MyMoneyFormatter { array, options: options.clone() });
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(ArrayFormatter::new(display_index, options.safe())));
+        }
+
+        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) <span class="comment">// None indicates that the default formatter should be used.
+    </span>}
+}
+
+<span class="doccomment">/// A formatter for the type `my_money` that wraps a specific array and has access to the
+/// formatting options.
+</span><span class="kw">struct </span>MyMoneyFormatter&lt;<span class="lifetime">'a</span>&gt; {
+    array: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Int32Array,
+    options: FormatOptions&lt;<span class="lifetime">'a</span>&gt;,
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; DisplayIndex <span class="kw">for </span>MyMoneyFormatter&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="kw">fn </span>write(<span class="kw-2">&amp;</span><span class="self">self</span>, idx: usize, f: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Write) -&gt; FormatResult {
+        <span class="kw">match </span><span class="self">self</span>.array.is_valid(idx) {
+            <span class="bool-val">true </span>=&gt; <span class="macro">write!</span>(f, <span class="string">"{} €"</span>, <span class="self">self</span>.array.value(idx))<span class="question-mark">?</span>,
+            <span class="bool-val">false </span>=&gt; <span class="macro">write!</span>(f, <span class="string">"{}"</span>, <span class="self">self</span>.options.null())<span class="question-mark">?</span>,
+        }
+
+        <span class="prelude-val">Ok</span>(())
+    }
+}
+
+<span class="comment">// Usually, here you would provide your record batches.
+</span><span class="kw">let </span>my_batches = <span class="macro">vec!</span>[];
+
+<span class="comment">// Call the pretty printer with the custom formatter factory.
+</span>pretty_format_batches_with_options(
+       <span class="kw-2">&amp;</span>my_batches,
+       <span class="kw-2">&amp;</span>FormatOptions::new().with_formatter_factory(<span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>MyFormatters {}))
+);</code></pre></div></div></details><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="tymethod.create_array_formatter" class="method"><h4 class="code-header">fn <a href="#tymethod.create_array_formatter" class="fn">create_array_formatter</a>&lt;'formatter&gt;(
+    &amp;self,
+    array: &amp;'formatter dyn <a class="trait" href="../../array/trait.Array.html" title="trait arrow::array::Array">Array</a>,
+    options: &amp;<a class="struct" href="struct.FormatOptions.html" title="struct arrow::util::display::FormatOptions">FormatOptions</a>&lt;'formatter&gt;,
+    field: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;'formatter <a class="struct" href="../../datatypes/struct.Field.html" title="struct arrow::datatypes::Field">Field</a>&gt;,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="struct.ArrayFormatter.html" title="struct arrow::util::display::ArrayFormatter">ArrayFormatter</a>&lt;'formatter&gt;&gt;, <a class="enum" href="../../error/enum.ArrowError.html" title="enum arrow::error::ArrowError">ArrowError</a>&gt;</h4></section></summary><div class="docblock"><p>Creates a new <a href="struct.ArrayFormatter.html" title="struct arrow::util::display::ArrayFormatter"><code>ArrayFormatter</code></a> for the given <a href="../../array/trait.Array.html" title="trait arrow::array::Array"><code>Array</code></a> and an optional <a href="../../datatypes/struct.Field.html" title="struct arrow::datatypes::Field"><code>Field</code></a>. If the
+default implementation should be used, return <a href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html#variant.None" title="variant core::option::Option::None"><code>None</code></a>.</p>
+<p>The field shall be used to look up metadata about the <code>array</code> while <code>options</code> provide
+information on formatting, for example, dates and times which should be considered by an
+implementor.</p>
+</div></details></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"></div><script src="../../../trait.impl/arrow_cast/display/trait.ArrayFormatterFactory.js" async></script></section></div></main></body></html>

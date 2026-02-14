@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["binary_view_to_dictionary","cast_to_dictionary","dictionary_cast","dictionary_to_dictionary_cast","pack_array_to_dictionary_via_primitive","pack_byte_to_dictionary","pack_byte_to_fixed_size_dictionary","pack_decimal_to_dictionary","pack_numeric_to_dictionary","string_view_to_dictionary","unpack_dictionary","view_from_dict_values"]};

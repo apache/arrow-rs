@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["is_incomplete_data"],"mod":["async_reader","block","cursor","header","record","vlq"],"struct":["AsyncAvroFileReader","AvroObjectReader","Decoder","Reader","ReaderBuilder"],"trait":["AsyncFileReader"]};

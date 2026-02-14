@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["NUM_HEADER_BYTES"],"struct":["VariantObject","VariantObjectHeader"]};

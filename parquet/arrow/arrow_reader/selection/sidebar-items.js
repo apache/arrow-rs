@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RowSelectionCursor","RowSelectionPolicy","RowSelectionStrategy"],"fn":["boolean_mask_from_selectors","intersect_row_selections","union_row_selections"],"struct":["MaskChunk","MaskCursor","RowSelection","RowSelector","SelectorsCursor"]};

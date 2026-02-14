@@ -1,0 +1,127 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="CSV Writing: `Writer` and `WriterBuilder`"><title>arrow_csv::writer - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="arrow_csv" data-themes="" data-resource-suffix="" data-rustdoc-version="1.95.0-nightly (a423f68a0 2026-02-13)" data-channel="nightly" data-search-js="search-fb33671b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-f9617a14.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-12f88f4f.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="icon" href="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module writer</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../arrow_csv/index.html"><img src="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg" alt="logo"></a><h2><a href="../../arrow_csv/index.html">arrow_<wbr>csv</a><span class="version">57.3.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module writer</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example" title="Example">Example</a></li><li><a href="#whitespace-handling" title="Whitespace Handling">Whitespace Handling</a><ul><li><a href="#example-use-writerbuilder-to-control-whitespace-handling" title="Example: Use `WriterBuilder` to control whitespace handling">Example: Use <code>WriterBuilder</code> to control whitespace handling</a></li></ul></li><li><a href="#quoting-styles" title="Quoting Styles">Quoting Styles</a><ul><li><a href="#example-1" title="Example">Example</a></li></ul></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#constants" title="Constants">Constants</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate arrow_<wbr>csv</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">arrow_csv</a></div><h1>Module <span>writer</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/arrow_csv/writer.rs.html#18-1361">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>CSV Writing: <a href="struct.Writer.html" title="struct arrow_csv::writer::Writer"><code>Writer</code></a> and <a href="struct.WriterBuilder.html" title="struct arrow_csv::writer::WriterBuilder"><code>WriterBuilder</code></a></p>
+<p>This CSV writer allows Arrow data (in record batches) to be written as CSV files.
+The writer does not support writing <code>ListArray</code> and <code>StructArray</code>.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>
+<span class="kw">let </span>schema = Schema::new(<span class="macro">vec!</span>[
+    Field::new(<span class="string">"c1"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+    Field::new(<span class="string">"c2"</span>, DataType::Float64, <span class="bool-val">true</span>),
+    Field::new(<span class="string">"c3"</span>, DataType::UInt32, <span class="bool-val">false</span>),
+    Field::new(<span class="string">"c4"</span>, DataType::Boolean, <span class="bool-val">true</span>),
+]);
+<span class="kw">let </span>c1 = StringArray::from(<span class="macro">vec!</span>[
+    <span class="string">"Lorem ipsum dolor sit amet"</span>,
+    <span class="string">"consectetur adipiscing elit"</span>,
+    <span class="string">"sed do eiusmod tempor"</span>,
+]);
+<span class="kw">let </span>c2 = PrimitiveArray::&lt;Float64Type&gt;::from(<span class="macro">vec!</span>[
+    <span class="prelude-val">Some</span>(<span class="number">123.564532</span>),
+    <span class="prelude-val">None</span>,
+    <span class="prelude-val">Some</span>(-<span class="number">556132.25</span>),
+]);
+<span class="kw">let </span>c3 = PrimitiveArray::&lt;UInt32Type&gt;::from(<span class="macro">vec!</span>[<span class="number">3</span>, <span class="number">2</span>, <span class="number">1</span>]);
+<span class="kw">let </span>c4 = BooleanArray::from(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="bool-val">true</span>), <span class="prelude-val">Some</span>(<span class="bool-val">false</span>), <span class="prelude-val">None</span>]);
+
+<span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(schema),
+    <span class="macro">vec!</span>[Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
+)
+.unwrap();
+
+<span class="kw">let </span><span class="kw-2">mut </span>output = Vec::with_capacity(<span class="number">1024</span>);
+
+<span class="kw">let </span><span class="kw-2">mut </span>writer = Writer::new(<span class="kw-2">&amp;mut </span>output);
+<span class="kw">let </span>batches = <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>batch, <span class="kw-2">&amp;</span>batch];
+<span class="kw">for </span>batch <span class="kw">in </span>batches {
+    writer.write(batch).unwrap();
+}</code></pre></div><h2 id="whitespace-handling"><a class="doc-anchor" href="#whitespace-handling">§</a>Whitespace Handling</h2>
+<p>The writer supports trimming leading and trailing whitespace from string values,
+compatible with Apache Spark’s CSV options <code>ignoreLeadingWhiteSpace</code> and
+<code>ignoreTrailingWhiteSpace</code>. This is useful when working with data that may have
+unwanted padding.</p>
+<p>Whitespace trimming is applied to all string data types:</p>
+<ul>
+<li><code>DataType::Utf8</code></li>
+<li><code>DataType::LargeUtf8</code></li>
+<li><code>DataType::Utf8View</code></li>
+</ul>
+<h3 id="example-use-writerbuilder-to-control-whitespace-handling"><a class="doc-anchor" href="#example-use-writerbuilder-to-control-whitespace-handling">§</a>Example: Use <a href="struct.WriterBuilder.html" title="struct arrow_csv::writer::WriterBuilder"><code>WriterBuilder</code></a> to control whitespace handling</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>schema = Schema::new(<span class="macro">vec!</span>[
+    Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+    Field::new(<span class="string">"comment"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+]);
+
+<span class="kw">let </span>name = StringArray::from(<span class="macro">vec!</span>[
+    <span class="string">"  Alice  "</span>,   <span class="comment">// Leading and trailing spaces
+    </span><span class="string">"Bob"</span>,         <span class="comment">// No spaces
+    </span><span class="string">"  Charlie"</span>,   <span class="comment">// Leading spaces only
+</span>]);
+<span class="kw">let </span>comment = StringArray::from(<span class="macro">vec!</span>[
+    <span class="string">"  Great job!  "</span>,
+    <span class="string">"Well done"</span>,
+    <span class="string">"Excellent  "</span>,
+]);
+
+<span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(schema),
+    <span class="macro">vec!</span>[Arc::new(name), Arc::new(comment)],
+)
+.unwrap();
+
+<span class="comment">// Trim both leading and trailing whitespace
+</span><span class="kw">let </span><span class="kw-2">mut </span>output = Vec::new();
+WriterBuilder::new()
+    .with_ignore_leading_whitespace(<span class="bool-val">true</span>)
+    .with_ignore_trailing_whitespace(<span class="bool-val">true</span>)
+    .build(<span class="kw-2">&amp;mut </span>output)
+    .write(<span class="kw-2">&amp;</span>batch)
+    .unwrap();
+<span class="macro">assert_eq!</span>(
+    String::from_utf8(output).unwrap(),
+    <span class="string">"\
+name,comment\n\
+Alice,Great job!\n\
+Bob,Well done\n\
+Charlie,Excellent\n"
+</span>);</code></pre></div><h2 id="quoting-styles"><a class="doc-anchor" href="#quoting-styles">§</a>Quoting Styles</h2>
+<p>The writer supports different quoting styles for fields, compatible with Apache Spark’s
+CSV options like <code>quoteAll</code>. You can control when fields are quoted using the
+<a href="../enum.QuoteStyle.html" title="enum arrow_csv::QuoteStyle"><code>QuoteStyle</code></a> enum.</p>
+<h3 id="example-1"><a class="doc-anchor" href="#example-1">§</a>Example</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>
+<span class="kw">let </span>schema = Schema::new(<span class="macro">vec!</span>[
+    Field::new(<span class="string">"product"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+    Field::new(<span class="string">"price"</span>, DataType::Float64, <span class="bool-val">false</span>),
+]);
+
+<span class="kw">let </span>product = StringArray::from(<span class="macro">vec!</span>[<span class="string">"apple"</span>, <span class="string">"banana,organic"</span>, <span class="string">"cherry"</span>]);
+<span class="kw">let </span>price = Float64Array::from(<span class="macro">vec!</span>[<span class="number">1.50</span>, <span class="number">2.25</span>, <span class="number">3.00</span>]);
+
+<span class="kw">let </span>batch = RecordBatch::try_new(
+    Arc::new(schema),
+    <span class="macro">vec!</span>[Arc::new(product), Arc::new(price)],
+)
+.unwrap();
+
+<span class="comment">// Default behavior (QuoteStyle::Necessary)
+</span><span class="kw">let </span><span class="kw-2">mut </span>output = Vec::new();
+WriterBuilder::new()
+    .build(<span class="kw-2">&amp;mut </span>output)
+    .write(<span class="kw-2">&amp;</span>batch)
+    .unwrap();
+<span class="macro">assert_eq!</span>(
+    String::from_utf8(output).unwrap(),
+    <span class="string">"product,price\napple,1.5\n\"banana,organic\",2.25\ncherry,3.0\n"
+</span>);
+
+<span class="comment">// Quote all fields (Spark's quoteAll=true)
+</span><span class="kw">let </span><span class="kw-2">mut </span>output = Vec::new();
+WriterBuilder::new()
+    .with_quote_style(QuoteStyle::Always)
+    .build(<span class="kw-2">&amp;mut </span>output)
+    .write(<span class="kw-2">&amp;</span>batch)
+    .unwrap();
+<span class="macro">assert_eq!</span>(
+    String::from_utf8(output).unwrap(),
+    <span class="string">"\"product\",\"price\"\n\"apple\",\"1.5\"\n\"banana,organic\",\"2.25\"\n\"cherry\",\"3.0\"\n"
+</span>);</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Writer.html" title="struct arrow_csv::writer::Writer">Writer</a></dt><dd>A CSV writer</dd><dt><a class="struct" href="struct.WriterBuilder.html" title="struct arrow_csv::writer::WriterBuilder">Writer<wbr>Builder</a></dt><dd>A CSV writer builder</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.QuoteStyle.html" title="enum arrow_csv::writer::QuoteStyle">Quote<wbr>Style</a></dt><dd>The quoting style to use when writing CSV files.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.DEFAULT_NULL_VALUE.html" title="constant arrow_csv::writer::DEFAULT_NULL_VALUE">DEFAULT_<wbr>NULL_<wbr>VALUE</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl></section></div></main></body></html>

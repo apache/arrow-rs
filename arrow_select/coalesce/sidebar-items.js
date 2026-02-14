@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["create_in_progress_array"],"mod":["byte_view","generic","primitive"],"struct":["BatchCoalescer"],"trait":["InProgressArray"]};

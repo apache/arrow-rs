@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Type"],"fn":["build_tree","check_logical_type","count_leaves","count_nodes","num_leaves","num_nodes","parquet_schema_from_array","schema_from_array_helper"],"struct":["BasicTypeInfo","ColumnDescriptor","ColumnPath","GroupTypeBuilder","PrimitiveTypeBuilder","SchemaDescriptor"],"type":["ColumnDescPtr","SchemaDescPtr","TypePtr"]};

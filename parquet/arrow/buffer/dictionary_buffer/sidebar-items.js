@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DictionaryBuffer"],"fn":["pack_fixed_values_impl","pack_values","pack_values_impl"],"macro":["dict_helper"]};

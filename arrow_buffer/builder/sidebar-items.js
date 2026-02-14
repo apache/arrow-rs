@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["boolean","null","offset"],"struct":["BooleanBufferBuilder","BufferBuilder","NullBufferBuilder","OffsetBufferBuilder"]};
