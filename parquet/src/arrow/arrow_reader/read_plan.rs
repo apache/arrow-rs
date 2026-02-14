@@ -18,6 +18,7 @@
 //! [`ReadPlan`] and [`ReadPlanBuilder`] for determining which rows to read
 //! from a Parquet file
 
+use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::ArrayReader;
 use crate::arrow::arrow_reader::selection::RowSelectionPolicy;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
@@ -25,9 +26,11 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]
@@ -37,6 +40,8 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
+    /// Precomputed page boundary row indices for mask chunking
+    page_boundaries: Option<Arc<[usize]>>,
 }
 
 impl ReadPlanBuilder {
@@ -46,6 +51,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
+            page_boundaries: None,
         }
     }
 
@@ -175,6 +181,33 @@ impl ReadPlanBuilder {
         Ok(self)
     }
 
+    /// Add offset index metadata for each column in a row group to this `ReadPlanBuilder`
+    ///
+    /// The computed page boundaries only include columns in the provided `projection`.
+    pub fn with_offset_index_metadata(
+        mut self,
+        metadata: Option<Arc<[OffsetIndexMetaData]>>,
+        projection: &ProjectionMask,
+    ) -> Self {
+        self.page_boundaries = metadata.as_ref().map(|columns| {
+            let mut boundaries: Vec<usize> = columns
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| projection.leaf_included(*idx))
+                .flat_map(|(_, column)| {
+                    column
+                        .page_locations()
+                        .iter()
+                        .map(|loc| loc.first_row_index as usize)
+                })
+                .collect();
+            boundaries.sort_unstable();
+            boundaries.dedup();
+            boundaries.into()
+        });
+        self
+    }
+
     /// Create a final `ReadPlan` the read plan for the scan
     pub fn build(mut self) -> ReadPlan {
         // If selection is empty, truncate
@@ -189,6 +222,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
+            page_boundaries: _,
         } = self;
 
         let selection = selection.map(|s| s.trim());
@@ -209,6 +243,7 @@ impl ReadPlanBuilder {
         ReadPlan {
             batch_size,
             row_selection_cursor,
+            page_boundaries: self.page_boundaries,
         }
     }
 }
@@ -307,6 +342,8 @@ pub struct ReadPlan {
     batch_size: usize,
     /// Row ranges to be selected from the data source
     row_selection_cursor: RowSelectionCursor,
+    /// Precomputed page boundary row indices for mask chunking
+    page_boundaries: Option<Arc<[usize]>>,
 }
 
 impl ReadPlan {
@@ -329,6 +366,11 @@ impl ReadPlan {
     #[inline(always)]
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    /// Return the page boundary row indices used for mask chunking
+    pub fn page_boundaries(&self) -> Option<Arc<[usize]>> {
+        self.page_boundaries.clone()
     }
 }
 

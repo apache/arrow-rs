@@ -271,8 +271,8 @@ impl RowSelection {
         })
     }
 
-    /// Returns true if selectors should be forced, preventing mask materialisation
-    pub(crate) fn should_force_selectors(
+    /// Returns true if bitmasks should be page aware
+    pub(crate) fn requires_page_aware_mask(
         &self,
         projection: &ProjectionMask,
         offset_index: Option<&[OffsetIndexMetaData]>,
@@ -778,8 +778,13 @@ impl MaskCursor {
         self.position >= self.mask.len()
     }
 
-    /// Advance through the mask representation, producing the next chunk summary
-    pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
+    /// Advance through the mask representation, producing the next chunk summary.
+    /// Optionally clips chunk boundaries to the next page boundary.
+    pub fn next_mask_chunk(
+        &mut self,
+        batch_size: usize,
+        page_boundaries: Option<&[usize]>,
+    ) -> Option<MaskChunk> {
         let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
             let mask = &self.mask;
 
@@ -791,6 +796,7 @@ impl MaskCursor {
             let mut cursor = start_position;
             let mut initial_skip = 0;
 
+            // Skip unselected rows
             while cursor < mask.len() && !mask.value(cursor) {
                 initial_skip += 1;
                 cursor += 1;
@@ -800,10 +806,19 @@ impl MaskCursor {
             let mut chunk_rows = 0;
             let mut selected_rows = 0;
 
-            // Advance until enough rows have been selected to satisfy the batch size,
-            // or until the mask is exhausted. This mirrors the behaviour of the legacy
-            // `RowSelector` queue-based iteration.
-            while cursor < mask.len() && selected_rows < batch_size {
+            let max_chunk_rows = page_boundaries
+                .and_then(|boundaries| {
+                    let next_idx = boundaries.partition_point(|&start| start <= mask_start);
+                    boundaries
+                        .get(next_idx)
+                        .and_then(|&start| (start > mask_start).then_some(start - mask_start))
+                })
+                .unwrap_or(usize::MAX);
+
+            // Advance until enough rows have been selected to satisfy batch_size,
+            // or until the mask is exhausted or until a page boundary.
+            while cursor < mask.len() && selected_rows < batch_size && chunk_rows < max_chunk_rows {
+                // Increment counters
                 chunk_rows += 1;
                 if mask.value(cursor) {
                     selected_rows += 1;
@@ -1088,6 +1103,53 @@ mod tests {
             selection.selectors,
             vec![RowSelector::skip(71), RowSelector::select(3),]
         );
+    }
+
+    #[test]
+    fn test_mask_cursor_page_aware_chunking() {
+        let selectors = vec![RowSelector::skip(2), RowSelector::select(10)];
+        let mask = boolean_mask_from_selectors(&selectors);
+        let mut cursor = MaskCursor { mask, position: 0 };
+
+        let pages = [
+            PageLocation {
+                offset: 0,
+                compressed_page_size: 1,
+                first_row_index: 0,
+            },
+            PageLocation {
+                offset: 1,
+                compressed_page_size: 1,
+                first_row_index: 4,
+            },
+            PageLocation {
+                offset: 2,
+                compressed_page_size: 1,
+                first_row_index: 8,
+            },
+            PageLocation {
+                offset: 3,
+                compressed_page_size: 1,
+                first_row_index: 12,
+            },
+        ];
+        let boundaries: Vec<usize> = pages
+            .iter()
+            .map(|loc| loc.first_row_index as usize)
+            .collect();
+        // First chunk is page 1
+        let chunk = cursor.next_mask_chunk(100, Some(&boundaries)).unwrap();
+        assert_eq!(chunk.initial_skip, 2);
+        assert_eq!(chunk.mask_start, 2);
+        assert_eq!(chunk.chunk_rows, 2);
+        assert_eq!(chunk.selected_rows, 2);
+
+        // Second chunk is page 2
+        let chunk = cursor.next_mask_chunk(100, Some(&boundaries)).unwrap();
+        assert_eq!(chunk.initial_skip, 0);
+        assert_eq!(chunk.mask_start, 4);
+        assert_eq!(chunk.chunk_rows, 4);
+        assert_eq!(chunk.selected_rows, 4);
     }
 
     #[test]
