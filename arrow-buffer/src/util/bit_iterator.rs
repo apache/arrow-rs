@@ -232,6 +232,7 @@ impl<'a> BitSliceIterator<'a> {
 impl Iterator for BitSliceIterator<'_> {
     type Item = (usize, usize);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         // Used as termination condition
         if self.len == 0 {
@@ -272,6 +273,7 @@ impl Iterator for BitSliceIterator<'_> {
         }
     }
 
+    #[inline]
     fn fold<B, F>(mut self, mut init: B, mut f: F) -> B
     where
         F: FnMut(B, Self::Item) -> B,
@@ -369,26 +371,29 @@ impl Iterator for BitIndexIterator<'_> {
         }
     }
 
+    #[inline]
     fn fold<B, F>(mut self, mut init: B, mut f: F) -> B
     where
         F: FnMut(B, Self::Item) -> B,
     {
-        loop {
-            while self.current_chunk != 0 {
-                let bit_pos = self.current_chunk.trailing_zeros();
-                self.current_chunk &= self.current_chunk - 1;
-                init = f(init, (self.chunk_offset + bit_pos as i64) as usize);
-            }
+        let mut accum = init;
+        while self.current_chunk != 0 {
+            let bit_pos = self.current_chunk.trailing_zeros();
+            self.current_chunk &= self.current_chunk - 1;
+            accum = f(accum, (self.chunk_offset + bit_pos as i64) as usize);
+        }
 
-            match self.iter.next() {
-                Some(next) => {
-                    self.current_chunk = next;
-                    self.chunk_offset += 64;
-                }
-                None => break,
+        let mut chunk_offset = self.chunk_offset;
+        for chunk in self.iter {
+            chunk_offset += 64;
+            let mut c = chunk;
+            while c != 0 {
+                let bit_pos = c.trailing_zeros();
+                c &= c - 1;
+                accum = f(accum, (chunk_offset + bit_pos as i64) as usize);
             }
         }
-        init
+        accum
     }
 }
 
