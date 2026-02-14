@@ -741,7 +741,8 @@ impl ReadTest {
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
-        .with_row_filter(self.row_filter());
+        .with_row_filter(self.row_filter())
+        .with_selectivity_threshold(Some(0.5));
         if let Some(selection) = self.compute_page_selection() {
             builder = builder.with_row_selection(selection);
         }
@@ -774,7 +775,8 @@ impl ReadTest {
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
-        .with_row_filter(self.row_filter());
+        .with_row_filter(self.row_filter())
+        .with_selectivity_threshold(Some(0.5));
         if let Some(selection) = self.compute_page_selection() {
             builder = builder.with_row_selection(selection);
         }
@@ -803,7 +805,8 @@ impl ReadTest {
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
-        .with_row_filter(self.row_filter());
+        .with_row_filter(self.row_filter())
+        .with_selectivity_threshold(Some(0.5));
         if let Some(selection) = self.compute_page_selection() {
             builder = builder.with_row_selection(selection);
         }
