@@ -58,6 +58,8 @@ all-features = true
 async = ["dep:futures"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
 force_validate = []
+# Enable memory tracking support
+pool = ["arrow-buffer/pool", "arrow-data/pool"]
 
 [dev-dependencies]
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
