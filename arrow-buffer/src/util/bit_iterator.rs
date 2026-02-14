@@ -388,7 +388,7 @@ impl Iterator for BitIndexIterator<'_> {
         }
 
         let mut chunk_offset = self.chunk_offset;
-        self.iter.fold(accum, |mut accum, chunk| {
+        for chunk in self.iter {
             chunk_offset += 64;
             let mut c = chunk;
             while c != 0 {
@@ -396,8 +396,8 @@ impl Iterator for BitIndexIterator<'_> {
                 c &= c - 1;
                 accum = f(accum, (chunk_offset + bit_pos as i64) as usize);
             }
-            accum
-        })
+        }
+        accum
     }
 }
 
@@ -457,6 +457,7 @@ impl<'a> Iterator for BitIndexU32Iterator<'a> {
         }
     }
 
+    #[inline]
     fn fold<B, F>(mut self, mut init: B, mut f: F) -> B
     where
         F: FnMut(B, Self::Item) -> B,
