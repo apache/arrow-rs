@@ -632,18 +632,11 @@ mod ree {
     use arrow_schema::ArrowError;
 
     /// Downcasts an array to a TypedRunArray.
-    // Once specialization gets stabilized, this method can be templated over the source
-    // array type and can directly pick up the type of the child values array.
     fn downcast<'a, I: RunEndIndexType, V: ArrowNumericType>(
         array: &'a dyn Array,
     ) -> Option<TypedRunArray<'a, I, PrimitiveArray<V>>> {
         let array = array.as_run_opt::<I>()?;
-        // This fails if the values child array is not the PrimitiveArray<T>. That is okay as:
-        // * BooleanArray & StringArray are not primitive, but their Item is not
-        //   ArrowNumericType, so they are not in scope for this function.
-        // * Having the values child array be either dict-encoded, or run-end-encoded is unlikely.
-        // Note however that the Arrow specification does not forbid using an exotic type as the
-        // values child array.
+        // We only support RunArray wrapping primitive types.
         array.downcast::<PrimitiveArray<V>>()
     }
 
@@ -651,36 +644,24 @@ mod ree {
     pub(super) fn sum_wrapping<I: RunEndIndexType, V: ArrowNumericType>(
         array: &dyn Array,
     ) -> Option<V::Native> {
-        if array.null_count() == array.len() {
-            return None;
-        }
-
         let ree = downcast::<I, V>(array)?;
-
-        let sum = fold(ree, |acc, val, len| -> Result<V::Native, Infallible> {
+        let Ok(sum) = fold(ree, |acc, val, len| -> Result<V::Native, Infallible> {
+            println!("Adding {:?}x{} to {:?}", val, len, acc);
             Ok(acc.add_wrapping(val.mul_wrapping(V::Native::usize_as(len))))
-        })
-        // Safety: error type is Infallible.
-        .unwrap();
-
-        Some(sum)
+        });
+        sum
     }
 
     /// Computes the sum (erroring on overflow) of the array values.
     pub(super) fn sum_checked<I: RunEndIndexType, V: ArrowNumericType>(
         array: &dyn Array,
     ) -> Result<Option<V::Native>, ArrowError> {
-        if array.null_count() == array.len() {
-            return Ok(None);
-        }
-
         let Some(ree) = downcast::<I, V>(array) else {
             return Err(ArrowError::InvalidArgumentError(
                 "Input array is not a TypedRunArray<'_, _, PrimitiveArray<T>".to_string(),
             ));
         };
-
-        let sum = fold(ree, |acc, val, len| -> Result<V::Native, ArrowError> {
+        fold(ree, |acc, val, len| -> Result<V::Native, ArrowError> {
             let Some(len) = V::Native::from_usize(len) else {
                 return Err(ArrowError::ArithmeticOverflow(format!(
                     "Cannot convert a run-end index ({:?}) to the value type ({})",
@@ -689,48 +670,41 @@ mod ree {
                 )));
             };
             acc.add_checked(val.mul_checked(len)?)
-        });
-
-        sum.map(Some)
+        })
     }
 
     /// Folds over the values in a run-end-encoded array.
     fn fold<'a, I: RunEndIndexType, V: ArrowNumericType, F, E>(
         array: TypedRunArray<'a, I, PrimitiveArray<V>>,
         mut f: F,
-    ) -> Result<V::Native, E>
+    ) -> Result<Option<V::Native>, E>
     where
         F: FnMut(V::Native, V::Native, usize) -> Result<V::Native, E>,
     {
         let run_ends = array.run_ends();
-
         let logical_start = run_ends.offset();
         let logical_end = run_ends.offset() + run_ends.len();
+        let run_ends = run_ends.sliced_values();
 
-        // Beware: the computed physical range is incorrect for empty arrays. Bail out if that
-        // happens. We don't need to, as the calling functions already handle that case. But
-        // ignoring it here is a recipe for disaster in the future.
-        if array.is_empty() {
-            return Ok(V::Native::ZERO);
-        }
+        let values_slice = array.run_array().values_slice();
+        let values = values_slice
+            .as_any()
+            .downcast_ref::<PrimitiveArray<V>>()
+            // Safety: we know the values array is PrimitiveArray<V>.
+            .unwrap();
 
-        let physical_range =
-            run_ends.get_start_physical_index()..run_ends.get_end_physical_index() + 1;
-        let physical_run_ends = &run_ends.values()[physical_range.clone()];
-        let physical_values = {
-            let values_array = array.values();
-            let values_data = values_array.values();
-            &values_data[physical_range]
-        };
-
-        let mut prev_end = logical_start;
+        let mut prev_end = 0;
         let mut acc = V::Native::ZERO;
+        let mut has_non_null_value = false;
 
-        for (run_end, val) in physical_run_ends.iter().zip(physical_values) {
-            let current_run_end = run_end.as_usize().max(logical_start).min(logical_end);
+        for (run_end, value) in run_ends.zip(values) {
+            let current_run_end = run_end.as_usize().clamp(logical_start, logical_end);
             let run_length = current_run_end - prev_end;
 
-            acc = f(acc, *val, run_length)?;
+            if let Some(value) = value {
+                has_non_null_value = true;
+                acc = f(acc, value, run_length)?;
+            }
 
             prev_end = current_run_end;
             if current_run_end == logical_end {
@@ -738,7 +712,7 @@ mod ree {
             }
         }
 
-        Ok(acc)
+        Ok(if has_non_null_value { Some(acc) } else { None })
     }
 }
 
@@ -776,45 +750,17 @@ where
         DataType::Dictionary(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
         DataType::RunEndEncoded(run_ends, _) => {
             // We can directly perform min/max on the values child array, as any
-            // run must have non-zero length. We just need take care of the logical offset & len.
-            fn values_and_boundaries<I: types::RunEndIndexType>(
-                array: &dyn Array,
-            ) -> Option<(&ArrayRef, Option<std::ops::Range<usize>>)> {
-                let array = array.as_run_opt::<I>()?;
-                // If the array is empty, start & end physical indices will be 0. Which is
-                // incorrect: array[0] does not exist.
-                let range = if array.len() == 0 {
-                    None
-                } else {
-                    Some(array.get_start_physical_index()..array.get_end_physical_index() + 1)
-                };
-                Some((array.values(), range))
-            }
-            let (values, range) = match run_ends.data_type() {
-                DataType::Int16 => values_and_boundaries::<types::Int16Type>(&array)?,
-                DataType::Int32 => values_and_boundaries::<types::Int32Type>(&array)?,
-                DataType::Int64 => values_and_boundaries::<types::Int64Type>(&array)?,
+            // run must have non-zero length.
+            let array: &dyn Array = &array;
+            let values = match run_ends.data_type() {
+                DataType::Int16 => array.as_run_opt::<types::Int16Type>()?.values_slice(),
+                DataType::Int32 => array.as_run_opt::<types::Int32Type>()?.values_slice(),
+                DataType::Int64 => array.as_run_opt::<types::Int64Type>()?.values_slice(),
                 _ => return None,
             };
-
-            // We will fail here if the values child array is not the PrimitiveArray<T>. That
-            // is okay as:
-            // * BooleanArray & StringArray are not primitive, but their Item is not
-            //   ArrowNumericType, so they are not in scope for this function.
-            // * Having the values child array be either dict-encoded, or run-end-encoded does not
-            //   make sense. Nor does using a custom array type.
-            // Note however that the Apache specification does not forbid using an exotic type as
-            // the values child array.
-            // The type parameter `A` is a TypedRunArray<'_, RunEndIndexType, ValuesArrayType>.
-            // Once specialization gets stabilized, this implementation can be changed to
-            // directly pick up `ValuesArrayType`.
+            // We only support RunArray wrapping primitive types.
             let values = values.as_any().downcast_ref::<PrimitiveArray<T>>()?;
-
-            if let Some(std::ops::Range { start, end }) = range {
-                m(&values.slice(start, end - start))
-            } else {
-                m(values)
-            }
+            m(values)
         }
         _ => m(as_primitive_array(&array)),
     }
@@ -1985,10 +1931,10 @@ mod tests {
         let typed_array = run_array.downcast::<Int16Array>().unwrap();
 
         let result = sum_array::<Int16Type, _>(typed_array);
-        assert_eq!(result, Some(0));
+        assert_eq!(result, None);
 
         let result = sum_array_checked::<Int16Type, _>(typed_array).unwrap();
-        assert_eq!(result, Some(0));
+        assert_eq!(result, None);
     }
 
     #[test]
@@ -2006,9 +1952,9 @@ mod tests {
 
     #[test]
     fn test_ree_sum_array_sliced() {
-        let run_array = make_run_array::<Int16Type, UInt8Type, _>(&[10, 10, 10, 20, 30, 30, 30]);
-        // Skip 1 value at the start and 1 at the end.
-        let sliced = run_array.slice(1, 5);
+        let run_array = make_run_array::<Int16Type, UInt8Type, _>(&[0, 10, 10, 10, 20, 30, 30, 30]);
+        // Skip 2 values at the start and 1 at the end.
+        let sliced = run_array.slice(2, 5);
         let typed_array = sliced.downcast::<UInt8Array>().unwrap();
 
         let result = sum_array::<UInt8Type, _>(typed_array);
