@@ -115,7 +115,7 @@ async fn test_misspecified_encryption_keys() {
 
     // Too short footer key
     check_for_error(
-        "Parquet error: Invalid footer key. Failed to create AES key",
+        format!("Parquet error: Invalid footer key. Error creating RingGcmBlockDecryptor with unsupported key length: {}", "bad_pwd".len()).as_str(),
         &path,
         "bad_pwd".as_bytes(),
         column_1_key,
@@ -145,7 +145,11 @@ async fn test_misspecified_encryption_keys() {
 
     // Too short column key
     check_for_error(
-        "Parquet error: Failed to create AES key",
+        format!(
+            "Parquet error: Error creating RingGcmBlockDecryptor with unsupported key length: {}",
+            "abc".len()
+        )
+        .as_str(),
         &path,
         footer_key,
         "abc".as_bytes(),

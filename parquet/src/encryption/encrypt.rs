@@ -359,7 +359,9 @@ impl FileEncryptor {
         }
         match self.properties.column_keys.get(column_path) {
             None => Err(general_err!("Column '{}' is not encrypted", column_path)),
-            Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new(column_key.key())?)),
+            Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new(
+                column_key.key(),
+            )?)),
         }
     }
 }
