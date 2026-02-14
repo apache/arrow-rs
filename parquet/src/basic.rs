@@ -634,6 +634,10 @@ enum Encoding {
   /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
   /// perform poorly for large values of N.
   BYTE_STREAM_SPLIT = 9;
+  /// Adaptive Lossless floating-Point encoding (ALP).
+  ///
+  /// Currently specified for FLOAT and DOUBLE.
+  ALP = 10;
 }
 );
 
@@ -654,6 +658,7 @@ impl FromStr for Encoding {
             "DELTA_BYTE_ARRAY" | "delta_byte_array" => Ok(Encoding::DELTA_BYTE_ARRAY),
             "RLE_DICTIONARY" | "rle_dictionary" => Ok(Encoding::RLE_DICTIONARY),
             "BYTE_STREAM_SPLIT" | "byte_stream_split" => Ok(Encoding::BYTE_STREAM_SPLIT),
+            "ALP" | "alp" => Ok(Encoding::ALP),
             _ => Err(general_err!("unknown encoding: {}", s)),
         }
     }
@@ -791,6 +796,7 @@ fn i32_to_encoding(val: i32) -> Encoding {
         7 => Encoding::DELTA_BYTE_ARRAY,
         8 => Encoding::RLE_DICTIONARY,
         9 => Encoding::BYTE_STREAM_SPLIT,
+        10 => Encoding::ALP,
         _ => panic!("Impossible encoding {val}"),
     }
 }
@@ -2137,6 +2143,7 @@ mod tests {
         );
         assert_eq!(Encoding::DELTA_BYTE_ARRAY.to_string(), "DELTA_BYTE_ARRAY");
         assert_eq!(Encoding::RLE_DICTIONARY.to_string(), "RLE_DICTIONARY");
+        assert_eq!(Encoding::ALP.to_string(), "ALP");
     }
 
     #[test]
@@ -2438,6 +2445,8 @@ mod tests {
         assert_eq!(encoding, Encoding::RLE_DICTIONARY);
         encoding = "BYTE_STREAM_SPLIT".parse().unwrap();
         assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
+        encoding = "alp".parse().unwrap();
+        assert_eq!(encoding, Encoding::ALP);
 
         // test lowercase
         encoding = "byte_stream_split".parse().unwrap();
@@ -2573,6 +2582,7 @@ mod tests {
             Encoding::PLAIN_DICTIONARY,
             Encoding::RLE_DICTIONARY,
             Encoding::BYTE_STREAM_SPLIT,
+            Encoding::ALP,
         ];
         encodings_roundtrip(encodings.into());
     }

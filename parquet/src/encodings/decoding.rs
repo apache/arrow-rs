@@ -29,10 +29,12 @@ use crate::data_type::*;
 use crate::encodings::decoding::byte_stream_split_decoder::{
     ByteStreamSplitDecoder, VariableWidthByteStreamSplitDecoder,
 };
+use crate::encodings::decoding::alp::AlpDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{self, BitReader};
 
+mod alp;
 mod byte_stream_split_decoder;
 
 pub(crate) mod private {
@@ -63,7 +65,8 @@ pub(crate) mod private {
             Encoding::RLE
             | Encoding::DELTA_BINARY_PACKED
             | Encoding::DELTA_BYTE_ARRAY
-            | Encoding::DELTA_LENGTH_BYTE_ARRAY => Err(general_err!(
+            | Encoding::DELTA_LENGTH_BYTE_ARRAY
+            | Encoding::ALP => Err(general_err!(
                 "Encoding {} is not supported for type",
                 encoding
             )),
@@ -116,6 +119,7 @@ pub(crate) mod private {
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
                 Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
+                Encoding::ALP => Ok(Box::new(AlpDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -127,6 +131,7 @@ pub(crate) mod private {
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
                 Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
+                Encoding::ALP => Ok(Box::new(AlpDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -1135,6 +1140,8 @@ mod tests {
         create_and_check_decoder::<ByteArrayType>(Encoding::DELTA_LENGTH_BYTE_ARRAY, None);
         create_and_check_decoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, None);
         create_and_check_decoder::<BoolType>(Encoding::RLE, None);
+        create_and_check_decoder::<FloatType>(Encoding::ALP, None);
+        create_and_check_decoder::<DoubleType>(Encoding::ALP, None);
 
         // error when initializing
         create_and_check_decoder::<Int32Type>(
