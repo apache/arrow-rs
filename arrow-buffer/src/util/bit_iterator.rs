@@ -274,15 +274,18 @@ impl Iterator for BitSliceIterator<'_> {
     }
 
     #[inline]
-    fn fold<B, F>(mut self, mut init: B, mut f: F) -> B
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
     where
+        Self: Sized,
         F: FnMut(B, Self::Item) -> B,
     {
-        if self.len == 0 {
-            return init;
-        }
+        let mut accum = init;
+        while self.len != 0 {
+            let (start_chunk, start_bit) = match self.advance_to_set_bit() {
+                Some(v) => v,
+                None => break,
+            };
 
-        while let Some((start_chunk, start_bit)) = self.advance_to_set_bit() {
             // Set bits up to start
             self.current_chunk |= (1 << start_bit) - 1;
 
@@ -294,13 +297,10 @@ impl Iterator for BitSliceIterator<'_> {
                     // Zero out up to end_bit
                     self.current_chunk &= !((1 << end_bit) - 1);
 
-                    init = f(
-                        init,
-                        (
-                            (start_chunk + start_bit as i64) as usize,
-                            (self.current_offset + end_bit as i64) as usize,
-                        ),
-                    );
+                    accum = f(accum, (
+                        (start_chunk + start_bit as i64) as usize,
+                        (self.current_offset + end_bit as i64) as usize,
+                    ));
                     break;
                 }
 
@@ -310,18 +310,16 @@ impl Iterator for BitSliceIterator<'_> {
                         self.current_offset += 64;
                     }
                     None => {
-                        return f(
-                            init,
-                            (
-                                (start_chunk + start_bit as i64) as usize,
-                                std::mem::replace(&mut self.len, 0),
-                            ),
-                        );
+                        accum = f(accum, (
+                            (start_chunk + start_bit as i64) as usize,
+                            std::mem::replace(&mut self.len, 0),
+                        ));
+                        return accum;
                     }
                 }
             }
         }
-        init
+        accum
     }
 }
 
