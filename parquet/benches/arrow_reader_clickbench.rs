@@ -251,14 +251,16 @@ fn all_queries() -> Vec<Query> {
             expected_row_count: 16,
         },
         // Q22: SELECT "SearchPhrase", MIN("URL"), MIN("Title"), COUNT(*) AS c, COUNT(DISTINCT "UserID") FROM hits WHERE "Title" LIKE '%Google%' AND "URL" NOT LIKE '%.google.%' AND "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
+        // Predicate order: cheapest/most selective first. not_empty filters ~87% of rows
+        // before expensive LIKE predicates run, reducing string decoding significantly.
         Query {
             name: "Q22",
-            filter_columns: vec!["Title", "URL", "SearchPhrase"],
+            filter_columns: vec!["SearchPhrase", "Title", "URL"],
             projection_columns: vec!["SearchPhrase", "URL", "Title", "UserID"],
             predicates: vec![
-                ClickBenchPredicate::like_Google(0),
-                ClickBenchPredicate::nlike_google(1),
-                ClickBenchPredicate::not_empty(2),
+                ClickBenchPredicate::not_empty(0),
+                ClickBenchPredicate::like_Google(1),
+                ClickBenchPredicate::nlike_google(2),
             ],
             expected_row_count: 46,
         },
