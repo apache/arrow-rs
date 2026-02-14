@@ -274,50 +274,69 @@ impl Iterator for BitSliceIterator<'_> {
     }
 
     #[inline]
-    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    fn fold<B, F>(self, init: B, mut f: F) -> B
     where
         Self: Sized,
         F: FnMut(B, Self::Item) -> B,
     {
+        if self.len == 0 {
+            return init;
+        }
+
         let mut accum = init;
-        while self.len != 0 {
-            let (start_chunk, start_bit) = match self.advance_to_set_bit() {
-                Some(v) => v,
-                None => break,
-            };
+        let mut start_idx: Option<usize> = None;
+        let mut current_chunk = self.current_chunk;
+        let mut current_offset = self.current_offset;
 
-            // Set bits up to start
-            self.current_chunk |= (1 << start_bit) - 1;
-
-            loop {
-                if self.current_chunk != u64::MAX {
-                    // Find the index of the first 0
-                    let end_bit = self.current_chunk.trailing_ones();
-
-                    // Zero out up to end_bit
-                    self.current_chunk &= !((1 << end_bit) - 1);
-
-                    accum = f(accum, (
-                        (start_chunk + start_bit as i64) as usize,
-                        (self.current_offset + end_bit as i64) as usize,
-                    ));
+        loop {
+            if let Some(start) = start_idx {
+                if current_chunk != u64::MAX {
+                    let end_bit = current_chunk.trailing_ones();
+                    accum = f(accum, (start, (current_offset + end_bit as i64) as usize));
+                    current_chunk &= !((1 << end_bit) - 1);
+                    start_idx = None;
+                } else {
                     break;
                 }
+            } else {
+                if current_chunk != 0 {
+                    let start_bit = current_chunk.trailing_zeros();
+                    start_idx = Some((current_offset + start_bit as i64) as usize);
+                    current_chunk |= (1 << start_bit) - 1;
+                } else {
+                    break;
+                }
+            }
+        }
 
-                match self.iter.next() {
-                    Some(next) => {
-                        self.current_chunk = next;
-                        self.current_offset += 64;
+        accum = self.iter.fold(accum, |mut acc, chunk| {
+            current_offset += 64;
+            let mut c = chunk;
+            loop {
+                if let Some(start) = start_idx {
+                    if c != u64::MAX {
+                        let end_bit = c.trailing_ones();
+                        acc = f(acc, (start, (current_offset + end_bit as i64) as usize));
+                        c &= !((1 << end_bit) - 1);
+                        start_idx = None;
+                    } else {
+                        break;
                     }
-                    None => {
-                        accum = f(accum, (
-                            (start_chunk + start_bit as i64) as usize,
-                            std::mem::replace(&mut self.len, 0),
-                        ));
-                        return accum;
+                } else {
+                    if c != 0 {
+                        let start_bit = c.trailing_zeros();
+                        start_idx = Some((current_offset + start_bit as i64) as usize);
+                        c |= (1 << start_bit) - 1;
+                    } else {
+                        break;
                     }
                 }
             }
+            acc
+        });
+
+        if let Some(start) = start_idx {
+            accum = f(accum, (start, self.len));
         }
         accum
     }
@@ -374,24 +393,23 @@ impl Iterator for BitIndexIterator<'_> {
     where
         F: FnMut(B, Self::Item) -> B,
     {
-        let mut accum = init;
         while self.current_chunk != 0 {
             let bit_pos = self.current_chunk.trailing_zeros();
             self.current_chunk &= self.current_chunk - 1;
-            accum = f(accum, (self.chunk_offset + bit_pos as i64) as usize);
+            init = f(init, (self.chunk_offset + bit_pos as i64) as usize);
         }
 
         let mut chunk_offset = self.chunk_offset;
-        for chunk in self.iter {
+        self.iter.fold(init, |mut acc, chunk| {
             chunk_offset += 64;
             let mut c = chunk;
             while c != 0 {
                 let bit_pos = c.trailing_zeros();
                 c &= c - 1;
-                accum = f(accum, (chunk_offset + bit_pos as i64) as usize);
+                acc = f(acc, (chunk_offset + bit_pos as i64) as usize);
             }
-        }
-        accum
+            acc
+        })
     }
 }
 
@@ -455,22 +473,23 @@ impl<'a> Iterator for BitIndexU32Iterator<'a> {
     where
         F: FnMut(B, Self::Item) -> B,
     {
-        loop {
-            while self.curr != 0 {
-                let tz = self.curr.trailing_zeros();
-                self.curr &= self.curr - 1;
-                init = f(init, (self.chunk_offset + tz as i64) as u32);
-            }
-
-            match self.iter.next() {
-                Some(next) => {
-                    self.chunk_offset += 64;
-                    self.curr = next;
-                }
-                None => break,
-            }
+        while self.curr != 0 {
+            let tz = self.curr.trailing_zeros();
+            self.curr &= self.curr - 1;
+            init = f(init, (self.chunk_offset + tz as i64) as u32);
         }
-        init
+
+        let mut chunk_offset = self.chunk_offset;
+        self.iter.fold(init, |mut acc, next_chunk| {
+            chunk_offset += 64;
+            let mut curr = next_chunk;
+            while curr != 0 {
+                let tz = curr.trailing_zeros();
+                curr &= curr - 1;
+                acc = f(acc, (chunk_offset + tz as i64) as u32);
+            }
+            acc
+        })
     }
 }
 
