@@ -74,6 +74,14 @@ impl Iterator for SlicesIterator<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
+
+    fn fold<B, F>(self, init: B, f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        self.0.fold(init, f)
+    }
 }
 
 /// An iterator of `usize` whose index in [`BooleanArray`] is true
@@ -95,19 +103,22 @@ impl<'a> IndexIterator<'a> {
     /// Collect this iterator as a [`Vec`]
     /// This is more efficient than the standard `collect` as we can
     /// pre-allocate the entire uninitialized buffer and then fill it (roughly 1.6x faster)
-    pub fn collect(mut self) -> Vec<usize> {
+    pub fn collect(self) -> Vec<usize> {
         let len = self.remaining;
         let mut result = Vec::with_capacity(len);
         let ptr: *mut usize = result.as_mut_ptr();
-        for i in 0..len {
+        let mut remaining = self.remaining;
+        self.for_each(|idx| {
+            if remaining == 0 {
+                return;
+            }
             // SAFETY: we have allocated enough space in `result` and remaining
             // correctly tracks the number of elements
-            let next = self.iter.next();
-            debug_assert!(next.is_some(), "IndexIterator exhausted early");
             unsafe {
-                *ptr.add(i) = next.unwrap_unchecked();
+                *ptr.add(len - remaining) = idx;
             }
-        }
+            remaining -= 1;
+        });
         // SAFETY: we have initialized `len` elements
         unsafe {
             result.set_len(len);
@@ -133,6 +144,22 @@ impl Iterator for IndexIterator<'_> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining, Some(self.remaining))
+    }
+
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut remaining = self.remaining;
+        self.iter.fold(init, |acc, item| {
+            if remaining != 0 {
+                remaining -= 1;
+                f(acc, item)
+            } else {
+                acc
+            }
+        })
     }
 }
 
@@ -1015,6 +1042,31 @@ fn filter_list_view<OffsetType: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_slices_iterator_fold() {
+        let filter = BooleanArray::from(vec![true, false, true, true, false, true]);
+        let iter = SlicesIterator::new(&filter);
+        let actual = iter.fold(Vec::new(), |mut acc, i| {
+            acc.push(i);
+            acc
+        });
+        let expected: Vec<_> = SlicesIterator::new(&filter).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_index_iterator_fold() {
+        let filter = BooleanArray::from(vec![true, false, true, true, false, true]);
+        let iter = IndexIterator::new(&filter, 4);
+        let actual = iter.fold(Vec::new(), |mut acc, i| {
+            acc.push(i);
+            acc
+        });
+        let expected: Vec<_> = IndexIterator::new(&filter, 4).collect();
+        assert_eq!(actual, expected);
+    }
+
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
