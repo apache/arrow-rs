@@ -638,7 +638,6 @@ fn find_file_if_exists(mut current_dir: PathBuf, file_name: &str) -> Option<Path
     None
 }
 
-
 /// Encapsulates the test parameters for a single benchmark
 struct ReadTest {
     /// Human identifiable name
