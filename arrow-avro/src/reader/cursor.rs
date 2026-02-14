@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::errors::AvroError;
-use crate::reader::vlq::read_varint;
+use crate::reader::vlq;
 
 /// A wrapper around a byte slice, providing low-level decoding for Avro
 ///
@@ -59,10 +59,17 @@ impl<'a> AvroCursor<'a> {
     }
 
     pub(crate) fn read_vlq(&mut self) -> Result<u64, AvroError> {
-        let (val, offset) =
-            read_varint(self.buf).ok_or_else(|| AvroError::ParseError("bad varint".to_string()))?;
+        let (val, offset) = vlq::read_varint(self.buf)
+            .ok_or_else(|| AvroError::ParseError("bad varint".to_string()))?;
         self.buf = &self.buf[offset..];
         Ok(val)
+    }
+
+    pub(crate) fn skip_vlq(&mut self) -> Result<(), AvroError> {
+        let offset = vlq::skip_varint(self.buf)
+            .ok_or_else(|| AvroError::ParseError("bad varint".to_string()))?;
+        self.buf = &self.buf[offset..];
+        Ok(())
     }
 
     #[inline]
