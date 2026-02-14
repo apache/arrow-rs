@@ -397,10 +397,20 @@ impl ByteArrayDecoderPlain {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
 
-            output.try_push(&buf[start_offset..end_offset], self.validate_utf8)?;
+           match output.try_push(&buf[start_offset..end_offset], self.validate_utf8) {
+    Ok(_) => {
+        self.offset = end_offset;
+        read += 1;
+    }
+    Err(e) => {
+        if e.to_string().contains("index overflow") {
+            break;
+        } else {
+            return Err(e);
+        }
+    }
+}
 
-            self.offset = end_offset;
-            read += 1;
         }
         self.max_remaining_values -= to_read;
 
@@ -474,38 +484,54 @@ impl ByteArrayDecoderDeltaLength {
     }
 
     fn read<I: OffsetSizeTrait>(
-        &mut self,
-        output: &mut OffsetBuffer<I>,
-        len: usize,
-    ) -> Result<usize> {
-        let initial_values_length = output.values.len();
+    &mut self,
+    output: &mut OffsetBuffer<I>,
+    len: usize,
+) -> Result<usize> {
+    let initial_values_length = output.values.len();
 
-        let to_read = len.min(self.lengths.len() - self.length_offset);
-        output.offsets.reserve(to_read);
+    let to_read = len.min(self.lengths.len() - self.length_offset);
+    output.offsets.reserve(to_read);
 
-        let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
+    let src_lengths =
+        &self.lengths[self.length_offset..self.length_offset + to_read];
 
-        let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
-        output.values.reserve(total_bytes);
+    let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
+    output.values.reserve(total_bytes);
 
-        let mut current_offset = self.data_offset;
-        for length in src_lengths {
-            let end_offset = current_offset + *length as usize;
-            output.try_push(
-                &self.data.as_ref()[current_offset..end_offset],
-                self.validate_utf8,
-            )?;
-            current_offset = end_offset;
+    let mut current_offset = self.data_offset;
+    let mut read = 0;   
+
+    for length in src_lengths {
+        let end_offset = current_offset + *length as usize;
+
+        match output.try_push(
+            &self.data.as_ref()[current_offset..end_offset],
+            self.validate_utf8,
+        ) {
+            Ok(_) => {
+                current_offset = end_offset;
+                read += 1;
+            }
+            Err(e) => {
+                if e.to_string().contains("index overflow") {
+                    break;
+                } else {
+                    return Err(e);
+                }
+            }
         }
-
-        self.data_offset = current_offset;
-        self.length_offset += to_read;
-
-        if self.validate_utf8 {
-            output.check_valid_utf8(initial_values_length)?;
-        }
-        Ok(to_read)
     }
+
+    self.data_offset = current_offset;
+    self.length_offset += read;   
+
+    if self.validate_utf8 {
+        output.check_valid_utf8(initial_values_length)?;
+    }
+
+    Ok(read)   
+}
 
     fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let remain_values = self.lengths.len() - self.length_offset;
@@ -542,9 +568,34 @@ impl ByteArrayDecoderDelta {
         let initial_values_length = output.values.len();
         output.offsets.reserve(len.min(self.decoder.remaining()));
 
-        let read = self
-            .decoder
-            .read(len, |bytes| output.try_push(bytes, self.validate_utf8))?;
+       
+        let mut read = 0;
+
+let result = self.decoder.read(len, |bytes| {
+    match output.try_push(bytes, self.validate_utf8) {
+        Ok(_) => {
+            read += 1;
+            Ok(())
+        }
+        Err(ParquetError::General(msg))
+            if msg.contains("index overflow") =>
+        {
+            Err(ParquetError::General(msg))
+        }
+        Err(e) => Err(e),
+    }
+});
+
+match result {
+    Ok(_) => {}
+    Err(ParquetError::General(msg))
+        if msg.contains("index overflow") =>
+    {
+        // stop early
+    }
+    Err(e) => return Err(e),
+}
+
 
         if self.validate_utf8 {
             output.check_valid_utf8(initial_values_length)?;

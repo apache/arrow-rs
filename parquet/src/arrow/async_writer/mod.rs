@@ -340,7 +340,7 @@ mod tests {
         let reader = get_test_reader();
 
         let write_props = WriterProperties::builder()
-            .set_max_row_group_size(64)
+            .set_max_row_group_row_count(Some(64))
             .build();
 
         let mut async_buffer = Vec::new();
