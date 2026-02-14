@@ -1039,7 +1039,10 @@ mod tests {
 
         let assert_preserved = |offset: usize, len: usize| {
             let new_buf = buf.bit_slice(offset, len);
-            assert_eq!(new_buf.len(), bit_util::ceil(len, 8));
+            assert_eq!(
+                new_buf.len(),
+                bit_util::round_upto_multiple_of_64(bit_util::ceil(len, 8))
+            );
 
             // if the offset is not byte-aligned, we have to create a deep copy to a new buffer
             // (since the `offset` value inside a Buffer is byte-granular, not bit-granular), so
