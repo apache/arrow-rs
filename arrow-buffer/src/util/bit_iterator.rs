@@ -1103,13 +1103,13 @@ mod tests {
     fn test_bit_index_iterator_fold() {
         let mask = &[0b00010010, 0b00100011];
         let iter = BitIndexIterator::new(mask, 0, 16);
-        let actual = iter.fold(0, |acc, i| acc + i);
+        let actual = iter.sum::<usize>();
         let expected = BitIndexIterator::new(mask, 0, 16).sum::<usize>();
         assert_eq!(actual, expected);
 
         let mask = &[0b11111111, 0b11111111];
         let iter = BitIndexIterator::new(mask, 0, 16);
-        let actual = iter.fold(0, |acc, i| acc + i);
+        let actual = iter.sum::<usize>();
         let expected = BitIndexIterator::new(mask, 0, 16).sum::<usize>();
         assert_eq!(actual, expected);
     }
