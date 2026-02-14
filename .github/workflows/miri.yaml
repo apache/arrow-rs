@@ -52,8 +52,8 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install nightly --component miri
-          rustup override set nightly
+          rustup toolchain install nightly-2026-02-01 --component miri
+          rustup override set nightly-2026-02-01
           cargo miri setup
       - name: Run Miri Checks
         env:

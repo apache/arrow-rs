@@ -200,12 +200,15 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     let dictionaries: Vec<_> = arrays.iter().map(|x| x.as_dictionary::<K>()).collect();
     let (should_merge, has_overflow) =
         should_merge_dictionary_values::<K>(&dictionaries, indices.len());
+
+    // If overflow detected, use generic fallback (not dictionary-specific)
+    if has_overflow {
+        return interleave_fallback(arrays, indices);
+    }
+
     if !should_merge {
-        return if has_overflow {
-            interleave_fallback(arrays, indices)
-        } else {
-            interleave_fallback_dictionary::<K>(&dictionaries, indices)
-        };
+        // Safe to use dictionary fallback since overflow was checked above
+        return interleave_fallback_dictionary::<K>(&dictionaries, indices);
     }
 
     let masks: Vec<_> = dictionaries
@@ -666,6 +669,32 @@ mod tests {
             .map(|x| x.unwrap())
             .collect();
         assert_eq!(string_result, vec!["v0", "v0", "v49"]);
+    }
+
+    #[test]
+    fn test_interleave_u8_dictionary_256_values() {
+        use arrow_array::FixedSizeBinaryArray;
+
+        let values: ArrayRef = Arc::new(
+            FixedSizeBinaryArray::try_from_iter((0..256_u16).map(|i| vec![i as u8])).unwrap(),
+        );
+
+        let dict1 =
+            DictionaryArray::<UInt8Type>::new(UInt8Array::from_iter_values(0..128), values.clone());
+        let dict2 = DictionaryArray::<UInt8Type>::new(
+            UInt8Array::from_iter_values(128..=255),
+            values.clone(),
+        );
+
+        let result = interleave(&[&dict1, &dict2], &[(0, 0), (1, 0), (0, 127), (1, 127)]).unwrap();
+
+        let dict = result.as_dictionary::<UInt8Type>();
+        let vals = dict.values().as_fixed_size_binary();
+
+        assert_eq!(vals.value(dict.keys().value(0) as usize), &[0_u8]);
+        assert_eq!(vals.value(dict.keys().value(1) as usize), &[128_u8]);
+        assert_eq!(vals.value(dict.keys().value(2) as usize), &[127_u8]);
+        assert_eq!(vals.value(dict.keys().value(3) as usize), &[255_u8]);
     }
 
     fn test_interleave_lists<O: OffsetSizeTrait>() {
