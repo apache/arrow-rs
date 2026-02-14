@@ -163,7 +163,7 @@ where
         let nulls = self
             .record_reader
             .consume_bitmap_buffer()
-            .and_then(|b| NullBuffer::try_from_unsliced(b, len));
+            .and_then(|b| NullBuffer::from_unsliced_buffer(b, len));
 
         let array: ArrayRef = match T::get_physical_type() {
             PhysicalType::BOOLEAN => Arc::new(BooleanArray::new(

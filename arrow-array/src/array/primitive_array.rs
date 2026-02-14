@@ -1488,7 +1488,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         let (null, buffer) = unsafe { trusted_len_unzip(iterator) };
 
-        let nulls = NullBuffer::try_from_unsliced(null, len);
+        let nulls = NullBuffer::from_unsliced_buffer(null, len);
         PrimitiveArray::new(ScalarBuffer::from(buffer), nulls)
     }
 }

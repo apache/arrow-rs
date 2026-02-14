@@ -222,10 +222,11 @@ impl NullBuffer {
     pub fn buffer(&self) -> &Buffer {
         self.buffer.inner()
     }
-    /// Create a [`NullBuffer`] from an *unsliced* validity bitmap (`offset = 0`) of length `len`.
+
+    /// Create a [`NullBuffer`] from an *unsliced* validity bitmap (`offset = 0` **bits**) of length `len`.
     ///
     /// Returns `None` if there are no nulls (all values valid).
-    pub fn try_from_unsliced(buffer: impl Into<Buffer>, len: usize) -> Option<Self> {
+    pub fn from_unsliced_buffer(buffer: impl Into<Buffer>, len: usize) -> Option<Self> {
         let bb = BooleanBuffer::new(buffer.into(), 0, len);
         let nb = NullBuffer::new(bb);
         (nb.null_count() > 0).then_some(nb)
@@ -285,10 +286,10 @@ mod tests {
     }
 
     #[test]
-    fn test_try_from_unsliced_with_nulls() {
+    fn test_from_unsliced_buffer_with_nulls() {
         // Buffer with some nulls: 0b10110010 = valid, null, valid, valid, null, null, valid, null
         let buf = Buffer::from([0b10110010u8]);
-        let result = NullBuffer::try_from_unsliced(buf, 8);
+        let result = NullBuffer::from_unsliced_buffer(buf, 8);
         assert!(result.is_some());
         let nb = result.unwrap();
         assert_eq!(nb.len(), 8);
@@ -304,18 +305,18 @@ mod tests {
     }
 
     #[test]
-    fn test_try_from_unsliced_all_valid() {
+    fn test_from_unsliced_buffer_all_valid() {
         // All bits set = all valid, no nulls
         let buf = Buffer::from([0b11111111u8]);
-        let result = NullBuffer::try_from_unsliced(buf, 8);
+        let result = NullBuffer::from_unsliced_buffer(buf, 8);
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_try_from_unsliced_all_null() {
+    fn test_from_unsliced_buffer_all_null() {
         // No bits set = all null
         let buf = Buffer::from([0b00000000u8]);
-        let result = NullBuffer::try_from_unsliced(buf, 8);
+        let result = NullBuffer::from_unsliced_buffer(buf, 8);
         assert!(result.is_some());
         let nb = result.unwrap();
         assert_eq!(nb.len(), 8);
@@ -323,9 +324,9 @@ mod tests {
     }
 
     #[test]
-    fn test_try_from_unsliced_empty() {
+    fn test_from_unsliced_buffer_empty() {
         let buf = Buffer::from([]);
-        let result = NullBuffer::try_from_unsliced(buf, 0);
+        let result = NullBuffer::from_unsliced_buffer(buf, 0);
         assert!(result.is_none());
     }
 }

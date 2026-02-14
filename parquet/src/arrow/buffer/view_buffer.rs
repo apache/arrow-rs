@@ -56,7 +56,7 @@ impl ViewBuffer {
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: &ArrowType) -> ArrayRef {
         let len = self.views.len();
         let views = ScalarBuffer::from(self.views);
-        let nulls = null_buffer.and_then(|b| NullBuffer::try_from_unsliced(b, len));
+        let nulls = null_buffer.and_then(|b| NullBuffer::from_unsliced_buffer(b, len));
         match data_type {
             ArrowType::Utf8View => {
                 // Safety: views were created correctly, and checked that the data is utf8 when building the buffer

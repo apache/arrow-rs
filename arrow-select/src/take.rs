@@ -415,7 +415,7 @@ fn take_nulls<I: ArrowPrimitiveType>(
     indices: &PrimitiveArray<I>,
 ) -> Option<NullBuffer> {
     match values.filter(|n| n.null_count() > 0) {
-        Some(n) => NullBuffer::try_from_unsliced(
+        Some(n) => NullBuffer::from_unsliced_buffer(
             take_bits(n.inner(), indices).into_inner(),
             indices.len(),
         ),

@@ -328,7 +328,7 @@ impl FixedSizeBinaryArray {
             ));
         }
 
-        let nulls = NullBuffer::try_from_unsliced(null_buf, len);
+        let nulls = NullBuffer::from_unsliced_buffer(null_buf, len);
 
         let size = size.unwrap_or(0) as i32;
         Ok(Self {
@@ -405,7 +405,7 @@ impl FixedSizeBinaryArray {
             Ok(())
         })?;
 
-        let nulls = NullBuffer::try_from_unsliced(null_buf, len);
+        let nulls = NullBuffer::from_unsliced_buffer(null_buf, len);
 
         Ok(Self {
             data_type: DataType::FixedSizeBinary(size),
