@@ -297,10 +297,13 @@ impl Iterator for BitSliceIterator<'_> {
                     // Zero out up to end_bit
                     self.current_chunk &= !((1 << end_bit) - 1);
 
-                    accum = f(accum, (
-                        (start_chunk + start_bit as i64) as usize,
-                        (self.current_offset + end_bit as i64) as usize,
-                    ));
+                    accum = f(
+                        accum,
+                        (
+                            (start_chunk + start_bit as i64) as usize,
+                            (self.current_offset + end_bit as i64) as usize,
+                        ),
+                    );
                     break;
                 }
 
@@ -310,10 +313,13 @@ impl Iterator for BitSliceIterator<'_> {
                         self.current_offset += 64;
                     }
                     None => {
-                        accum = f(accum, (
-                            (start_chunk + start_bit as i64) as usize,
-                            std::mem::replace(&mut self.len, 0),
-                        ));
+                        accum = f(
+                            accum,
+                            (
+                                (start_chunk + start_bit as i64) as usize,
+                                std::mem::replace(&mut self.len, 0),
+                            ),
+                        );
                         return accum;
                     }
                 }
@@ -370,7 +376,7 @@ impl Iterator for BitIndexIterator<'_> {
     }
 
     #[inline]
-    fn fold<B, F>(mut self, mut init: B, mut f: F) -> B
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
     where
         F: FnMut(B, Self::Item) -> B,
     {
@@ -382,7 +388,7 @@ impl Iterator for BitIndexIterator<'_> {
         }
 
         let mut chunk_offset = self.chunk_offset;
-        for chunk in self.iter {
+        self.iter.fold(accum, |mut accum, chunk| {
             chunk_offset += 64;
             let mut c = chunk;
             while c != 0 {
@@ -390,8 +396,8 @@ impl Iterator for BitIndexIterator<'_> {
                 c &= c - 1;
                 accum = f(accum, (chunk_offset + bit_pos as i64) as usize);
             }
-        }
-        accum
+            accum
+        })
     }
 }
 

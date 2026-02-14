@@ -146,20 +146,13 @@ impl Iterator for IndexIterator<'_> {
         (self.remaining, Some(self.remaining))
     }
 
-    fn fold<B, F>(self, init: B, mut f: F) -> B
+    #[inline]
+    fn fold<B, F>(self, init: B, f: F) -> B
     where
         Self: Sized,
         F: FnMut(B, Self::Item) -> B,
     {
-        let mut remaining = self.remaining;
-        self.iter.fold(init, |acc, item| {
-            if remaining != 0 {
-                remaining -= 1;
-                f(acc, item)
-            } else {
-                acc
-            }
-        })
+        self.iter.fold(init, f)
     }
 }
 
