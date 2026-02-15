@@ -219,7 +219,7 @@ static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
     let mut output = Vec::new();
 
     let writer_options = WriterProperties::builder()
-        .set_max_row_group_size(200)
+        .set_max_row_group_row_count(Some(200))
         .set_data_page_row_count_limit(100)
         .build();
     let mut writer =
@@ -244,6 +244,7 @@ struct TestParquetFile {
     /// The operation log for IO operations performed on this file
     ops: Arc<OperationLog>,
     /// The (pre-parsed) parquet metadata for this file
+    #[cfg(feature = "async")]
     parquet_metadata: Arc<ParquetMetaData>,
 }
 
@@ -288,6 +289,7 @@ impl TestParquetFile {
         TestParquetFile {
             bytes,
             ops,
+            #[cfg(feature = "async")]
             parquet_metadata,
         }
     }
@@ -302,7 +304,7 @@ impl TestParquetFile {
         &self.ops
     }
 
-    /// Return the parquet metadata for this file
+    #[cfg(feature = "async")]
     fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
         &self.parquet_metadata
     }
@@ -477,10 +479,12 @@ enum LogEntry {
     /// Read the metadata of the parquet file
     ReadMetadata(Range<usize>),
     /// Access previously parsed metadata
+    #[allow(dead_code)]
     GetProvidedMetadata,
     /// Read a single logical data object
     ReadData(ReadInfo),
     /// Read one or more logical data objects in a single operation
+    #[allow(dead_code)]
     ReadMultipleData(Vec<LogEntry>),
     /// Not known where the read came from
     Unknown(Range<usize>),
@@ -572,6 +576,7 @@ impl OperationLog {
     /// accessed by the specified range
     ///
     /// It behaves the same as [`add_entry_for_range`] but for multiple ranges.
+    #[cfg(feature = "async")]
     fn add_entry_for_ranges<'a>(&self, ranges: impl IntoIterator<Item = &'a Range<usize>>) {
         let entries = ranges
             .into_iter()

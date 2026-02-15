@@ -533,18 +533,14 @@ impl BooleanArray {
             }
         });
 
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                data_len,
-                None,
-                Some(null_builder.into()),
-                0,
-                vec![val_builder.into()],
-                vec![],
-            )
-        };
-        BooleanArray::from(data)
+        let values = BooleanBuffer::new(val_builder.into(), 0, data_len);
+        let nulls = Some(NullBuffer::new(BooleanBuffer::new(
+            null_builder.into(),
+            0,
+            data_len,
+        )))
+        .filter(|n| n.null_count() > 0);
+        BooleanArray::new(values, nulls)
     }
 }
 

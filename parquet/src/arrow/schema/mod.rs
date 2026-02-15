@@ -769,7 +769,11 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
+        DataType::List(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::LargeList(f)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f) => {
             let field_ref = if coerce_types && f.name() != PARQUET_LIST_ELEMENT_NAME {
                 // Ensure proper naming per the Parquet specification
                 let ff = f.as_ref().clone().with_name(PARQUET_LIST_ELEMENT_NAME);
@@ -789,9 +793,6 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 .with_repetition(repetition)
                 .with_id(id)
                 .build()
-        }
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
         }
         DataType::Struct(fields) => {
             if fields.is_empty() {

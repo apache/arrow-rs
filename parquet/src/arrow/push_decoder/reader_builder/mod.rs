@@ -20,7 +20,7 @@ mod filter;
 
 use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
-use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
+use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
@@ -604,7 +604,7 @@ impl RowGroupReaderBuilder {
                 let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_parquet_metadata(&self.metadata);
                 let array_reader = if let Some(cache_info) = cache_info.as_ref() {
-                    let cache_options = cache_info.builder().consumer();
+                    let cache_options: CacheOptions = cache_info.builder().consumer();
                     array_reader_builder
                         .with_cache_options(Some(&cache_options))
                         .build_array_reader(self.fields.as_deref(), &self.projection)
