@@ -32,6 +32,7 @@ fn test_datapage_v1_corrupt_checksum() {
             Ok(()),
             Ok(()),
             Err("Parquet argument error: Parquet error: Page CRC checksum mismatch".to_string()),
+            Err("Parquet argument error: Parquet error: Not all children array length are the same!".to_string()),
         ]
     );
 }
