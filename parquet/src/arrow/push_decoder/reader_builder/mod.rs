@@ -240,13 +240,9 @@ impl RowGroupReaderBuilder {
                 "Internal Error: next_row_group called while still reading a row group. Expected Finished state, got {state:?}"
             )));
         }
-        let offset_index_metadata = self
-            .row_group_offset_index(row_group_idx)
-            .map(|columns| columns.to_vec().into());
         let plan_builder = ReadPlanBuilder::new(self.batch_size)
             .with_selection(selection)
-            .with_row_selection_policy(self.row_selection_policy)
-            .with_offset_index_metadata(offset_index_metadata, &self.projection);
+            .with_row_selection_policy(self.row_selection_policy);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
@@ -441,11 +437,13 @@ impl RowGroupReaderBuilder {
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
-                let offset_index_metadata = self
-                    .row_group_offset_index(row_group_idx)
-                    .map(|columns| columns.to_vec().into());
-                plan_builder = plan_builder
-                    .with_offset_index_metadata(offset_index_metadata, predicate.projection());
+                let page_boundaries = self.compute_page_aware_boundaries(
+                    row_group_idx,
+                    plan_builder.selection(),
+                    predicate.projection(),
+                    plan_builder.resolve_selection_strategy() == RowSelectionStrategy::Mask,
+                );
+                plan_builder = plan_builder.with_page_boundaries(page_boundaries);
                 plan_builder =
                     plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
 
@@ -591,23 +589,16 @@ impl RowGroupReaderBuilder {
                     &mut self.buffers,
                 )?;
 
-                // For mask-based selection, attach offset index metadata for page-aware chunking.
-                let offset_index_metadata = if plan_builder.resolve_selection_strategy()
-                    == RowSelectionStrategy::Mask
-                    && plan_builder.selection().is_some_and(|selection| {
-                        selection.requires_page_aware_mask(
-                            &self.projection,
-                            self.row_group_offset_index(row_group_idx),
-                        )
-                    }) {
-                    self.row_group_offset_index(row_group_idx)
-                        .map(|columns| columns.to_vec().into())
-                } else {
-                    None
-                };
+                // For mask-based selection, chunk only at starts of skipped pages to
+                // coalesce contiguous selected and skipped page runs.
+                let page_boundaries = self.compute_page_aware_boundaries(
+                    row_group_idx,
+                    plan_builder.selection(),
+                    &self.projection,
+                    plan_builder.resolve_selection_strategy() == RowSelectionStrategy::Mask,
+                );
 
-                let plan_builder = plan_builder
-                    .with_offset_index_metadata(offset_index_metadata, &self.projection);
+                let plan_builder = plan_builder.with_page_boundaries(page_boundaries);
 
                 let plan = plan_builder.build();
 
@@ -663,6 +654,33 @@ impl RowGroupReaderBuilder {
     /// Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
     fn exclude_nested_columns_from_cache(&self, mask: &ProjectionMask) -> Option<ProjectionMask> {
         mask.without_nested_types(self.metadata.file_metadata().schema_descr())
+    }
+
+    /// Compute page-aware mask chunk boundaries for the given projection, if needed.
+    fn compute_page_aware_boundaries(
+        &self,
+        row_group_idx: usize,
+        selection: Option<&RowSelection>,
+        projection: &ProjectionMask,
+        mask_strategy: bool,
+    ) -> Option<Arc<[usize]>> {
+        if !mask_strategy
+            || selection.is_none()
+            || self.row_group_offset_index(row_group_idx).is_none()
+        {
+            return None;
+        }
+
+        selection
+            .and_then(|selection| {
+                let offset_index = self.row_group_offset_index(row_group_idx);
+                if selection.requires_page_aware_mask(projection, offset_index) {
+                    selection.page_aware_mask_boundaries(projection, offset_index)
+                } else {
+                    None
+                }
+            })
+            .map(Arc::<[usize]>::from)
     }
 
     /// Get the column offset indexes for the specified row group, if any

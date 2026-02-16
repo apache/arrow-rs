@@ -18,7 +18,6 @@
 //! [`ReadPlan`] and [`ReadPlanBuilder`] for determining which rows to read
 //! from a Parquet file
 
-use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::ArrayReader;
 use crate::arrow::arrow_reader::selection::RowSelectionPolicy;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
@@ -26,7 +25,6 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
@@ -181,30 +179,9 @@ impl ReadPlanBuilder {
         Ok(self)
     }
 
-    /// Add offset index metadata for each column in a row group to this `ReadPlanBuilder`
-    ///
-    /// The computed page boundaries only include columns in the provided `projection`.
-    pub fn with_offset_index_metadata(
-        mut self,
-        metadata: Option<Arc<[OffsetIndexMetaData]>>,
-        projection: &ProjectionMask,
-    ) -> Self {
-        self.page_boundaries = metadata.as_ref().map(|columns| {
-            let mut boundaries: Vec<usize> = columns
-                .iter()
-                .enumerate()
-                .filter(|(idx, _)| projection.leaf_included(*idx))
-                .flat_map(|(_, column)| {
-                    column
-                        .page_locations()
-                        .iter()
-                        .map(|loc| loc.first_row_index as usize)
-                })
-                .collect();
-            boundaries.sort_unstable();
-            boundaries.dedup();
-            boundaries.into()
-        });
+    /// Set page boundary rows directly for mask chunking
+    pub(crate) fn with_page_boundaries(mut self, boundaries: Option<Arc<[usize]>>) -> Self {
+        self.page_boundaries = boundaries;
         self
     }
 
