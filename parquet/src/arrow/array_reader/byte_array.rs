@@ -598,7 +598,7 @@ impl ByteArrayDecoderDelta {
                     output.check_valid_utf8(initial_values_length)?;
                 }
             }
-            Err(e) if hit_overflow => {
+            Err(_) if hit_overflow => {
                 // Index overflow - this is expected, just stop reading
                 // Don't validate UTF-8 as buffer may be in intermediate state
             }
