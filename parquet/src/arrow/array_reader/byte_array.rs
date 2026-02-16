@@ -397,21 +397,21 @@ impl ByteArrayDecoderPlain {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
 
-           match output.try_push(&buf[start_offset..end_offset], self.validate_utf8) {
-    Ok(_) => {
-        self.offset = end_offset;
-        read += 1;
-    }
-    Err(e) => {
-        if e.to_string().contains("index overflow") {
-            break;
-        } else {
-            // Update state before returning error
-            self.max_remaining_values -= read;
-            return Err(e);
-        }
-    }
-}
+            match output.try_push(&buf[start_offset..end_offset], self.validate_utf8) {
+                Ok(_) => {
+                    self.offset = end_offset;
+                    read += 1;
+                }
+                Err(e) => {
+                    if e.to_string().contains("index overflow") {
+                        break;
+                    } else {
+                        // Update state before returning error
+                        self.max_remaining_values -= read;
+                        return Err(e);
+                    }
+                }
+            }
 
         }
         self.max_remaining_values -= read;
