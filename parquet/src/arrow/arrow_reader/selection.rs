@@ -290,13 +290,22 @@ impl RowSelection {
             }
 
             let selected_ranges = self.scan_ranges(locations);
-            let mut selected_page_starts: Vec<u64> =
-                selected_ranges.iter().map(|r| r.start).collect();
-            selected_page_starts.sort_unstable();
-
+            let mut selected_idx = 0usize;
             for page in locations {
                 let page_start = page.offset as u64;
-                if selected_page_starts.binary_search(&page_start).is_err() {
+
+                while selected_idx < selected_ranges.len()
+                    && selected_ranges[selected_idx].start < page_start
+                {
+                    selected_idx += 1;
+                }
+
+                let selected = selected_idx < selected_ranges.len()
+                    && selected_ranges[selected_idx].start == page_start;
+
+                if selected {
+                    selected_idx += 1;
+                } else {
                     skipped_page_rows.push(page.first_row_index as usize);
                 }
             }
