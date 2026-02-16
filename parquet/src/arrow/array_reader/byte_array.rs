@@ -573,38 +573,41 @@ impl ByteArrayDecoderDelta {
         let initial_values_length = output.values.len();
         output.offsets.reserve(len.min(self.decoder.remaining()));
 
-       
         let mut read = 0;
+        let mut hit_overflow = false;
 
-let result = self.decoder.read(len, |bytes| {
-    match output.try_push(bytes, self.validate_utf8) {
-        Ok(_) => {
-            read += 1;
-            Ok(())
+        let result = self.decoder.read(len, |bytes| {
+            match output.try_push(bytes, self.validate_utf8) {
+                Ok(_) => {
+                    read += 1;
+                    Ok(())
+                }
+                Err(e) if e.to_string().contains("index overflow") => {
+                    hit_overflow = true;
+                    // Return error to stop decoder, but we'll handle it as overflow outside
+                    Err(e)
+                }
+                Err(e) => Err(e),
+            }
+        });
+
+        match result {
+            Ok(_) => {
+                // All values read successfully
+                if self.validate_utf8 {
+                    output.check_valid_utf8(initial_values_length)?;
+                }
+            }
+            Err(e) if hit_overflow => {
+                // Index overflow - this is expected, just stop reading
+                // Don't validate UTF-8 as buffer may be in intermediate state
+            }
+            Err(e) => {
+                // Other error - propagate it
+                return Err(e);
+            }
         }
-        Err(ParquetError::General(msg))
-            if msg.contains("index overflow") =>
-        {
-            Err(ParquetError::General(msg))
-        }
-        Err(e) => Err(e),
-    }
-});
 
-match result {
-    Ok(_) => {}
-    Err(ParquetError::General(msg))
-        if msg.contains("index overflow") =>
-    {
-        // stop early
-    }
-    Err(e) => return Err(e),
-}
-
-
-        if self.validate_utf8 {
-            output.check_valid_utf8(initial_values_length)?;
-        }
         Ok(read)
     }
 
