@@ -826,6 +826,9 @@ pub struct MaskCursor {
     mask: BooleanBuffer,
     /// Current absolute offset into the selection
     position: usize,
+    /// Index of the next page boundary candidate. This advances monotonically
+    /// as `position` advances.
+    next_boundary_idx: usize,
 }
 
 impl MaskCursor {
@@ -864,9 +867,13 @@ impl MaskCursor {
 
             let max_chunk_rows = page_boundaries
                 .and_then(|boundaries| {
-                    let next_idx = boundaries.partition_point(|&start| start <= mask_start);
+                    while self.next_boundary_idx < boundaries.len()
+                        && boundaries[self.next_boundary_idx] <= mask_start
+                    {
+                        self.next_boundary_idx += 1;
+                    }
                     boundaries
-                        .get(next_idx)
+                        .get(self.next_boundary_idx)
                         .and_then(|&start| (start > mask_start).then_some(start - mask_start))
                 })
                 .unwrap_or(usize::MAX);
@@ -977,6 +984,7 @@ impl RowSelectionCursor {
         Self::Mask(MaskCursor {
             mask: boolean_mask_from_selectors(&selectors),
             position: 0,
+            next_boundary_idx: 0,
         })
     }
 
@@ -1165,7 +1173,11 @@ mod tests {
     fn test_mask_cursor_page_aware_chunking() {
         let selectors = vec![RowSelector::skip(2), RowSelector::select(10)];
         let mask = boolean_mask_from_selectors(&selectors);
-        let mut cursor = MaskCursor { mask, position: 0 };
+        let mut cursor = MaskCursor {
+            mask,
+            position: 0,
+            next_boundary_idx: 0,
+        };
 
         let pages = [
             PageLocation {
