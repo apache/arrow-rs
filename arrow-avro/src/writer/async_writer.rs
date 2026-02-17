@@ -67,13 +67,41 @@ use std::sync::Arc;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 /// The asynchronous interface used by [`AsyncWriter`] to write Avro files.
+///
+/// This trait allows [`AsyncWriter`] to be generic over different output destinations,
+/// such as files, network sockets, or in-memory buffers. It abstracts the async write
+/// operations needed to produce Avro output.
+///
+/// # Semantics
+///
+/// - **[`write`](Self::write)**: Writes a chunk of bytes to the underlying sink. This may be
+///   called multiple times during writing. Implementations may buffer internally (or write
+///   immediately), and may implement retry logic. The method is expected to append all bytes
+///   or return an error. The bytes are provided as [`Bytes`] for efficient zero-copy handling.
+///
+/// - **[`complete`](Self::complete)**: Signals that writing is finished. Implementations should
+///   flush any buffered data and finalize the output (e.g., close file handles). After `complete`
+///   returns `Ok(())`, no further `write` calls should be made.
+///
+/// # Provided Implementations
+///
+/// A blanket implementation is provided for all types implementing [`AsyncWrite`] + [`Unpin`] + [`Send`],
+/// which covers common types like `tokio::fs::File`, `tokio::net::TcpStream`, and `Vec<u8>`.
+///
+/// For custom sinks (e.g., object stores, cloud storage), implement this trait directly.
 pub trait AsyncFileWriter: Send {
-    /// Write the provided bytes to the underlying writer
+    /// Write the provided bytes to the underlying writer.
+    ///
+    /// This method may be called multiple times during the writing process.
+    /// Each call provides a chunk of the Avro output that should be written
+    /// to the destination. Implementations are expected to append all bytes
+    /// or return an error.
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<(), ArrowError>>;
 
     /// Flush any buffered data and finish the writing process.
     ///
-    /// After `complete` returns `Ok(())`, the caller SHOULD not call write again.
+    /// This method should ensure all data is persisted to the underlying storage.
+    /// After `complete` returns `Ok(())`, the caller SHOULD NOT call `write` again.
     fn complete(&mut self) -> BoxFuture<'_, Result<(), ArrowError>>;
 }
 
@@ -123,7 +151,7 @@ impl AsyncWriterBuilder {
     /// Create a new builder with default settings.
     ///
     /// The Avro schema used for writing is determined as follows:
-    /// 1) If the Arrow schema metadata contains `avro::schema` (see `SCHEMA_METADATA_KEY`),
+    /// 1) If the Arrow schema metadata contains `avro.schema` (see [`SCHEMA_METADATA_KEY`]),
     ///    that JSON is used verbatim.
     /// 2) Otherwise, the Arrow schema is converted to an Avro record schema.
     ///
@@ -158,6 +186,10 @@ impl AsyncWriterBuilder {
     }
 
     /// Create a new async `AsyncWriter` with specified `AvroFormat`.
+    ///
+    /// This method validates the schema and encoder configuration before writing
+    /// any bytes to the output, ensuring initialization failures don't leave
+    /// partially written data.
     pub async fn build<W, F>(self, mut writer: W) -> Result<AsyncWriter<W, F>, ArrowError>
     where
         W: AsyncFileWriter,
@@ -190,15 +222,19 @@ impl AsyncWriterBuilder {
         );
         let schema = Arc::new(Schema::new_with_metadata(self.schema.fields().clone(), md));
 
-        // Start the stream (write header, etc.)
-        let mut header_buf = Vec::<u8>::with_capacity(256);
-        format.start_stream(&mut header_buf, &schema, self.codec)?;
-        writer.write(Bytes::from(header_buf)).await?;
-
+        // Build the encoder BEFORE writing any bytes to the output.
+        // This ensures initialization failures don't leave partially written data.
         let avro_root = crate::codec::AvroFieldBuilder::new(&avro_schema.schema()?).build()?;
         let encoder = RecordEncoderBuilder::new(&avro_root, schema.as_ref())
             .with_fingerprint(maybe_fingerprint)
             .build()?;
+
+        // Now that encoder is validated, write the header
+        let mut header_buf = Vec::<u8>::with_capacity(256);
+        format.start_stream(&mut header_buf, &schema, self.codec)?;
+        if !header_buf.is_empty() {
+            writer.write(Bytes::from(header_buf)).await?;
+        }
 
         Ok(AsyncWriter {
             writer,
@@ -297,17 +333,21 @@ impl<W: AsyncFileWriter, F: AvroFormat> AsyncWriter<W, F> {
         let mut buf = Vec::<u8>::with_capacity(self.capacity);
         self.encoder.encode(&mut buf, batch)?;
         let encoded = match self.compression {
-            Some(codec) => codec.compress(&buf)?,
-            None => buf,
+            Some(codec) => Bytes::from(codec.compress(&buf)?),
+            None => Bytes::from(buf),
         };
 
-        let mut block_buf = Vec::<u8>::new();
-        write_long(&mut block_buf, batch.num_rows() as i64)?;
-        write_long(&mut block_buf, encoded.len() as i64)?;
-        block_buf.extend_from_slice(&encoded);
-        block_buf.extend_from_slice(sync);
+        // Write block header (row count + byte count)
+        let mut header_buf = Vec::<u8>::with_capacity(16);
+        write_long(&mut header_buf, batch.num_rows() as i64)?;
+        write_long(&mut header_buf, encoded.len() as i64)?;
+        self.writer.write(Bytes::from(header_buf)).await?;
 
-        self.writer.write(Bytes::from(block_buf)).await
+        // Write encoded data (zero-copy move)
+        self.writer.write(encoded).await?;
+
+        // Write sync marker
+        self.writer.write(Bytes::from(sync.to_vec())).await
     }
 
     async fn write_stream(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
@@ -356,6 +396,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn test_async_avro_stream_writer() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::schema::{AvroSchema, SINGLE_OBJECT_MAGIC, SchemaStore};
+
         let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)]);
 
         let batch = RecordBatch::try_new(
@@ -364,11 +406,43 @@ mod tests {
         )?;
 
         let mut buffer = Vec::new();
-        let mut writer = AsyncAvroStreamWriter::new(&mut buffer, schema).await?;
+        let mut writer = AsyncAvroStreamWriter::new(&mut buffer, schema.clone()).await?;
         writer.write(&batch).await?;
         writer.finish().await?;
 
-        assert!(!buffer.is_empty());
+        // Validate SOE prefix: magic bytes (0xC3, 0x01) + 8-byte fingerprint
+        assert!(buffer.len() >= 10, "buffer too short for SOE prefix");
+        assert_eq!(
+            &buffer[0..2],
+            &SINGLE_OBJECT_MAGIC,
+            "SOE magic bytes mismatch"
+        );
+
+        // Round-trip decode using Decoder with SchemaStore
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let mut store = SchemaStore::new(); // Rabin fingerprint by default
+        store.register(avro_schema)?;
+
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+
+        let consumed = decoder.decode(&buffer)?;
+        assert_eq!(consumed, buffer.len(), "decoder should consume all bytes");
+
+        let decoded = decoder.flush()?.expect("expected decoded batch");
+        assert_eq!(decoded.num_rows(), 3);
+
+        // Verify actual values match
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("Int32Array");
+        assert_eq!(col.value(0), 10);
+        assert_eq!(col.value(1), 20);
+        assert_eq!(col.value(2), 30);
+
         Ok(())
     }
 
@@ -434,14 +508,21 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![99])) as ArrayRef],
         )?;
 
-        let mut buffer = Vec::new();
-        {
-            let mut writer = AsyncAvroWriter::new(&mut buffer, schema).await?;
-            writer.write(&batch).await?;
-            writer.finish().await?;
-        }
+        // Use an owned Vec so we can call into_inner() and get it back
+        let buffer = Vec::new();
+        let mut writer = AsyncAvroWriter::new(buffer, schema).await?;
+        writer.write(&batch).await?;
+        writer.finish().await?;
 
-        assert!(!buffer.is_empty());
+        // Actually call into_inner() and verify we get the buffer back
+        let recovered = writer.into_inner();
+        assert!(!recovered.is_empty());
+
+        // Verify the recovered buffer is valid Avro
+        let mut reader = ReaderBuilder::new().build(Cursor::new(recovered))?;
+        let out = reader.next().unwrap()?;
+        assert_eq!(out.num_rows(), 1);
+
         Ok(())
     }
 
