@@ -62,6 +62,48 @@ pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
 pub const DEFAULT_COERCE_TYPES: bool = false;
 
+/// EXPERIMENTAL: Options for content-defined chunking (CDC).
+///
+/// CDC creates data page boundaries based on content rather than fixed sizes,
+/// enabling efficient deduplication in content-addressable storage (CAS) systems.
+/// When enabled, unchanged data across file versions will produce identical byte
+/// sequences, allowing storage-level deduplication.
+///
+/// Each content-defined chunk is written as a separate parquet data page. These
+/// options control the chunk size and the chunking process. Note that the chunk
+/// size is calculated based on the logical value of the data, before any encoding
+/// or compression is applied.
+#[derive(Debug, Clone, Copy)]
+pub struct CdcOptions {
+    /// Minimum chunk size in bytes, default is 256 KiB.
+    /// The rolling hash will not be evaluated until this many bytes have been
+    /// accumulated in the current chunk. All data fed through the hash function
+    /// counts towards the chunk size, including definition and repetition levels.
+    pub min_chunk_size: usize,
+    /// Maximum chunk size in bytes, default is 1024 KiB.
+    /// A chunk boundary is forced when the chunk size reaches this value,
+    /// regardless of hash state. The parquet writer's `data_page_size_limit`
+    /// still applies independently.
+    pub max_chunk_size: usize,
+    /// Normalization level to center the chunk size distribution around the
+    /// average size more aggressively, default is 0.
+    /// Increasing the normalization level increases the probability of finding
+    /// a chunk boundary, improving the deduplication ratio, but also increases
+    /// the number of small chunks. Use 1 or 2 for higher deduplication at the
+    /// expense of fragmentation.
+    pub norm_level: i32,
+}
+
+impl Default for CdcOptions {
+    fn default() -> Self {
+        Self {
+            min_chunk_size: 256 * 1024,
+            max_chunk_size: 1024 * 1024,
+            norm_level: 0,
+        }
+    }
+}
+
 /// Parquet writer version.
 ///
 /// Basic constant, which is not part of the Thrift definition.
@@ -168,6 +210,7 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    cdc_options: Option<CdcOptions>,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -364,6 +407,13 @@ impl WriterProperties {
         self.coerce_types
     }
 
+    /// EXPERIMENTAL: Returns content-defined chunking options, or `None` if CDC is disabled.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_content_defined_chunking`]
+    pub fn cdc_options(&self) -> Option<&CdcOptions> {
+        self.cdc_options.as_ref()
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     ///
     /// This is not configurable.
@@ -487,6 +537,7 @@ pub struct WriterPropertiesBuilder {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    cdc_options: Option<CdcOptions>,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -510,6 +561,7 @@ impl Default for WriterPropertiesBuilder {
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
+            cdc_options: None,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -535,6 +587,7 @@ impl WriterPropertiesBuilder {
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
+            cdc_options: self.cdc_options,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -747,6 +800,33 @@ impl WriterPropertiesBuilder {
     /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
+        self
+    }
+
+    /// EXPERIMENTAL: Enables or disables content-defined chunking with default options.
+    ///
+    /// When enabled, data page boundaries are determined by a rolling hash of the
+    /// column values, so unchanged data produces identical byte sequences across
+    /// file versions. This enables efficient deduplication on content-addressable
+    /// storage systems.
+    ///
+    /// Only supported through the Arrow writer interface ([`ArrowWriter`]).
+    ///
+    /// [`ArrowWriter`]: crate::arrow::arrow_writer::ArrowWriter
+    pub fn set_content_defined_chunking(mut self, enabled: bool) -> Self {
+        self.cdc_options = if enabled {
+            Some(CdcOptions::default())
+        } else {
+            None
+        };
+        self
+    }
+
+    /// EXPERIMENTAL: Sets content-defined chunking options, implicitly enabling CDC.
+    ///
+    /// See [`CdcOptions`] for details on each parameter.
+    pub fn set_cdc_options(mut self, options: CdcOptions) -> Self {
+        self.cdc_options = Some(options);
         self
     }
 
@@ -1033,6 +1113,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             column_index_truncate_length: props.column_index_truncate_length,
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
+            cdc_options: props.cdc_options,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }

@@ -801,6 +801,52 @@ impl ArrayLevels {
     pub fn non_null_indices(&self) -> &[usize] {
         &self.non_null_indices
     }
+
+    /// Create a sliced view of this `ArrayLevels` for a CDC chunk.
+    ///
+    /// - `level_offset`: start position within `def_levels`/`rep_levels`
+    /// - `levels_to_write`: number of levels in this chunk
+    /// - `value_offset`: start position within the values array
+    /// - `num_values`: number of values in this chunk
+    pub(crate) fn slice_for_chunk(
+        &self,
+        level_offset: usize,
+        levels_to_write: usize,
+        value_offset: usize,
+        num_values: usize,
+    ) -> Self {
+        let def_levels = self
+            .def_levels
+            .as_ref()
+            .map(|levels| levels[level_offset..level_offset + levels_to_write].to_vec());
+        let rep_levels = self
+            .rep_levels
+            .as_ref()
+            .map(|levels| levels[level_offset..level_offset + levels_to_write].to_vec());
+
+        // Filter non_null_indices to [value_offset, value_offset + num_values)
+        // and shift by -value_offset.
+        let value_end = value_offset + num_values;
+        let non_null_indices: Vec<usize> = self
+            .non_null_indices
+            .iter()
+            .filter(|&&idx| idx >= value_offset && idx < value_end)
+            .map(|&idx| idx - value_offset)
+            .collect();
+
+        let array = self.array.slice(value_offset, num_values);
+        let logical_nulls = array.logical_nulls();
+
+        Self {
+            def_levels,
+            rep_levels,
+            non_null_indices,
+            max_def_level: self.max_def_level,
+            max_rep_level: self.max_rep_level,
+            array,
+            logical_nulls,
+        }
+    }
 }
 
 #[cfg(test)]

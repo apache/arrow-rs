@@ -35,7 +35,7 @@ use arrow::{record_batch::RecordBatch, util::data_gen::*};
 use arrow_array::RecordBatchOptions;
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::errors::Result;
-use parquet::file::properties::{WriterProperties, WriterVersion};
+use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 use parquet::file::writer::SerializedFileWriter;
 
 fn create_primitive_bench_batch(
@@ -348,7 +348,7 @@ fn write_batch_with_option(
         .with_coerce_types(props.coerce_types())
         .convert(batch.schema_ref())?;
     let writer = SerializedFileWriter::new(&mut file, parquet_schema.root_schema_ptr(), props)?;
-    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, batch.schema());
+    let mut row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, batch.schema());
 
     bench.iter(|| {
         let mut row_group = row_group_writer_factory.create_column_writers(0).unwrap();
@@ -439,6 +439,19 @@ fn create_writer_props() -> Vec<(&'static str, WriterProperties)> {
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .build();
     props.push(("zstd_parquet_2", prop));
+
+    // CDC with small chunk sizes so that boundaries actually trigger within the
+    // benchmark batch size (~16 KiB for a 4096-row i32 batch). Dictionary encoding
+    // is disabled because CDC materializes dictionary arrays before hashing.
+    let prop = WriterProperties::builder()
+        .set_cdc_options(CdcOptions {
+            min_chunk_size: 4 * 1024,
+            max_chunk_size: 16 * 1024,
+            norm_level: 0,
+        })
+        .set_dictionary_enabled(false)
+        .build();
+    props.push(("cdc", prop));
 
     props
 }

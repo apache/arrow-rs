@@ -17,6 +17,8 @@
 
 //! Contains writer which writes arrow data into parquet data.
 
+use crate::column::chunker;
+
 use bytes::Bytes;
 use std::io::{Read, Write};
 use std::iter::Peekable;
@@ -335,10 +337,12 @@ impl<W: Write + Send> ArrowWriter<W> {
 
         let in_progress = match &mut self.in_progress {
             Some(in_progress) => in_progress,
-            x => x.insert(
-                self.row_group_writer_factory
-                    .create_row_group_writer(self.writer.flushed_row_groups().len())?,
-            ),
+            x => {
+                let rg = self
+                    .row_group_writer_factory
+                    .create_row_group_writer(self.writer.flushed_row_groups().len())?;
+                x.insert(rg)
+            }
         };
 
         if let Some(max_rows) = self.max_row_group_row_count {
@@ -421,8 +425,11 @@ impl<W: Write + Send> ArrowWriter<W> {
             None => return Ok(()),
         };
 
+        let (chunks, chunkers) = in_progress.close()?;
+        self.row_group_writer_factory.cdc_chunkers = chunkers;
+
         let mut row_group_writer = self.writer.next_row_group()?;
-        for chunk in in_progress.close()? {
+        for chunk in chunks {
             chunk.append_to_row_group(&mut row_group_writer)?;
         }
         row_group_writer.close()?;
@@ -792,7 +799,7 @@ impl ArrowColumnChunk {
 ///   .unwrap();
 ///
 /// // Create a factory for building Arrow column writers
-/// let row_group_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+/// let mut row_group_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
 /// // Create column writers for the 0th row group
 /// let col_writers = row_group_factory.create_column_writers(0).unwrap();
 ///
@@ -853,6 +860,7 @@ impl ArrowColumnChunk {
 pub struct ArrowColumnWriter {
     writer: ArrowColumnWriterImpl,
     chunk: SharedColumnChunk,
+    pub(crate) chunker: Option<chunker::ContentDefinedChunker>,
 }
 
 impl std::fmt::Debug for ArrowColumnWriter {
@@ -869,6 +877,14 @@ enum ArrowColumnWriterImpl {
 impl ArrowColumnWriter {
     /// Write an [`ArrowLeafColumn`]
     pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
+        if self.chunker.is_some() {
+            self.write_with_cdc(col)
+        } else {
+            self.write_without_cdc(col)
+        }
+    }
+
+    fn write_without_cdc(&mut self, col: &ArrowLeafColumn) -> Result<()> {
         match &mut self.writer {
             ArrowColumnWriterImpl::Column(c) => {
                 let leaf = col.0.array();
@@ -886,6 +902,67 @@ impl ArrowColumnWriter {
             }
         }
         Ok(())
+    }
+
+    fn write_with_cdc(&mut self, col: &ArrowLeafColumn) -> Result<()> {
+        let levels = &col.0;
+
+        // Dictionary-encoded arrays must be materialized before hashing because the
+        // CDC chunker must see the actual values, not dictionary indices. Two arrays
+        // with the same values but different dictionary orderings would otherwise
+        // produce different rolling hash states, breaking cross-file deduplication.
+        let leaf_array = match levels.array().as_any_dictionary_opt() {
+            Some(dictionary) => {
+                arrow_select::take::take(dictionary.values(), dictionary.keys(), None)?
+            }
+            None => levels.array().clone(),
+        };
+
+        let def_levels = levels.def_levels();
+        let rep_levels = levels.rep_levels();
+        let num_levels = def_levels
+            .map(|d| d.len())
+            .or_else(|| rep_levels.map(|r| r.len()))
+            .unwrap_or(leaf_array.len());
+
+        // Compute CDC chunk boundaries
+        let chunks = {
+            let chunker = self.chunker.as_mut().unwrap();
+            get_cdc_chunks(chunker, def_levels, rep_levels, num_levels, &leaf_array)?
+        };
+
+        let num_chunks = chunks.len();
+        for (i, chunk) in chunks.iter().enumerate() {
+            // Compute the number of values in this chunk
+            let num_values = if i + 1 < num_chunks {
+                chunks[i + 1].value_offset - chunk.value_offset
+            } else {
+                leaf_array.len() - chunk.value_offset
+            };
+
+            let chunk_levels = levels.slice_for_chunk(
+                chunk.level_offset,
+                chunk.levels_to_write,
+                chunk.value_offset,
+                num_values,
+            );
+            let chunk_col = ArrowLeafColumn(chunk_levels);
+
+            self.write_without_cdc(&chunk_col)?;
+
+            // Flush the page after each chunk except the last
+            if i + 1 < num_chunks {
+                self.flush_current_page()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn flush_current_page(&mut self) -> Result<()> {
+        match &mut self.writer {
+            ArrowColumnWriterImpl::Column(c) => c.flush_current_page(),
+            ArrowColumnWriterImpl::ByteArray(c) => c.flush_current_page(),
+        }
     }
 
     /// Close this column returning the written [`ArrowColumnChunk`]
@@ -972,11 +1049,26 @@ impl ArrowRowGroupWriter {
             .sum()
     }
 
-    fn close(self) -> Result<Vec<ArrowColumnChunk>> {
-        self.writers
-            .into_iter()
-            .map(|writer| writer.close())
-            .collect()
+    fn close(
+        self,
+    ) -> Result<(
+        Vec<ArrowColumnChunk>,
+        Option<Vec<chunker::ContentDefinedChunker>>,
+    )> {
+        let mut chunks = Vec::with_capacity(self.writers.len());
+        let mut chunkers = Vec::new();
+        for mut writer in self.writers {
+            if let Some(chunker) = writer.chunker.take() {
+                chunkers.push(chunker);
+            }
+            chunks.push(writer.close()?);
+        }
+        let chunkers = if chunkers.is_empty() {
+            None
+        } else {
+            Some(chunkers)
+        };
+        Ok((chunks, chunkers))
     }
 }
 
@@ -991,6 +1083,9 @@ pub struct ArrowRowGroupWriterFactory {
     props: WriterPropertiesPtr,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
+    /// CDC chunkers persisted across row groups (one per leaf column).
+    /// `None` when CDC is not enabled.
+    cdc_chunkers: Option<Vec<chunker::ContentDefinedChunker>>,
 }
 
 impl ArrowRowGroupWriterFactory {
@@ -1007,28 +1102,70 @@ impl ArrowRowGroupWriterFactory {
             props,
             #[cfg(feature = "encryption")]
             file_encryptor: file_writer.file_encryptor(),
+            cdc_chunkers: None,
         }
     }
 
-    fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
+    fn create_row_group_writer(&mut self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
         let writers = self.create_column_writers(row_group_index)?;
         Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
 
     /// Create column writers for a new row group, with the given row group index
-    pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
+    pub fn create_column_writers(
+        &mut self,
+        row_group_index: usize,
+    ) -> Result<Vec<ArrowColumnWriter>> {
         let mut writers = Vec::with_capacity(self.arrow_schema.fields.len());
         let mut leaves = self.schema.columns().iter();
         let column_factory = self.column_writer_factory(row_group_index);
+        let schema_root = self.schema.root_schema();
         for field in &self.arrow_schema.fields {
             column_factory.get_arrow_column_writer(
                 field.data_type(),
+                schema_root,
                 &self.props,
                 &mut leaves,
                 &mut writers,
             )?;
         }
+        let chunkers = match self.cdc_chunkers.take() {
+            Some(chunkers) => chunkers,
+            None => match self.create_cdc_chunkers()? {
+                Some(chunkers) => chunkers,
+                None => return Ok(writers),
+            },
+        };
+        for (writer, chunker) in writers.iter_mut().zip(chunkers) {
+            writer.chunker = Some(chunker);
+        }
         Ok(writers)
+    }
+
+    /// Create CDC chunkers for all leaf columns, or `None` if CDC is not enabled.
+    fn create_cdc_chunkers(&self) -> Result<Option<Vec<chunker::ContentDefinedChunker>>> {
+        let opts = match self.props.cdc_options() {
+            Some(opts) => opts,
+            None => return Ok(None),
+        };
+        let schema_root = self.schema.root_schema();
+        self.schema
+            .columns()
+            .iter()
+            .map(|desc| {
+                let max_def_level = desc.max_def_level();
+                let max_rep_level = desc.max_rep_level();
+                let repeated_ancestor_def_level =
+                    compute_repeated_ancestor_def_level(schema_root, desc.path());
+                chunker::ContentDefinedChunker::new(
+                    max_def_level,
+                    max_rep_level,
+                    repeated_ancestor_def_level,
+                    opts,
+                )
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Some)
     }
 
     #[cfg(feature = "encryption")]
@@ -1053,9 +1190,11 @@ pub fn get_column_writers(
     let mut writers = Vec::with_capacity(arrow.fields.len());
     let mut leaves = parquet.columns().iter();
     let column_factory = ArrowColumnWriterFactory::new();
+    let schema_root = parquet.root_schema();
     for field in &arrow.fields {
         column_factory.get_arrow_column_writer(
             field.data_type(),
+            schema_root,
             props,
             &mut leaves,
             &mut writers,
@@ -1125,6 +1264,7 @@ impl ArrowColumnWriterFactory {
     fn get_arrow_column_writer(
         &self,
         data_type: &ArrowDataType,
+        schema_root: &crate::schema::types::Type,
         props: &WriterPropertiesPtr,
         leaves: &mut Iter<'_, ColumnDescPtr>,
         out: &mut Vec<ArrowColumnWriter>,
@@ -1137,6 +1277,7 @@ impl ArrowColumnWriterFactory {
             Ok(ArrowColumnWriter {
                 chunk,
                 writer: ArrowColumnWriterImpl::Column(writer),
+                chunker: None,
             })
         };
 
@@ -1148,6 +1289,7 @@ impl ArrowColumnWriterFactory {
             Ok(ArrowColumnWriter {
                 chunk,
                 writer: ArrowColumnWriterImpl::ByteArray(writer),
+                chunker: None,
             })
         };
 
@@ -1167,17 +1309,29 @@ impl ArrowColumnWriterFactory {
             | ArrowDataType::FixedSizeList(f, _)
             | ArrowDataType::ListView(f)
             | ArrowDataType::LargeListView(f) => {
-                self.get_arrow_column_writer(f.data_type(), props, leaves, out)?
+                self.get_arrow_column_writer(f.data_type(), schema_root, props, leaves, out)?
             }
             ArrowDataType::Struct(fields) => {
                 for field in fields {
-                    self.get_arrow_column_writer(field.data_type(), props, leaves, out)?
+                    self.get_arrow_column_writer(
+                        field.data_type(),
+                        schema_root,
+                        props,
+                        leaves,
+                        out,
+                    )?
                 }
             }
             ArrowDataType::Map(f, _) => match f.data_type() {
                 ArrowDataType::Struct(f) => {
-                    self.get_arrow_column_writer(f[0].data_type(), props, leaves, out)?;
-                    self.get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
+                    self.get_arrow_column_writer(
+                        f[0].data_type(),
+                        schema_root,
+                        props,
+                        leaves,
+                        out,
+                    )?;
+                    self.get_arrow_column_writer(f[1].data_type(), schema_root, props, leaves, out)?
                 }
                 _ => unreachable!("invalid map type"),
             },
@@ -1588,6 +1742,110 @@ fn get_fsb_array_slice(
         values.push(FixedLenByteArray::from(ByteArray::from(value)))
     }
     values
+}
+
+/// Compute the definition level at the nearest REPEATED ancestor by traversing
+/// the Parquet schema tree from root to the given leaf column path.
+fn compute_repeated_ancestor_def_level(
+    schema_root: &crate::schema::types::Type,
+    path: &crate::schema::types::ColumnPath,
+) -> i16 {
+    use crate::basic::Repetition;
+    let parts = path.parts();
+    if parts.is_empty() {
+        return 0;
+    }
+
+    let mut current_type = schema_root;
+    let mut def_level: i16 = 0;
+    let mut repeated_ancestor_def_level: i16 = 0;
+
+    for part in parts {
+        // Find the child with matching name
+        if !current_type.is_group() {
+            break;
+        }
+        let child = current_type.get_fields().iter().find(|f| f.name() == part);
+        let child = match child {
+            Some(c) => c,
+            None => break,
+        };
+
+        // Update def/rep levels based on this node's repetition
+        if child.get_basic_info().has_repetition() {
+            match child.get_basic_info().repetition() {
+                Repetition::OPTIONAL => {
+                    def_level += 1;
+                }
+                Repetition::REPEATED => {
+                    def_level += 1;
+                    repeated_ancestor_def_level = def_level;
+                }
+                Repetition::REQUIRED => {}
+            }
+        }
+        current_type = child.as_ref();
+    }
+
+    repeated_ancestor_def_level
+}
+
+/// Compute CDC chunk boundaries by dispatching on the Arrow array's data type
+/// to feed value bytes into the rolling hash.
+fn get_cdc_chunks(
+    chunker: &mut chunker::ContentDefinedChunker,
+    def_levels: Option<&[i16]>,
+    rep_levels: Option<&[i16]>,
+    num_levels: usize,
+    array: &dyn arrow_array::Array,
+) -> Result<Vec<chunker::Chunk>> {
+    // Downcasts `array` to a concrete type, binds it to `$a`, then calls
+    // `get_chunks` with a closure that yields value bytes for index `$i`.
+    macro_rules! chunk {
+        ($a:ident = $downcast:expr, |$i:ident| $bytes:expr) => {{
+            let $a = $downcast;
+            chunker.get_chunks(def_levels, rep_levels, num_levels, |$i| $bytes)
+        }};
+    }
+
+    let dtype = array.data_type();
+    let chunks = match dtype {
+        ArrowDataType::Null => {
+            chunker.get_chunks(def_levels, rep_levels, num_levels, |_| -> &[u8] { &[] })
+        }
+        ArrowDataType::Boolean => chunk!(a = array.as_boolean(), |i| [a.value(i) as u8]),
+        ArrowDataType::FixedSizeBinary(_) => {
+            chunk!(a = array.as_fixed_size_binary(), |i| a.value(i))
+        }
+        ArrowDataType::Binary => chunk!(a = array.as_binary::<i32>(), |i| a.value(i)),
+        ArrowDataType::Utf8 => chunk!(a = array.as_string::<i32>(), |i| a.value(i).as_bytes()),
+        ArrowDataType::LargeBinary => chunk!(a = array.as_binary::<i64>(), |i| a.value(i)),
+        ArrowDataType::LargeUtf8 => chunk!(a = array.as_string::<i64>(), |i| a.value(i).as_bytes()),
+        ArrowDataType::BinaryView => chunk!(a = array.as_binary_view(), |i| a.value(i)),
+        ArrowDataType::Utf8View => chunk!(a = array.as_string_view(), |i| a.value(i).as_bytes()),
+        // All fixed-width primitive types (ints, floats, dates, times, timestamps,
+        // durations, intervals, decimals, float16).
+        //
+        // Values are read directly from the underlying buffer. `data.offset()` accounts
+        // for sliced arrays (non-zero logical start), so `base + i * byte_width` always
+        // resolves to the correct physical byte position for logical index `i`.
+        _ => {
+            let byte_width = dtype.primitive_width().ok_or_else(|| {
+                ParquetError::General(format!(
+                    "content-defined chunking is not supported for data type {:?}",
+                    dtype
+                ))
+            })?;
+            let data = array.to_data();
+            let buffer = &data.buffers()[0];
+            let base = data.offset() * byte_width;
+            chunker.get_chunks(def_levels, rep_levels, num_levels, |i| {
+                let start = base + i * byte_width;
+                &buffer[start..start + byte_width]
+            })
+        }
+    };
+    Ok(chunks)
 }
 
 #[cfg(test)]

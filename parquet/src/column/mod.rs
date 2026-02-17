@@ -117,6 +117,7 @@
 //! assert_eq!(rep_levels, vec![0, 1, 0, 1, 1]);
 //! ```
 
+pub(crate) mod chunker;
 pub mod page;
 #[cfg(feature = "encryption")]
 pub(crate) mod page_encryption;

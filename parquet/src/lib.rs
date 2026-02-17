@@ -67,6 +67,28 @@
 //! * [`ArrowColumnWriter`] for writing using multiple threads,
 //! * [`RowFilter`] to apply filters during decode
 //!
+//! ### EXPERIMENTAL: Content-Defined Chunking
+//!
+//! [`ArrowWriter`] supports content-defined chunking (CDC), which creates data page
+//! boundaries based on content rather than fixed sizes. CDC enables efficient
+//! deduplication in content-addressable storage (CAS) systems: when the same data
+//! appears in successive file versions, it will produce identical byte sequences that
+//! CAS backends can deduplicate.
+//!
+//! Enable CDC via [`WriterProperties`]:
+//!
+//! ```no_run
+//! # use parquet::file::properties::WriterProperties;
+//! let props = WriterProperties::builder()
+//!     .set_content_defined_chunking(true)
+//!     .build();
+//! ```
+//!
+//! See [`CdcOptions`] for chunk size and normalization parameters.
+//!
+//! [`WriterProperties`]: file::properties::WriterProperties
+//! [`CdcOptions`]: file::properties::CdcOptions
+//!
 //! [`ArrowWriter`]: arrow::arrow_writer::ArrowWriter
 //! [`ParquetRecordBatchReaderBuilder`]: arrow::arrow_reader::ParquetRecordBatchReaderBuilder
 //! [`ParquetPushDecoder`]: arrow::push_decoder::ParquetPushDecoder
