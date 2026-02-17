@@ -404,13 +404,13 @@ where
 
 macro_rules! dict_helper {
     ($t:ty, $arrays:expr) => {
-        return Ok(Arc::new(concat_dictionaries::<$t>($arrays)?) as _)
+        return concat_dictionaries::<$t>($arrays)
     };
 }
 
 macro_rules! primitive_concat {
     ($t:ty, $arrays:expr) => {
-        return Ok(Arc::new(concat_primitives::<$t>($arrays)?) as _)
+        return concat_primitives::<$t>($arrays)
     };
 }
 

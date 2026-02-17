@@ -313,12 +313,10 @@ pub enum DataType {
     /// A single List array can store up to [`i32::MAX`] elements in total.
     List(FieldRef),
 
-    /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length.
+    /// A list of some logical data type with variable length.
     ///
     /// Logically the same as [`List`], but the internal representation differs in how child
     /// data is referenced, allowing flexibility in how data is layed out.
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
     ///
     /// [`List`]: Self::List
     ListView(FieldRef),
@@ -329,12 +327,10 @@ pub enum DataType {
     /// A single LargeList array can store up to [`i64::MAX`] elements in total.
     LargeList(FieldRef),
 
-    /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length and 64-bit offsets.
+    /// A list of some logical data type with variable length and 64-bit offsets.
     ///
     /// Logically the same as [`LargeList`], but the internal representation differs in how child
     /// data is referenced, allowing flexibility in how data is layed out.
-    ///
-    /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
     ///
     /// [`LargeList`]: Self::LargeList
     LargeListView(FieldRef),
@@ -646,6 +642,27 @@ impl DataType {
     pub fn is_string(&self) -> bool {
         use DataType::*;
         matches!(self, Utf8 | LargeUtf8 | Utf8View)
+    }
+
+    /// Returns true if this type is a List type.
+    ///
+    /// List types include List, LargeList, FixedSizeList, ListView, and LargeListView.
+    #[inline]
+    pub fn is_list(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self,
+            List(_) | LargeList(_) | FixedSizeList(_, _) | ListView(_) | LargeListView(_)
+        )
+    }
+
+    /// Returns true if this type is a Binary type.
+    ///
+    /// Binary types include Binary, LargeBinary, FixedSizeBinary and BinaryView.
+    #[inline]
+    pub fn is_binary(&self) -> bool {
+        use DataType::*;
+        matches!(self, Binary | LargeBinary | FixedSizeBinary(_) | BinaryView)
     }
 
     /// Compares the datatype with another, ignoring nested field names
@@ -1191,6 +1208,38 @@ mod tests {
     fn test_datatype_is_null() {
         assert!(DataType::is_null(&DataType::Null));
         assert!(!DataType::is_null(&DataType::Int32));
+    }
+
+    #[test]
+    fn test_is_list() {
+        assert!(DataType::is_list(&DataType::new_list(
+            DataType::Int16,
+            true
+        )));
+        assert!(DataType::is_list(&DataType::new_large_list(
+            DataType::Int16,
+            true
+        )));
+        assert!(DataType::is_list(&DataType::new_fixed_size_list(
+            DataType::Int16,
+            5,
+            true
+        )));
+        assert!(DataType::is_list(&DataType::ListView(Arc::new(
+            Field::new("f", DataType::Int16, true)
+        ))));
+        assert!(DataType::is_list(&DataType::LargeListView(Arc::new(
+            Field::new("f", DataType::Int16, true)
+        ))));
+        assert!(!DataType::is_list(&DataType::Binary));
+    }
+
+    #[test]
+    fn test_is_binary() {
+        assert!(DataType::is_binary(&DataType::Binary));
+        assert!(DataType::is_binary(&DataType::LargeBinary));
+        assert!(DataType::is_binary(&DataType::BinaryView));
+        assert!(!DataType::is_list(&DataType::Utf8View));
     }
 
     #[test]
