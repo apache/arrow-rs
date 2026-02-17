@@ -14,9 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::{borrow::Cow, ops::Deref};
-
 use crate::utils::parse_path;
+use arrow_schema::ArrowError;
+use std::{borrow::Cow, ops::Deref};
 
 /// Represents a qualified path to a potential subfield or index of a variant
 /// value.
@@ -33,7 +33,7 @@ use crate::utils::parse_path;
 /// ```rust
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// // access the field "foo" in a variant object value
-/// let path = VariantPath::from("foo");
+/// let path = VariantPath::try_from("foo").unwrap();
 /// // access the first element in a variant list vale
 /// let path = VariantPath::from(0);
 /// ```
@@ -43,7 +43,7 @@ use crate::utils::parse_path;
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// /// You can also create a path by joining elements together:
 /// // access the field "foo" and then the first element in a variant list value
-/// let path = VariantPath::from("foo").join(0);
+/// let path = VariantPath::try_from("foo").unwrap().join(0);
 /// // this is the same as the previous one
 /// let path2 = VariantPath::from_iter(["foo".into(), 0.into()]);
 /// assert_eq!(path, path2);
@@ -59,8 +59,8 @@ use crate::utils::parse_path;
 /// ```
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// /// You can also convert strings directly into paths using dot notation
-/// let path = VariantPath::from("foo.bar.baz");
-/// let expected = VariantPath::from("foo").join("bar").join("baz");
+/// let path = VariantPath::try_from("foo.bar.baz").unwrap();
+/// let expected = VariantPath::try_from("foo").unwrap().join("bar").join("baz");
 /// assert_eq!(path, expected);
 /// ```
 ///
@@ -69,11 +69,21 @@ use crate::utils::parse_path;
 /// # use parquet_variant::{VariantPath, VariantPathElement};
 /// /// You can access the paths using slices
 /// // access the field "foo" and then the first element in a variant list value
-/// let path = VariantPath::from("foo")
+/// let path = VariantPath::try_from("foo").unwrap()
 ///   .join("bar")
 ///   .join("baz");
 /// assert_eq!(path[1], VariantPathElement::field("bar"));
 /// ```
+///
+/// # Example: Accessing filed with bracket
+/// ```
+/// # use parquet_variant::{VariantPath, VariantPathElement};
+/// let path = VariantPath::try_from("a[b.c].d[2]").unwrap();
+/// let expected = VariantPath::from_iter([VariantPathElement::field("a"),
+///     VariantPathElement::field("b.c"),
+///     VariantPathElement::field("d"),
+///     VariantPathElement::index(2)]);
+/// assert_eq!(path, expected)
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct VariantPath<'a>(Vec<VariantPathElement<'a>>);
 
@@ -112,9 +122,11 @@ impl<'a> From<Vec<VariantPathElement<'a>>> for VariantPath<'a> {
 }
 
 /// Create from &str with support for dot notation
-impl<'a> From<&'a str> for VariantPath<'a> {
-    fn from(path: &'a str) -> Self {
-        VariantPath::new(path.split(".").flat_map(parse_path).collect())
+impl<'a> TryFrom<&'a str> for VariantPath<'a> {
+    type Error = ArrowError;
+
+    fn try_from(path: &'a str) -> Result<Self, Self::Error> {
+        parse_path(path).map(VariantPath::new)
     }
 }
 
@@ -211,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_variant_path_empty_str() {
-        let path = VariantPath::from("");
+        let path = VariantPath::try_from("").unwrap();
         assert!(path.is_empty());
     }
 
@@ -224,9 +236,10 @@ mod tests {
 
     #[test]
     fn test_variant_path_dot_notation_with_array_index() {
-        let path = VariantPath::from("city.store.books[3].title");
+        let path = VariantPath::try_from("city.store.books[3].title").unwrap();
 
-        let expected = VariantPath::from("city")
+        let expected = VariantPath::try_from("city")
+            .unwrap()
             .join("store")
             .join("books")
             .join(3)
@@ -237,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_variant_path_dot_notation_with_only_array_index() {
-        let path = VariantPath::from("[3]");
+        let path = VariantPath::try_from("[3]").unwrap();
 
         let expected = VariantPath::from(3);
 
@@ -246,10 +259,67 @@ mod tests {
 
     #[test]
     fn test_variant_path_dot_notation_with_starting_array_index() {
-        let path = VariantPath::from("[3].title");
+        let path = VariantPath::try_from("[3].title").unwrap();
 
         let expected = VariantPath::from(3).join("title");
 
         assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn test_variant_path_field_in_bracket() {
+        // field with index
+        let path = VariantPath::try_from("foo[0].bar").unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("foo"),
+            VariantPathElement::index(0),
+            VariantPathElement::field("bar"),
+        ]);
+        assert_eq!(path, expected);
+
+        // index in the end
+        let path = VariantPath::try_from("foo.bar[42]").unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("foo"),
+            VariantPathElement::field("bar"),
+            VariantPathElement::index(42),
+        ]);
+        assert_eq!(path, expected);
+
+        // invalid index will be treated as field
+        let path = VariantPath::try_from("foo.bar[abc]").unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("foo"),
+            VariantPathElement::field("bar"),
+            VariantPathElement::field("abc"),
+        ]);
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn test_invalid_path_parse() {
+        // Leading dot
+        let err = VariantPath::try_from(".foo.bar").unwrap_err();
+        assert_eq!(err.to_string(), "Parser error: Unexpected leading '.'");
+
+        // Trailing dot
+        let err = VariantPath::try_from("foo.bar.").unwrap_err();
+        assert_eq!(err.to_string(), "Parser error: Unexpected trailing '.'");
+
+        // No ']' will be treated as error
+        let err = VariantPath::try_from("foo.bar[2.baz").unwrap_err();
+        assert_eq!(err.to_string(), "Parser error: Unclosed '[' at byte 7");
+
+        // No ']' because of escaped.
+        let err = VariantPath::try_from("foo.bar[2\\].fds").unwrap_err();
+        assert_eq!(err.to_string(), "Parser error: Unclosed '[' at byte 7");
+
+        // Trailing backslash in bracket
+        let err = VariantPath::try_from("foo.bar[fdafa\\").unwrap_err();
+        assert_eq!(err.to_string(), "Parser error: Unclosed '[' at byte 7");
+
+        // No '[' before ']'
+        let err = VariantPath::try_from("foo.bar]baz").unwrap_err();
+        assert_eq!(err.to_string(), "Parser error: Unexpected ']' at byte 7");
     }
 }
