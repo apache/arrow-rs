@@ -38,9 +38,10 @@ mod converter;
     missing_docs,
     non_camel_case_types
 )]
-mod parquet3_generated;
+mod parquet_generated;
 
 pub use converter::{
     append_flatbuffer, extract_flatbuffer, flatbuf_to_parquet_metadata,
     parquet_metadata_to_flatbuf, ExtractResult,
 };
+pub use parquet_generated::parquet::format;

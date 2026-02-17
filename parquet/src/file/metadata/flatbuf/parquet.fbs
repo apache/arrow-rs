@@ -22,21 +22,17 @@
 //
 // Key differences from parquet.thrift:
 // 1. Statistics are stored in integral types if their size is fixed, otherwise prefix + suffix
-// 2. ColumnMetaData.encoding_stats are removed, replaced with
-//    ColumnMetaData.is_fully_dict_encoded.
-// 3. RowGroups are limited to 2GB in size, so we can use int for sizes.
-// 4. ColumnChunk/ColumnMetaData offsets are now relative to the start of the row group, so we can
-//    use int for offsets.
-// 5. RowGroup ordinal is removed (derivable from position in the row_groups vector).
-// 6. Restrict RowGroups to 2^31-1 rows.
-// 7. Remove offset/column indexes, they are small and just their offsets are of similar size.
+// 2. ColumnMetaData.encoding_stats removed, replaced with is_fully_dict_encoded boolean
+// 3. RowGroup ordinal removed (derivable from position in the row_groups vector)
+// 4. Column orders moved into SchemaElement for better locality
+// 5. Bloom filter metadata consolidated into a struct
 //
 // Related:
 //   - parquet.thrift: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 //   - C++ implementation: https://github.com/apache/arrow/pull/48431
 //   - Format proposal: https://github.com/apache/parquet-format/pull/544
 
-namespace parquet.format3;
+namespace parquet.format;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Physical types.
@@ -205,6 +201,12 @@ table KeyValue {
   val: string;
 }
 
+// Bloom filter metadata for a column chunk.
+table BloomFilterInfo {
+  offset: long;   // Byte offset of the bloom filter data in the file
+  length: int;    // Length of the bloom filter data in bytes
+}
+
 table ColumnMetadata {
   codec: CompressionCodec;
   num_values: long = null;  // only present if not equal to rg.num_rows
@@ -216,8 +218,7 @@ table ColumnMetadata {
   dictionary_page_offset: long = null;
   statistics: Statistics;
   is_fully_dict_encoded: bool;
-  bloom_filter_offset: long = null;
-  bloom_filter_length: int = null;
+  bloom_filter: BloomFilterInfo;
 }
 
 table ColumnChunk {
@@ -249,9 +250,8 @@ table FileMetaData {
   row_groups: [RowGroup];
   kv: [KeyValue];
   created_by: string;
-  // column_orders: [ColumnOrder];  // moved to SchemaElement
-  // encryption_algorithm: [EncryptionAlgorithm];  // TODO
-  // footer_signing_key_metadata: binary;  // TODO
+  // encryption_algorithm: EncryptionAlgorithm;  // TODO: encryption support
+  // footer_signing_key_metadata: [byte];         // TODO: encryption support
 }
 
 root_type FileMetaData;

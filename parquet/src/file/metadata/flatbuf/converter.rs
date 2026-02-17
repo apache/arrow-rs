@@ -18,7 +18,7 @@
 //! Converter between Parquet metadata and FlatBuffers representation.
 //!
 //! This module provides functionality to convert Parquet metadata to/from
-//! the FlatBuffers format defined in `parquet3.fbs`.
+//! the FlatBuffers format defined in `parquet.fbs`.
 //!
 //! The FlatBuffers format packs statistics into integral fields for efficient
 //! storage and zero-copy access. See [`pack_statistics`] and [`unpack_statistics`]
@@ -44,7 +44,7 @@ use crate::schema::types::{
     ColumnDescriptor, SchemaDescPtr, SchemaDescriptor, Type as SchemaType,
 };
 
-use super::parquet3_generated::parquet::format_3 as fb;
+use super::parquet_generated::parquet::format as fb;
 
 
 /// Packed min/max statistics for FlatBuffers format
@@ -656,6 +656,18 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
             None
         };
 
+        // Build bloom filter info if present
+        let bloom_filter = match (cc.bloom_filter_offset(), cc.bloom_filter_length()) {
+            (Some(offset), Some(length)) => Some(fb::BloomFilterInfo::create(
+                &mut self.builder,
+                &fb::BloomFilterInfoArgs {
+                    offset,
+                    length,
+                },
+            )),
+            _ => None,
+        };
+
         fb::ColumnMetadata::create(
             &mut self.builder,
             &fb::ColumnMetadataArgs {
@@ -669,8 +681,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 dictionary_page_offset: cc.dictionary_page_offset(),
                 statistics,
                 is_fully_dict_encoded,
-                bloom_filter_offset: cc.bloom_filter_offset(),
-                bloom_filter_length: cc.bloom_filter_length(),
+                bloom_filter,
             },
         )
     }
@@ -890,12 +901,9 @@ impl FlatBufferConverter {
             builder = builder.set_dictionary_page_offset(Some(offset));
         }
 
-        if let Some(offset) = fb_meta.bloom_filter_offset() {
-            builder = builder.set_bloom_filter_offset(Some(offset));
-        }
-
-        if let Some(length) = fb_meta.bloom_filter_length() {
-            builder = builder.set_bloom_filter_length(Some(length));
+        if let Some(bloom_filter) = fb_meta.bloom_filter() {
+            builder = builder.set_bloom_filter_offset(Some(bloom_filter.offset()));
+            builder = builder.set_bloom_filter_length(Some(bloom_filter.length()));
         }
 
         // Convert statistics

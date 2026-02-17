@@ -7,7 +7,7 @@ extern crate alloc;
 pub mod parquet {
 
 #[allow(unused_imports, dead_code)]
-pub mod format_3 {
+pub mod format {
 
 
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
@@ -2603,6 +2603,119 @@ impl ::core::fmt::Debug for KeyValue<'_> {
       ds.finish()
   }
 }
+pub enum BloomFilterInfoOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct BloomFilterInfo<'a> {
+  pub _tab: ::flatbuffers::Table<'a>,
+}
+
+impl<'a> ::flatbuffers::Follow<'a> for BloomFilterInfo<'a> {
+  type Inner = BloomFilterInfo<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> BloomFilterInfo<'a> {
+  pub const VT_OFFSET: ::flatbuffers::VOffsetT = 4;
+  pub const VT_LENGTH: ::flatbuffers::VOffsetT = 6;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
+    BloomFilterInfo { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args BloomFilterInfoArgs
+  ) -> ::flatbuffers::WIPOffset<BloomFilterInfo<'bldr>> {
+    let mut builder = BloomFilterInfoBuilder::new(_fbb);
+    builder.add_offset(args.offset);
+    builder.add_length(args.length);
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn offset(&self) -> i64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<i64>(BloomFilterInfo::VT_OFFSET, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn length(&self) -> i32 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<i32>(BloomFilterInfo::VT_LENGTH, Some(0)).unwrap()}
+  }
+}
+
+impl ::flatbuffers::Verifiable for BloomFilterInfo<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut ::flatbuffers::Verifier, pos: usize
+  ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+    v.visit_table(pos)?
+     .visit_field::<i64>("offset", Self::VT_OFFSET, false)?
+     .visit_field::<i32>("length", Self::VT_LENGTH, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct BloomFilterInfoArgs {
+    pub offset: i64,
+    pub length: i32,
+}
+impl<'a> Default for BloomFilterInfoArgs {
+  #[inline]
+  fn default() -> Self {
+    BloomFilterInfoArgs {
+      offset: 0,
+      length: 0,
+    }
+  }
+}
+
+pub struct BloomFilterInfoBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> BloomFilterInfoBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_offset(&mut self, offset: i64) {
+    self.fbb_.push_slot::<i64>(BloomFilterInfo::VT_OFFSET, offset, 0);
+  }
+  #[inline]
+  pub fn add_length(&mut self, length: i32) {
+    self.fbb_.push_slot::<i32>(BloomFilterInfo::VT_LENGTH, length, 0);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> BloomFilterInfoBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    BloomFilterInfoBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<BloomFilterInfo<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    ::flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl ::core::fmt::Debug for BloomFilterInfo<'_> {
+  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+    let mut ds = f.debug_struct("BloomFilterInfo");
+      ds.field("offset", &self.offset());
+      ds.field("length", &self.length());
+      ds.finish()
+  }
+}
 pub enum ColumnMetadataOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -2629,8 +2742,7 @@ impl<'a> ColumnMetadata<'a> {
   pub const VT_DICTIONARY_PAGE_OFFSET: ::flatbuffers::VOffsetT = 18;
   pub const VT_STATISTICS: ::flatbuffers::VOffsetT = 20;
   pub const VT_IS_FULLY_DICT_ENCODED: ::flatbuffers::VOffsetT = 22;
-  pub const VT_BLOOM_FILTER_OFFSET: ::flatbuffers::VOffsetT = 24;
-  pub const VT_BLOOM_FILTER_LENGTH: ::flatbuffers::VOffsetT = 26;
+  pub const VT_BLOOM_FILTER: ::flatbuffers::VOffsetT = 24;
 
   #[inline]
   pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -2642,14 +2754,13 @@ impl<'a> ColumnMetadata<'a> {
     args: &'args ColumnMetadataArgs<'args>
   ) -> ::flatbuffers::WIPOffset<ColumnMetadata<'bldr>> {
     let mut builder = ColumnMetadataBuilder::new(_fbb);
-    if let Some(x) = args.bloom_filter_offset { builder.add_bloom_filter_offset(x); }
     if let Some(x) = args.dictionary_page_offset { builder.add_dictionary_page_offset(x); }
     if let Some(x) = args.index_page_offset { builder.add_index_page_offset(x); }
     builder.add_data_page_offset(args.data_page_offset);
     builder.add_total_compressed_size(args.total_compressed_size);
     builder.add_total_uncompressed_size(args.total_uncompressed_size);
     if let Some(x) = args.num_values { builder.add_num_values(x); }
-    if let Some(x) = args.bloom_filter_length { builder.add_bloom_filter_length(x); }
+    if let Some(x) = args.bloom_filter { builder.add_bloom_filter(x); }
     if let Some(x) = args.statistics { builder.add_statistics(x); }
     if let Some(x) = args.key_value_metadata { builder.add_key_value_metadata(x); }
     builder.add_is_fully_dict_encoded(args.is_fully_dict_encoded);
@@ -2729,18 +2840,11 @@ impl<'a> ColumnMetadata<'a> {
     unsafe { self._tab.get::<bool>(ColumnMetadata::VT_IS_FULLY_DICT_ENCODED, Some(false)).unwrap()}
   }
   #[inline]
-  pub fn bloom_filter_offset(&self) -> Option<i64> {
+  pub fn bloom_filter(&self) -> Option<BloomFilterInfo<'a>> {
     // Safety:
     // Created from valid Table for this object
     // which contains a valid value in this slot
-    unsafe { self._tab.get::<i64>(ColumnMetadata::VT_BLOOM_FILTER_OFFSET, None)}
-  }
-  #[inline]
-  pub fn bloom_filter_length(&self) -> Option<i32> {
-    // Safety:
-    // Created from valid Table for this object
-    // which contains a valid value in this slot
-    unsafe { self._tab.get::<i32>(ColumnMetadata::VT_BLOOM_FILTER_LENGTH, None)}
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<BloomFilterInfo>>(ColumnMetadata::VT_BLOOM_FILTER, None)}
   }
 }
 
@@ -2760,8 +2864,7 @@ impl ::flatbuffers::Verifiable for ColumnMetadata<'_> {
      .visit_field::<i64>("dictionary_page_offset", Self::VT_DICTIONARY_PAGE_OFFSET, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<Statistics>>("statistics", Self::VT_STATISTICS, false)?
      .visit_field::<bool>("is_fully_dict_encoded", Self::VT_IS_FULLY_DICT_ENCODED, false)?
-     .visit_field::<i64>("bloom_filter_offset", Self::VT_BLOOM_FILTER_OFFSET, false)?
-     .visit_field::<i32>("bloom_filter_length", Self::VT_BLOOM_FILTER_LENGTH, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<BloomFilterInfo>>("bloom_filter", Self::VT_BLOOM_FILTER, false)?
      .finish();
     Ok(())
   }
@@ -2777,8 +2880,7 @@ pub struct ColumnMetadataArgs<'a> {
     pub dictionary_page_offset: Option<i64>,
     pub statistics: Option<::flatbuffers::WIPOffset<Statistics<'a>>>,
     pub is_fully_dict_encoded: bool,
-    pub bloom_filter_offset: Option<i64>,
-    pub bloom_filter_length: Option<i32>,
+    pub bloom_filter: Option<::flatbuffers::WIPOffset<BloomFilterInfo<'a>>>,
 }
 impl<'a> Default for ColumnMetadataArgs<'a> {
   #[inline]
@@ -2794,8 +2896,7 @@ impl<'a> Default for ColumnMetadataArgs<'a> {
       dictionary_page_offset: None,
       statistics: None,
       is_fully_dict_encoded: false,
-      bloom_filter_offset: None,
-      bloom_filter_length: None,
+      bloom_filter: None,
     }
   }
 }
@@ -2846,12 +2947,8 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ColumnMetadataBuilder<'a, 'b,
     self.fbb_.push_slot::<bool>(ColumnMetadata::VT_IS_FULLY_DICT_ENCODED, is_fully_dict_encoded, false);
   }
   #[inline]
-  pub fn add_bloom_filter_offset(&mut self, bloom_filter_offset: i64) {
-    self.fbb_.push_slot_always::<i64>(ColumnMetadata::VT_BLOOM_FILTER_OFFSET, bloom_filter_offset);
-  }
-  #[inline]
-  pub fn add_bloom_filter_length(&mut self, bloom_filter_length: i32) {
-    self.fbb_.push_slot_always::<i32>(ColumnMetadata::VT_BLOOM_FILTER_LENGTH, bloom_filter_length);
+  pub fn add_bloom_filter(&mut self, bloom_filter: ::flatbuffers::WIPOffset<BloomFilterInfo<'b >>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<BloomFilterInfo>>(ColumnMetadata::VT_BLOOM_FILTER, bloom_filter);
   }
   #[inline]
   pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> ColumnMetadataBuilder<'a, 'b, A> {
@@ -2881,8 +2978,7 @@ impl ::core::fmt::Debug for ColumnMetadata<'_> {
       ds.field("dictionary_page_offset", &self.dictionary_page_offset());
       ds.field("statistics", &self.statistics());
       ds.field("is_fully_dict_encoded", &self.is_fully_dict_encoded());
-      ds.field("bloom_filter_offset", &self.bloom_filter_offset());
-      ds.field("bloom_filter_length", &self.bloom_filter_length());
+      ds.field("bloom_filter", &self.bloom_filter());
       ds.finish()
   }
 }
@@ -3562,6 +3658,6 @@ pub fn finish_file_meta_data_buffer<'a, 'b, A: ::flatbuffers::Allocator + 'a>(
 pub fn finish_size_prefixed_file_meta_data_buffer<'a, 'b, A: ::flatbuffers::Allocator + 'a>(fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>, root: ::flatbuffers::WIPOffset<FileMetaData<'a>>) {
   fbb.finish_size_prefixed(root, None);
 }
-}  // pub mod format3
+}  // pub mod format
 }  // pub mod parquet
 
