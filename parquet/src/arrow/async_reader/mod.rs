@@ -369,7 +369,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// Each [`ParquetRecordBatchStream`] is independent and can be used to read
     /// from the same underlying source in parallel. Use
     /// [`ParquetRecordBatchStream::next_row_group`] with a single stream to
-    /// begin prefetching the next Row Group. To read a read in parallel, create
+    /// begin prefetching the next Row Group. To read a file in parallel, create
     /// a stream for each subset of the file. For example, you can read each
     /// row group in parallel by creating a stream for each row group using the
     /// [`ParquetRecordBatchStreamBuilder::with_row_groups`] API as shown below
