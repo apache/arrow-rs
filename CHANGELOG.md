@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [58.0.0](https://github.com/apache/arrow-rs/tree/58.0.0) (2026-02-16)
+## [58.0.0](https://github.com/apache/arrow-rs/tree/58.0.0) (2026-02-17)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/57.3.0...58.0.0)
 
@@ -28,6 +28,7 @@
 - Remove support for List types in bit\_length kernel [\#9350](https://github.com/apache/arrow-rs/pull/9350) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([codephage2020](https://github.com/codephage2020))
 - Optimize `from_bitwise_unary_op` [\#9297](https://github.com/apache/arrow-rs/pull/9297) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
 - Mark `BufferBuilder::new_from_buffer` as unsafe [\#9292](https://github.com/apache/arrow-rs/pull/9292) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Jefffrey](https://github.com/Jefffrey))
+- \[Variant\] Support `['fieldName']` in VariantPath parser [\#9276](https://github.com/apache/arrow-rs/pull/9276) ([klion26](https://github.com/klion26))
 - Remove parquet arrow\_cast dependency [\#9077](https://github.com/apache/arrow-rs/pull/9077) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 - feat: change default behavior for Parquet `PageEncodingStats` to bitmask [\#9051](https://github.com/apache/arrow-rs/pull/9051) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([WaterWhisperer](https://github.com/WaterWhisperer))
 - \[arrow\] Minimize allocation in GenericViewArray::slice\(\) [\#9016](https://github.com/apache/arrow-rs/pull/9016) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([maxburke](https://github.com/maxburke))
@@ -85,6 +86,7 @@
 
 - BatchCoalescer::push\_batch panics on schema mismatch instead of returning error [\#9389](https://github.com/apache/arrow-rs/issues/9389)
 - Release arrow-rs / parquet Minor version `57.3.0` \(January 2026\) [\#9240](https://github.com/apache/arrow-rs/issues/9240)
+- \[Variant\] support `..` and `['fieldName']` syntax in the VariantPath parser [\#9050](https://github.com/apache/arrow-rs/issues/9050)
 - Support Float16 for create\_random\_array [\#9028](https://github.com/apache/arrow-rs/issues/9028)
 
 **Merged pull requests:**
@@ -93,6 +95,7 @@
 - Fix `ArrowArrayStreamReader` for 0-columns record batch streams [\#9405](https://github.com/apache/arrow-rs/pull/9405) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jonded94](https://github.com/jonded94))
 - Use zstd::bulk API in IPC and Parquet with context reuse for compression and decompression [\#9400](https://github.com/apache/arrow-rs/pull/9400) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
 - Reproduce the issue of \#9370 in a minimal, end-to-end way [\#9399](https://github.com/apache/arrow-rs/pull/9399) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([jonded94](https://github.com/jonded94))
+- perf: optimize skipper for varint values used when projecting Avro record types [\#9397](https://github.com/apache/arrow-rs/pull/9397) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mzabaluev](https://github.com/mzabaluev))
 - fix: return error instead of panic on schema mismatch in BatchCoalescer::push\_batch [\#9390](https://github.com/apache/arrow-rs/pull/9390) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([bvolpato-dd](https://github.com/bvolpato-dd))
 - Minor: Add additional test coverage for WriterProperties::{max\_row\_group\_row\_count,max\_row\_group\_size} [\#9387](https://github.com/apache/arrow-rs/pull/9387) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Moving invalid\_utf8 tests into a separate mod [\#9384](https://github.com/apache/arrow-rs/pull/9384) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([sdf-jkl](https://github.com/sdf-jkl))
