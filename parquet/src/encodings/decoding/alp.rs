@@ -121,9 +121,6 @@ impl<Exact: AlpExact> AlpEncodedForVectorInfo<Exact> {
 /// `packed_values` is a zero-copy range into page body bytes.
 /// Exception positions/values are copied for straightforward decode handling.
 /// Parsed view of one vector.
-///
-/// `packed_values` is a byte range into [`AlpPageLayout::body`] (zero-copy),
-/// matching the C++ `LoadViewDataOnly` model for packed bytes.
 #[derive(Debug)]
 struct AlpEncodedVectorView<Exact: AlpExact> {
     num_elements: u16,
@@ -140,113 +137,9 @@ struct AlpEncodedVectorView<Exact: AlpExact> {
 struct AlpPageLayout<Exact: AlpExact> {
     header: AlpHeader,
     body: Bytes,
+    #[allow(dead_code)]
     offsets: Vec<u32>,
     vectors: Vec<AlpEncodedVectorView<Exact>>,
-}
-
-/// Type-erased wrapper over parsed `f32`/`f64` page layouts.
-#[derive(Debug)]
-enum AlpPageLayoutAny {
-    F32(AlpPageLayout<u32>),
-    F64(AlpPageLayout<u64>),
-}
-
-impl AlpPageLayoutAny {
-    fn num_vectors(&self) -> usize {
-        match self {
-            Self::F32(layout) => layout.vectors.len(),
-            Self::F64(layout) => layout.vectors.len(),
-        }
-    }
-
-    fn num_offsets(&self) -> usize {
-        match self {
-            Self::F32(layout) => layout.offsets.len(),
-            Self::F64(layout) => layout.offsets.len(),
-        }
-    }
-
-    fn parsed_values(&self) -> usize {
-        match self {
-            Self::F32(layout) => layout.vectors.iter().map(|v| v.num_elements as usize).sum(),
-            Self::F64(layout) => layout.vectors.iter().map(|v| v.num_elements as usize).sum(),
-        }
-    }
-
-    fn total_exceptions(&self) -> usize {
-        match self {
-            Self::F32(layout) => layout
-                .vectors
-                .iter()
-                .map(|v| v.alp_info.num_exceptions as usize)
-                .sum(),
-            Self::F64(layout) => layout
-                .vectors
-                .iter()
-                .map(|v| v.alp_info.num_exceptions as usize)
-                .sum(),
-        }
-    }
-
-    fn total_packed_bytes(&self) -> usize {
-        match self {
-            Self::F32(layout) => layout
-                .vectors
-                .iter()
-                .map(|v| v.packed_values.end - v.packed_values.start)
-                .sum(),
-            Self::F64(layout) => layout
-                .vectors
-                .iter()
-                .map(|v| v.packed_values.end - v.packed_values.start)
-                .sum(),
-        }
-    }
-
-    fn total_exception_bytes(&self) -> usize {
-        match self {
-            Self::F32(layout) => layout
-                .vectors
-                .iter()
-                .map(|v| v.exception_values.len() * std::mem::size_of::<u32>())
-                .sum(),
-            Self::F64(layout) => layout
-                .vectors
-                .iter()
-                .map(|v| v.exception_values.len() * std::mem::size_of::<u64>())
-                .sum(),
-        }
-    }
-
-    fn sum_for_xor(&self) -> u64 {
-        match self {
-            Self::F32(layout) => layout
-                .vectors
-                .iter()
-                .fold(0u64, |acc, v| acc ^ v.for_info.frame_of_reference.to_u64()),
-            Self::F64(layout) => layout
-                .vectors
-                .iter()
-                .fold(0u64, |acc, v| acc ^ v.for_info.frame_of_reference.to_u64()),
-        }
-    }
-
-    fn sum_positions(&self) -> usize {
-        match self {
-            Self::F32(layout) => layout
-                .vectors
-                .iter()
-                .flat_map(|v| v.exception_positions.iter())
-                .map(|v| *v as usize)
-                .sum(),
-            Self::F64(layout) => layout
-                .vectors
-                .iter()
-                .flat_map(|v| v.exception_positions.iter())
-                .map(|v| *v as usize)
-                .sum(),
-        }
-    }
 }
 
 /// Exact integer type used by FOR reconstruction.
@@ -261,21 +154,19 @@ impl AlpPageLayoutAny {
 /// - Signed interpretation is applied later during decimal reconstruction.
 trait AlpExact: Copy + std::fmt::Debug {
     const WIDTH: usize;
+    type Signed: Copy;
     fn from_le_slice(slice: &[u8]) -> Self;
-    fn to_u64(self) -> u64;
     fn zero() -> Self;
     fn wrapping_add(self, rhs: Self) -> Self;
+    fn reinterpret_as_signed(self) -> Self::Signed;
 }
 
 impl AlpExact for u32 {
     const WIDTH: usize = 4;
+    type Signed = i32;
 
     fn from_le_slice(slice: &[u8]) -> Self {
         u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]])
-    }
-
-    fn to_u64(self) -> u64 {
-        self as u64
     }
 
     fn zero() -> Self {
@@ -285,10 +176,15 @@ impl AlpExact for u32 {
     fn wrapping_add(self, rhs: Self) -> Self {
         self.wrapping_add(rhs)
     }
+
+    fn reinterpret_as_signed(self) -> Self::Signed {
+        i32::from_ne_bytes(self.to_ne_bytes())
+    }
 }
 
 impl AlpExact for u64 {
     const WIDTH: usize = 8;
+    type Signed = i64;
 
     fn from_le_slice(slice: &[u8]) -> Self {
         u64::from_le_bytes([
@@ -296,16 +192,130 @@ impl AlpExact for u64 {
         ])
     }
 
-    fn to_u64(self) -> u64 {
-        self
-    }
-
     fn zero() -> Self {
         0
     }
 
     fn wrapping_add(self, rhs: Self) -> Self {
         self.wrapping_add(rhs)
+    }
+
+    fn reinterpret_as_signed(self) -> Self::Signed {
+        i64::from_ne_bytes(self.to_ne_bytes())
+    }
+}
+
+const ALP_I64_POW10: [i64; 19] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+];
+
+const ALP_NEG_POW10_F32: [f32; 11] = [
+    1.0,
+    0.1,
+    0.01,
+    0.001,
+    0.0001,
+    0.00001,
+    0.000001,
+    0.0000001,
+    0.00000001,
+    0.000000001,
+    0.0000000001,
+];
+
+const ALP_NEG_POW10_F64: [f64; 19] = [
+    1.0,
+    0.1,
+    0.01,
+    0.001,
+    0.0001,
+    0.00001,
+    0.000001,
+    0.0000001,
+    0.00000001,
+    0.000000001,
+    0.0000000001,
+    0.00000000001,
+    0.000000000001,
+    0.0000000000001,
+    0.00000000000001,
+    0.000000000000001,
+    0.0000000000000001,
+    0.00000000000000001,
+    0.000000000000000001,
+];
+
+trait AlpFloat: Copy + Default {
+    type Exact: AlpExact + FromBytes;
+
+    fn decode_value(
+        signed_encoded: <Self::Exact as AlpExact>::Signed,
+        exponent: u8,
+        factor: u8,
+    ) -> Result<Self>;
+
+    fn from_exact_bits(bits: Self::Exact) -> Self;
+}
+
+impl AlpFloat for f32 {
+    type Exact = u32;
+
+    fn decode_value(signed_encoded: i32, exponent: u8, factor: u8) -> Result<Self> {
+        let factor_multiplier = ALP_I64_POW10
+            .get(factor as usize)
+            .ok_or_else(|| general_err!("Invalid ALP page: factor {} exceeds max 18", factor))?;
+        let exponent_multiplier = ALP_NEG_POW10_F32.get(exponent as usize).ok_or_else(|| {
+            general_err!(
+                "Invalid ALP page: exponent {} exceeds max {} for f32",
+                exponent,
+                ALP_NEG_POW10_F32.len() - 1
+            )
+        })?;
+        Ok((signed_encoded as f32) * (*factor_multiplier as f32) * *exponent_multiplier)
+    }
+
+    fn from_exact_bits(bits: Self::Exact) -> Self {
+        f32::from_bits(bits)
+    }
+}
+
+impl AlpFloat for f64 {
+    type Exact = u64;
+
+    fn decode_value(signed_encoded: i64, exponent: u8, factor: u8) -> Result<Self> {
+        let factor_multiplier = ALP_I64_POW10
+            .get(factor as usize)
+            .ok_or_else(|| general_err!("Invalid ALP page: factor {} exceeds max 18", factor))?;
+        let exponent_multiplier = ALP_NEG_POW10_F64.get(exponent as usize).ok_or_else(|| {
+            general_err!(
+                "Invalid ALP page: exponent {} exceeds max {} for f64",
+                exponent,
+                ALP_NEG_POW10_F64.len() - 1
+            )
+        })?;
+        Ok((signed_encoded as f64) * (*factor_multiplier as f64) * *exponent_multiplier)
+    }
+
+    fn from_exact_bits(bits: Self::Exact) -> Self {
+        f64::from_bits(bits)
     }
 }
 
@@ -584,6 +594,7 @@ fn inverse_for<Exact: AlpExact>(deltas: &mut [Exact], frame_of_reference: Exact)
 }
 
 /// Patch exception values at their original positions.
+#[cfg(test)]
 fn patch_exceptions<Exact: AlpExact>(
     decoded: &mut [Exact],
     exception_positions: &[u16],
@@ -614,6 +625,7 @@ fn patch_exceptions<Exact: AlpExact>(
 
 /// Decode one vector to exact integers:
 /// bit-unpack -> inverse FOR -> exception patch.
+#[cfg(test)]
 fn decode_vector_exact<Exact: AlpExact + FromBytes>(
     body: &[u8],
     vector: &AlpEncodedVectorView<Exact>,
@@ -632,118 +644,115 @@ fn decode_vector_exact<Exact: AlpExact + FromBytes>(
     Ok(decoded)
 }
 
-/// Decode all vectors in a page into exact integers (still pre-decimal reconstruction).
-fn decode_page_exact<Exact: AlpExact + FromBytes>(layout: &AlpPageLayout<Exact>) -> Result<Vec<Exact>> {
+/// Decode one vector into output floating values:
+/// bit-unpack -> inverse FOR -> decimal decode -> patch exceptions.
+fn decode_vector_values<Value: AlpFloat>(
+    body: &[u8],
+    vector: &AlpEncodedVectorView<Value::Exact>,
+) -> Result<Vec<Value>> {
+    let mut exact_values = bit_unpack_integers(
+        &body[vector.packed_values.clone()],
+        vector.for_info.bit_width,
+        vector.num_elements,
+    )?;
+    inverse_for(&mut exact_values, vector.for_info.frame_of_reference);
+
+    let mut out = Vec::with_capacity(vector.num_elements as usize);
+    for exact_value in exact_values {
+        let signed_value = exact_value.reinterpret_as_signed();
+        out.push(Value::decode_value(
+            signed_value,
+            vector.alp_info.exponent,
+            vector.alp_info.factor,
+        )?);
+    }
+
+    if vector.exception_positions.len() != vector.exception_values.len() {
+        return Err(general_err!(
+            "Invalid ALP page: exception positions ({}) and values ({}) length mismatch",
+            vector.exception_positions.len(),
+            vector.exception_values.len()
+        ));
+    }
+
+    for (pos, value_bits) in vector
+        .exception_positions
+        .iter()
+        .zip(vector.exception_values.iter())
+    {
+        let pos = *pos as usize;
+        if pos >= out.len() {
+            return Err(general_err!(
+                "Invalid ALP page: exception position {} out of bounds for vector length {}",
+                pos,
+                out.len()
+            ));
+        }
+        out[pos] = Value::from_exact_bits(*value_bits);
+    }
+
+    Ok(out)
+}
+
+fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout<Value::Exact>) -> Result<Vec<Value>> {
     let mut out = Vec::with_capacity(layout.header.num_elements_usize());
     for vector in &layout.vectors {
-        out.extend_from_slice(&decode_vector_exact(layout.body.as_ref(), vector)?);
+        out.extend_from_slice(&decode_vector_values::<Value>(
+            layout.body.as_ref(),
+            vector,
+        )?);
     }
     Ok(out)
 }
 
 pub(crate) struct AlpDecoder<T: DataType> {
-    num_values: usize,
-    layout: Option<AlpPageLayoutAny>,
+    decoded_values: Vec<T::T>,
+    values_decoded: usize,
     _marker: PhantomData<T>,
 }
 
 impl<T: DataType> AlpDecoder<T> {
     pub(crate) fn new() -> Self {
         Self {
-            num_values: 0,
-            layout: None,
+            decoded_values: Vec::new(),
+            values_decoded: 0,
             _marker: PhantomData,
         }
     }
 }
 
-impl<T: DataType> Decoder<T> for AlpDecoder<T> {
+impl<T: DataType> Decoder<T> for AlpDecoder<T>
+where
+    T::T: AlpFloat,
+{
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
-        let layout = match std::mem::size_of::<T::T>() {
-            4 => AlpPageLayoutAny::F32(parse_alp_page_layout::<u32>(data)?),
-            8 => AlpPageLayoutAny::F64(parse_alp_page_layout::<u64>(data)?),
-            type_size => {
-                return Err(general_err!(
-                    "Invalid ALP page: exact type size {} is unsupported",
-                    type_size
-                ))
-            }
-        };
+        let layout = parse_alp_page_layout::<<T::T as AlpFloat>::Exact>(data)?;
 
-        let header_num_elements = match &layout {
-            AlpPageLayoutAny::F32(layout) => layout.header.num_elements,
-            AlpPageLayoutAny::F64(layout) => layout.header.num_elements,
-        };
-
-        if header_num_elements as usize != num_values {
+        if layout.header.num_elements_usize() != num_values {
             return Err(general_err!(
                 "Invalid ALP page: header num_elements {} does not match page num_values {}",
-                header_num_elements,
+                layout.header.num_elements,
                 num_values
             ));
         }
 
-        self.num_values = num_values;
-        self.layout = Some(layout);
+        self.decoded_values = decode_page_values::<T::T>(&layout)?;
+        self.values_decoded = 0;
         Ok(())
     }
 
-    fn get(&mut self, _buffer: &mut [T::T]) -> Result<usize> {
-        let num_vectors = self.layout.as_ref().map(|layout| layout.num_vectors()).unwrap_or(0);
-        let num_offsets = self.layout.as_ref().map(|layout| layout.num_offsets()).unwrap_or(0);
-        let parsed_values = self
-            .layout
-            .as_ref()
-            .map(|layout| layout.parsed_values())
-            .unwrap_or(0);
-        let total_exceptions = self
-            .layout
-            .as_ref()
-            .map(|layout| layout.total_exceptions())
-            .unwrap_or(0);
-        let total_packed_bytes = self
-            .layout
-            .as_ref()
-            .map(|layout| layout.total_packed_bytes())
-            .unwrap_or(0);
-        let total_exception_bytes = self
-            .layout
-            .as_ref()
-            .map(|layout| layout.total_exception_bytes())
-            .unwrap_or(0);
-        let sum_for = self.layout.as_ref().map(|layout| layout.sum_for_xor()).unwrap_or(0);
-        let sum_positions = self
-            .layout
-            .as_ref()
-            .map(|layout| layout.sum_positions())
-            .unwrap_or(0);
-
-        let decoded_checksum = match self.layout.as_ref() {
-            Some(AlpPageLayoutAny::F32(layout)) => decode_page_exact(layout)?
-                .into_iter()
-                .fold(0u64, |acc, v| acc ^ v.to_u64()),
-            Some(AlpPageLayoutAny::F64(layout)) => decode_page_exact(layout)?
-                .into_iter()
-                .fold(0u64, |acc, v| acc ^ v.to_u64()),
-            None => 0,
-        };
-
-        Err(nyi_err!(
-            "Encoding ALP page layout parsed ({} vectors, {} offsets, {} values, {} exceptions, {} packed bytes, {} exception bytes, for-xor {}, pos-sum {}, decoded-xor {}), value decoding is not implemented",
-            num_vectors,
-            num_offsets,
-            parsed_values,
-            total_exceptions,
-            total_packed_bytes,
-            total_exception_bytes,
-            sum_for,
-            sum_positions,
-            decoded_checksum
-        ))
+    fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
+        let num_values = buffer.len().min(self.values_left());
+        let end = self.values_decoded + num_values;
+        buffer[..num_values].copy_from_slice(&self.decoded_values[self.values_decoded..end]);
+        self.values_decoded = end;
+        Ok(num_values)
     }
 
     fn values_left(&self) -> usize {
-        self.num_values
+        self.decoded_values
+            .len()
+            .saturating_sub(self.values_decoded)
     }
 
     fn encoding(&self) -> Encoding {
@@ -751,8 +760,8 @@ impl<T: DataType> Decoder<T> for AlpDecoder<T> {
     }
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
-        let skipped = num_values.min(self.num_values);
-        self.num_values -= skipped;
+        let skipped = num_values.min(self.values_left());
+        self.values_decoded += skipped;
         Ok(skipped)
     }
 }

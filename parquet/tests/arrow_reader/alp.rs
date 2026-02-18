@@ -16,10 +16,12 @@
 // under the License.
 
 use arrow::util::test_util::parquet_test_data;
+use arrow_array::cast::as_primitive_array;
+use arrow_array::types::Float64Type;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 
 #[test]
-fn test_read_single_f64_alp_page_layout() {
+fn test_read_single_f64_alp() {
     let path = std::path::PathBuf::from(parquet_test_data()).join("single_f64_ALP.parquet");
     if !path.exists() {
         eprintln!("Skipping ALP test file not found: {}", path.display());
@@ -29,13 +31,22 @@ fn test_read_single_f64_alp_page_layout() {
     let file = std::fs::File::open(path).unwrap();
     let mut reader = ArrowReaderBuilder::try_new(file).unwrap().build().unwrap();
 
-    let err = loop {
+    let mut total_rows = 0usize;
+    let mut first_value = None;
+    loop {
         match reader.next() {
-            Some(Ok(_)) => continue,
-            Some(Err(err)) => break err,
-            None => panic!("Expected ALP decode to fail with NYI"),
+            Some(Ok(batch)) => {
+                total_rows += batch.num_rows();
+                if first_value.is_none() && batch.num_rows() > 0 {
+                    let values = as_primitive_array::<Float64Type>(batch.column(0).as_ref());
+                    first_value = Some(values.value(0));
+                }
+            }
+            Some(Err(err)) => panic!("Unexpected ALP decode error: {err}"),
+            None => break,
         }
-    };
+    }
 
-    assert!(err.to_string().contains("Encoding ALP page layout parsed"));
+    assert_eq!(total_rows, 1024);
+    assert_eq!(first_value, Some(0.125));
 }
