@@ -1768,11 +1768,9 @@ mod tests {
             let pool = TrackingMemoryPool::default();
 
             let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-            let batch = RecordBatch::try_new(
-                schema,
-                vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-            )
-            .unwrap();
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                    .unwrap();
 
             batch.claim(&pool);
             let first = pool.used();
