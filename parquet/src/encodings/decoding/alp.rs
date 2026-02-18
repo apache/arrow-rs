@@ -24,6 +24,7 @@ use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::decoding::Decoder;
 use crate::errors::{ParquetError, Result};
+use crate::util::bit_util::{BitReader, FromBytes};
 
 const ALP_HEADER_SIZE: usize = 8;
 const ALP_VERSION: u8 = 1;
@@ -39,8 +40,6 @@ const ALP_MAX_LOG_VECTOR_SIZE: u8 = 16;
 /// - `[2]` `integer_encoding`
 /// - `[3]` `log_vector_size`
 /// - `[4..8]` `num_elements` (little-endian `i32`)
-///
-/// This mirrors the C++ `AlpHeader` in `arrow/util/alp/alp_wrapper.cc`.
 #[derive(Debug, Clone, Copy)]
 struct AlpHeader {
     version: u8,
@@ -52,19 +51,13 @@ struct AlpHeader {
 
 impl AlpHeader {
     fn num_elements_usize(&self) -> usize {
-        // `num_elements` is serialized as i32, matching Parquet page header `num_values`.
-        // Parsing rejects negative values, so this conversion is safe.
         self.num_elements as usize
     }
 
-    /// Returns `2 ^ log_vector_size`.
     fn vector_size(&self) -> usize {
         1usize << self.log_vector_size
     }
 
-    /// Number of vectors in the page.
-    ///
-    /// All vectors are full-sized except possibly the last one.
     fn num_vectors(&self) -> usize {
         if self.num_elements == 0 {
             0
@@ -73,7 +66,6 @@ impl AlpHeader {
         }
     }
 
-    /// Number of logical values in `vector_index`.
     fn vector_num_elements(&self, vector_index: usize) -> u16 {
         let vector_size = self.vector_size();
         let num_full_vectors = self.num_elements_usize() / vector_size;
@@ -89,11 +81,6 @@ impl AlpHeader {
 }
 
 /// Per-vector ALP metadata (4 bytes), equivalent to C++ `AlpEncodedVectorInfo`.
-///
-/// Layout in bytes:
-/// - `[0]` `exponent`
-/// - `[1]` `factor`
-/// - `[2..4]` `num_exceptions` (little-endian `u16`)
 #[derive(Debug, Clone, Copy)]
 struct AlpEncodedVectorInfo {
     exponent: u8,
@@ -105,8 +92,7 @@ impl AlpEncodedVectorInfo {
     const STORED_SIZE: usize = 4;
 }
 
-/// Per-vector FOR metadata for a given exact integer type (`u32` for `f32`,
-/// `u64` for `f64`), equivalent to C++ `AlpEncodedForVectorInfo<T>`.
+/// Per-vector FOR metadata for exact integer type (`u32` for `f32`, `u64` for `f64`).
 #[derive(Debug, Clone, Copy)]
 struct AlpEncodedForVectorInfo<Exact: AlpExact> {
     frame_of_reference: Exact,
@@ -114,18 +100,14 @@ struct AlpEncodedForVectorInfo<Exact: AlpExact> {
 }
 
 impl<Exact: AlpExact> AlpEncodedForVectorInfo<Exact> {
-    /// Serialized size of FOR metadata (`Exact::WIDTH + 1` for `bit_width`).
     fn stored_size() -> usize {
         Exact::WIDTH + 1
     }
 
-    /// Number of bytes used for bit-packed encoded integers.
     fn get_bit_packed_size(&self, num_elements: u16) -> usize {
         (self.bit_width as usize * num_elements as usize).div_ceil(8)
     }
 
-    /// Data-only size:
-    /// `[packed_values][exception_positions][exception_values]`
     fn get_data_stored_size(&self, num_elements: u16, num_exceptions: u16) -> usize {
         let bit_packed_size = self.get_bit_packed_size(num_elements);
         bit_packed_size
@@ -136,9 +118,12 @@ impl<Exact: AlpExact> AlpEncodedForVectorInfo<Exact> {
 
 /// Parsed view of one vector's metadata and data slices.
 ///
-/// Note:
-/// - `packed_values` is expressed as a range into the vector data section
-/// - exceptions are copied into owned vectors for safety and simplicity
+/// `packed_values` is a zero-copy range into page body bytes.
+/// Exception positions/values are copied for straightforward decode handling.
+/// Parsed view of one vector.
+///
+/// `packed_values` is a byte range into [`AlpPageLayout::body`] (zero-copy),
+/// matching the C++ `LoadViewDataOnly` model for packed bytes.
 #[derive(Debug)]
 struct AlpEncodedVectorView<Exact: AlpExact> {
     num_elements: u16,
@@ -146,21 +131,20 @@ struct AlpEncodedVectorView<Exact: AlpExact> {
     for_info: AlpEncodedForVectorInfo<Exact>,
     packed_values: Range<usize>,
     exception_positions: Vec<u16>,
-    exception_values: Vec<u8>,
+    exception_values: Vec<Exact>,
 }
 
-/// Parsed ALP layout for a page with a concrete exact integer type.
-///
-/// `Exact = u32` for `f32` pages and `Exact = u64` for `f64` pages.
+/// Parsed ALP page layout for one exact integer width (`u32` for float pages,
+/// `u64` for double pages).
 #[derive(Debug)]
 struct AlpPageLayout<Exact: AlpExact> {
     header: AlpHeader,
+    body: Bytes,
     offsets: Vec<u32>,
     vectors: Vec<AlpEncodedVectorView<Exact>>,
 }
 
-/// Type-erased page layout used by `AlpDecoder<T>` so we can keep one decoder
-/// implementation while preserving exact-width FOR storage.
+/// Type-erased wrapper over parsed `f32`/`f64` page layouts.
 #[derive(Debug)]
 enum AlpPageLayoutAny {
     F32(AlpPageLayout<u32>),
@@ -221,8 +205,16 @@ impl AlpPageLayoutAny {
 
     fn total_exception_bytes(&self) -> usize {
         match self {
-            Self::F32(layout) => layout.vectors.iter().map(|v| v.exception_values.len()).sum(),
-            Self::F64(layout) => layout.vectors.iter().map(|v| v.exception_values.len()).sum(),
+            Self::F32(layout) => layout
+                .vectors
+                .iter()
+                .map(|v| v.exception_values.len() * std::mem::size_of::<u32>())
+                .sum(),
+            Self::F64(layout) => layout
+                .vectors
+                .iter()
+                .map(|v| v.exception_values.len() * std::mem::size_of::<u64>())
+                .sum(),
         }
     }
 
@@ -264,18 +256,15 @@ impl AlpPageLayoutAny {
 /// - `double` -> `uint64_t`
 ///
 /// Why unsigned (not `i32`/`i64`)?
-/// - FOR computes and stores deltas (`value - frame_of_reference`) that are
-///   encoded with bitpacking and are naturally treated as non-negative bit
-///   patterns.
-/// - Using unsigned exact-width integers avoids signed-overflow edge cases in
-///   the FOR stage and matches the C++ implementation's arithmetic model.
-/// - Signed interpretation is still applied later during ALP decimal
-///   reconstruction (after inverse FOR), so we preserve behavior while keeping
-///   FOR metadata compact and byte-compatible.
+/// - FOR stores non-negative deltas optimized for bitpacking.
+/// - Unsigned arithmetic avoids signed-overflow edge cases in FOR stage.
+/// - Signed interpretation is applied later during decimal reconstruction.
 trait AlpExact: Copy + std::fmt::Debug {
     const WIDTH: usize;
     fn from_le_slice(slice: &[u8]) -> Self;
     fn to_u64(self) -> u64;
+    fn zero() -> Self;
+    fn wrapping_add(self, rhs: Self) -> Self;
 }
 
 impl AlpExact for u32 {
@@ -287,6 +276,14 @@ impl AlpExact for u32 {
 
     fn to_u64(self) -> u64 {
         self as u64
+    }
+
+    fn zero() -> Self {
+        0
+    }
+
+    fn wrapping_add(self, rhs: Self) -> Self {
+        self.wrapping_add(rhs)
     }
 }
 
@@ -302,30 +299,39 @@ impl AlpExact for u64 {
     fn to_u64(self) -> u64 {
         self
     }
+
+    fn zero() -> Self {
+        0
+    }
+
+    fn wrapping_add(self, rhs: Self) -> Self {
+        self.wrapping_add(rhs)
+    }
 }
 
-/// Parse and validate a full ALP page body.
+/// Parse and validate a full ALP-encoded page body.
 ///
-/// The caller provides `Exact` (`u32` or `u64`) based on the physical type.
-/// Parsing validates:
-/// - header fields and version
-/// - offsets section bounds and monotonicity
-/// - per-vector metadata and data section sizes
-fn parse_alp_page_layout<Exact: AlpExact>(data: &[u8]) -> Result<AlpPageLayout<Exact>> {
-    if data.len() < ALP_HEADER_SIZE {
+/// Validation includes:
+/// - header fields/version/encoding
+/// - non-negative `num_elements`
+/// - offsets bounds + monotonicity
+/// - per-vector metadata/data section lengths
+fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<Exact>> {
+    let data_ref = data.as_ref();
+    if data_ref.len() < ALP_HEADER_SIZE {
         return Err(general_err!(
             "Invalid ALP page: expected at least {} bytes for header, got {}",
             ALP_HEADER_SIZE,
-            data.len()
+            data_ref.len()
         ));
     }
 
     let header = AlpHeader {
-        version: data[0],
-        compression_mode: data[1],
-        integer_encoding: data[2],
-        log_vector_size: data[3],
-        num_elements: i32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+        version: data_ref[0],
+        compression_mode: data_ref[1],
+        integer_encoding: data_ref[2],
+        log_vector_size: data_ref[3],
+        num_elements: i32::from_le_bytes([data_ref[4], data_ref[5], data_ref[6], data_ref[7]]),
     };
 
     if header.version != ALP_VERSION {
@@ -357,6 +363,7 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: &[u8]) -> Result<AlpPageLayout<E
             ALP_MAX_LOG_VECTOR_SIZE
         ));
     }
+
     if header.num_elements < 0 {
         return Err(general_err!(
             "Invalid ALP page: num_elements {} must be >= 0",
@@ -373,26 +380,30 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: &[u8]) -> Result<AlpPageLayout<E
         .checked_add(offsets_len)
         .ok_or_else(|| general_err!("Invalid ALP page: header + offsets length overflow"))?;
 
-    if data.len() < offsets_end {
+    if data_ref.len() < offsets_end {
         return Err(general_err!(
             "Invalid ALP page: expected at least {} bytes for {} offsets, got {}",
             offsets_end,
             num_vectors,
-            data.len()
+            data_ref.len()
         ));
     }
 
-    let body_len = data.len() - ALP_HEADER_SIZE;
+    let body = data.slice(ALP_HEADER_SIZE..);
+    let body_ref = body.as_ref();
+    let body_len = body_ref.len();
     let offsets_section_size = num_vectors * std::mem::size_of::<u32>();
+
     let mut offsets = Vec::with_capacity(num_vectors);
     for i in 0..num_vectors {
         let start = ALP_HEADER_SIZE + i * 4;
         let offset = u32::from_le_bytes([
-            data[start],
-            data[start + 1],
-            data[start + 2],
-            data[start + 3],
+            data_ref[start],
+            data_ref[start + 1],
+            data_ref[start + 2],
+            data_ref[start + 3],
         ]);
+
         if offset as usize >= body_len {
             return Err(general_err!(
                 "Invalid ALP page: vector offset {} out of bounds for body length {}",
@@ -400,6 +411,7 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: &[u8]) -> Result<AlpPageLayout<E
                 body_len
             ));
         }
+
         if (offset as usize) < offsets_section_size {
             return Err(general_err!(
                 "Invalid ALP page: vector offset {} points into offsets section {}",
@@ -407,10 +419,10 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: &[u8]) -> Result<AlpPageLayout<E
                 offsets_section_size
             ));
         }
+
         offsets.push(offset);
     }
 
-    let body = &data[ALP_HEADER_SIZE..];
     let mut vectors = Vec::with_capacity(num_vectors);
     for (vector_idx, vector_offset) in offsets.iter().enumerate() {
         let vector_start = *vector_offset as usize;
@@ -428,31 +440,34 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: &[u8]) -> Result<AlpPageLayout<E
         }
 
         let vector_num_elements = header.vector_num_elements(vector_idx);
-        let vector_view = parse_vector_view(
-            &body[vector_start..vector_end],
+        vectors.push(parse_vector_view::<Exact>(
+            body_ref,
+            vector_start,
+            vector_end,
             vector_num_elements,
-        )?;
-        vectors.push(vector_view);
+        )?);
     }
 
     Ok(AlpPageLayout {
         header,
+        body,
         offsets,
         vectors,
     })
 }
 
-/// Parse one vector:
-/// `[AlpEncodedVectorInfo][AlpEncodedForVectorInfo][data-only section]`
-///
-/// Data-only section layout:
-/// `[packed_values][exception_positions][exception_values]`
+/// Parse a single vector section:
+/// `[AlpInfo][ForInfo][PackedValues][ExceptionPositions][ExceptionValues]`.
 fn parse_vector_view<Exact: AlpExact>(
-    vector_bytes: &[u8],
+    body: &[u8],
+    vector_start: usize,
+    vector_end: usize,
     num_elements: u16,
 ) -> Result<AlpEncodedVectorView<Exact>> {
-    let metadata_size = AlpEncodedVectorInfo::STORED_SIZE
-        + AlpEncodedForVectorInfo::<Exact>::stored_size();
+    let vector_bytes = &body[vector_start..vector_end];
+
+    let metadata_size =
+        AlpEncodedVectorInfo::STORED_SIZE + AlpEncodedForVectorInfo::<Exact>::stored_size();
     if vector_bytes.len() < metadata_size {
         return Err(general_err!(
             "Invalid ALP page: vector metadata too short, expected at least {} bytes, got {}",
@@ -471,6 +486,7 @@ fn parse_vector_view<Exact: AlpExact>(
     let for_end = for_start + Exact::WIDTH;
     let frame_of_reference = Exact::from_le_slice(&vector_bytes[for_start..for_end]);
     let bit_width = vector_bytes[for_end];
+
     if bit_width as usize > Exact::WIDTH * 8 {
         return Err(general_err!(
             "Invalid ALP page: bit width {} exceeds {}",
@@ -509,16 +525,120 @@ fn parse_vector_view<Exact: AlpExact>(
     for chunk in data[positions_start..positions_end].chunks_exact(2) {
         exception_positions.push(u16::from_le_bytes([chunk[0], chunk[1]]));
     }
-    let exception_values = data[values_start..values_end].to_vec();
+
+    let packed_values =
+        (vector_start + metadata_size + packed_start)..(vector_start + metadata_size + packed_end);
+
+    let mut exception_values = Vec::with_capacity(alp_info.num_exceptions as usize);
+    for chunk in data[values_start..values_end].chunks_exact(Exact::WIDTH) {
+        exception_values.push(Exact::from_le_slice(chunk));
+    }
 
     Ok(AlpEncodedVectorView {
         num_elements,
         alp_info,
         for_info,
-        packed_values: packed_start..packed_end,
+        packed_values,
         exception_positions,
         exception_values,
     })
+}
+
+/// Decode bit-packed deltas into exact integers.
+fn bit_unpack_integers<Exact: AlpExact + FromBytes>(
+    packed_values: &[u8],
+    bit_width: u8,
+    num_elements: u16,
+) -> Result<Vec<Exact>> {
+    if bit_width as usize > Exact::WIDTH * 8 {
+        return Err(general_err!(
+            "Invalid ALP page: bit width {} exceeds {}",
+            bit_width,
+            Exact::WIDTH * 8
+        ));
+    }
+
+    if bit_width == 0 {
+        return Ok(vec![Exact::zero(); num_elements as usize]);
+    }
+
+    let mut out = vec![Exact::zero(); num_elements as usize];
+    let mut reader = BitReader::new(Bytes::copy_from_slice(packed_values));
+    let read = reader.get_batch::<Exact>(&mut out, bit_width as usize);
+    if read != out.len() {
+        return Err(general_err!(
+            "Invalid ALP page: bit unpack read {} values, expected {}",
+            read,
+            out.len()
+        ));
+    }
+
+    Ok(out)
+}
+
+/// Apply inverse FOR: `decoded = delta + frame_of_reference`.
+fn inverse_for<Exact: AlpExact>(deltas: &mut [Exact], frame_of_reference: Exact) {
+    for value in deltas {
+        *value = value.wrapping_add(frame_of_reference);
+    }
+}
+
+/// Patch exception values at their original positions.
+fn patch_exceptions<Exact: AlpExact>(
+    decoded: &mut [Exact],
+    exception_positions: &[u16],
+    exception_values: &[Exact],
+) -> Result<()> {
+    if exception_positions.len() != exception_values.len() {
+        return Err(general_err!(
+            "Invalid ALP page: exception positions ({}) and values ({}) length mismatch",
+            exception_positions.len(),
+            exception_values.len()
+        ));
+    }
+
+    for (pos, value) in exception_positions.iter().zip(exception_values.iter()) {
+        let pos = *pos as usize;
+        if pos >= decoded.len() {
+            return Err(general_err!(
+                "Invalid ALP page: exception position {} out of bounds for vector length {}",
+                pos,
+                decoded.len()
+            ));
+        }
+        decoded[pos] = *value;
+    }
+
+    Ok(())
+}
+
+/// Decode one vector to exact integers:
+/// bit-unpack -> inverse FOR -> exception patch.
+fn decode_vector_exact<Exact: AlpExact + FromBytes>(
+    body: &[u8],
+    vector: &AlpEncodedVectorView<Exact>,
+) -> Result<Vec<Exact>> {
+    let mut decoded = bit_unpack_integers(
+        &body[vector.packed_values.clone()],
+        vector.for_info.bit_width,
+        vector.num_elements,
+    )?;
+    inverse_for(&mut decoded, vector.for_info.frame_of_reference);
+    patch_exceptions(
+        &mut decoded,
+        &vector.exception_positions,
+        &vector.exception_values,
+    )?;
+    Ok(decoded)
+}
+
+/// Decode all vectors in a page into exact integers (still pre-decimal reconstruction).
+fn decode_page_exact<Exact: AlpExact + FromBytes>(layout: &AlpPageLayout<Exact>) -> Result<Vec<Exact>> {
+    let mut out = Vec::with_capacity(layout.header.num_elements_usize());
+    for vector in &layout.vectors {
+        out.extend_from_slice(&decode_vector_exact(layout.body.as_ref(), vector)?);
+    }
+    Ok(out)
 }
 
 pub(crate) struct AlpDecoder<T: DataType> {
@@ -539,10 +659,9 @@ impl<T: DataType> AlpDecoder<T> {
 
 impl<T: DataType> Decoder<T> for AlpDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
-        // Keep exact-width FOR values per page type, matching C++ layout choices.
         let layout = match std::mem::size_of::<T::T>() {
-            4 => AlpPageLayoutAny::F32(parse_alp_page_layout::<u32>(data.as_ref())?),
-            8 => AlpPageLayoutAny::F64(parse_alp_page_layout::<u64>(data.as_ref())?),
+            4 => AlpPageLayoutAny::F32(parse_alp_page_layout::<u32>(data)?),
+            8 => AlpPageLayoutAny::F64(parse_alp_page_layout::<u64>(data)?),
             type_size => {
                 return Err(general_err!(
                     "Invalid ALP page: exact type size {} is unsupported",
@@ -550,10 +669,12 @@ impl<T: DataType> Decoder<T> for AlpDecoder<T> {
                 ))
             }
         };
+
         let header_num_elements = match &layout {
             AlpPageLayoutAny::F32(layout) => layout.header.num_elements,
             AlpPageLayoutAny::F64(layout) => layout.header.num_elements,
         };
+
         if header_num_elements as usize != num_values {
             return Err(general_err!(
                 "Invalid ALP page: header num_elements {} does not match page num_values {}",
@@ -568,7 +689,6 @@ impl<T: DataType> Decoder<T> for AlpDecoder<T> {
     }
 
     fn get(&mut self, _buffer: &mut [T::T]) -> Result<usize> {
-        // Layout parsing succeeds in `set_data`; value decode is implemented next.
         let num_vectors = self.layout.as_ref().map(|layout| layout.num_vectors()).unwrap_or(0);
         let num_offsets = self.layout.as_ref().map(|layout| layout.num_offsets()).unwrap_or(0);
         let parsed_values = self
@@ -597,8 +717,19 @@ impl<T: DataType> Decoder<T> for AlpDecoder<T> {
             .as_ref()
             .map(|layout| layout.sum_positions())
             .unwrap_or(0);
+
+        let decoded_checksum = match self.layout.as_ref() {
+            Some(AlpPageLayoutAny::F32(layout)) => decode_page_exact(layout)?
+                .into_iter()
+                .fold(0u64, |acc, v| acc ^ v.to_u64()),
+            Some(AlpPageLayoutAny::F64(layout)) => decode_page_exact(layout)?
+                .into_iter()
+                .fold(0u64, |acc, v| acc ^ v.to_u64()),
+            None => 0,
+        };
+
         Err(nyi_err!(
-            "Encoding ALP page layout parsed ({} vectors, {} offsets, {} values, {} exceptions, {} packed bytes, {} exception bytes, for-xor {}, pos-sum {}), value decoding is not implemented",
+            "Encoding ALP page layout parsed ({} vectors, {} offsets, {} values, {} exceptions, {} packed bytes, {} exception bytes, for-xor {}, pos-sum {}, decoded-xor {}), value decoding is not implemented",
             num_vectors,
             num_offsets,
             parsed_values,
@@ -606,7 +737,8 @@ impl<T: DataType> Decoder<T> for AlpDecoder<T> {
             total_packed_bytes,
             total_exception_bytes,
             sum_for,
-            sum_positions
+            sum_positions,
+            decoded_checksum
         ))
     }
 
@@ -653,9 +785,8 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_valid() {
-        // num_elements=4 with vector_size=4 -> one vector, one offset entry.
         let data = make_alp_page_bytes(1, 0, 0, 2, 4, &[4], 13);
-        let parsed = parse_alp_page_layout::<u64>(&data).unwrap();
+        let parsed = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap();
         assert_eq!(parsed.header.version, 1);
         assert_eq!(parsed.header.num_elements, 4);
         assert_eq!(parsed.offsets, vec![4]);
@@ -663,7 +794,7 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_short_header() {
-        let err = parse_alp_page_layout::<u64>(&[0, 1, 2]).unwrap_err();
+        let err = parse_alp_page_layout::<u64>(Bytes::from_static(&[0, 1, 2])).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Invalid ALP page: expected at least 8 bytes for header")
@@ -673,7 +804,7 @@ mod tests {
     #[test]
     fn test_parse_alp_page_layout_invalid_log_vector_size() {
         let data = make_alp_page_bytes(1, 0, 0, 17, 1, &[4], 8);
-        let err = parse_alp_page_layout::<u64>(&data).unwrap_err();
+        let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Invalid ALP page: log_vector_size 17 exceeds max 16")
@@ -683,7 +814,7 @@ mod tests {
     #[test]
     fn test_parse_alp_page_layout_invalid_integer_encoding() {
         let data = make_alp_page_bytes(1, 0, 1, 2, 1, &[4], 8);
-        let err = parse_alp_page_layout::<u64>(&data).unwrap_err();
+        let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Invalid ALP page: unsupported integer encoding 1")
@@ -693,7 +824,7 @@ mod tests {
     #[test]
     fn test_parse_alp_page_layout_negative_num_elements() {
         let data = make_alp_page_bytes(1, 0, 0, 2, -1, &[4], 8);
-        let err = parse_alp_page_layout::<u64>(&data).unwrap_err();
+        let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Invalid ALP page: num_elements -1 must be >= 0")
@@ -704,34 +835,70 @@ mod tests {
     fn test_parse_alp_page_layout_parses_vector_view_data_only_f64() {
         let mut vector = Vec::new();
 
-        // AlpEncodedVectorInfo: exponent=2, factor=0, num_exceptions=1
         vector.push(2);
         vector.push(0);
         vector.extend_from_slice(&1u16.to_le_bytes());
 
-        // AlpEncodedForVectorInfo<f64>: frame_of_reference=10, bit_width=0
         vector.extend_from_slice(&10u64.to_le_bytes());
         vector.push(0);
 
-        // Packed values: bit_width=0 and num_elements=1 -> 0 bytes.
-        // Exception positions (1 * u16)
         vector.extend_from_slice(&0u16.to_le_bytes());
-        // Exception values (1 * f64 bytes)
         vector.extend_from_slice(&42.5_f64.to_le_bytes());
 
         let offsets = [4u32];
         let mut page = make_alp_page_bytes(1, 0, 0, 0, 1, &offsets, 0);
         page.extend_from_slice(&vector);
 
-        let parsed = parse_alp_page_layout::<u64>(&page).unwrap();
+        let parsed = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
         assert_eq!(parsed.vectors.len(), 1);
         assert_eq!(parsed.vectors[0].num_elements, 1);
         assert_eq!(parsed.vectors[0].alp_info.num_exceptions, 1);
         assert_eq!(parsed.vectors[0].for_info.bit_width, 0);
         assert_eq!(parsed.vectors[0].exception_positions, vec![0]);
-        assert_eq!(
-            parsed.vectors[0].exception_values,
-            42.5_f64.to_le_bytes().to_vec()
-        );
+        assert_eq!(parsed.vectors[0].exception_values, vec![42.5_f64.to_bits()]);
+    }
+
+    #[test]
+    fn test_bit_unpack_integers_width_zero() {
+        let unpacked = bit_unpack_integers::<u32>(&[], 0, 3).unwrap();
+        assert_eq!(unpacked, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn test_bit_unpack_integers_width_two() {
+        let unpacked = bit_unpack_integers::<u32>(&[0b0010_0111], 2, 3).unwrap();
+        assert_eq!(unpacked, vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn test_inverse_for_and_patch_exceptions() {
+        let mut decoded = vec![0u32, 3, 2];
+        inverse_for(&mut decoded, 10);
+        assert_eq!(decoded, vec![10, 13, 12]);
+
+        patch_exceptions(&mut decoded, &[1], &[99]).unwrap();
+        assert_eq!(decoded, vec![10, 99, 12]);
+    }
+
+    #[test]
+    fn test_decode_vector_exact() {
+        let vector = AlpEncodedVectorView::<u32> {
+            num_elements: 3,
+            alp_info: AlpEncodedVectorInfo {
+                exponent: 0,
+                factor: 0,
+                num_exceptions: 1,
+            },
+            for_info: AlpEncodedForVectorInfo {
+                frame_of_reference: 10,
+                bit_width: 2,
+            },
+            packed_values: 0..1,
+            exception_positions: vec![2],
+            exception_values: vec![77],
+        };
+
+        let decoded = decode_vector_exact(&[0b0010_1100], &vector).unwrap();
+        assert_eq!(decoded, vec![10, 13, 77]);
     }
 }
