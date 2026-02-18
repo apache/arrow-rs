@@ -479,6 +479,27 @@ impl ArrayData {
         size
     }
 
+    /// Registers all [`Buffer`]s in this [`ArrayData`] with the provided [`MemoryPool`].
+    ///
+    /// This recursively claims all data buffers, the null buffer, and any child data buffers.
+    /// Shared buffers are counted once (last-writer-wins), matching the behavior of
+    /// [`Buffer::claim`].
+    ///
+    /// [`MemoryPool`]: arrow_buffer::MemoryPool
+    /// [`Buffer::claim`]: arrow_buffer::Buffer::claim
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        for buffer in &self.buffers {
+            buffer.claim(pool);
+        }
+        if let Some(nulls) = &self.nulls {
+            nulls.buffer().claim(pool);
+        }
+        for child in &self.child_data {
+            child.claim(pool);
+        }
+    }
+
     /// Returns the total number of the bytes of memory occupied by
     /// the buffers by this slice of [`ArrayData`] (See also diagram on [`ArrayData`]).
     ///
@@ -2207,6 +2228,100 @@ impl From<ArrayData> for ArrayDataBuilder {
             align_buffers: false,
             skip_validation: UnsafeFlag::new(),
         }
+    }
+}
+
+#[cfg(all(test, feature = "pool"))]
+mod pool_tests {
+    use super::*;
+    use arrow_buffer::{Buffer, MemoryPool, TrackingMemoryPool};
+
+    #[test]
+    fn test_claim_primitive() {
+        let pool = TrackingMemoryPool::default();
+        let data = ArrayData::try_new(
+            DataType::Int32,
+            4,
+            None,
+            0,
+            vec![Buffer::from_slice_ref([1i32, 2, 3, 4])],
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(pool.used(), 0);
+        data.claim(&pool);
+        assert!(pool.used() > 0);
+    }
+
+    #[test]
+    fn test_claim_with_nulls() {
+        let pool = TrackingMemoryPool::default();
+        let null_bit_buffer = Buffer::from(&[0b00001111u8]);
+        let data = ArrayData::try_new(
+            DataType::Int32,
+            4,
+            Some(null_bit_buffer),
+            0,
+            vec![Buffer::from_slice_ref([1i32, 2, 3, 4])],
+            vec![],
+        )
+        .unwrap();
+
+        data.claim(&pool);
+        let used = pool.used();
+        assert!(used > 0);
+    }
+
+    #[test]
+    fn test_claim_nested_list() {
+        let pool = TrackingMemoryPool::default();
+        let child_data = ArrayData::try_new(
+            DataType::Int32,
+            4,
+            None,
+            0,
+            vec![Buffer::from_slice_ref([1i32, 2, 3, 4])],
+            vec![],
+        )
+        .unwrap();
+
+        let offsets = Buffer::from_slice_ref([0i32, 2, 4]);
+        let list_data = ArrayData::try_new(
+            DataType::List(Arc::new(arrow_schema::Field::new_list_field(
+                DataType::Int32,
+                true,
+            ))),
+            2,
+            None,
+            0,
+            vec![offsets],
+            vec![child_data],
+        )
+        .unwrap();
+
+        list_data.claim(&pool);
+        assert!(pool.used() > 0);
+    }
+
+    #[test]
+    fn test_claim_drop_releases() {
+        let pool = TrackingMemoryPool::default();
+        let data = ArrayData::try_new(
+            DataType::Int32,
+            4,
+            None,
+            0,
+            vec![Buffer::from_slice_ref([1i32, 2, 3, 4])],
+            vec![],
+        )
+        .unwrap();
+
+        data.claim(&pool);
+        assert!(pool.used() > 0);
+
+        drop(data);
+        assert_eq!(pool.used(), 0);
     }
 }
 

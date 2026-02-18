@@ -80,6 +80,8 @@ pyarrow = ["ffi", "dep:arrow-pyarrow"]
 force_validate = ["arrow-array/force_validate", "arrow-data/force_validate"]
 # Enable ffi support
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "arrow-array/ffi"]
+# Enable memory pool tracking
+pool = ["arrow-buffer/pool", "arrow-data/pool", "arrow-array/pool"]
 chrono-tz = ["arrow-array/chrono-tz"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 
