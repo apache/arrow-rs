@@ -108,6 +108,8 @@ pub fn interleave(
         DataType::Struct(fields) => interleave_struct(fields, values, indices),
         DataType::List(field) => interleave_list::<i32>(values, indices, field),
         DataType::LargeList(field) => interleave_list::<i64>(values, indices, field),
+        DataType::ListView(field) => interleave_list_view::<i32>(values, indices, field),
+        DataType::LargeListView(field) => interleave_list_view::<i64>(values, indices, field),
         _ => interleave_fallback(values, indices)
     }
 }
@@ -409,6 +411,56 @@ fn interleave_list<O: OffsetSizeTrait>(
     );
 
     Ok(Arc::new(list_array))
+}
+
+fn interleave_list_view<O: OffsetSizeTrait>(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+    field: &FieldRef,
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, GenericListViewArray<O>>::new(values, indices);
+
+    // Collect child indices for each referenced list element and build
+    // new offsets/sizes that point into the interleaved child array
+    let mut capacity = 0usize;
+    let mut offsets = Vec::with_capacity(indices.len());
+    let mut sizes = Vec::with_capacity(indices.len());
+    for &(array_idx, row_idx) in indices {
+        let list = interleaved.arrays[array_idx];
+        let size = list.sizes()[row_idx].as_usize();
+        offsets.push(
+            O::from_usize(capacity).ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+        );
+        sizes.push(O::from_usize(size).ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?);
+        capacity += size;
+    }
+
+    // Build child indices for recursive interleave of child values
+    let mut child_indices = Vec::with_capacity(capacity);
+    for &(array_idx, row_idx) in indices {
+        let list = interleaved.arrays[array_idx];
+        let start = list.offsets()[row_idx].as_usize();
+        let size = list.sizes()[row_idx].as_usize();
+        child_indices.extend((start..start + size).map(|i| (array_idx, i)));
+    }
+
+    let child_arrays: Vec<&dyn Array> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().as_ref())
+        .collect();
+
+    let interleaved_values = interleave(&child_arrays, &child_indices)?;
+
+    let list_view_array = GenericListViewArray::<O>::new(
+        field.clone(),
+        offsets.into(),
+        sizes.into(),
+        interleaved_values,
+        interleaved.nulls,
+    );
+
+    Ok(Arc::new(list_view_array))
 }
 
 /// Fallback implementation of interleave using [`MutableArrayData`]
@@ -768,6 +820,61 @@ mod tests {
     #[test]
     fn test_large_lists() {
         test_interleave_lists::<i64>();
+    }
+
+    fn test_interleave_list_views<O: OffsetSizeTrait>() {
+        // [[1, 2], null, [3]]
+        let mut a = GenericListBuilder::<O, _>::new(Int32Builder::new());
+        a.values().append_value(1);
+        a.values().append_value(2);
+        a.append(true);
+        a.append(false);
+        a.values().append_value(3);
+        a.append(true);
+        let a: GenericListViewArray<O> = a.finish().into();
+
+        // [[4], null, [5, 6, null]]
+        let mut b = GenericListBuilder::<O, _>::new(Int32Builder::new());
+        b.values().append_value(4);
+        b.append(true);
+        b.append(false);
+        b.values().append_value(5);
+        b.values().append_value(6);
+        b.values().append_null();
+        b.append(true);
+        let b: GenericListViewArray<O> = b.finish().into();
+
+        let values = interleave(&[&a, &b], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
+        let v = values
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        // [[3], null, [4], [5, 6, null], null]
+        let mut expected = GenericListBuilder::<O, _>::new(Int32Builder::new());
+        expected.values().append_value(3);
+        expected.append(true);
+        expected.append(false);
+        expected.values().append_value(4);
+        expected.append(true);
+        expected.values().append_value(5);
+        expected.values().append_value(6);
+        expected.values().append_null();
+        expected.append(true);
+        expected.append(false);
+        let expected: GenericListViewArray<O> = expected.finish().into();
+
+        assert_eq!(v, &expected);
+    }
+
+    #[test]
+    fn test_list_views() {
+        test_interleave_list_views::<i32>();
+    }
+
+    #[test]
+    fn test_large_list_views() {
+        test_interleave_list_views::<i64>();
     }
 
     #[test]

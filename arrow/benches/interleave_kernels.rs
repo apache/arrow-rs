@@ -121,6 +121,11 @@ fn add_benchmark(c: &mut Criterion) {
     let list_i64_no_nulls =
         create_primitive_list_array_with_seed::<i32, Int64Type>(8192, 0.0, 0.0, 20, 42);
 
+    let list_view_i64: ListViewArray =
+        create_primitive_list_array_with_seed::<i32, Int64Type>(8192, 0.1, 0.1, 20, 42).into();
+    let list_view_i64_no_nulls: ListViewArray =
+        create_primitive_list_array_with_seed::<i32, Int64Type>(8192, 0.0, 0.0, 20, 42).into();
+
     let cases: &[(&str, &dyn Array)] = &[
         ("i32(0.0)", &i32),
         ("i32(0.5)", &i32_opt),
@@ -143,6 +148,8 @@ fn add_benchmark(c: &mut Criterion) {
         ),
         ("list<i64>(0.1,0.1,20)", &list_i64),
         ("list<i64>(0.0,0.0,20)", &list_i64_no_nulls),
+        ("list_view<i64>(0.1,0.1,20)", &list_view_i64),
+        ("list_view<i64>(0.0,0.0,20)", &list_view_i64_no_nulls),
     ];
 
     for (prefix, base) in cases {
