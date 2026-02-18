@@ -110,6 +110,19 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         self.offsets_builder.push(self.next_offset());
     }
 
+    /// Appends a value of type `T` into the builder `n` times.
+    ///
+    /// See [`Self::append_value`] for more panic information.
+    #[inline]
+    pub fn append_value_n(&mut self, value: impl AsRef<T::Native>, n: usize) {
+        let bytes = value.as_ref().as_ref();
+        for _ in 0..n {
+            self.value_builder.extend_from_slice(bytes);
+            self.offsets_builder.push(self.next_offset());
+        }
+        self.null_buffer_builder.append_n_non_nulls(n);
+    }
+
     /// Append an `Option` value into the builder.
     ///
     /// - A `None` value will append a null value.
@@ -938,5 +951,22 @@ mod tests {
         let result = builder.append_array(&overflow_array);
 
         assert!(matches!(result, Err(ArrowError::OffsetOverflowError(_))));
+    }
+
+    #[test]
+    fn test_append_value_n() {
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_value("hello");
+        builder.append_value_n("world", 3);
+        builder.append_null();
+        let array = builder.finish();
+
+        assert_eq!(5, array.len());
+        assert_eq!(1, array.null_count());
+        assert_eq!("hello", array.value(0));
+        assert_eq!("world", array.value(1));
+        assert_eq!("world", array.value(2));
+        assert_eq!("world", array.value(3));
+        assert!(array.is_null(4));
     }
 }
