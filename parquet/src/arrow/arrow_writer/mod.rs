@@ -1148,22 +1148,10 @@ impl ArrowRowGroupWriterFactory {
             Some(opts) => opts,
             None => return Ok(None),
         };
-        let schema_root = self.schema.root_schema();
         self.schema
             .columns()
             .iter()
-            .map(|desc| {
-                let max_def_level = desc.max_def_level();
-                let max_rep_level = desc.max_rep_level();
-                let repeated_ancestor_def_level =
-                    compute_repeated_ancestor_def_level(schema_root, desc.path());
-                chunker::ContentDefinedChunker::new(
-                    max_def_level,
-                    max_rep_level,
-                    repeated_ancestor_def_level,
-                    opts,
-                )
-            })
+            .map(|desc| chunker::ContentDefinedChunker::new(desc, opts))
             .collect::<Result<Vec<_>>>()
             .map(Some)
     }
@@ -1742,52 +1730,6 @@ fn get_fsb_array_slice(
         values.push(FixedLenByteArray::from(ByteArray::from(value)))
     }
     values
-}
-
-/// Compute the definition level at the nearest REPEATED ancestor by traversing
-/// the Parquet schema tree from root to the given leaf column path.
-fn compute_repeated_ancestor_def_level(
-    schema_root: &crate::schema::types::Type,
-    path: &crate::schema::types::ColumnPath,
-) -> i16 {
-    use crate::basic::Repetition;
-    let parts = path.parts();
-    if parts.is_empty() {
-        return 0;
-    }
-
-    let mut current_type = schema_root;
-    let mut def_level: i16 = 0;
-    let mut repeated_ancestor_def_level: i16 = 0;
-
-    for part in parts {
-        // Find the child with matching name
-        if !current_type.is_group() {
-            break;
-        }
-        let child = current_type.get_fields().iter().find(|f| f.name() == part);
-        let child = match child {
-            Some(c) => c,
-            None => break,
-        };
-
-        // Update def/rep levels based on this node's repetition
-        if child.get_basic_info().has_repetition() {
-            match child.get_basic_info().repetition() {
-                Repetition::OPTIONAL => {
-                    def_level += 1;
-                }
-                Repetition::REPEATED => {
-                    def_level += 1;
-                    repeated_ancestor_def_level = def_level;
-                }
-                Repetition::REQUIRED => {}
-            }
-        }
-        current_type = child.as_ref();
-    }
-
-    repeated_ancestor_def_level
 }
 
 /// Compute CDC chunk boundaries by dispatching on the Arrow array's data type

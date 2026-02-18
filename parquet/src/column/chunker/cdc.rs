@@ -17,6 +17,7 @@
 
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::CdcOptions;
+use crate::schema::types::ColumnDescriptor;
 
 use super::Chunk;
 use super::cdc_generated::{GEARHASH_TABLE, NUM_GEARHASH_TABLES};
@@ -68,21 +69,16 @@ pub(crate) struct ContentDefinedChunker {
 }
 
 impl ContentDefinedChunker {
-    pub fn new(
-        max_def_level: i16,
-        max_rep_level: i16,
-        repeated_ancestor_def_level: i16,
-        options: &CdcOptions,
-    ) -> Result<Self> {
+    pub fn new(desc: &ColumnDescriptor, options: &CdcOptions) -> Result<Self> {
         let rolling_hash_mask = Self::calculate_mask(
             options.min_chunk_size as i64,
             options.max_chunk_size as i64,
             options.norm_level,
         )?;
         Ok(Self {
-            max_def_level,
-            max_rep_level,
-            repeated_ancestor_def_level,
+            max_def_level: desc.max_def_level(),
+            max_rep_level: desc.max_rep_level(),
+            repeated_ancestor_def_level: desc.repeated_ancestor_def_level(),
             min_chunk_size: options.min_chunk_size as i64,
             max_chunk_size: options.max_chunk_size as i64,
             rolling_hash_mask,
@@ -362,6 +358,16 @@ impl ContentDefinedChunker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::basic::Type as PhysicalType;
+    use crate::schema::types::{ColumnPath, Type};
+    use std::sync::Arc;
+
+    fn make_desc(max_def_level: i16, max_rep_level: i16) -> ColumnDescriptor {
+        let tp = Type::primitive_type_builder("col", PhysicalType::INT32)
+            .build()
+            .unwrap();
+        ColumnDescriptor::new(Arc::new(tp), max_def_level, max_rep_level, ColumnPath::new(vec![]))
+    }
 
     #[test]
     fn test_calculate_mask_defaults() {
@@ -393,7 +399,7 @@ mod tests {
             max_chunk_size: 1024,
             norm_level: 0,
         };
-        let mut chunker = ContentDefinedChunker::new(0, 0, 0, &options).unwrap();
+        let mut chunker = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
 
         // Write a small amount of data — should produce exactly 1 chunk.
         let num_values = 4;
@@ -411,7 +417,7 @@ mod tests {
             max_chunk_size: 1024,
             norm_level: 0,
         };
-        let mut chunker = ContentDefinedChunker::new(0, 0, 0, &options).unwrap();
+        let mut chunker = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
 
         // Write enough data to exceed max_chunk_size multiple times.
         // Each i32 = 4 bytes, max_chunk_size=1024, so ~256 values per chunk max.
@@ -443,10 +449,10 @@ mod tests {
 
         let roll = |i: usize| (i as i64).to_le_bytes();
 
-        let mut chunker1 = ContentDefinedChunker::new(0, 0, 0, &options).unwrap();
+        let mut chunker1 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
         let chunks1 = chunker1.get_chunks(None, None, 200, roll);
 
-        let mut chunker2 = ContentDefinedChunker::new(0, 0, 0, &options).unwrap();
+        let mut chunker2 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
         let chunks2 = chunker2.get_chunks(None, None, 200, roll);
 
         assert_eq!(chunks1.len(), chunks2.len());
@@ -464,7 +470,7 @@ mod tests {
             max_chunk_size: 64,
             norm_level: 0,
         };
-        let mut chunker = ContentDefinedChunker::new(1, 0, 0, &options).unwrap();
+        let mut chunker = ContentDefinedChunker::new(&make_desc(1, 0), &options).unwrap();
 
         let num_levels = 20;
         // def_level=1 means non-null, def_level=0 means null
