@@ -82,6 +82,8 @@ force_validate = ["arrow-array/force_validate", "arrow-data/force_validate"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "arrow-array/ffi"]
 chrono-tz = ["arrow-array/chrono-tz"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
+# Enable memory tracking support
+pool = ["arrow-array/pool"]
 
 [dev-dependencies]
 chrono = { workspace = true }
@@ -114,6 +116,11 @@ path = "./examples/read_csv_infer_schema.rs"
 name = "zero_copy_ipc"
 required-features = ["prettyprint"]
 path = "examples/zero_copy_ipc.rs"
+
+[[example]]
+name = "memory_tracking"
+required-features = ["pool"]
+path = "examples/memory_tracking.rs"
 
 [[bench]]
 name = "aggregate_kernels"
