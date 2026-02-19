@@ -20,6 +20,7 @@
 use crate::encryption_util::{
     TestKeyRetriever, read_encrypted_file, verify_column_indexes,
     verify_encryption_double_test_data, verify_encryption_test_data,
+    verify_encryption_test_data_from_java,
 };
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
@@ -436,6 +437,53 @@ async fn test_decrypt_page_index_non_uniform() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn test_aes_256_non_uniform_encryption_plaintext_footer() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/aes256/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let mut file = File::open(&path).await.unwrap();
+
+    // There is always a footer key even with a plaintext footer,
+    // but this is used for signing the footer.
+    let footer_key = "01234567890123456789012345678901".as_bytes().to_vec(); // 128bit/16
+    let column_1_key = "12345678901234567890123456789012".as_bytes().to_vec();
+    let column_2_key = "12345678901234567890123456789013".as_bytes().to_vec();
+    let column_3_key = "12345678901234567890123456789014".as_bytes().to_vec();
+    let column_4_key = "12345678901234567890123456789015".as_bytes().to_vec();
+    let column_5_key = "12345678901234567890123456789016".as_bytes().to_vec();
+    let column_6_key = "12345678901234567890123456789017".as_bytes().to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
+        .with_column_key("boolean_field", column_3_key)
+        .with_column_key("int32_field", column_4_key)
+        .with_column_key("ba_field", column_5_key)
+        .with_column_key("flba_field", column_6_key)
+        .build()
+        .unwrap();
+
+    verify_aes256_encryption_java_test_file_read_async(&mut file, decryption_properties)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_aes_256_uniform_encryption() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/aes256/uniform_encryption.parquet.encrypted");
+    let mut file = File::open(&path).await.unwrap();
+
+    let key_code: &[u8] = "01234567890123456789012345678901".as_bytes();
+    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+        .build()
+        .unwrap();
+
+    verify_aes256_encryption_java_test_file_read_async(&mut file, decryption_properties)
+        .await
+        .unwrap();
+}
+
 async fn test_decrypt_page_index(
     path: &str,
     decryption_properties: Arc<FileDecryptionProperties>,
@@ -450,6 +498,19 @@ async fn test_decrypt_page_index(
 
     verify_column_indexes(arrow_metadata.metadata());
 
+    Ok(())
+}
+
+async fn verify_aes256_encryption_java_test_file_read_async(
+    file: &mut tokio::fs::File,
+    decryption_properties: Arc<FileDecryptionProperties>,
+) -> Result<(), ParquetError> {
+    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+
+    let arrow_metadata = ArrowReaderMetadata::load_async(file, options).await?;
+    let metadata = arrow_metadata.metadata();
+
+    verify_encryption_test_data_from_java(metadata);
     Ok(())
 }
 

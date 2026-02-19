@@ -104,6 +104,20 @@ pub(crate) fn verify_encryption_double_test_data(
     assert_eq!(row_count, file_metadata.num_rows() as usize);
 }
 
+/// Verifies parquet-java generated AES-256 data from the parquet-testing repository
+pub(crate) fn verify_encryption_test_data_from_java(metadata: &ParquetMetaData) {
+    let file_metadata = metadata.file_metadata();
+    assert_eq!(file_metadata.num_rows(), 10000);
+    assert_eq!(file_metadata.schema_descr().num_columns(), 7);
+
+    let mut total_rows = 0;
+    metadata.row_groups().iter().for_each(|rg| {
+        assert_eq!(rg.num_columns(), 7);
+        total_rows += rg.num_rows();
+    });
+    assert_eq!(total_rows, 10000);
+}
+
 /// Verifies data read from an encrypted file from the parquet-testing repository
 pub(crate) fn verify_encryption_test_data(
     record_batches: Vec<RecordBatch>,
