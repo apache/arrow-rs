@@ -445,7 +445,7 @@ async fn test_aes_256_non_uniform_encryption_plaintext_footer() {
 
     // There is always a footer key even with a plaintext footer,
     // but this is used for signing the footer.
-    let footer_key = "01234567890123456789012345678901".as_bytes().to_vec(); // 128bit/16
+    let footer_key = "01234567890123456789012345678901".as_bytes().to_vec(); // 256bit/32
     let column_1_key = "12345678901234567890123456789012".as_bytes().to_vec();
     let column_2_key = "12345678901234567890123456789013".as_bytes().to_vec();
     let column_3_key = "12345678901234567890123456789014".as_bytes().to_vec();
