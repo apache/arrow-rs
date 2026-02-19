@@ -1241,6 +1241,58 @@ mod tests {
         );
     }
 
+    fn assert_write_list_view<O: OffsetSizeTrait>() {
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let data_type = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(field.clone());
+        let schema = Schema::new(vec![Field::new("lv", data_type, true)]);
+
+        // rows: [1, 2, 3], [4, null], null, [6]
+        let values = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4), None, Some(6)]);
+        let offsets = [0, 3, 0, 5]
+            .iter()
+            .map(|&v| O::from_usize(v).unwrap())
+            .collect::<Vec<_>>();
+        let sizes = [3, 2, 0, 1]
+            .iter()
+            .map(|&v| O::from_usize(v).unwrap())
+            .collect::<Vec<_>>();
+        let list_view = GenericListViewArray::<O>::try_new(
+            field,
+            ScalarBuffer::from(offsets),
+            ScalarBuffer::from(sizes),
+            Arc::new(values),
+            Some(NullBuffer::from_iter([true, true, false, true])),
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_view)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"lv":[1,2,3]}
+{"lv":[4,null]}
+{}
+{"lv":[6]}
+"#,
+        );
+    }
+
+    #[test]
+    fn write_list_view() {
+        assert_write_list_view::<i32>();
+    }
+
+    #[test]
+    fn write_large_list_view() {
+        assert_write_list_view::<i64>();
+    }
+
     fn test_write_for_file(test_file: &str, remove_nulls: bool) {
         let file = File::open(test_file).unwrap();
         let mut reader = BufReader::new(file);
