@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [58.0.0](https://github.com/apache/arrow-rs/tree/58.0.0) (2026-02-17)
+## [58.0.0](https://github.com/apache/arrow-rs/tree/58.0.0) (2026-02-19)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/57.3.0...58.0.0)
 
@@ -35,6 +35,7 @@
 
 **Implemented enhancements:**
 
+- Avoid allocating a `Vec` in `StructBuilder` [\#9427](https://github.com/apache/arrow-rs/issues/9427)
 - Zstd context reuse [\#9401](https://github.com/apache/arrow-rs/issues/9401)
 - Optimize `from_bitwise_unary_op` [\#9364](https://github.com/apache/arrow-rs/issues/9364)
 - Support `RunEndEncoded` in ord comparator [\#9360](https://github.com/apache/arrow-rs/issues/9360)
@@ -91,6 +92,8 @@
 
 **Merged pull requests:**
 
+- Avoid allocating a `Vec` in `StructBuilder` [\#9428](https://github.com/apache/arrow-rs/pull/9428) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Fokko](https://github.com/Fokko))
+- fix: fixed trait functions clash get\_date\_time\_part\_extract\_fn \(\#8221\) [\#9424](https://github.com/apache/arrow-rs/pull/9424) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([esavier](https://github.com/esavier))
 - \[Minor\] Use per-predicate projection masks in arrow\_reader\_clickbench benchmark [\#9413](https://github.com/apache/arrow-rs/pull/9413) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Dandandan](https://github.com/Dandandan))
 - Fix `ArrowArrayStreamReader` for 0-columns record batch streams [\#9405](https://github.com/apache/arrow-rs/pull/9405) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jonded94](https://github.com/jonded94))
 - Use zstd::bulk API in IPC and Parquet with context reuse for compression and decompression [\#9400](https://github.com/apache/arrow-rs/pull/9400) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
