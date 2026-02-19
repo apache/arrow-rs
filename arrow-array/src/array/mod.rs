@@ -667,6 +667,21 @@ impl<'a> BinaryArrayType<'a> for &'a FixedSizeBinaryArray {
     }
 }
 
+/// A trait for Arrow list-like arrays, abstracting over
+/// [`GenericListArray`], [`GenericListViewArray`], and [`FixedSizeListArray`].
+///
+/// This trait provides a uniform interface for accessing the child values and
+/// computing the element range for a given index, regardless of the underlying
+/// list layout (offsets, offsets+sizes, or fixed-size).
+pub trait ListLikeArray: Array {
+    /// Returns the child values array.
+    fn values(&self) -> &ArrayRef;
+
+    /// Returns the start and end indices into the values array for the list
+    /// element at `index`.
+    fn element_range(&self, index: usize) -> std::ops::Range<usize>;
+}
+
 impl PartialEq for dyn Array + '_ {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
