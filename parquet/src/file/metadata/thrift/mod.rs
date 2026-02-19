@@ -1285,6 +1285,19 @@ impl PageHeader {
 /////////////////////////////////////////////////
 // helper functions for writing file meta data
 
+#[cfg(feature = "encryption")]
+fn should_write_column_stats(column_chunk: &ColumnChunkMetaData) -> bool {
+    // If there is encrypted column metadata present,
+    // the column is encrypted with a different key to the footer or a plaintext footer is used,
+    // so the statistics are sensitive and shouldn't be written.
+    column_chunk.encrypted_column_metadata.is_none()
+}
+
+#[cfg(not(feature = "encryption"))]
+fn should_write_column_stats(_column_chunk: &ColumnChunkMetaData) -> bool {
+    true
+}
+
 // serialize the bits of the column chunk needed for a thrift ColumnMetaData
 // struct ColumnMetaData {
 //   1: required Type type
@@ -1335,48 +1348,51 @@ pub(super) fn serialize_column_meta_data<W: Write>(
     if let Some(dictionary_page_offset) = column_chunk.dictionary_page_offset {
         last_field_id = dictionary_page_offset.write_thrift_field(w, 11, last_field_id)?;
     }
-    // PageStatistics is the same as thrift Statistics, but writable
-    let stats = page_stats_to_thrift(column_chunk.statistics());
-    if let Some(stats) = stats {
-        last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
-    }
-    if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
-        last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
-    }
-    if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
-        last_field_id = bloom_filter_offset.write_thrift_field(w, 14, last_field_id)?;
-    }
-    if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
-        last_field_id = bloom_filter_length.write_thrift_field(w, 15, last_field_id)?;
-    }
 
-    // SizeStatistics
-    let size_stats = if column_chunk.unencoded_byte_array_data_bytes.is_some()
-        || column_chunk.repetition_level_histogram.is_some()
-        || column_chunk.definition_level_histogram.is_some()
-    {
-        let repetition_level_histogram = column_chunk
-            .repetition_level_histogram()
-            .map(|hist| hist.clone().into_inner());
+    if should_write_column_stats(column_chunk) {
+        // PageStatistics is the same as thrift Statistics, but writable
+        let stats = page_stats_to_thrift(column_chunk.statistics());
+        if let Some(stats) = stats {
+            last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
+        }
+        if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
+            last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
+        }
+        if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
+            last_field_id = bloom_filter_offset.write_thrift_field(w, 14, last_field_id)?;
+        }
+        if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
+            last_field_id = bloom_filter_length.write_thrift_field(w, 15, last_field_id)?;
+        }
 
-        let definition_level_histogram = column_chunk
-            .definition_level_histogram()
-            .map(|hist| hist.clone().into_inner());
+        // SizeStatistics
+        let size_stats = if column_chunk.unencoded_byte_array_data_bytes.is_some()
+            || column_chunk.repetition_level_histogram.is_some()
+            || column_chunk.definition_level_histogram.is_some()
+        {
+            let repetition_level_histogram = column_chunk
+                .repetition_level_histogram()
+                .map(|hist| hist.clone().into_inner());
 
-        Some(SizeStatistics {
-            unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
-            repetition_level_histogram,
-            definition_level_histogram,
-        })
-    } else {
-        None
-    };
-    if let Some(size_stats) = size_stats {
-        last_field_id = size_stats.write_thrift_field(w, 16, last_field_id)?;
-    }
+            let definition_level_histogram = column_chunk
+                .definition_level_histogram()
+                .map(|hist| hist.clone().into_inner());
 
-    if let Some(geo_stats) = column_chunk.geo_statistics() {
-        geo_stats.write_thrift_field(w, 17, last_field_id)?;
+            Some(SizeStatistics {
+                unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
+                repetition_level_histogram,
+                definition_level_histogram,
+            })
+        } else {
+            None
+        };
+        if let Some(size_stats) = size_stats {
+            last_field_id = size_stats.write_thrift_field(w, 16, last_field_id)?;
+        }
+
+        if let Some(geo_stats) = column_chunk.geo_statistics() {
+            geo_stats.write_thrift_field(w, 17, last_field_id)?;
+        }
     }
 
     w.write_struct_end()
@@ -1596,17 +1612,17 @@ impl WriteThrift for ColumnChunkMetaData {
             .write_thrift_field(writer, 2, last_field_id)?;
 
         #[cfg(feature = "encryption")]
-        {
-            // only write the ColumnMetaData if we haven't already encrypted it
-            if self.encrypted_column_metadata.is_none() {
-                writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
-                serialize_column_meta_data(self, writer)?;
-                last_field_id = 3;
-            }
-        }
+        let write_meta_data =
+            self.encrypted_column_metadata.is_none() || self.plaintext_footer_mode;
         #[cfg(not(feature = "encryption"))]
-        {
-            // always write the ColumnMetaData
+        let write_meta_data = true;
+
+        // When the footer is encrypted and encrypted_column_metadata is present,
+        // skip writing the plaintext meta_data field to reduce footer size.
+        // When the footer is plaintext (plaintext_footer_mode=true), we still write
+        // meta_data for backward compatibility with readers that expect it, but with
+        // sensitive fields (statistics, bloom filter info, etc.) stripped out.
+        if write_meta_data {
             writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
             serialize_column_meta_data(self, writer)?;
             last_field_id = 3;

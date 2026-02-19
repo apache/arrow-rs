@@ -222,7 +222,7 @@ impl StructBuilder {
     /// Appends `n` `null`s into the builder.
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
-        self.null_buffer_builder.append_slice(&vec![false; n]);
+        self.null_buffer_builder.append_n_nulls(n);
     }
 
     /// Builds the `StructArray` and reset this builder.

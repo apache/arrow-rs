@@ -49,7 +49,7 @@ parquet-variant = { workspace = true, optional = true }
 parquet-variant-json = { workspace = true, optional = true }
 parquet-variant-compute = { workspace = true, optional = true }
 
-object_store = { version = "0.12.0", default-features = false, optional = true }
+object_store = { version = "0.13.1", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
@@ -93,8 +93,8 @@ arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "jso
 arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-object_store = { version = "0.12.0", default-features = false, features = ["azure", "fs"] }
-sysinfo = { version = "0.37.1", default-features = false, features = ["system"] }
+object_store = { version = "0.13.1", default-features = false, features = ["azure", "fs"] }
+sysinfo = { version = "0.38.1", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -233,7 +233,7 @@ harness = false
 
 [[bench]]
 name = "arrow_reader_clickbench"
-required-features = ["arrow", "async"]
+required-features = ["arrow", "async", "object_store"]
 harness = false
 
 [[bench]]
@@ -259,6 +259,11 @@ harness = false
 name = "row_selector"
 harness = false
 required-features = ["arrow"]
+
+[[bench]]
+name = "row_group_index_reader"
+required-features = ["arrow"]
+harness = false
 
 [[bench]]
 name = "row_selection_cursor"

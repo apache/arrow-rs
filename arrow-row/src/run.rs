@@ -27,11 +27,11 @@ pub fn compute_lengths<R: RunEndIndexType>(
     rows: &Rows,
     array: &RunArray<R>,
 ) {
-    let run_ends = array.run_ends().values();
+    let run_ends = array.run_ends().sliced_values();
     let mut logical_start = 0;
 
     // Iterate over each run and apply the same length to all logical positions in the run
-    for (physical_idx, &run_end) in run_ends.iter().enumerate() {
+    for (physical_idx, run_end) in run_ends.enumerate() {
         let logical_end = run_end.as_usize();
         let row_len = rows.row_len(physical_idx);
         let encoded_len = variable::padded_length(Some(row_len));
@@ -55,14 +55,14 @@ pub fn encode<R: RunEndIndexType>(
     opts: SortOptions,
     array: &RunArray<R>,
 ) {
-    let run_ends = array.run_ends();
+    let run_ends = array.run_ends().sliced_values();
 
     let mut logical_idx = 0;
     let mut offset_idx = 1; // Skip first offset
 
     // Iterate over each run
-    for physical_idx in 0..run_ends.values().len() {
-        let run_end = run_ends.values()[physical_idx].as_usize();
+    for (physical_idx, run_end) in run_ends.enumerate() {
+        let run_end = run_end.as_usize();
 
         // Process all elements in this run
         while logical_idx < run_end && offset_idx < offsets.len() {
@@ -638,5 +638,16 @@ mod tests {
         // Verify both columns round-trip correctly
         let result_ree = arrays[0].as_run::<Int32Type>();
         assert_eq!(result_ree.len(), 0);
+    }
+
+    #[test]
+    fn test_run_end_encoded_round_trip_sliced() {
+        let values = Int64Array::from(vec![100, 200, 100, 300]);
+        let run_ends = vec![2, 3, 5, 6];
+        let array: RunArray<Int16Type> =
+            RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
+        let array = array.slice(2, 3);
+
+        assert_roundtrip(&array, DataType::Int16, DataType::Int64, None);
     }
 }

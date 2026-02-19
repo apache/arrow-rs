@@ -21,7 +21,7 @@ use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{CacheOptionsBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 /// State machine for evaluating a sequence of predicates.
 ///
@@ -51,13 +51,13 @@ pub(super) struct CacheInfo {
     /// Normally these are the columns that filters may look at such that
     /// if we have a filter like `(a + 10 > 5) AND (a + b = 0)` we cache `a` to avoid re-reading it between evaluating `a + 10 > 5` and `a + b = 0`.
     cache_projection: ProjectionMask,
-    row_group_cache: Arc<Mutex<RowGroupCache>>,
+    row_group_cache: Arc<RwLock<RowGroupCache>>,
 }
 
 impl CacheInfo {
     pub(super) fn new(
         cache_projection: ProjectionMask,
-        row_group_cache: Arc<Mutex<RowGroupCache>>,
+        row_group_cache: Arc<RwLock<RowGroupCache>>,
     ) -> Self {
         Self {
             cache_projection,

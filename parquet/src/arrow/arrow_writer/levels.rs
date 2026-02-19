@@ -44,7 +44,7 @@ use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::bit_iterator::BitIndexIterator;
-use arrow_buffer::{NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
 use std::sync::Arc;
@@ -131,6 +131,22 @@ enum LevelInfoBuilder {
         usize,                 // List Size
         Option<NullBuffer>,    // Nulls
     ),
+    /// A list view array
+    ListView(
+        Box<LevelInfoBuilder>, // Child Values
+        LevelContext,          // Context
+        ScalarBuffer<i32>,     // Offsets
+        ScalarBuffer<i32>,     // Sizes
+        Option<NullBuffer>,    // Nulls
+    ),
+    /// A large list view array
+    LargeListView(
+        Box<LevelInfoBuilder>, // Child Values
+        LevelContext,          // Context
+        ScalarBuffer<i64>,     // Offsets
+        ScalarBuffer<i64>,     // Sizes
+        Option<NullBuffer>,    // Nulls
+    ),
     /// A struct array
     Struct(Vec<LevelInfoBuilder>, LevelContext, Option<NullBuffer>),
 }
@@ -181,7 +197,9 @@ impl LevelInfoBuilder {
             DataType::List(child)
             | DataType::LargeList(child)
             | DataType::Map(child, _)
-            | DataType::FixedSizeList(child, _) => {
+            | DataType::FixedSizeList(child, _)
+            | DataType::ListView(child)
+            | DataType::LargeListView(child) => {
                 let def_level = match is_nullable {
                     true => parent_ctx.def_level + 2,
                     false => parent_ctx.def_level + 1,
@@ -219,6 +237,22 @@ impl LevelInfoBuilder {
                         let nulls = list.nulls().cloned();
                         Self::FixedSizeList(Box::new(child), ctx, *size as _, nulls)
                     }
+                    DataType::ListView(_) => {
+                        let list = array.as_list_view();
+                        let child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        let offsets = list.offsets().clone();
+                        let sizes = list.sizes().clone();
+                        let nulls = list.nulls().cloned();
+                        Self::ListView(Box::new(child), ctx, offsets, sizes, nulls)
+                    }
+                    DataType::LargeListView(_) => {
+                        let list = array.as_list_view();
+                        let child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        let offsets = list.offsets().clone();
+                        let sizes = list.sizes().clone();
+                        let nulls = list.nulls().cloned();
+                        Self::LargeListView(Box::new(child), ctx, offsets, sizes, nulls)
+                    }
                     _ => unreachable!(),
                 })
             }
@@ -233,7 +267,9 @@ impl LevelInfoBuilder {
             LevelInfoBuilder::Primitive(v) => vec![v],
             LevelInfoBuilder::List(v, _, _, _)
             | LevelInfoBuilder::LargeList(v, _, _, _)
-            | LevelInfoBuilder::FixedSizeList(v, _, _, _) => v.finish(),
+            | LevelInfoBuilder::FixedSizeList(v, _, _, _)
+            | LevelInfoBuilder::ListView(v, _, _, _, _)
+            | LevelInfoBuilder::LargeListView(v, _, _, _, _) => v.finish(),
             LevelInfoBuilder::Struct(v, _, _) => v.into_iter().flat_map(|l| l.finish()).collect(),
         }
     }
@@ -250,6 +286,12 @@ impl LevelInfoBuilder {
             }
             LevelInfoBuilder::FixedSizeList(child, ctx, size, nulls) => {
                 Self::write_fixed_size_list(child, ctx, *size, nulls.as_ref(), range)
+            }
+            LevelInfoBuilder::ListView(child, ctx, offsets, sizes, nulls) => {
+                Self::write_list_view(child, ctx, offsets, sizes, nulls.as_ref(), range)
+            }
+            LevelInfoBuilder::LargeListView(child, ctx, offsets, sizes, nulls) => {
+                Self::write_list_view(child, ctx, offsets, sizes, nulls.as_ref(), range)
             }
             LevelInfoBuilder::Struct(children, ctx, nulls) => {
                 Self::write_struct(children, ctx, nulls.as_ref(), range)
@@ -333,6 +375,93 @@ impl LevelInfoBuilder {
                     let start_idx = w[0].as_usize();
                     let end_idx = w[1].as_usize();
                     if start_idx == end_idx {
+                        write_empty_slice(child)
+                    } else {
+                        write_non_null_slice(child, start_idx, end_idx)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Write `range` elements from ListViewArray `array`
+    fn write_list_view<O: OffsetSizeTrait>(
+        child: &mut LevelInfoBuilder,
+        ctx: &LevelContext,
+        offsets: &[O],
+        sizes: &[O],
+        nulls: Option<&NullBuffer>,
+        range: Range<usize>,
+    ) {
+        let offsets = &offsets[range.start..range.end];
+        let sizes = &sizes[range.start..range.end];
+
+        let write_non_null_slice =
+            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+                child.write(start_idx..end_idx);
+                child.visit_leaves(|leaf| {
+                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                    let mut rev = rep_levels.iter_mut().rev();
+                    let mut remaining = end_idx - start_idx;
+
+                    loop {
+                        let next = rev.next().unwrap();
+                        if *next > ctx.rep_level {
+                            // Nested element - ignore
+                            continue;
+                        }
+
+                        remaining -= 1;
+                        if remaining == 0 {
+                            *next = ctx.rep_level - 1;
+                            break;
+                        }
+                    }
+                })
+            };
+
+        let write_empty_slice = |child: &mut LevelInfoBuilder| {
+            child.visit_leaves(|leaf| {
+                let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                rep_levels.push(ctx.rep_level - 1);
+                let def_levels = leaf.def_levels.as_mut().unwrap();
+                def_levels.push(ctx.def_level - 1);
+            })
+        };
+
+        let write_null_slice = |child: &mut LevelInfoBuilder| {
+            child.visit_leaves(|leaf| {
+                let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                rep_levels.push(ctx.rep_level - 1);
+                let def_levels = leaf.def_levels.as_mut().unwrap();
+                def_levels.push(ctx.def_level - 2);
+            })
+        };
+
+        match nulls {
+            Some(nulls) => {
+                let null_offset = range.start;
+                // TODO: Faster bitmask iteration (#1757)
+                for (idx, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
+                    let is_valid = nulls.is_valid(idx + null_offset);
+                    let start_idx = offset.as_usize();
+                    let size = size.as_usize();
+                    let end_idx = start_idx + size;
+                    if !is_valid {
+                        write_null_slice(child)
+                    } else if size == 0 {
+                        write_empty_slice(child)
+                    } else {
+                        write_non_null_slice(child, start_idx, end_idx)
+                    }
+                }
+            }
+            None => {
+                for (offset, size) in offsets.iter().zip(sizes.iter()) {
+                    let start_idx = offset.as_usize();
+                    let size = size.as_usize();
+                    let end_idx = start_idx + size;
+                    if size == 0 {
                         write_empty_slice(child)
                     } else {
                         write_non_null_slice(child, start_idx, end_idx)
@@ -535,7 +664,9 @@ impl LevelInfoBuilder {
             LevelInfoBuilder::Primitive(info) => visit(info),
             LevelInfoBuilder::List(c, _, _, _)
             | LevelInfoBuilder::LargeList(c, _, _, _)
-            | LevelInfoBuilder::FixedSizeList(c, _, _, _) => c.visit_leaves(visit),
+            | LevelInfoBuilder::FixedSizeList(c, _, _, _)
+            | LevelInfoBuilder::ListView(c, _, _, _, _)
+            | LevelInfoBuilder::LargeListView(c, _, _, _, _) => c.visit_leaves(visit),
             LevelInfoBuilder::Struct(children, _, _) => {
                 for c in children {
                     c.visit_leaves(visit)

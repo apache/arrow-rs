@@ -55,13 +55,14 @@ arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-half = { version = "2.1", default-features = false, optional = true }
+half = { version = "2.1", default-features = false, features = ["rand_distr"], optional = true }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
 default = ["csv", "ipc", "json"]
+async = ["arrow-array/async"]
 ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
 csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
@@ -85,7 +86,7 @@ canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 [dev-dependencies]
 chrono = { workspace = true }
 criterion = { workspace = true, default-features = false }
-half = { version = "2.1", default-features = false }
+half = { version = "2.1", default-features = false, features = ["rand_distr"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 # used in examples
