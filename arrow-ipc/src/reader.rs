@@ -42,7 +42,7 @@ use arrow_buffer::{
 use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
-use crate::compression::CompressionCodec;
+use crate::compression::{CompressionCodec, DecompressionContext};
 use crate::r#gen::Message::{self};
 use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
 use DataType::*;
@@ -60,13 +60,16 @@ fn read_buffer(
     buf: &crate::Buffer,
     a_data: &Buffer,
     compression_codec: Option<CompressionCodec>,
+    decompression_context: &mut DecompressionContext,
 ) -> Result<Buffer, ArrowError> {
     let start_offset = buf.offset() as usize;
     let buf_data = a_data.slice_with_length(start_offset, buf.length() as usize);
     // corner case: empty buffer
     match (buf_data.is_empty(), compression_codec) {
         (true, _) | (_, None) => Ok(buf_data),
-        (false, Some(decompressor)) => decompressor.decompress_to_buffer(&buf_data),
+        (false, Some(decompressor)) => {
+            decompressor.decompress_to_buffer(&buf_data, decompression_context)
+        }
     }
 }
 impl RecordBatchDecoder<'_> {
@@ -121,6 +124,16 @@ impl RecordBatchDecoder<'_> {
                 let list_buffers = [self.next_buffer()?, self.next_buffer()?];
                 let values = self.create_array(list_field, variadic_counts)?;
                 self.create_list_array(list_node, data_type, &list_buffers, values)
+            }
+            ListView(list_field) | LargeListView(list_field) => {
+                let list_node = self.next_node(field)?;
+                let list_buffers = [
+                    self.next_buffer()?, // null buffer
+                    self.next_buffer()?, // offsets
+                    self.next_buffer()?, // sizes
+                ];
+                let values = self.create_array(list_field, variadic_counts)?;
+                self.create_list_view_array(list_node, data_type, &list_buffers, values)
             }
             FixedSizeList(list_field, _) => {
                 let list_node = self.next_node(field)?;
@@ -322,6 +335,30 @@ impl RecordBatchDecoder<'_> {
         self.create_array_from_builder(builder)
     }
 
+    fn create_list_view_array(
+        &self,
+        field_node: &FieldNode,
+        data_type: &DataType,
+        buffers: &[Buffer],
+        child_array: ArrayRef,
+    ) -> Result<ArrayRef, ArrowError> {
+        assert!(matches!(data_type, ListView(_) | LargeListView(_)));
+
+        let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
+        let length = field_node.length() as usize;
+        let child_data = child_array.into_data();
+
+        self.create_array_from_builder(
+            ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(buffers[1].clone()) // offsets
+                .add_buffer(buffers[2].clone()) // sizes
+                .add_child_data(child_data)
+                .null_bit_buffer(null_buffer)
+                .null_count(field_node.null_count() as usize),
+        )
+    }
+
     fn create_struct_array(
         &self,
         struct_node: &FieldNode,
@@ -410,6 +447,8 @@ pub struct RecordBatchDecoder<'a> {
     dictionaries_by_id: &'a HashMap<i64, ArrayRef>,
     /// Optional compression codec
     compression: Option<CompressionCodec>,
+    /// Decompression context for reusing zstd decompressor state
+    decompression_context: DecompressionContext,
     /// The format version
     version: MetadataVersion,
     /// The raw data buffer
@@ -456,6 +495,7 @@ impl<'a> RecordBatchDecoder<'a> {
             schema,
             dictionaries_by_id,
             compression,
+            decompression_context: DecompressionContext::new(),
             version: *metadata,
             data: buf,
             nodes: field_nodes.iter(),
@@ -572,7 +612,12 @@ impl<'a> RecordBatchDecoder<'a> {
         let buffer = self.buffers.next().ok_or_else(|| {
             ArrowError::IpcError("Buffer count mismatched with metadata".to_string())
         })?;
-        read_buffer(buffer, self.data, self.compression)
+        read_buffer(
+            buffer,
+            self.data,
+            self.compression,
+            &mut self.decompression_context,
+        )
     }
 
     fn skip_buffer(&mut self) {
@@ -1835,13 +1880,10 @@ mod tests {
         let fixed_size_list_data_type =
             DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, false)), 3);
 
-        let union_fields = UnionFields::new(
-            vec![0, 1],
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Float64, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]);
 
         let union_data_type = DataType::Union(union_fields, UnionMode::Dense);
 
@@ -1923,7 +1965,7 @@ mod tests {
             .len(3)
             .build()
             .unwrap();
-        let array9: ArrayRef = Arc::new(StructArray::from(array9));
+        let array9 = StructArray::from(array9);
 
         let array10_input = vec![Some(1_i32), None, None];
         let mut array10_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
@@ -2964,7 +3006,7 @@ mod tests {
             )
         };
         expect_ipc_validation_error(
-            Arc::new(invalid_struct_arr),
+            invalid_struct_arr,
             "Invalid argument error: Invalid UTF8 sequence at string index 3 (3..18): invalid utf-8 sequence of 1 bytes from index 11",
         );
     }
@@ -3107,13 +3149,14 @@ mod tests {
     #[test]
     fn test_validation_of_invalid_union_array() {
         let array = unsafe {
-            let fields = UnionFields::new(
+            let fields = UnionFields::try_new(
                 vec![1, 3], // typeids : type id 2 is not valid
                 vec![
                     Field::new("a", DataType::Int32, false),
                     Field::new("b", DataType::Utf8, false),
                 ],
-            );
+            )
+            .unwrap();
             let type_ids = ScalarBuffer::from(vec![1i8, 2, 3]); // 2 is invalid
             let offsets = None;
             let children: Vec<ArrayRef> = vec![

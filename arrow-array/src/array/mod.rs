@@ -20,7 +20,7 @@
 mod binary_array;
 
 use crate::types::*;
-use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -78,8 +78,26 @@ pub use list_view_array::*;
 
 use crate::iterator::ArrayIter;
 
-/// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
-pub trait Array: std::fmt::Debug + Send + Sync {
+/// An array in the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html)
+///
+/// # Safety
+///
+/// Implementations of this trait must ensure that all methods implementations comply with
+/// the Arrow specification. No safety guards are placed and failing to comply with it can
+/// translate into panics or undefined behavior. For example, a value computed based on `len`
+/// may be used as a direct index into memory regions without checks.
+///
+/// Note that it is likely impossible to correctly implement the trait for a
+/// third party type, as substantial arrow-rs functionality is based on the
+/// return values of [`Array::data_type`] and third party types cannot extend
+/// the [`DataType`] enum. So any code that attempts casting based on data type
+/// (including internal arrow library code) risks a panic or undefined behavior.
+/// See [this discussion] for more details.
+///
+/// This trait might be sealed in the future. Use at your own risk.
+///
+/// [this discussion]: https://github.com/apache/arrow-rs/pull/9234#pullrequestreview-3708950936
+pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
@@ -342,7 +360,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 pub type ArrayRef = Arc<dyn Array>;
 
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
-impl Array for ArrayRef {
+unsafe impl Array for ArrayRef {
     fn as_any(&self) -> &dyn Any {
         self.as_ref().as_any()
     }
@@ -421,7 +439,7 @@ impl Array for ArrayRef {
     }
 }
 
-impl<T: Array> Array for &T {
+unsafe impl<T: Array> Array for &T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
     }
@@ -620,10 +638,11 @@ impl<'a> StringArrayType<'a> for &'a StringViewArray {
     }
 }
 
-/// A trait for Arrow String Arrays, currently three types are supported:
+/// A trait for Arrow Binary Arrays, currently four types are supported:
 /// - `BinaryArray`
 /// - `LargeBinaryArray`
 /// - `BinaryViewArray`
+/// - `FixedSizeBinaryArray`
 ///
 /// This trait helps to abstract over the different types of binary arrays
 /// so that we don't need to duplicate the implementation for each type.
@@ -640,6 +659,11 @@ impl<'a, O: OffsetSizeTrait> BinaryArrayType<'a> for &'a GenericBinaryArray<O> {
 impl<'a> BinaryArrayType<'a> for &'a BinaryViewArray {
     fn iter(&self) -> ArrayIter<Self> {
         BinaryViewArray::iter(self)
+    }
+}
+impl<'a> BinaryArrayType<'a> for &'a FixedSizeBinaryArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        FixedSizeBinaryArray::iter(self)
     }
 }
 
@@ -739,8 +763,36 @@ impl<R: RunEndIndexType> PartialEq for RunArray<R> {
     }
 }
 
-/// Constructs an array using the input `data`.
-/// Returns a reference-counted `Array` instance.
+/// Constructs an [`ArrayRef`] from an [`ArrayData`].
+///
+/// # Notes:
+///
+/// It is more efficient to directly construct the concrete array type rather
+/// than using this function as creating an `ArrayData` requires at least one
+/// additional allocation (the Vec of buffers).
+///
+/// # Example:
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_data::ArrayData;
+/// # use arrow_array::{make_array, ArrayRef, Int32Array};
+/// # use arrow_buffer::{Buffer, ScalarBuffer};
+/// # use arrow_schema::DataType;
+/// // Create an Int32Array with values [1, 2, 3]
+/// let values_buffer = Buffer::from_slice_ref(&[1, 2, 3]);
+/// // ArrayData can be constructed using ArrayDataBuilder
+///  let builder = ArrayData::builder(DataType::Int32)
+///    .len(3)
+///    .add_buffer(values_buffer.clone());
+/// let array_data = builder.build().unwrap();
+/// // Create the ArrayRef from the ArrayData
+/// let array = make_array(array_data);
+///
+/// // It is equivalent to directly constructing the Int32Array
+/// let scalar_buffer = ScalarBuffer::from(values_buffer);
+/// let int32_array: ArrayRef = Arc::new(Int32Array::new(scalar_buffer, None));
+/// assert_eq!(&array, &int32_array);
+/// ```
 pub fn make_array(data: ArrayData) -> ArrayRef {
     match data.data_type() {
         DataType::Boolean => Arc::new(BooleanArray::from(data)) as ArrayRef,
@@ -824,20 +876,20 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             DataType::UInt16 => Arc::new(DictionaryArray::<UInt16Type>::from(data)) as ArrayRef,
             DataType::UInt32 => Arc::new(DictionaryArray::<UInt32Type>::from(data)) as ArrayRef,
             DataType::UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef,
-            dt => panic!("Unexpected dictionary key type {dt}"),
+            dt => unimplemented!("Unexpected dictionary key type {dt}"),
         },
         DataType::RunEndEncoded(run_ends_type, _) => match run_ends_type.data_type() {
             DataType::Int16 => Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef,
             DataType::Int32 => Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef,
             DataType::Int64 => Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef,
-            dt => panic!("Unexpected data type for run_ends array {dt}"),
+            dt => unimplemented!("Unexpected data type for run_ends array {dt}"),
         },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
         DataType::Decimal32(_, _) => Arc::new(Decimal32Array::from(data)) as ArrayRef,
         DataType::Decimal64(_, _) => Arc::new(Decimal64Array::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
-        dt => panic!("Unexpected data type {dt}"),
+        dt => unimplemented!("Unexpected data type {dt}"),
     }
 }
 
@@ -875,22 +927,25 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
     make_array(ArrayData::new_null(data_type, length))
 }
 
-/// Helper function that gets offset from an [`ArrayData`]
+/// Helper function that creates an [`OffsetBuffer`] from a buffer and array offset/ length
 ///
 /// # Safety
 ///
-/// - ArrayData must contain a valid [`OffsetBuffer`] as its first buffer
-unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
-    match data.is_empty() && data.buffers()[0].is_empty() {
-        true => OffsetBuffer::new_empty(),
-        false => {
-            let buffer =
-                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len() + 1);
-            // Safety:
-            // ArrayData is valid
-            unsafe { OffsetBuffer::new_unchecked(buffer) }
-        }
+/// - buffer must contain valid arrow offsets ( [`OffsetBuffer`] ) for the
+///   given length and offset.
+unsafe fn get_offsets_from_buffer<O: ArrowNativeType>(
+    buffer: Buffer,
+    offset: usize,
+    len: usize,
+) -> OffsetBuffer<O> {
+    if len == 0 && buffer.is_empty() {
+        return OffsetBuffer::new_empty();
     }
+
+    let scalar_buffer = ScalarBuffer::new(buffer, offset, len + 1);
+    // Safety:
+    // Arguments were valid
+    unsafe { OffsetBuffer::new_unchecked(scalar_buffer) }
 }
 
 /// Helper function for printing potentially long arrays.
@@ -1067,13 +1122,14 @@ mod tests {
     fn test_null_union() {
         for mode in [UnionMode::Sparse, UnionMode::Dense] {
             let data_type = DataType::Union(
-                UnionFields::new(
+                UnionFields::try_new(
                     vec![2, 1],
                     vec![
                         Field::new("foo", DataType::Int32, true),
                         Field::new("bar", DataType::Int64, true),
                     ],
-                ),
+                )
+                .unwrap(),
                 mode,
             );
             let array = new_null_array(&data_type, 4);

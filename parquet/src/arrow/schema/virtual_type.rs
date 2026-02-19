@@ -27,6 +27,50 @@ macro_rules! VIRTUAL_PREFIX {
     };
 }
 
+/// The extension type for row group indices
+///
+/// Extension name: `parquet.virtual.row_group_index`
+///
+/// This virtual column has storage type `Int64` and uses empty string metadata
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct RowGroupIndex;
+
+impl ExtensionType for RowGroupIndex {
+    const NAME: &'static str = concat!(VIRTUAL_PREFIX!(), "row_group_index");
+    type Metadata = &'static str;
+
+    fn metadata(&self) -> &Self::Metadata {
+        &""
+    }
+
+    fn serialize_metadata(&self) -> Option<String> {
+        Some(String::default())
+    }
+
+    fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
+        if metadata.is_some_and(str::is_empty) {
+            Ok("")
+        } else {
+            Err(ArrowError::InvalidArgumentError(
+                "Virtual column extension type expects an empty string as metadata".to_owned(),
+            ))
+        }
+    }
+
+    fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
+        match data_type {
+            DataType::Int64 => Ok(()),
+            data_type => Err(ArrowError::InvalidArgumentError(format!(
+                "Virtual column data type mismatch, expected Int64, found {data_type}"
+            ))),
+        }
+    }
+
+    fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
+        Self.supports_data_type(data_type).map(|_| Self)
+    }
+}
+
 /// The extension type for row numbers.
 ///
 /// Extension name: `parquet.virtual.row_number`.
@@ -90,7 +134,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn valid() -> Result<(), ArrowError> {
+    fn row_number_valid() -> Result<(), ArrowError> {
         let mut field = Field::new("", DataType::Int64, false);
         field.try_with_extension_type(RowNumber)?;
         field.try_extension_type::<RowNumber>()?;
@@ -99,8 +143,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
-    fn missing_name() {
+    #[should_panic(expected = "Extension type name missing")]
+    fn row_number_missing_name() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
                 .into_iter()
@@ -111,13 +155,13 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "expected Int64, found Int32")]
-    fn invalid_type() {
+    fn row_number_invalid_type() {
         Field::new("", DataType::Int32, false).with_extension_type(RowNumber);
     }
 
     #[test]
     #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
-    fn missing_metadata() {
+    fn row_number_missing_metadata() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [(
                 EXTENSION_TYPE_NAME_KEY.to_owned(),
@@ -131,7 +175,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
-    fn invalid_metadata() {
+    fn row_number_invalid_metadata() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [
                 (
@@ -147,5 +191,65 @@ mod tests {
             .collect(),
         );
         field.extension_type::<RowNumber>();
+    }
+
+    #[test]
+    fn row_group_index_valid() -> Result<(), ArrowError> {
+        let mut field = Field::new("", DataType::Int64, false);
+        field.try_with_extension_type(RowGroupIndex)?;
+        field.try_extension_type::<RowGroupIndex>()?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "Extension type name missing")]
+    fn row_group_index_missing_name() {
+        let field = Field::new("", DataType::Int64, false).with_metadata(
+            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
+                .into_iter()
+                .collect(),
+        );
+        field.extension_type::<RowGroupIndex>();
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Int64, found Int32")]
+    fn row_group_index_invalid_type() {
+        Field::new("", DataType::Int32, false).with_extension_type(RowGroupIndex);
+    }
+
+    #[test]
+    #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
+    fn row_group_index_missing_metadata() {
+        let field = Field::new("", DataType::Int64, false).with_metadata(
+            [(
+                EXTENSION_TYPE_NAME_KEY.to_owned(),
+                RowGroupIndex::NAME.to_owned(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        field.extension_type::<RowGroupIndex>();
+    }
+
+    #[test]
+    #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
+    fn row_group_index_invalid_metadata() {
+        let field = Field::new("", DataType::Int64, false).with_metadata(
+            [
+                (
+                    EXTENSION_TYPE_NAME_KEY.to_owned(),
+                    RowGroupIndex::NAME.to_owned(),
+                ),
+                (
+                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
+                    "non-empty".to_owned(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        field.extension_type::<RowGroupIndex>();
     }
 }

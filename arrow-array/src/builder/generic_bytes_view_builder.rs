@@ -87,6 +87,7 @@ pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     /// Some if deduplicating strings
     /// map `<string hash> -> <index to the views>`
     string_tracker: Option<(HashTable<usize>, ahash::RandomState)>,
+    max_deduplication_len: Option<u32>,
     phantom: PhantomData<T>,
 }
 
@@ -107,7 +108,25 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                 current_size: STARTING_BLOCK_SIZE,
             },
             string_tracker: None,
+            max_deduplication_len: None,
             phantom: Default::default(),
+        }
+    }
+
+    /// Configure max deduplication length when deduplicating strings while building the array.
+    /// Default is None.
+    ///
+    /// When [`Self::with_deduplicate_strings`] is enabled, the builder attempts to deduplicate
+    /// any strings longer than 12 bytes. However, since it takes time proportional to the length
+    /// of the string to deduplicate, setting this option limits the CPU overhead for this option.  
+    pub fn with_max_deduplication_len(self, max_deduplication_len: u32) -> Self {
+        debug_assert!(
+            max_deduplication_len > 0,
+            "max_deduplication_len must be greater than 0"
+        );
+        Self {
+            max_deduplication_len: Some(max_deduplication_len),
+            ..self
         }
     }
 
@@ -334,35 +353,42 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
         // Deduplication if:
         // (1) deduplication is enabled.
-        // (2) len > 12
-        if let Some((mut ht, hasher)) = self.string_tracker.take() {
-            let hash_val = hasher.hash_one(v);
-            let hasher_fn = |v: &_| hasher.hash_one(v);
+        // (2) len > `MAX_INLINE_VIEW_LEN` and len <= `max_deduplication_len`
+        let can_deduplicate = self.string_tracker.is_some()
+            && self
+                .max_deduplication_len
+                .map(|max_length| length <= max_length)
+                .unwrap_or(true);
+        if can_deduplicate {
+            if let Some((mut ht, hasher)) = self.string_tracker.take() {
+                let hash_val = hasher.hash_one(v);
+                let hasher_fn = |v: &_| hasher.hash_one(v);
 
-            let entry = ht.entry(
-                hash_val,
-                |idx| {
-                    let stored_value = self.get_value(*idx);
-                    v == stored_value
-                },
-                hasher_fn,
-            );
-            match entry {
-                Entry::Occupied(occupied) => {
-                    // If the string already exists, we will directly use the view
-                    let idx = occupied.get();
-                    self.views_buffer.push(self.views_buffer[*idx]);
-                    self.null_buffer_builder.append_non_null();
-                    self.string_tracker = Some((ht, hasher));
-                    return Ok(());
+                let entry = ht.entry(
+                    hash_val,
+                    |idx| {
+                        let stored_value = self.get_value(*idx);
+                        v == stored_value
+                    },
+                    hasher_fn,
+                );
+                match entry {
+                    Entry::Occupied(occupied) => {
+                        // If the string already exists, we will directly use the view
+                        let idx = occupied.get();
+                        self.views_buffer.push(self.views_buffer[*idx]);
+                        self.null_buffer_builder.append_non_null();
+                        self.string_tracker = Some((ht, hasher));
+                        return Ok(());
+                    }
+                    Entry::Vacant(vacant) => {
+                        // o.w. we insert the (string hash -> view index)
+                        // the idx is current length of views_builder, as we are inserting a new view
+                        vacant.insert(self.views_buffer.len());
+                    }
                 }
-                Entry::Vacant(vacant) => {
-                    // o.w. we insert the (string hash -> view index)
-                    // the idx is current length of views_builder, as we are inserting a new view
-                    vacant.insert(self.views_buffer.len());
-                }
+                self.string_tracker = Some((ht, hasher));
             }
-            self.string_tracker = Some((ht, hasher));
         }
 
         let required_cap = self.in_progress.len() + v.len();
@@ -402,6 +428,53 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             None => self.append_null(),
             Some(v) => self.append_value(v),
         };
+    }
+
+    /// Append the same value `n` times into the builder
+    ///
+    /// This is more efficient than calling [`Self::try_append_value`] `n` times,
+    /// especially when deduplication is enabled, as it only hashes the value once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if
+    /// - String buffer count exceeds `u32::MAX`
+    /// - String length exceeds `u32::MAX`
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::builder::StringViewBuilder;
+    /// # use arrow_array::Array;
+    /// let mut builder = StringViewBuilder::new().with_deduplicate_strings();
+    ///
+    /// // Append "hello" 1000 times efficiently
+    /// builder.try_append_value_n("hello", 1000)?;
+    ///
+    /// let array = builder.finish();
+    /// assert_eq!(array.len(), 1000);
+    ///
+    /// // All values are "hello"
+    /// for value in array.iter() {
+    ///     assert_eq!(value, Some("hello"));
+    /// }
+    /// # Ok::<(), arrow_schema::ArrowError>(())
+    /// ```
+    #[inline]
+    pub fn try_append_value_n(
+        &mut self,
+        value: impl AsRef<T::Native>,
+        n: usize,
+    ) -> Result<(), ArrowError> {
+        if n == 0 {
+            return Ok(());
+        }
+        // Process value once (handles deduplication, buffer management, view creation)
+        self.try_append_value(value)?;
+        // Reuse the view (n-1) times
+        let view = *self.views_buffer.last().unwrap();
+        self.views_buffer.extend(std::iter::repeat_n(view, n - 1));
+        self.null_buffer_builder.append_n_non_nulls(n - 1);
+        Ok(())
     }
 
     /// Append a null value into the builder
@@ -636,7 +709,52 @@ pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
 mod tests {
     use core::str;
 
+    use arrow_buffer::ArrowNativeType;
+
     use super::*;
+
+    #[test]
+    fn test_string_max_deduplication_len() {
+        let value_1 = "short";
+        let value_2 = "not so similar string but long";
+        let value_3 = "1234567890123";
+
+        let max_deduplication_len = MAX_INLINE_VIEW_LEN * 2;
+
+        let mut builder = StringViewBuilder::new()
+            .with_deduplicate_strings()
+            .with_max_deduplication_len(max_deduplication_len);
+
+        assert!(value_1.len() < MAX_INLINE_VIEW_LEN.as_usize());
+        assert!(value_2.len() > max_deduplication_len.as_usize());
+        assert!(
+            value_3.len() > MAX_INLINE_VIEW_LEN.as_usize()
+                && value_3.len() < max_deduplication_len.as_usize()
+        );
+
+        // append value1 (short), expect it is inlined and not deduplicated
+        builder.append_value(value_1); // view 0
+        builder.append_value(value_1); // view 1
+        // append value2, expect second copy is not deduplicated as it exceeds max_deduplication_len
+        builder.append_value(value_2); // view 2
+        builder.append_value(value_2); // view 3
+        // append value3, expect second copy is deduplicated
+        builder.append_value(value_3); // view 4
+        builder.append_value(value_3); // view 5
+
+        let array = builder.finish();
+
+        // verify
+        let v2 = ByteView::from(array.views()[2]);
+        let v3 = ByteView::from(array.views()[3]);
+        assert_eq!(v2.buffer_index, v3.buffer_index); // stored in same buffer
+        assert_ne!(v2.offset, v3.offset); // different offsets --> not deduplicated
+
+        let v4 = ByteView::from(array.views()[4]);
+        let v5 = ByteView::from(array.views()[5]);
+        assert_eq!(v4.buffer_index, v5.buffer_index); // stored in same buffer
+        assert_eq!(v4.offset, v5.offset); // same offsets --> deduplicated
+    }
 
     #[test]
     fn test_string_view_deduplicate() {
@@ -812,5 +930,77 @@ mod tests {
             exp_builder.completed.last().unwrap().capacity(),
             MAX_BLOCK_SIZE as usize
         );
+    }
+
+    #[test]
+    fn test_append_value_n() {
+        // Test with inline strings (<=12 bytes)
+        let mut builder = StringViewBuilder::new();
+
+        builder.try_append_value_n("hello", 100).unwrap();
+        builder.append_value("world");
+        builder.try_append_value_n("foo", 50).unwrap();
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 151);
+        assert_eq!(array.null_count(), 0);
+
+        // Verify the values
+        for i in 0..100 {
+            assert_eq!(array.value(i), "hello");
+        }
+        assert_eq!(array.value(100), "world");
+        for i in 101..151 {
+            assert_eq!(array.value(i), "foo");
+        }
+
+        // All inline strings should have no data buffers
+        assert_eq!(array.data_buffers().len(), 0);
+    }
+
+    #[test]
+    fn test_append_value_n_with_deduplication() {
+        let long_string = "This is a very long string that exceeds the inline length";
+
+        // Test with deduplication enabled
+        let mut builder = StringViewBuilder::new().with_deduplicate_strings();
+
+        // First append the string once to add it to the hash map
+        builder.append_value(long_string);
+
+        // Then append_n the same string - should deduplicate and reuse the existing value
+        builder.try_append_value_n(long_string, 999).unwrap();
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 1000);
+        assert_eq!(array.null_count(), 0);
+
+        // Verify all values are the same
+        for i in 0..1000 {
+            assert_eq!(array.value(i), long_string);
+        }
+
+        // With deduplication, should only have 1 data buffer containing the string once
+        assert_eq!(array.data_buffers().len(), 1);
+
+        // All views should be identical
+        let first_view = array.views()[0];
+        for view in array.views().iter() {
+            assert_eq!(*view, first_view);
+        }
+    }
+
+    #[test]
+    fn test_append_value_n_zero() {
+        let mut builder = StringViewBuilder::new();
+
+        builder.append_value("first");
+        builder.try_append_value_n("should not appear", 0).unwrap();
+        builder.append_value("second");
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.value(0), "first");
+        assert_eq!(array.value(1), "second");
     }
 }

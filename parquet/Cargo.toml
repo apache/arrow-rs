@@ -39,7 +39,6 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 [dependencies]
 arrow-array = { workspace = true, optional = true }
 arrow-buffer = { workspace = true, optional = true }
-arrow-cast = { workspace = true, optional = true }
 arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
@@ -50,7 +49,7 @@ parquet-variant = { workspace = true, optional = true }
 parquet-variant-json = { workspace = true, optional = true }
 parquet-variant-compute = { workspace = true, optional = true }
 
-object_store = { version = "0.12.0", default-features = false, optional = true }
+object_store = { version = "0.13.1", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
@@ -91,10 +90,11 @@ lz4_flex = { version = "0.12", default-features = false, features = ["std", "fra
 zstd = { version = "0.13", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
+arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-object_store = { version = "0.12.0", default-features = false, features = ["azure", "fs"] }
-sysinfo = { version = "0.37.1", default-features = false, features = ["system"] }
+object_store = { version = "0.13.1", default-features = false, features = ["azure", "fs"] }
+sysinfo = { version = "0.38.1", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -104,7 +104,7 @@ default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64",
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
-arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
+arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable support for arrow canonical extension types
 arrow_canonical_extension_types = ["arrow-schema?/canonical_extension_types"]
 # Enable CLI tools
@@ -150,11 +150,6 @@ path = "./examples/read_parquet.rs"
 name = "write_parquet"
 required-features = ["cli"]
 path = "./examples/write_parquet.rs"
-
-[[example]]
-name = "async_read_parquet"
-required-features = ["arrow", "async"]
-path = "./examples/async_read_parquet.rs"
 
 [[example]]
 name = "read_with_rowgroup"
@@ -238,7 +233,7 @@ harness = false
 
 [[bench]]
 name = "arrow_reader_clickbench"
-required-features = ["arrow", "async"]
+required-features = ["arrow", "async", "object_store"]
 harness = false
 
 [[bench]]
@@ -256,9 +251,19 @@ name = "metadata"
 harness = false
 
 [[bench]]
+name = "parquet_round_trip"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "row_selector"
 harness = false
 required-features = ["arrow"]
+
+[[bench]]
+name = "row_group_index_reader"
+required-features = ["arrow"]
+harness = false
 
 [[bench]]
 name = "row_selection_cursor"

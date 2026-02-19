@@ -93,7 +93,7 @@ impl ChunkReader for File {
     fn get_read(&self, start: u64) -> Result<Self::T> {
         let mut reader = self.try_clone()?;
         reader.seek(SeekFrom::Start(start))?;
-        Ok(BufReader::new(self.try_clone()?))
+        Ok(BufReader::new(reader))
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {

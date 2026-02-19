@@ -390,7 +390,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Returns the value of the field with the specified name, if any.
     ///
-    /// `Ok(None)` means the field does not exist; `Err` means the search encountered an error.
+    /// Returns `Some(Variant)` if the field exists, or `None` if the field does not exist.
     pub fn get(&self, name: &str) -> Option<Variant<'m, 'v>> {
         // Binary search through the field IDs of this object to find the requested field name.
         //

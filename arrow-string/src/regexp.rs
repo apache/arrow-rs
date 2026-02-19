@@ -25,8 +25,8 @@ use arrow_array::builder::{
 };
 use arrow_array::cast::AsArray;
 use arrow_array::*;
-use arrow_buffer::NullBuffer;
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, Field};
 use regex::Regex;
 
@@ -180,7 +180,6 @@ pub fn regexp_is_match_scalar<'a, S>(
 where
     &'a S: StringArrayType<'a>,
 {
-    let null_bit_buffer = array.nulls().map(|x| x.inner().sliced());
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let pattern = match flag {
@@ -200,20 +199,13 @@ where
         }
     }
 
-    let buffer = result.into();
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![buffer],
-            vec![],
-        )
-    };
-
-    Ok(BooleanArray::from(data))
+    let values = BooleanBuffer::from(result);
+    let nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
+        .filter(|n| n.null_count() > 0);
+    Ok(BooleanArray::new(values, nulls))
 }
 
 macro_rules! process_regexp_array_match {

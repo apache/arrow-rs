@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Download crate docs
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: crate-docs
           path: website/build

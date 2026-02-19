@@ -17,18 +17,21 @@
 
 use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 
-/// Builder for creating [`NullBuffer`]
+/// Builder for creating [`NullBuffer`]s (bitmaps indicating validity/nulls).
+///
+/// # See also
+/// * [`BooleanBufferBuilder`] for a lower-level bitmap builder.
+/// * [`Self::allocated_size`] for the current memory allocated by the builder.
 ///
 /// # Performance
 ///
-/// This builder only materializes the buffer when we append `false`.
-/// If you only append `true`s to the builder, what you get will be
-/// `None` when calling [`finish`](#method.finish).
+/// This builder only materializes the buffer when null values (`false`) are
+/// appended. If you only append non-null, (`true`) to the builder, no buffer is
+/// allocated and [`build`](#method.build) or [`finish`](#method.finish) return
+/// `None`.
 ///
 /// This optimization is **very** important for the performance as it avoids
 /// allocating memory for the null buffer when there are no nulls.
-///
-/// See [`Self::allocated_size`] to get the current memory allocated by the builder.
 ///
 /// # Example
 /// ```
@@ -144,6 +147,13 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Sets a bit in the builder at `index`
+    #[inline]
+    pub fn set_bit(&mut self, index: usize, v: bool) {
+        self.materialize_if_needed();
+        self.bitmap_builder.as_mut().unwrap().set_bit(index, v);
+    }
+
     /// Gets a bit in the buffer at `index`
     #[inline]
     pub fn is_valid(&self, index: usize) -> bool {
@@ -193,11 +203,20 @@ impl NullBufferBuilder {
         }
     }
 
-    /// Builds the null buffer and resets the builder.
-    /// Returns `None` if the builder only contains `true`s.
+    /// Builds the [`NullBuffer`] and resets the builder.
+    ///
+    /// Returns `None` if the builder only contains `true`s. Use [`Self::build`]
+    /// when you don't need to reuse this builder.
     pub fn finish(&mut self) -> Option<NullBuffer> {
         self.len = 0;
-        Some(NullBuffer::new(self.bitmap_builder.take()?.finish()))
+        Some(NullBuffer::new(self.bitmap_builder.take()?.build()))
+    }
+
+    /// Builds the [`NullBuffer`] without resetting the builder.
+    ///
+    /// This consumes the builder. Use [`Self::finish`] to reuse it.
+    pub fn build(self) -> Option<NullBuffer> {
+        self.bitmap_builder.map(NullBuffer::from)
     }
 
     /// Builds the [NullBuffer] without resetting the builder.
@@ -238,9 +257,7 @@ impl NullBufferBuilder {
             .map(|b| b.capacity() / 8)
             .unwrap_or(0)
     }
-}
 
-impl NullBufferBuilder {
     /// Return the number of bits in the buffer.
     pub fn len(&self) -> usize {
         self.bitmap_builder.as_ref().map_or(self.len, |b| b.len())

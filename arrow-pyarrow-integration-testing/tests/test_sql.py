@@ -20,6 +20,7 @@ import contextlib
 import datetime
 import decimal
 import string
+from typing import Union, Tuple, Protocol
 
 import pytest
 import pyarrow as pa
@@ -27,7 +28,9 @@ import pytz
 
 import arrow_pyarrow_integration_testing as rust
 
-PYARROW_PRE_14 = int(pa.__version__.split('.')[0]) < 14
+PYARROW_MAJOR_VER = int(pa.__version__.split(".")[0])
+PYARROW_PRE_14 = PYARROW_MAJOR_VER < 14
+PYARROW_PRE_16 = PYARROW_MAJOR_VER < 16
 
 
 @contextlib.contextmanager
@@ -112,36 +115,66 @@ _supported_pyarrow_types = [
     ),
 ]
 
-_unsupported_pyarrow_types = [
-]
+if PYARROW_MAJOR_VER >= 16:
+    _supported_pyarrow_types.extend(
+        [
+            pa.list_view(pa.uint64()),
+            pa.large_list_view(pa.uint64()),
+            pa.list_view(pa.string()),
+            pa.large_list_view(pa.string()),
+        ]
+    )
+
 
 # As of pyarrow 14, pyarrow implements the Arrow PyCapsule interface
 # (https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
 # This defines that Arrow consumers should allow any object that has specific "dunder"
 # methods, `__arrow_c_*_`. These wrapper classes ensure that arrow-rs is able to handle
 # _any_ class, without pyarrow-specific handling.
-class SchemaWrapper:
-    def __init__(self, schema):
+
+
+class ArrowSchemaExportable(Protocol):
+    def __arrow_c_schema__(self) -> object: ...
+
+
+class ArrowArrayExportable(Protocol):
+    def __arrow_c_array__(
+        self,
+        requested_schema: Union[object, None] = None
+    ) -> Tuple[object, object]:
+        ...
+
+
+class ArrowStreamExportable(Protocol):
+    def __arrow_c_stream__(
+        self,
+        requested_schema: Union[object, None] = None
+    ) -> object:
+        ...
+
+
+class SchemaWrapper(ArrowSchemaExportable):
+    def __init__(self, schema: ArrowSchemaExportable) -> None:
         self.schema = schema
 
-    def __arrow_c_schema__(self):
+    def __arrow_c_schema__(self) -> object:
         return self.schema.__arrow_c_schema__()
 
 
-class ArrayWrapper:
-    def __init__(self, array):
+class ArrayWrapper(ArrowArrayExportable):
+    def __init__(self, array: ArrowArrayExportable) -> None:
         self.array = array
 
-    def __arrow_c_array__(self):
-        return self.array.__arrow_c_array__()
+    def __arrow_c_array__(self, requested_schema: Union[object, None] = None) -> Tuple[object, object]:
+        return self.array.__arrow_c_array__(requested_schema=requested_schema)
 
 
-class StreamWrapper:
-    def __init__(self, stream):
+class StreamWrapper(ArrowStreamExportable):
+    def __init__(self, stream: ArrowStreamExportable) -> None:
         self.stream = stream
 
-    def __arrow_c_stream__(self):
-        return self.stream.__arrow_c_stream__()
+    def __arrow_c_stream__(self, requested_schema: Union[object, None] = None) -> object:
+        return self.stream.__arrow_c_stream__(requested_schema=requested_schema)
 
 
 @pytest.mark.parametrize("pyarrow_type", _supported_pyarrow_types, ids=str)
@@ -157,12 +190,6 @@ def test_type_roundtrip_pycapsule(pyarrow_type):
     restored = rust.round_trip_type(wrapped)
     assert restored == pyarrow_type
     assert restored is not pyarrow_type
-
-
-@pytest.mark.parametrize("pyarrow_type", _unsupported_pyarrow_types, ids=str)
-def test_type_roundtrip_raises(pyarrow_type):
-    with pytest.raises(pa.ArrowException):
-        rust.round_trip_type(pyarrow_type)
 
 @pytest.mark.parametrize('pyarrow_type', _supported_pyarrow_types, ids=str)
 def test_field_roundtrip(pyarrow_type):
@@ -337,6 +364,21 @@ def test_list_array():
     del a
     del b
 
+
+@pytest.mark.skipif(PYARROW_PRE_16, reason="requires pyarrow 16")
+def test_list_view_array():
+    """
+    Python -> Rust -> Python
+    """
+    a = pa.array([[], None, [1, 2], [4, 5, 6]], pa.list_view(pa.int64()))
+    b = rust.round_trip_array(a)
+    b.validate(full=True)
+    assert a.to_pylist() == b.to_pylist()
+    assert a.type == b.type
+    del a
+    del b
+
+
 def test_map_array():
     """
     Python -> Rust -> Python
@@ -485,7 +527,7 @@ def test_empty_recordbatch_with_row_count():
     """
 
     # Create an empty schema with no fields
-    batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3, 4]}).select([])
+    batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3, 4]}, metadata={b'key1': b'value1'}).select([])
     num_rows = 4
     assert batch.num_rows == num_rows
     assert batch.num_columns == 0
@@ -503,7 +545,7 @@ def test_record_batch_reader():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batches = [
         pa.record_batch([[[1], [2, 42]]], schema),
         pa.record_batch([[None, [], [5, 6]]], schema),
@@ -529,7 +571,7 @@ def test_record_batch_reader_pycapsule():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batches = [
         pa.record_batch([[[1], [2, 42]]], schema),
         pa.record_batch([[None, [], [5, 6]]], schema),
@@ -579,7 +621,7 @@ def test_record_batch_pycapsule():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batch = pa.record_batch([[[1], [2, 42]]], schema)
     wrapped = StreamWrapper(batch)
     b = rust.round_trip_record_batch_reader(wrapped)
@@ -598,7 +640,7 @@ def test_table_pycapsule():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batches = [
         pa.record_batch([[[1], [2, 42]]], schema),
         pa.record_batch([[None, [], [5, 6]]], schema),
@@ -608,9 +650,74 @@ def test_table_pycapsule():
     b = rust.round_trip_record_batch_reader(wrapped)
     new_table = b.read_all()
 
-    assert table.schema == new_table.schema
     assert table == new_table
+    assert table.schema == new_table.schema
+    assert table.schema.metadata == new_table.schema.metadata
     assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_empty():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
+    table = pa.Table.from_batches([], schema=schema)
+    new_table = rust.build_table([], schema=schema)
+
+    assert table == new_table
+    assert table.schema == new_table.schema
+    assert table.schema.metadata == new_table.schema.metadata
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_roundtrip():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema),
+        pa.record_batch([[None, [], [5, 6]]], schema),
+    ]
+    table = pa.Table.from_batches(batches, schema=schema)
+    new_table = rust.round_trip_table(table)
+
+    assert table == new_table
+    assert table.schema == new_table.schema
+    assert table.schema.metadata == new_table.schema.metadata
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_from_batches():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema),
+        pa.record_batch([[None, [], [5, 6]]], schema),
+    ]
+    table = pa.Table.from_batches(batches)
+    new_table = rust.build_table(batches, schema)
+
+    assert table == new_table
+    assert table.schema == new_table.schema
+    assert table.schema.metadata == new_table.schema.metadata
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_error_inconsistent_schema():
+    """
+    Python -> Rust -> Python
+    """
+    schema_1 = pa.schema([('ints', pa.list_(pa.int32()))])
+    schema_2 = pa.schema([('floats', pa.list_(pa.float32()))])
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema_1),
+        pa.record_batch([[None, [], [5.6, 6.4]]], schema_2),
+    ]
+    with pytest.raises(pa.ArrowException, match="Schema error: All record batches must have the same schema."):
+        rust.build_table(batches, schema_1)
 
 
 def test_reject_other_classes():

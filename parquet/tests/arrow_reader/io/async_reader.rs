@@ -28,6 +28,7 @@ use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelection, RowSelector
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::errors::Result;
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
 use std::ops::Range;
 use std::sync::Arc;
@@ -206,7 +207,7 @@ async fn test_read_single_row_filter_no_page_index() {
     // Apply a filter  "b" > 575 and <less> than 625
     // (last data page in Row Group 0 and first DataPage in Row Group 1)
     let test_file = test_file();
-    let options = test_options().with_page_index(false);
+    let options = test_options().with_page_index_policy(PageIndexPolicy::from(false));
     let builder = async_builder(&test_file, options).await;
     let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
 
@@ -318,7 +319,9 @@ async fn async_builder(
     test_file: &TestParquetFile,
     options: ArrowReaderOptions,
 ) -> ParquetRecordBatchStreamBuilder<RecordingAsyncFileReader> {
-    let parquet_meta_data = if options.page_index() {
+    let parquet_meta_data = if options.offset_index_policy() != PageIndexPolicy::Skip
+        || options.column_index_policy() != PageIndexPolicy::Skip
+    {
         Arc::clone(test_file.parquet_metadata())
     } else {
         // strip out the page index from the metadata

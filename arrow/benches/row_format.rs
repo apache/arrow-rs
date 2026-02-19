@@ -23,13 +23,15 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Int64Type, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
-    create_boolean_array, create_dict_from_values, create_primitive_array,
-    create_string_array_with_len, create_string_dict_array, create_string_view_array_with_len,
+    create_boolean_array, create_boolean_array_with_seed, create_dict_from_values,
+    create_f64_array_with_seed, create_primitive_array, create_primitive_array_with_seed,
+    create_string_array_with_len, create_string_array_with_len_range_and_prefix_and_seed,
+    create_string_dict_array, create_string_view_array_with_len,
     create_string_view_array_with_max_len,
 };
 use arrow::util::data_gen::create_random_array;
 use arrow_array::Array;
-use arrow_array::types::Int32Type;
+use arrow_array::types::{Int8Type, Int32Type};
 use arrow_schema::{DataType, Field};
 use criterion::Criterion;
 use std::{hint, sync::Arc};
@@ -83,6 +85,102 @@ fn bench_iter(c: &mut Criterion) {
             }
         })
     });
+}
+
+/// A single benchmark with a medium number of columns (around 50) without nested columns for real-world use cases
+/// This also makes sure there is a large gap between each value in the column and how it is laid out in the row format.
+/// and it is on the edge of not fitting in L3 on some machines
+fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
+    batch_size: usize,
+    c: &mut Criterion,
+) {
+    let mut seed = 0;
+
+    let mut cols: Vec<ArrayRef> = vec![];
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int8Type>(
+            batch_size, nulls, seed,
+        )) as ArrayRef);
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int32Type>(
+            batch_size, nulls, seed,
+        )) as ArrayRef);
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+            batch_size, nulls, seed,
+        )) as ArrayRef);
+    }
+
+    for _ in 0..10 {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+            batch_size, 0.0, seed,
+        )) as ArrayRef);
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, nulls, 0, 50, "", seed,
+            ),
+        ));
+    }
+
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 0, 10, "", seed,
+            ),
+        ));
+    }
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 10, 20, "", seed,
+            ),
+        ));
+    }
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 20, 30, "", seed,
+            ),
+        ));
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_boolean_array_with_seed(
+            batch_size, nulls, 0.5, seed,
+        )));
+    }
+
+    for _ in 0..10 {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+            batch_size, 0.0, seed,
+        )) as ArrayRef);
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_f64_array_with_seed(batch_size, nulls, seed)) as ArrayRef);
+    }
+
+    assert_eq!(cols.len(), 53);
+    do_bench(c, format!("{batch_size} 53 columns").as_str(), cols);
 }
 
 fn row_bench(c: &mut Criterion) {
@@ -278,6 +376,9 @@ fn row_bench(c: &mut Criterion) {
         .slice(10, 20),
     ];
     do_bench(c, "4096 large_list(0) sliced to 10 of u64(0)", cols);
+
+    run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(4096, c);
+    run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(8192, c);
 
     bench_iter(c);
 }

@@ -26,7 +26,7 @@ use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 /// Role of the cached array reader
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +69,7 @@ pub struct CachedArrayReader {
     /// The underlying array reader
     inner: Box<dyn ArrayReader>,
     /// Shared cache for this row group
-    shared_cache: Arc<Mutex<RowGroupCache>>,
+    shared_cache: Arc<RwLock<RowGroupCache>>,
     /// Column index for cache key generation
     column_idx: usize,
     /// Current logical position in the data stream for this reader (for cache key generation)
@@ -93,12 +93,12 @@ impl CachedArrayReader {
     /// Creates a new cached array reader with the specified role
     pub fn new(
         inner: Box<dyn ArrayReader>,
-        cache: Arc<Mutex<RowGroupCache>>,
+        cache: Arc<RwLock<RowGroupCache>>,
         column_idx: usize,
         role: CacheRole,
         metrics: ArrowReaderMetrics,
     ) -> Self {
-        let batch_size = cache.lock().unwrap().batch_size();
+        let batch_size = cache.read().unwrap().batch_size();
 
         Self {
             inner,
@@ -151,7 +151,7 @@ impl CachedArrayReader {
         // The local cache ensures data is available for our consume_batch call
         let _cached =
             self.shared_cache
-                .lock()
+                .write()
                 .unwrap()
                 .insert(self.column_idx, batch_id, array.clone());
         // Note: if the shared cache is full (_cached == false), we continue without caching
@@ -172,7 +172,7 @@ impl CachedArrayReader {
         // This ensures we don't remove batches that might still be needed for the current batch
         // We can safely remove batch_id if current_batch_id > batch_id + 1
         if current_batch_id.val > 1 {
-            let mut cache = self.shared_cache.lock().unwrap();
+            let mut cache = self.shared_cache.write().unwrap();
             for batch_id_to_remove in 0..(current_batch_id.val - 1) {
                 cache.remove(
                     self.column_idx,
@@ -201,17 +201,17 @@ impl ArrayReader for CachedArrayReader {
 
             // Check local cache first
             let cached = if let Some(array) = self.local_cache.get(&batch_id) {
-                Some(array.clone())
+                Some(Arc::clone(array))
             } else {
                 // If not in local cache, i.e., we are consumer, check shared cache
                 let cache_content = self
                     .shared_cache
-                    .lock()
+                    .read()
                     .unwrap()
                     .get(self.column_idx, batch_id);
                 if let Some(array) = cache_content.as_ref() {
                     // Store in local cache for later use in consume_batch
-                    self.local_cache.insert(batch_id, array.clone());
+                    self.local_cache.insert(batch_id, Arc::clone(array));
                 }
                 cache_content
             };
@@ -354,7 +354,7 @@ mod tests {
     use crate::arrow::array_reader::ArrayReader;
     use crate::arrow::array_reader::row_group_cache::RowGroupCache;
     use arrow_array::{ArrayRef, Int32Array};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, RwLock};
 
     // Mock ArrayReader for testing
     struct MockArrayReader {
@@ -420,7 +420,7 @@ mod tests {
     fn test_cached_reader_basic() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
         let mut cached_reader = CachedArrayReader::new(
             Box::new(mock_reader),
             cache,
@@ -448,7 +448,7 @@ mod tests {
     fn test_read_skip_pattern() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, usize::MAX))); // Batch size 5
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(5, usize::MAX))); // Batch size 5
         let mut cached_reader = CachedArrayReader::new(
             Box::new(mock_reader),
             cache,
@@ -482,7 +482,7 @@ mod tests {
     fn test_multiple_reads_before_consume() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
         let mut cached_reader = CachedArrayReader::new(
             Box::new(mock_reader),
             cache,
@@ -509,7 +509,7 @@ mod tests {
     fn test_eof_behavior() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, usize::MAX))); // Batch size 5
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(5, usize::MAX))); // Batch size 5
         let mut cached_reader = CachedArrayReader::new(
             Box::new(mock_reader),
             cache,
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn test_cache_sharing() {
         let metrics = ArrowReaderMetrics::disabled();
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, usize::MAX))); // Batch size 5
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(5, usize::MAX))); // Batch size 5
 
         // First reader - populate cache
         let mock_reader1 = MockArrayReader::new(vec![1, 2, 3, 4, 5]);
@@ -575,7 +575,7 @@ mod tests {
     fn test_consumer_removes_batches() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
         let mut consumer_reader = CachedArrayReader::new(
             Box::new(mock_reader),
             cache.clone(),
@@ -589,14 +589,14 @@ mod tests {
         assert_eq!(read1, 3);
         assert_eq!(consumer_reader.outer_position, 3);
         // Check that batch 0 is in cache after read_records
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_some());
 
         let array1 = consumer_reader.consume_batch().unwrap();
         assert_eq!(array1.len(), 3);
 
         // After first consume_batch, batch 0 should still be in cache
         // (current_batch_id = 3/3 = 1, cleanup only happens if current_batch_id > 1)
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_some());
 
         // Read second batch (positions 3-5, batch 1)
         let read2 = consumer_reader.read_records(3).unwrap();
@@ -607,8 +607,8 @@ mod tests {
 
         // After second consume_batch, batch 0 should be removed
         // (current_batch_id = 6/3 = 2, cleanup removes batches 0..(2-1) = 0..1, so removes batch 0)
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_none());
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 1 }).is_some());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_none());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 1 }).is_some());
 
         // Read third batch (positions 6-8, batch 2)
         let read3 = consumer_reader.read_records(3).unwrap();
@@ -619,16 +619,16 @@ mod tests {
 
         // After third consume_batch, batches 0 and 1 should be removed
         // (current_batch_id = 9/3 = 3, cleanup removes batches 0..(3-1) = 0..2, so removes batches 0 and 1)
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_none());
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 1 }).is_none());
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 2 }).is_some());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_none());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 1 }).is_none());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 2 }).is_some());
     }
 
     #[test]
     fn test_producer_keeps_batches() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
         let mut producer_reader = CachedArrayReader::new(
             Box::new(mock_reader),
             cache.clone(),
@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(array1.len(), 3);
 
         // Verify batch 0 is in cache
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_some());
 
         // Read second batch (positions 3-5) - producer should NOT remove batch 0
         let read2 = producer_reader.read_records(3).unwrap();
@@ -653,15 +653,15 @@ mod tests {
         assert_eq!(array2.len(), 3);
 
         // Verify both batch 0 and batch 1 are still present (no removal for producer)
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 1 }).is_some());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_some());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 1 }).is_some());
     }
 
     #[test]
     fn test_local_cache_protects_against_eviction() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
         let mut cached_reader = CachedArrayReader::new(
             Box::new(mock_reader),
             cache.clone(),
@@ -675,12 +675,12 @@ mod tests {
         assert_eq!(records_read, 3);
 
         // Verify data is in both caches
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_some());
         assert!(cached_reader.local_cache.contains_key(&BatchID { val: 0 }));
 
         // Simulate cache eviction by manually removing from shared cache
-        cache.lock().unwrap().remove(0, BatchID { val: 0 });
-        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_none());
+        cache.write().unwrap().remove(0, BatchID { val: 0 });
+        assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_none());
 
         // Even though shared cache was evicted, consume_batch should still work
         // because data is preserved in local cache
@@ -698,7 +698,7 @@ mod tests {
     fn test_local_cache_is_cleared_properly() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, 0))); // Batch size 3, cache 0
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(3, 0))); // Batch size 3, cache 0
         let mut cached_reader = CachedArrayReader::new(
             Box::new(mock_reader),
             cache.clone(),
@@ -723,7 +723,7 @@ mod tests {
     fn test_batch_id_calculation_with_incremental_reads() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
 
         // Create a producer to populate cache
         let mut producer = CachedArrayReader::new(

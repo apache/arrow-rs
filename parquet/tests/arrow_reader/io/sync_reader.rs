@@ -27,6 +27,7 @@ use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{
     ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
 };
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::reader::{ChunkReader, Length};
 use std::io::Read;
 use std::sync::Arc;
@@ -122,7 +123,7 @@ fn test_read_single_column() {
 #[test]
 fn test_read_single_column_no_page_index() {
     let test_file = test_file();
-    let options = test_options().with_page_index(false);
+    let options = test_options().with_page_index_policy(PageIndexPolicy::from(false));
     let builder = sync_builder(&test_file, options);
     let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
     let builder = builder.with_projection(ProjectionMask::columns(&schema_descr, ["b"]));

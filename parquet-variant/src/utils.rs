@@ -16,6 +16,7 @@
 // under the License.
 use std::{array::TryFromSliceError, ops::Range, str};
 
+use crate::VariantPathElement;
 use arrow_schema::ArrowError;
 
 use std::cmp::Ordering;
@@ -147,6 +148,131 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
 
 pub(crate) fn fits_precision<const N: u32>(n: impl Into<i64>) -> bool {
     n.into().unsigned_abs().leading_zeros() >= (i64::BITS - N)
+}
+
+/// Parse a path string into a vector of [`VariantPathElement`].
+///
+/// # Syntax
+/// - `.field` or `field` - access object field (do not support special char)
+/// - `[index]` - access array element by index
+/// - `[field]` - access object field (support special char with escape `\`)
+///
+/// # Escape Rules
+/// Inside brackets `[...]`:
+/// - `\\` -> literal `\`
+/// - `\]` -> literal `]`
+/// - Any other `\x` -> literal `x`
+///
+/// Outside brackets, no escaping is supported.
+///
+/// # Examples
+/// - `""` -> empty path
+/// - `"foo"` -> single field `foo`
+/// - `"foo.bar"` -> nested fields `foo`, `bar`
+/// - `"[1]"` -> array index 1
+/// - `"foo[1].bar"` -> field `foo`, index 1, field `bar`
+/// - `"[a.b]"` -> field `a.b` (dot is literal inside bracket)
+/// - `"[a\\]b]"` -> field `a]b` (escaped `]`
+/// - etc.
+///
+/// # Errors
+/// - Leading `.` (e.g., `".foo"`)
+/// - Trailing `.` (e.g., `"foo."`)
+/// - Unclosed '[' (e.g., `"foo[1"`)
+/// - Unexpected ']' (e.g., `"foo]"`)
+/// - Trailing '`' inside bracket (treated as unclosed bracket)
+#[inline]
+pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowError> {
+    let scan_field = |start: usize| {
+        s[start..]
+            .find(['.', '[', ']'])
+            .map_or_else(|| s.len(), |p| start + p)
+    };
+
+    let bytes = s.as_bytes();
+    if let Some(b'.') = bytes.first() {
+        return Err(ArrowError::ParseError("Unexpected leading '.'".into()));
+    }
+
+    let mut elements = Vec::new();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let (elem, end) = match bytes[i] {
+            b'.' => {
+                i += 1; // skip the dot; a field must follow
+                let end = scan_field(i);
+                if end == i {
+                    return Err(ArrowError::ParseError(match bytes.get(i) {
+                        None => "Unexpected trailing '.'".into(),
+                        Some(&c) => format!("Unexpected '{}' at byte {i}", c as char),
+                    }));
+                }
+                (VariantPathElement::field(&s[i..end]), end)
+            }
+            b'[' => {
+                let (element, end) = parse_in_bracket(s, i)?;
+                (element, end)
+            }
+            b']' => {
+                return Err(ArrowError::ParseError(format!(
+                    "Unexpected ']' at byte {i}"
+                )));
+            }
+            _ => {
+                let end = scan_field(i);
+                (VariantPathElement::field(&s[i..end]), end)
+            }
+        };
+        elements.push(elem);
+        i = end;
+    }
+
+    Ok(elements)
+}
+
+/// Parse `[digits | field]` starting at `i` (which points to `[`).
+/// Returns (VariantPathElement, position after `]`).
+fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize), ArrowError> {
+    let start = i + 1; // skip '['
+
+    let mut unescaped = String::new();
+    let mut chars = s[start..].char_indices().peekable();
+    let mut end = None;
+
+    while let Some((offset, c)) = chars.next() {
+        match c {
+            // Escape: take next char literally
+            '\\' => {
+                if let Some((_, next)) = chars.next() {
+                    unescaped.push(next);
+                }
+                // Trailing backslash will be handled as 'unclosed [' below
+            }
+            ']' => {
+                // Unescaped ']' ends the bracket
+                end = Some(start + offset);
+                break;
+            }
+            _ => {
+                unescaped.push(c);
+            }
+        }
+    }
+
+    let end = match end {
+        Some(e) => e,
+        None => {
+            return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
+        }
+    };
+
+    let element = match unescaped.parse() {
+        Ok(idx) => VariantPathElement::index(idx),
+        Err(_) => VariantPathElement::field(unescaped),
+    };
+
+    Ok((element, end + 1))
 }
 
 #[cfg(test)]

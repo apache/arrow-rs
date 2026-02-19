@@ -818,34 +818,48 @@ impl MetadataObjectWriter {
     ) -> Result<ColumnChunkMetaData> {
         // Column crypto metadata should have already been set when the column was created.
         // Here we apply the encryption by encrypting the column metadata if required.
-        match column_chunk.column_crypto_metadata.as_deref() {
-            None => {}
+        let encryptor = match column_chunk.column_crypto_metadata.as_deref() {
+            None => None,
             Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY) => {
+                let is_footer_encrypted = file_encryptor.properties().encrypt_footer();
+
                 // When uniform encryption is used the footer is already encrypted,
                 // so the column chunk does not need additional encryption.
+                // Except if we're in plaintext footer mode, then we need to encrypt
+                // the column metadata here.
+                if !is_footer_encrypted {
+                    Some(file_encryptor.get_footer_encryptor()?)
+                } else {
+                    None
+                }
             }
             Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(col_key)) => {
-                use crate::file::metadata::thrift::serialize_column_meta_data;
-
                 let column_path = col_key.path_in_schema.join(".");
-                let mut column_encryptor = file_encryptor.get_column_encryptor(&column_path)?;
-                let aad = create_module_aad(
-                    file_encryptor.file_aad(),
-                    ModuleType::ColumnMetaData,
-                    row_group_index,
-                    column_index,
-                    None,
-                )?;
-                // create temp ColumnMetaData that we can encrypt
-                let mut buffer: Vec<u8> = vec![];
-                {
-                    let mut prot = ThriftCompactOutputProtocol::new(&mut buffer);
-                    serialize_column_meta_data(&column_chunk, &mut prot)?;
-                }
-                let ciphertext = column_encryptor.encrypt(&buffer, &aad)?;
-
-                column_chunk.encrypted_column_metadata = Some(ciphertext);
+                Some(file_encryptor.get_column_encryptor(&column_path)?)
             }
+        };
+
+        if let Some(mut encryptor) = encryptor {
+            use crate::file::metadata::thrift::serialize_column_meta_data;
+
+            let aad = create_module_aad(
+                file_encryptor.file_aad(),
+                ModuleType::ColumnMetaData,
+                row_group_index,
+                column_index,
+                None,
+            )?;
+            // create temp ColumnMetaData that we can encrypt
+            let mut buffer: Vec<u8> = vec![];
+            {
+                let mut prot = ThriftCompactOutputProtocol::new(&mut buffer);
+                serialize_column_meta_data(&column_chunk, &mut prot)?;
+            }
+            let ciphertext = encryptor.encrypt(&buffer, &aad)?;
+            column_chunk.encrypted_column_metadata = Some(ciphertext);
+            // Track whether the footer is plaintext, which affects how we serialize
+            // the column metadata (we need to write stripped metadata for backward compatibility)
+            column_chunk.plaintext_footer_mode = !file_encryptor.properties().encrypt_footer();
         }
 
         Ok(column_chunk)

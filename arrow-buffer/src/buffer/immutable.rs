@@ -28,7 +28,6 @@ use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 #[cfg(feature = "pool")]
 use crate::pool::MemoryPool;
 
-use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
 
 /// A contiguous memory region that can be shared with other buffers and across
@@ -344,7 +343,17 @@ impl Buffer {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
-        bitwise_unary_op_helper(self, offset, len, |a| a)
+        let chunks = self.bit_chunks(offset, len);
+
+        let buffer: Vec<u64> = if chunks.remainder_len() > 0 {
+            chunks.iter().chain(Some(chunks.remainder_bits())).collect()
+        } else {
+            chunks.iter().collect()
+        };
+        let mut buffer = Buffer::from_vec(buffer);
+        // Update length to be byte-aligned
+        buffer.length = bit_util::ceil(len, 8);
+        buffer
     }
 
     /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
