@@ -31,6 +31,8 @@ const ALP_VERSION: u8 = 1;
 const ALP_COMPRESSION_MODE: u8 = 0;
 const ALP_INTEGER_ENCODING_FOR_BIT_PACK: u8 = 0;
 const ALP_MAX_LOG_VECTOR_SIZE: u8 = 16;
+const ALP_MAX_EXPONENT_F32: u8 = 10;
+const ALP_MAX_EXPONENT_F64: u8 = 18;
 
 /// Page-level ALP header (version 1, 8 bytes).
 ///
@@ -120,7 +122,6 @@ impl<Exact: AlpExact> AlpEncodedForVectorInfo<Exact> {
 ///
 /// `packed_values` is a zero-copy range into page body bytes.
 /// Exception positions/values are copied for straightforward decode handling.
-/// Parsed view of one vector.
 #[derive(Debug)]
 struct AlpEncodedVectorView<Exact: AlpExact> {
     num_elements: u16,
@@ -266,11 +267,14 @@ const ALP_NEG_POW10_F64: [f64; 19] = [
 trait AlpFloat: Copy + Default {
     type Exact: AlpExact + FromBytes;
 
-    fn decode_value(
-        signed_encoded: <Self::Exact as AlpExact>::Signed,
-        exponent: u8,
-        factor: u8,
-    ) -> Result<Self>;
+    /// Precompute vector-level ALP decimal scale for:
+    /// `value = encoded * 10^(factor) * 10^(-exponent)`.
+    ///
+    /// Preconditions are validated during page parse.
+    fn decode_scale(exponent: u8, factor: u8) -> Self;
+
+    /// Decode one signed exact integer using a precomputed scale.
+    fn decode_value(signed_encoded: <Self::Exact as AlpExact>::Signed, scale: Self) -> Self;
 
     fn from_exact_bits(bits: Self::Exact) -> Self;
 }
@@ -278,18 +282,14 @@ trait AlpFloat: Copy + Default {
 impl AlpFloat for f32 {
     type Exact = u32;
 
-    fn decode_value(signed_encoded: i32, exponent: u8, factor: u8) -> Result<Self> {
-        let factor_multiplier = ALP_I64_POW10
-            .get(factor as usize)
-            .ok_or_else(|| general_err!("Invalid ALP page: factor {} exceeds max 18", factor))?;
-        let exponent_multiplier = ALP_NEG_POW10_F32.get(exponent as usize).ok_or_else(|| {
-            general_err!(
-                "Invalid ALP page: exponent {} exceeds max {} for f32",
-                exponent,
-                ALP_NEG_POW10_F32.len() - 1
-            )
-        })?;
-        Ok((signed_encoded as f32) * (*factor_multiplier as f32) * *exponent_multiplier)
+    fn decode_scale(exponent: u8, factor: u8) -> Self {
+        debug_assert!(exponent <= ALP_MAX_EXPONENT_F32);
+        debug_assert!(factor <= exponent);
+        (ALP_I64_POW10[factor as usize] as f32) * ALP_NEG_POW10_F32[exponent as usize]
+    }
+
+    fn decode_value(signed_encoded: i32, scale: Self) -> Self {
+        (signed_encoded as f32) * scale
     }
 
     fn from_exact_bits(bits: Self::Exact) -> Self {
@@ -300,18 +300,14 @@ impl AlpFloat for f32 {
 impl AlpFloat for f64 {
     type Exact = u64;
 
-    fn decode_value(signed_encoded: i64, exponent: u8, factor: u8) -> Result<Self> {
-        let factor_multiplier = ALP_I64_POW10
-            .get(factor as usize)
-            .ok_or_else(|| general_err!("Invalid ALP page: factor {} exceeds max 18", factor))?;
-        let exponent_multiplier = ALP_NEG_POW10_F64.get(exponent as usize).ok_or_else(|| {
-            general_err!(
-                "Invalid ALP page: exponent {} exceeds max {} for f64",
-                exponent,
-                ALP_NEG_POW10_F64.len() - 1
-            )
-        })?;
-        Ok((signed_encoded as f64) * (*factor_multiplier as f64) * *exponent_multiplier)
+    fn decode_scale(exponent: u8, factor: u8) -> Self {
+        debug_assert!(exponent <= ALP_MAX_EXPONENT_F64);
+        debug_assert!(factor <= exponent);
+        (ALP_I64_POW10[factor as usize] as f64) * ALP_NEG_POW10_F64[exponent as usize]
+    }
+
+    fn decode_value(signed_encoded: i64, scale: Self) -> Self {
+        (signed_encoded as f64) * scale
     }
 
     fn from_exact_bits(bits: Self::Exact) -> Self {
@@ -492,6 +488,36 @@ fn parse_vector_view<Exact: AlpExact>(
         num_exceptions: u16::from_le_bytes([vector_bytes[2], vector_bytes[3]]),
     };
 
+    let max_exponent = if Exact::WIDTH == 4 {
+        ALP_MAX_EXPONENT_F32
+    } else {
+        ALP_MAX_EXPONENT_F64
+    };
+
+    if alp_info.exponent > max_exponent {
+        return Err(general_err!(
+            "Invalid ALP page: exponent {} exceeds max {}",
+            alp_info.exponent,
+            max_exponent
+        ));
+    }
+
+    if alp_info.factor > alp_info.exponent {
+        return Err(general_err!(
+            "Invalid ALP page: factor {} exceeds exponent {}",
+            alp_info.factor,
+            alp_info.exponent
+        ));
+    }
+
+    if alp_info.num_exceptions > num_elements {
+        return Err(general_err!(
+            "Invalid ALP page: num_exceptions {} exceeds vector num_elements {}",
+            alp_info.num_exceptions,
+            num_elements
+        ));
+    }
+
     let for_start = AlpEncodedVectorInfo::STORED_SIZE;
     let for_end = for_start + Exact::WIDTH;
     let frame_of_reference = Exact::from_le_slice(&vector_bytes[for_start..for_end]);
@@ -533,7 +559,15 @@ fn parse_vector_view<Exact: AlpExact>(
 
     let mut exception_positions = Vec::with_capacity(alp_info.num_exceptions as usize);
     for chunk in data[positions_start..positions_end].chunks_exact(2) {
-        exception_positions.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        let position = u16::from_le_bytes([chunk[0], chunk[1]]);
+        if position >= num_elements {
+            return Err(general_err!(
+                "Invalid ALP page: exception position {} out of bounds for vector length {}",
+                position,
+                num_elements
+            ));
+        }
+        exception_positions.push(position);
     }
 
     let packed_values =
@@ -657,14 +691,12 @@ fn decode_vector_values<Value: AlpFloat>(
     )?;
     inverse_for(&mut exact_values, vector.for_info.frame_of_reference);
 
+    let scale = Value::decode_scale(vector.alp_info.exponent, vector.alp_info.factor);
+
     let mut out = Vec::with_capacity(vector.num_elements as usize);
     for exact_value in exact_values {
         let signed_value = exact_value.reinterpret_as_signed();
-        out.push(Value::decode_value(
-            signed_value,
-            vector.alp_info.exponent,
-            vector.alp_info.factor,
-        )?);
+        out.push(Value::decode_value(signed_value, scale));
     }
 
     if vector.exception_positions.len() != vector.exception_values.len() {
@@ -705,6 +737,14 @@ fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout<Value::Exact>) -> 
     Ok(out)
 }
 
+/// Decoder for ALP-encoded floating-point pages (`f32`/`f64`).
+///
+/// Current behavior:
+/// - `set_data` parses + validates page layout and eagerly decodes all values.
+/// - `get` copies from the decoded buffer into the requested output slice.
+/// - `skip` advances the decoded cursor without additional parsing/decoding.
+///
+/// This keeps ALP decoding straightforward while functionality is being brought up.
 pub(crate) struct AlpDecoder<T: DataType> {
     decoded_values: Vec<T::T>,
     values_decoded: usize,
@@ -792,6 +832,92 @@ mod tests {
         out
     }
 
+    fn make_vector_u32(
+        exponent: u8,
+        factor: u8,
+        num_exceptions: u16,
+        frame_of_reference: u32,
+        bit_width: u8,
+        packed_values: &[u8],
+        exception_positions: &[u16],
+        exception_values: &[u32],
+    ) -> Vec<u8> {
+        assert_eq!(num_exceptions as usize, exception_positions.len());
+        assert_eq!(num_exceptions as usize, exception_values.len());
+
+        let mut out = Vec::new();
+        out.push(exponent);
+        out.push(factor);
+        out.extend_from_slice(&num_exceptions.to_le_bytes());
+        out.extend_from_slice(&frame_of_reference.to_le_bytes());
+        out.push(bit_width);
+        out.extend_from_slice(packed_values);
+        for position in exception_positions {
+            out.extend_from_slice(&position.to_le_bytes());
+        }
+        for value in exception_values {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out
+    }
+
+    fn make_vector_u64(
+        exponent: u8,
+        factor: u8,
+        num_exceptions: u16,
+        frame_of_reference: u64,
+        bit_width: u8,
+        packed_values: &[u8],
+        exception_positions: &[u16],
+        exception_values: &[u64],
+    ) -> Vec<u8> {
+        assert_eq!(num_exceptions as usize, exception_positions.len());
+        assert_eq!(num_exceptions as usize, exception_values.len());
+
+        let mut out = Vec::new();
+        out.push(exponent);
+        out.push(factor);
+        out.extend_from_slice(&num_exceptions.to_le_bytes());
+        out.extend_from_slice(&frame_of_reference.to_le_bytes());
+        out.push(bit_width);
+        out.extend_from_slice(packed_values);
+        for position in exception_positions {
+            out.extend_from_slice(&position.to_le_bytes());
+        }
+        for value in exception_values {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out
+    }
+
+    fn make_page_from_vectors(
+        log_vector_size: u8,
+        num_elements: i32,
+        vectors: &[Vec<u8>],
+    ) -> Vec<u8> {
+        let vector_size = 1usize << log_vector_size;
+        let expected_num_vectors = if num_elements <= 0 {
+            0
+        } else {
+            (num_elements as usize).div_ceil(vector_size)
+        };
+        assert_eq!(vectors.len(), expected_num_vectors);
+
+        let offsets_section_size = vectors.len() * std::mem::size_of::<u32>();
+        let mut offsets = Vec::with_capacity(vectors.len());
+        let mut running_offset = offsets_section_size as u32;
+        for vector in vectors {
+            offsets.push(running_offset);
+            running_offset += vector.len() as u32;
+        }
+
+        let mut page = make_alp_page_bytes(1, 0, 0, log_vector_size, num_elements, &offsets, 0);
+        for vector in vectors {
+            page.extend_from_slice(vector);
+        }
+        page
+    }
+
     #[test]
     fn test_parse_alp_page_layout_valid() {
         let data = make_alp_page_bytes(1, 0, 0, 2, 4, &[4], 13);
@@ -837,6 +963,88 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Invalid ALP page: num_elements -1 must be >= 0")
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_invalid_exponent_f32() {
+        let vector = make_vector_u32(11, 0, 0, 0, 0, &[], &[], &[]);
+        let page = make_page_from_vectors(0, 1, &[vector]);
+        let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: exponent 11 exceeds max 10")
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_invalid_factor_f32() {
+        let vector = make_vector_u32(0, 11, 0, 0, 0, &[], &[], &[]);
+        let page = make_page_from_vectors(0, 1, &[vector]);
+        let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: factor 11 exceeds exponent 0")
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_factor_exceeds_exponent() {
+        let vector = make_vector_u32(2, 3, 0, 0, 0, &[], &[], &[]);
+        let page = make_page_from_vectors(0, 1, &[vector]);
+        let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: factor 3 exceeds exponent 2")
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_invalid_num_exceptions() {
+        let vector = make_vector_u32(0, 0, 2, 0, 0, &[], &[0, 0], &[0, 0]);
+        let page = make_page_from_vectors(0, 1, &[vector]);
+        let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: num_exceptions 2 exceeds vector num_elements 1")
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_invalid_exception_position() {
+        let vector = make_vector_u32(0, 0, 1, 0, 0, &[], &[1], &[123]);
+        let page = make_page_from_vectors(0, 1, &[vector]);
+        let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "Invalid ALP page: exception position 1 out of bounds for vector length 1"
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_non_monotonic_offsets() {
+        let data = make_alp_page_bytes(1, 0, 0, 1, 3, &[12, 8], 12);
+        let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: vector offsets are not monotonic at index 0")
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_truncated_vector_data() {
+        let mut vector = Vec::new();
+        vector.push(0);
+        vector.push(0);
+        vector.extend_from_slice(&0u16.to_le_bytes());
+        vector.extend_from_slice(&10u32.to_le_bytes());
+        vector.push(1);
+        let page = make_page_from_vectors(1, 2, &[vector]);
+        let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: vector data too short")
         );
     }
 
@@ -909,5 +1117,42 @@ mod tests {
 
         let decoded = decode_vector_exact(&[0b0010_1100], &vector).unwrap();
         assert_eq!(decoded, vec![10, 13, 77]);
+    }
+
+    #[test]
+    fn test_decode_page_values_f32_no_exceptions() {
+        let vector = make_vector_u32(0, 0, 0, 10, 2, &[0b1110_0100], &[], &[]);
+        let page = make_page_from_vectors(2, 4, &[vector]);
+        let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
+        let decoded = decode_page_values::<f32>(&layout).unwrap();
+        assert_eq!(decoded, vec![10.0, 11.0, 12.0, 13.0]);
+    }
+
+    #[test]
+    fn test_decode_page_values_f64_multi_vector_with_exceptions() {
+        let vector0 = make_vector_u64(0, 0, 1, 10, 1, &[0b0000_0010], &[1], &[42.5f64.to_bits()]);
+        let vector1 = make_vector_u64(0, 0, 0, 7, 0, &[], &[], &[]);
+        let page = make_page_from_vectors(1, 3, &[vector0, vector1]);
+        let layout = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
+        let decoded = decode_page_values::<f64>(&layout).unwrap();
+        assert_eq!(decoded, vec![10.0, 42.5, 7.0]);
+    }
+
+    #[test]
+    fn test_decode_page_values_f32_edge_values_via_exceptions() {
+        let edge_values = [
+            f32::NAN.to_bits(),
+            (-0.0f32).to_bits(),
+            f32::INFINITY.to_bits(),
+        ];
+        let vector = make_vector_u32(0, 0, 3, 0, 0, &[], &[0, 1, 2], &edge_values);
+        let page = make_page_from_vectors(2, 3, &[vector]);
+        let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
+        let decoded = decode_page_values::<f32>(&layout).unwrap();
+
+        assert!(decoded[0].is_nan());
+        assert_eq!(decoded[1], -0.0);
+        assert!(decoded[1].is_sign_negative());
+        assert_eq!(decoded[2], f32::INFINITY);
     }
 }
