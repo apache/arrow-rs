@@ -352,23 +352,23 @@ pub fn make_encoder<'a>(
         }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
-            NullableEncoder::new(Box::new(ListEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
         }
         DataType::LargeList(_) => {
             let array = array.as_list::<i64>();
-            NullableEncoder::new(Box::new(ListEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
         }
         DataType::ListView(_) => {
             let array = array.as_list_view::<i32>();
-            NullableEncoder::new(Box::new(ListViewEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
         }
         DataType::LargeListView(_) => {
             let array = array.as_list_view::<i64>();
-            NullableEncoder::new(Box::new(ListViewEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
         }
         DataType::FixedSizeList(_, _) => {
             let array = array.as_fixed_size_list();
-            NullableEncoder::new(Box::new(FixedSizeListEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            NullableEncoder::new(Box::new(ListLikeEncoder::try_new(field, array, options)?), array.nulls().cloned())
         }
 
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
@@ -647,127 +647,30 @@ impl Encoder for BinaryViewEncoder<'_> {
     }
 }
 
-struct ListEncoder<'a, O: OffsetSizeTrait> {
-    offsets: OffsetBuffer<O>,
+struct ListLikeEncoder<'a, L: ListLikeArray> {
+    list_array: &'a L,
     encoder: NullableEncoder<'a>,
 }
 
-impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
+impl<'a, L: ListLikeArray> ListLikeEncoder<'a, L> {
     fn try_new(
         field: &'a FieldRef,
-        array: &'a GenericListArray<O>,
+        array: &'a L,
         options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
         let encoder = make_encoder(field, array.values().as_ref(), options)?;
         Ok(Self {
-            offsets: array.offsets().clone(),
+            list_array: array,
             encoder,
         })
     }
 }
 
-impl<O: OffsetSizeTrait> Encoder for ListEncoder<'_, O> {
+impl<L: ListLikeArray> Encoder for ListLikeEncoder<'_, L> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        let end = self.offsets[idx + 1].as_usize();
-        let start = self.offsets[idx].as_usize();
-        out.push(b'[');
-
-        if self.encoder.has_nulls() {
-            for idx in start..end {
-                if idx != start {
-                    out.push(b',')
-                }
-                if self.encoder.is_null(idx) {
-                    out.extend_from_slice(b"null");
-                } else {
-                    self.encoder.encode(idx, out);
-                }
-            }
-        } else {
-            for idx in start..end {
-                if idx != start {
-                    out.push(b',')
-                }
-                self.encoder.encode(idx, out);
-            }
-        }
-        out.push(b']');
-    }
-}
-
-struct ListViewEncoder<'a, O: OffsetSizeTrait> {
-    offsets: ScalarBuffer<O>,
-    sizes: ScalarBuffer<O>,
-    encoder: NullableEncoder<'a>,
-}
-
-impl<'a, O: OffsetSizeTrait> ListViewEncoder<'a, O> {
-    fn try_new(
-        field: &'a FieldRef,
-        array: &'a GenericListViewArray<O>,
-        options: &'a EncoderOptions,
-    ) -> Result<Self, ArrowError> {
-        let encoder = make_encoder(field, array.values().as_ref(), options)?;
-        Ok(Self {
-            offsets: array.offsets().clone(),
-            sizes: array.sizes().clone(),
-            encoder,
-        })
-    }
-}
-
-impl<O: OffsetSizeTrait> Encoder for ListViewEncoder<'_, O> {
-    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        let start = self.offsets[idx].as_usize();
-        let end = start + self.sizes[idx].as_usize();
-        out.push(b'[');
-
-        if self.encoder.has_nulls() {
-            for idx in start..end {
-                if idx != start {
-                    out.push(b',')
-                }
-                if self.encoder.is_null(idx) {
-                    out.extend_from_slice(b"null");
-                } else {
-                    self.encoder.encode(idx, out);
-                }
-            }
-        } else {
-            for idx in start..end {
-                if idx != start {
-                    out.push(b',')
-                }
-                self.encoder.encode(idx, out);
-            }
-        }
-        out.push(b']');
-    }
-}
-
-struct FixedSizeListEncoder<'a> {
-    value_length: usize,
-    encoder: NullableEncoder<'a>,
-}
-
-impl<'a> FixedSizeListEncoder<'a> {
-    fn try_new(
-        field: &'a FieldRef,
-        array: &'a FixedSizeListArray,
-        options: &'a EncoderOptions,
-    ) -> Result<Self, ArrowError> {
-        let encoder = make_encoder(field, array.values().as_ref(), options)?;
-        Ok(Self {
-            encoder,
-            value_length: array.value_length().as_usize(),
-        })
-    }
-}
-
-impl Encoder for FixedSizeListEncoder<'_> {
-    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        let start = idx * self.value_length;
-        let end = start + self.value_length;
+        let range = self.list_array.element_range(idx);
+        let start = range.start;
+        let end = range.end;
         out.push(b'[');
         if self.encoder.has_nulls() {
             for idx in start..end {
