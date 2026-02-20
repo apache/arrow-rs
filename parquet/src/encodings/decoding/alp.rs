@@ -667,7 +667,31 @@ fn decode_vector_values<Value: AlpFloat>(
 }
 
 fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout) -> Result<Vec<Value>> {
-    let mut out = Vec::with_capacity(layout.header.num_elements_usize());
+    let total = layout.header.num_elements_usize();
+    let mut out = vec![Value::default(); total];
+    let written = decode_page_values_into::<Value>(layout, &mut out)?;
+    debug_assert_eq!(written, total);
+    Ok(out)
+}
+
+/// Decode a full ALP page into an existing output slice.
+///
+/// This walks vectors using `layout.offsets` (C++-style offset-based decode flow),
+/// reparsing each vector view from the page body and decoding it into `out`.
+fn decode_page_values_into<Value: AlpFloat>(
+    layout: &AlpPageLayout,
+    out: &mut [Value],
+) -> Result<usize> {
+    let total = layout.header.num_elements_usize();
+    if out.len() < total {
+        return Err(general_err!(
+            "Invalid ALP decode output: output length {} smaller than page values {}",
+            out.len(),
+            total
+        ));
+    }
+
+    let mut output_offset = 0usize;
     for (vector_idx, vector_offset) in layout.offsets.iter().enumerate() {
         let vector_start = *vector_offset as usize;
         let vector_end = if vector_idx + 1 < layout.offsets.len() {
@@ -682,19 +706,20 @@ fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout) -> Result<Vec<Val
             vector_end,
             vector_num_elements,
         )?;
-        out.extend_from_slice(&decode_vector_values::<Value>(
-            layout.body.as_ref(),
-            &vector,
-        )?);
+        let vector_values = decode_vector_values::<Value>(layout.body.as_ref(), &vector)?;
+        let next_offset = output_offset + vector_values.len();
+        out[output_offset..next_offset].copy_from_slice(&vector_values);
+        output_offset = next_offset;
     }
-    Ok(out)
+    Ok(output_offset)
 }
 
 /// Decoder for ALP-encoded floating-point pages (`f32`/`f64`).
 ///
 /// Current behavior:
 /// - `set_data` parses + validates page metadata and stores ALP layout state.
-/// - `get` lazily decodes the full page once, then copies from the decoded buffer.
+/// - `get` uses a fast path to decode directly to output when all values are requested.
+/// - otherwise, `get` lazily decodes the full page once, then copies from decoded buffer.
 /// - `skip` advances the decoded cursor.
 pub(crate) struct AlpDecoder<T: DataType>
 where
@@ -725,6 +750,9 @@ where
         }
     }
 
+    /// Decode the stored page into `decoded_values` if it hasn't been decoded yet.
+    ///
+    /// Used by partial `get` / `skip` paths that need a stable decoded buffer.
     fn ensure_decoded(&mut self) -> Result<()> {
         if !self.needs_decode {
             return Ok(());
@@ -746,6 +774,9 @@ where
     T::T: AlpFloat,
     <T::T as AlpFloat>::Exact: Send,
 {
+    /// Store validated page layout and reset read cursor state.
+    ///
+    /// Actual value decoding is deferred until first `get`/`skip`.
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         let layout = parse_alp_page_layout::<<T::T as AlpFloat>::Exact>(data)?;
 
@@ -765,10 +796,30 @@ where
         Ok(())
     }
 
+    /// Read up to `buffer.len()` decoded values.
+    ///
+    /// Fast path: if caller requests all remaining values from a fresh page,
+    /// decode directly into `buffer` (matching C++ ALP decoder behavior).
+    /// Otherwise decode once into internal storage and copy slices from there.
     fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
         let target = buffer.len().min(self.num_values);
         if target == 0 {
             return Ok(0);
+        }
+
+        // C++ parity fast path: decode directly into caller output when it asks
+        // for all remaining values from a fresh page.
+        if self.needs_decode && target == self.num_values {
+            let layout = self.layout.take().ok_or_else(|| {
+                general_err!("Invalid ALP decoder state: set_data must be called before get/skip")
+            })?;
+            let written = decode_page_values_into::<T::T>(&layout, &mut buffer[..target])?;
+            self.needs_decode = false;
+            self.decoded_values.clear();
+            self.current_offset = 0;
+            self.num_values = 0;
+            debug_assert_eq!(written, target);
+            return Ok(written);
         }
 
         self.ensure_decoded()?;
@@ -787,6 +838,10 @@ where
         Encoding::ALP
     }
 
+    /// Skip up to `num_values` decoded values.
+    ///
+    /// For parity with C++ partial-read behavior, this may trigger deferred
+    /// page decoding before advancing the cursor.
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         let to_skip = num_values.min(self.num_values);
         if to_skip == 0 {
@@ -1175,5 +1230,24 @@ mod tests {
         assert_eq!(read, 1);
         assert_eq!(out[0], 21.0);
         assert_eq!(decoder.values_left(), 0);
+    }
+
+    #[test]
+    fn test_alp_decoder_get_fast_path_full_read() {
+        let vector0 = make_vector_u32(0, 0, 0, 10, 1, &[0b0000_0010], &[], &[]);
+        let vector1 = make_vector_u32(0, 0, 0, 20, 1, &[0b0000_0010], &[], &[]);
+        let page = make_page_from_vectors(1, 4, &[vector0, vector1]);
+
+        let mut decoder = AlpDecoder::<FloatType>::new();
+        decoder.set_data(Bytes::from(page), 4).unwrap();
+
+        let mut out = [0.0f32; 4];
+        let read = decoder.get(&mut out).unwrap();
+        assert_eq!(read, 4);
+        assert_eq!(out, [10.0, 11.0, 20.0, 21.0]);
+        assert_eq!(decoder.values_left(), 0);
+        assert!(!decoder.needs_decode);
+        assert!(decoder.decoded_values.is_empty());
+        assert!(decoder.layout.is_none());
     }
 }
