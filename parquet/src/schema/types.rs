@@ -1079,7 +1079,16 @@ impl SchemaDescriptor {
         let mut path = Vec::with_capacity(INIT_SCHEMA_DEPTH);
         for (root_idx, f) in tp.get_fields().iter().enumerate() {
             path.clear();
-            build_tree(f, root_idx, 0, 0, 0, &mut leaves, &mut leaf_to_base, &mut path);
+            build_tree(
+                f,
+                root_idx,
+                0,
+                0,
+                0,
+                &mut leaves,
+                &mut leaf_to_base,
+                &mut path,
+            );
         }
 
         Self {

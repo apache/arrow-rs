@@ -366,7 +366,12 @@ mod tests {
         let tp = Type::primitive_type_builder("col", PhysicalType::INT32)
             .build()
             .unwrap();
-        ColumnDescriptor::new(Arc::new(tp), max_def_level, max_rep_level, ColumnPath::new(vec![]))
+        ColumnDescriptor::new(
+            Arc::new(tp),
+            max_def_level,
+            max_rep_level,
+            ColumnPath::new(vec![]),
+        )
     }
 
     #[test]
