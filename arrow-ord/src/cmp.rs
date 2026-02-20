@@ -614,6 +614,7 @@ fn compare_op_run_array<I: types::RunEndIndexType>(
 
 /// Returns the indices amongst `indices` at which the value is valid.
 /// All of `indices` must be within `nulls`'s length.
+/// Returns None if all values are valid.
 fn valids_at_indices(
     nulls: Option<&NullBuffer>,
     indices: Vec<usize>,
