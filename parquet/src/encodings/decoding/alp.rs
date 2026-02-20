@@ -669,8 +669,7 @@ fn decode_vector_values<Value: AlpFloat>(
 fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout) -> Result<Vec<Value>> {
     let total = layout.header.num_elements_usize();
     let mut out = vec![Value::default(); total];
-    let written = decode_page_values_into::<Value>(layout, &mut out)?;
-    debug_assert_eq!(written, total);
+    decode_page_values_into::<Value>(layout, &mut out)?;
     Ok(out)
 }
 
@@ -681,7 +680,7 @@ fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout) -> Result<Vec<Val
 fn decode_page_values_into<Value: AlpFloat>(
     layout: &AlpPageLayout,
     out: &mut [Value],
-) -> Result<usize> {
+) -> Result<()> {
     let total = layout.header.num_elements_usize();
     if out.len() < total {
         return Err(general_err!(
@@ -711,7 +710,14 @@ fn decode_page_values_into<Value: AlpFloat>(
         out[output_offset..next_offset].copy_from_slice(&vector_values);
         output_offset = next_offset;
     }
-    Ok(output_offset)
+    if output_offset != total {
+        return Err(general_err!(
+            "Invalid ALP decode output: decoded {} values, expected {}",
+            output_offset,
+            total
+        ));
+    }
+    Ok(())
 }
 
 /// Decoder for ALP-encoded floating-point pages (`f32`/`f64`).
@@ -813,13 +819,12 @@ where
             let layout = self.layout.take().ok_or_else(|| {
                 general_err!("Invalid ALP decoder state: set_data must be called before get/skip")
             })?;
-            let written = decode_page_values_into::<T::T>(&layout, &mut buffer[..target])?;
+            decode_page_values_into::<T::T>(&layout, &mut buffer[..target])?;
             self.needs_decode = false;
             self.decoded_values.clear();
             self.current_offset = 0;
             self.num_values = 0;
-            debug_assert_eq!(written, target);
-            return Ok(written);
+            return Ok(target);
         }
 
         self.ensure_decoded()?;
