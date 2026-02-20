@@ -557,7 +557,7 @@ fn compare_op_run_array<I: types::RunEndIndexType>(
                 .iter()
                 .zip(l_valid)
                 .zip(r_valid)
-                .map(|((b, l_n), r_n)| match (b, l_n, r_n) {
+                .map(|((b, l_v), r_v)| match (b, l_v, r_v) {
                     (b, true, true) => b,
                     (_, false, false) => false,
                     _ => true,
@@ -582,12 +582,12 @@ fn compare_op_run_array<I: types::RunEndIndexType>(
             Op::Distinct => result_no_null
                 .iter()
                 .zip(valid)
-                .map(|(r, n)| !n || r)
+                .map(|(r, v)| r || !v)
                 .collect(),
             Op::NotDistinct => result_no_null
                 .iter()
                 .zip(valid)
-                .map(|(r, n)| n && r)
+                .map(|(r, v)| r && v)
                 .collect(),
             _ => BooleanArray::new(result_no_null, Some(valid.collect())),
         },
