@@ -22,7 +22,7 @@
 use arrow_array::builder::BufferBuilder;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use num_traits::Zero;
@@ -320,22 +320,13 @@ where
         })
         .for_each(|slice| new_values.extend_from_slice(slice));
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            GenericByteArray::<T>::DATA_TYPE,
-            array.len(),
-            None,
-            array
-                .nulls()
-                .map(|b| b.inner().sliced())
-                .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()))
-                .map(|nb| nb.into_inner().into_inner()),
-            0,
-            vec![Buffer::from_vec(new_offsets), new_values.into()],
-            vec![],
-        )
-    };
-    Ok(make_array(data))
+    let offsets = OffsetBuffer::new(new_offsets.into());
+    let values = new_values.into();
+    let nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()));
+    Ok(Arc::new(GenericByteArray::<T>::new(offsets, values, nulls)))
 }
 
 fn fixed_size_binary_substring(

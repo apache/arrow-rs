@@ -533,21 +533,9 @@ impl BooleanArray {
             }
         });
 
-        let null_buffer = NullBuffer::from_unsliced_buffer(null_builder, data_len)
-            .map(|nb| nb.into_inner().into_inner());
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                data_len,
-                None,
-                null_buffer,
-                0,
-                vec![val_builder.into()],
-                vec![],
-            )
-        };
-        BooleanArray::from(data)
+        let values = BooleanBuffer::new(val_builder.into(), 0, data_len);
+        let nulls = NullBuffer::from_unsliced_buffer(null_builder, data_len);
+        BooleanArray::new(values, nulls)
     }
 }
 
