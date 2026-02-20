@@ -218,7 +218,9 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
         .nulls()
         .map(|n| n.inner().sliced())
         .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()));
-    Ok(GenericStringArray::<OffsetSize>::new(offsets, values, nulls))
+    Ok(GenericStringArray::<OffsetSize>::new(
+        offsets, values, nulls,
+    ))
 }
 
 /// * `val` - string
@@ -350,23 +352,21 @@ fn fixed_size_binary_substring(
         })
         .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
 
-    let array_data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::FixedSizeBinary(new_len),
-            num_of_elements,
-            None,
-            array
-                .nulls()
-                .map(|b| b.inner().sliced())
-                .and_then(|b| NullBuffer::from_unsliced_buffer(b, num_of_elements))
-                .map(|nb| nb.into_inner().into_inner()),
-            0,
-            vec![new_values.into()],
-            vec![],
-        )
-    };
+    let mut nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .and_then(|b| NullBuffer::from_unsliced_buffer(b, num_of_elements));
 
-    Ok(make_array(array_data))
+    // FixedSizeBinaryArray with size 0 requires a validity bitmap
+    if new_len == 0 && nulls.is_none() {
+        nulls = Some(NullBuffer::new_valid(num_of_elements));
+    }
+
+    Ok(Arc::new(FixedSizeBinaryArray::new(
+        new_len,
+        new_values.into(),
+        nulls,
+    )))
 }
 
 #[cfg(test)]
