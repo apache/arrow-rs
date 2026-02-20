@@ -417,7 +417,7 @@ async fn test_predicate_pushdown_with_skipped_pages() {
     ]));
 
     let props = WriterProperties::builder()
-        .set_max_row_group_size(300)
+        .set_max_row_group_row_count(Some(300))
         .set_data_page_row_count_limit(33)
         .build();
 

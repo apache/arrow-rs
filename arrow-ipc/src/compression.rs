@@ -57,6 +57,43 @@ impl std::fmt::Debug for CompressionContext {
     }
 }
 
+/// Additional context that may be needed for decompression.
+///
+/// In the case of zstd, this will contain the zstd decompression context, which can be reused
+/// between subsequent decompression calls to avoid the performance overhead of initialising a new
+/// context for every decompression.
+pub struct DecompressionContext {
+    #[cfg(feature = "zstd")]
+    decompressor: zstd::bulk::Decompressor<'static>,
+}
+
+impl DecompressionContext {
+    pub(crate) fn new() -> Self {
+        Default::default()
+    }
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for DecompressionContext {
+    fn default() -> Self {
+        DecompressionContext {
+            #[cfg(feature = "zstd")]
+            decompressor: zstd::bulk::Decompressor::new().expect("can create zstd decompressor"),
+        }
+    }
+}
+
+impl std::fmt::Debug for DecompressionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut ds = f.debug_struct("DecompressionContext");
+
+        #[cfg(feature = "zstd")]
+        ds.field("decompressor", &"zstd::bulk::Decompressor");
+
+        ds.finish()
+    }
+}
+
 /// Represents compressing a ipc stream using a particular compression algorithm
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionCodec {
@@ -126,7 +163,11 @@ impl CompressionCodec {
     /// [8 bytes]:         uncompressed length
     /// [remaining bytes]: compressed data stream
     /// ```
-    pub(crate) fn decompress_to_buffer(&self, input: &Buffer) -> Result<Buffer, ArrowError> {
+    pub(crate) fn decompress_to_buffer(
+        &self,
+        input: &Buffer,
+        context: &mut DecompressionContext,
+    ) -> Result<Buffer, ArrowError> {
         // read the first 8 bytes to determine if the data is
         // compressed
         let decompressed_length = read_uncompressed_size(input);
@@ -139,7 +180,7 @@ impl CompressionCodec {
         } else if let Ok(decompressed_length) = usize::try_from(decompressed_length) {
             // decompress data using the codec
             let input_data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
-            let v = self.decompress(input_data, decompressed_length as _)?;
+            let v = self.decompress(input_data, decompressed_length as _, context)?;
             Buffer::from_vec(v)
         } else {
             return Err(ArrowError::IpcError(format!(
@@ -165,10 +206,15 @@ impl CompressionCodec {
 
     /// Decompress the data in input buffer and write to output buffer
     /// using the specified compression
-    fn decompress(&self, input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
+    fn decompress(
+        &self,
+        input: &[u8],
+        decompressed_size: usize,
+        context: &mut DecompressionContext,
+    ) -> Result<Vec<u8>, ArrowError> {
         let ret = match self {
             CompressionCodec::Lz4Frame => decompress_lz4(input, decompressed_size)?,
-            CompressionCodec::Zstd => decompress_zstd(input, decompressed_size)?,
+            CompressionCodec::Zstd => decompress_zstd(input, decompressed_size, context)?,
         };
         if ret.len() != decompressed_size {
             return Err(ArrowError::IpcError(format!(
@@ -239,16 +285,22 @@ fn compress_zstd(
 }
 
 #[cfg(feature = "zstd")]
-fn decompress_zstd(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
-    use std::io::Read;
-    let mut output = Vec::with_capacity(decompressed_size);
-    zstd::Decoder::with_buffer(input)?.read_to_end(&mut output)?;
+fn decompress_zstd(
+    input: &[u8],
+    decompressed_size: usize,
+    context: &mut DecompressionContext,
+) -> Result<Vec<u8>, ArrowError> {
+    let output = context.decompressor.decompress(input, decompressed_size)?;
     Ok(output)
 }
 
 #[cfg(not(feature = "zstd"))]
 #[allow(clippy::ptr_arg)]
-fn decompress_zstd(_input: &[u8], _decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
+fn decompress_zstd(
+    _input: &[u8],
+    _decompressed_size: usize,
+    _context: &mut DecompressionContext,
+) -> Result<Vec<u8>, ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "zstd IPC decompression requires the zstd feature".to_string(),
     ))
@@ -278,7 +330,11 @@ mod tests {
             .compress(input_bytes, &mut output_bytes, &mut Default::default())
             .unwrap();
         let result = codec
-            .decompress(output_bytes.as_slice(), input_bytes.len())
+            .decompress(
+                output_bytes.as_slice(),
+                input_bytes.len(),
+                &mut Default::default(),
+            )
             .unwrap();
         assert_eq!(input_bytes, result.as_slice());
     }
@@ -293,7 +349,11 @@ mod tests {
             .compress(input_bytes, &mut output_bytes, &mut Default::default())
             .unwrap();
         let result = codec
-            .decompress(output_bytes.as_slice(), input_bytes.len())
+            .decompress(
+                output_bytes.as_slice(),
+                input_bytes.len(),
+                &mut Default::default(),
+            )
             .unwrap();
         assert_eq!(input_bytes, result.as_slice());
     }
