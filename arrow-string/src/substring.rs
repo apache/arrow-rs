@@ -212,22 +212,13 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
         }
         new_offsets.append(OffsetSize::from_usize(vals.len()).unwrap());
     });
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            GenericStringArray::<OffsetSize>::DATA_TYPE,
-            array.len(),
-            None,
-            array
-                .nulls()
-                .map(|b| b.inner().sliced())
-                .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()))
-                .map(|nb| nb.into_inner().into_inner()),
-            0,
-            vec![new_offsets.finish(), vals.finish()],
-            vec![],
-        )
-    };
-    Ok(GenericStringArray::<OffsetSize>::from(data))
+    let offsets = OffsetBuffer::new(new_offsets.finish().into());
+    let values = vals.finish();
+    let nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()));
+    Ok(GenericStringArray::<OffsetSize>::new(offsets, values, nulls))
 }
 
 /// * `val` - string
