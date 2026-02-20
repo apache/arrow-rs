@@ -154,11 +154,9 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         (&mut self.key_builder, &mut self.value_builder)
     }
 
-    /// Finish the current map array slot
-    ///
-    /// Returns an error if the key and values builders are in an inconsistent state.
+    /// Validates that key and value builders have equal lengths.
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<(), ArrowError> {
+    fn validate_equal_lengths(&self) -> Result<(), ArrowError> {
         if self.key_builder.len() != self.value_builder.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot append to a map builder when its keys and values have unequal lengths of {} and {}",
@@ -166,6 +164,15 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
                 self.value_builder.len()
             )));
         }
+        Ok(())
+    }
+
+    /// Finish the current map array slot
+    ///
+    /// Returns an error if the key and values builders are in an inconsistent state.
+    #[inline]
+    pub fn append(&mut self, is_valid: bool) -> Result<(), ArrowError> {
+        self.validate_equal_lengths()?;
         self.offsets_builder.push(self.key_builder.len() as i32);
         self.null_buffer_builder.append(is_valid);
         Ok(())
@@ -176,13 +183,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// Returns an error if the key and values builders are in an inconsistent state.
     #[inline]
     pub fn append_nulls(&mut self, n: usize) -> Result<(), ArrowError> {
-        if self.key_builder.len() != self.value_builder.len() {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot append to a map builder when its keys and values have unequal lengths of {} and {}",
-                self.key_builder.len(),
-                self.value_builder.len()
-            )));
-        }
+        self.validate_equal_lengths()?;
         let offset = self.key_builder.len() as i32;
         self.offsets_builder.extend(std::iter::repeat_n(offset, n));
         self.null_buffer_builder.append_n_nulls(n);
