@@ -1290,20 +1290,20 @@ mod tests {
     use arrow_array::{BooleanArray, RunArray};
 
     #[test]
-    fn test_ree_empty() {
-        let left = RunArray::<Int16Type>::from_iter(Vec::<&str>::new().into_iter());
+    fn test_runarray_empty() {
+        let left = RunArray::<Int16Type>::from_iter(Vec::<&str>::new());
         assert_eq!(distinct(&left, &left).unwrap(), Vec::<bool>::new().into());
     }
 
     #[test]
-    fn test_ree_size_mismatch() {
+    fn test_runarray_size_mismatch() {
         let left = RunArray::<Int16Type>::from_iter(["a", "a"]);
         let right = RunArray::<Int16Type>::from_iter(["b"]);
         assert!(distinct(&left, &right).is_err());
     }
 
     #[test]
-    fn test_ree_no_nulls() {
+    fn test_runarray_no_nulls() {
         let left =
             make_primitive_run_array::<Int16Type, Int8Type, _>(&[1, 2, 2, 2, 10, 10, 0, 0, 0, 1]);
         let righ =
@@ -1340,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ree_one_side_nulls() {
+    fn test_runarray_one_side_nulls() {
         let left = make_primitive_run_array::<Int16Type, Int8Type, _>(&[
             Some(1),
             Some(2),
@@ -1388,7 +1388,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ree_both_side_nulls() {
+    fn test_runarray_both_side_nulls() {
         let left = make_primitive_run_array::<Int16Type, Int8Type, _>(&[
             Some(1),
             Some(2),
