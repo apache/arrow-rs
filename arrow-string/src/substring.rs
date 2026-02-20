@@ -22,8 +22,7 @@
 use arrow_array::builder::BufferBuilder;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer, OffsetBuffer};
-use arrow_data::ArrayData;
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::Zero;
 use std::cmp::Ordering;
@@ -356,7 +355,6 @@ fn fixed_size_binary_substring(
         .nulls()
         .map(|n| n.inner().sliced())
         .and_then(|b| NullBuffer::from_unsliced_buffer(b, num_of_elements));
-
 
     if new_len == 0 && nulls.is_none() {
         // FixedSizeBinaryArray::new takes length from the values buffer, except when size == 0.
