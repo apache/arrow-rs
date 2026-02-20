@@ -119,7 +119,7 @@ impl ContentDefinedChunker {
 
         let effective_bits = mask_bits - norm_level;
 
-        if effective_bits < 1 || effective_bits > 63 {
+        if !(1..=63).contains(&effective_bits) {
             return Err(ParquetError::General(format!(
                 "The number of bits in the CDC mask must be between 1 and 63, got {effective_bits}"
             )));
@@ -240,6 +240,7 @@ impl ContentDefinedChunker {
             // level_offset == value_offset for non-nested data.
             let def_levels = def_levels.expect("def_levels required when max_def_level > 0");
             let mut prev_offset: usize = 0;
+            #[allow(clippy::needless_range_loop)]
             for offset in 0..num_levels {
                 let def_level = def_levels[offset];
                 self.roll_level(def_level);

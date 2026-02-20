@@ -1210,6 +1210,7 @@ fn count_leaves(tp: &TypePtr, n_leaves: &mut usize) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_tree<'a>(
     tp: &'a TypePtr,
     root_idx: usize,

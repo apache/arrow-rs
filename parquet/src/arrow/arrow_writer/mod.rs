@@ -1119,11 +1119,9 @@ impl ArrowRowGroupWriterFactory {
         let mut writers = Vec::with_capacity(self.arrow_schema.fields.len());
         let mut leaves = self.schema.columns().iter();
         let column_factory = self.column_writer_factory(row_group_index);
-        let schema_root = self.schema.root_schema();
         for field in &self.arrow_schema.fields {
             column_factory.get_arrow_column_writer(
                 field.data_type(),
-                schema_root,
                 &self.props,
                 &mut leaves,
                 &mut writers,
@@ -1178,11 +1176,9 @@ pub fn get_column_writers(
     let mut writers = Vec::with_capacity(arrow.fields.len());
     let mut leaves = parquet.columns().iter();
     let column_factory = ArrowColumnWriterFactory::new();
-    let schema_root = parquet.root_schema();
     for field in &arrow.fields {
         column_factory.get_arrow_column_writer(
             field.data_type(),
-            schema_root,
             props,
             &mut leaves,
             &mut writers,
@@ -1252,7 +1248,6 @@ impl ArrowColumnWriterFactory {
     fn get_arrow_column_writer(
         &self,
         data_type: &ArrowDataType,
-        schema_root: &crate::schema::types::Type,
         props: &WriterPropertiesPtr,
         leaves: &mut Iter<'_, ColumnDescPtr>,
         out: &mut Vec<ArrowColumnWriter>,
@@ -1297,29 +1292,17 @@ impl ArrowColumnWriterFactory {
             | ArrowDataType::FixedSizeList(f, _)
             | ArrowDataType::ListView(f)
             | ArrowDataType::LargeListView(f) => {
-                self.get_arrow_column_writer(f.data_type(), schema_root, props, leaves, out)?
+                self.get_arrow_column_writer(f.data_type(), props, leaves, out)?
             }
             ArrowDataType::Struct(fields) => {
                 for field in fields {
-                    self.get_arrow_column_writer(
-                        field.data_type(),
-                        schema_root,
-                        props,
-                        leaves,
-                        out,
-                    )?
+                    self.get_arrow_column_writer(field.data_type(), props, leaves, out)?
                 }
             }
             ArrowDataType::Map(f, _) => match f.data_type() {
                 ArrowDataType::Struct(f) => {
-                    self.get_arrow_column_writer(
-                        f[0].data_type(),
-                        schema_root,
-                        props,
-                        leaves,
-                        out,
-                    )?;
-                    self.get_arrow_column_writer(f[1].data_type(), schema_root, props, leaves, out)?
+                    self.get_arrow_column_writer(f[0].data_type(), props, leaves, out)?;
+                    self.get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
                 }
                 _ => unreachable!("invalid map type"),
             },
