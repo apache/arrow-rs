@@ -40,6 +40,7 @@
 //!
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
+use crate::column::chunker::Chunk;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
@@ -803,26 +804,19 @@ impl ArrayLevels {
     }
 
     /// Create a sliced view of this `ArrayLevels` for a CDC chunk.
-    ///
-    /// - `level_offset`: start position within `def_levels`/`rep_levels`
-    /// - `levels_to_write`: number of levels in this chunk
-    /// - `value_offset`: start position within the values array
-    /// - `num_values`: number of values in this chunk
-    pub(crate) fn slice_for_chunk(
-        &self,
-        level_offset: usize,
-        levels_to_write: usize,
-        value_offset: usize,
-        num_values: usize,
-    ) -> Self {
+    pub(crate) fn slice_for_chunk(&self, chunk: &Chunk) -> Self {
+        let level_offset = chunk.level_offset;
+        let num_levels = chunk.num_levels;
+        let value_offset = chunk.value_offset;
+        let num_values = chunk.num_values;
         let def_levels = self
             .def_levels
             .as_ref()
-            .map(|levels| levels[level_offset..level_offset + levels_to_write].to_vec());
+            .map(|levels| levels[level_offset..level_offset + num_levels].to_vec());
         let rep_levels = self
             .rep_levels
             .as_ref()
-            .map(|levels| levels[level_offset..level_offset + levels_to_write].to_vec());
+            .map(|levels| levels[level_offset..level_offset + num_levels].to_vec());
 
         // Filter non_null_indices to [value_offset, value_offset + num_values)
         // and shift by -value_offset.
@@ -852,6 +846,7 @@ impl ArrayLevels {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::column::chunker::Chunk;
 
     use arrow_array::builder::*;
     use arrow_array::types::Int32Type;
@@ -2141,5 +2136,141 @@ mod tests {
     fn levels<T: Array + 'static>(field: &Field, array: T) -> LevelInfoBuilder {
         let v = Arc::new(array) as ArrayRef;
         LevelInfoBuilder::try_new(field, Default::default(), &v).unwrap()
+    }
+
+    #[test]
+    fn test_slice_for_chunk_flat() {
+        // Required field (no levels): array [1..=6], slice values 2..5
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
+        let logical_nulls = array.logical_nulls();
+        let levels = ArrayLevels {
+            def_levels: None,
+            rep_levels: None,
+            non_null_indices: vec![0, 1, 2, 3, 4, 5],
+            max_def_level: 0,
+            max_rep_level: 0,
+            array,
+            logical_nulls,
+        };
+        let sliced = levels.slice_for_chunk(&Chunk {
+            level_offset: 0,
+            num_levels: 0,
+            value_offset: 2,
+            num_values: 3,
+        });
+        assert!(sliced.def_levels.is_none());
+        assert!(sliced.rep_levels.is_none());
+        assert_eq!(sliced.non_null_indices, vec![0, 1, 2]);
+        assert_eq!(sliced.array.len(), 3);
+
+        // Optional field (def levels only): [1, null, 3, null, 5, 6]
+        // Slice levels 1..4 (def=[0,1,0]), values 1..4 → non_null_indices [2]→[1]
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            None,
+            Some(5),
+            Some(6),
+        ]));
+        let logical_nulls = array.logical_nulls();
+        let levels = ArrayLevels {
+            def_levels: Some(vec![1, 0, 1, 0, 1, 1]),
+            rep_levels: None,
+            non_null_indices: vec![0, 2, 4, 5],
+            max_def_level: 1,
+            max_rep_level: 0,
+            array,
+            logical_nulls,
+        };
+        let sliced = levels.slice_for_chunk(&Chunk {
+            level_offset: 1,
+            num_levels: 3,
+            value_offset: 1,
+            num_values: 3,
+        });
+        assert_eq!(sliced.def_levels, Some(vec![0, 1, 0]));
+        assert!(sliced.rep_levels.is_none());
+        assert_eq!(sliced.non_null_indices, vec![1]);
+        assert_eq!(sliced.array.len(), 3);
+    }
+
+    #[test]
+    fn test_slice_for_chunk_nested() {
+        // [[1,2],[3],[4,5]]: def=[2,2,2,2,2], rep=[0,1,0,0,1]
+        // Slice levels 2..5 (def=[2,2,2], rep=[0,0,1]), values 2..5
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let logical_nulls = array.logical_nulls();
+        let levels = ArrayLevels {
+            def_levels: Some(vec![2, 2, 2, 2, 2]),
+            rep_levels: Some(vec![0, 1, 0, 0, 1]),
+            non_null_indices: vec![0, 1, 2, 3, 4],
+            max_def_level: 2,
+            max_rep_level: 1,
+            array,
+            logical_nulls,
+        };
+        let sliced = levels.slice_for_chunk(&Chunk {
+            level_offset: 2,
+            num_levels: 3,
+            value_offset: 2,
+            num_values: 3,
+        });
+        assert_eq!(sliced.def_levels, Some(vec![2, 2, 2]));
+        assert_eq!(sliced.rep_levels, Some(vec![0, 0, 1]));
+        // [0,1,2,3,4] filtered to [2,5) → [2,3,4] → shifted -2 → [0,1,2]
+        assert_eq!(sliced.non_null_indices, vec![0, 1, 2]);
+        assert_eq!(sliced.array.len(), 3);
+    }
+
+    #[test]
+    fn test_slice_for_chunk_non_null_indices_boundary() {
+        // [1, null, 3]: non_null_indices=[0, 2]; test inclusive lower / exclusive upper bounds
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        let logical_nulls = array.logical_nulls();
+        let levels = ArrayLevels {
+            def_levels: Some(vec![1, 0, 1]),
+            rep_levels: None,
+            non_null_indices: vec![0, 2],
+            max_def_level: 1,
+            max_rep_level: 0,
+            array,
+            logical_nulls,
+        };
+        assert_eq!(
+            levels
+                .slice_for_chunk(&Chunk {
+                    level_offset: 0,
+                    num_levels: 1,
+                    value_offset: 0,
+                    num_values: 1
+                })
+                .non_null_indices,
+            vec![0]
+        );
+        // idx 2 in range [1,3), shifted -1 → 1
+        assert_eq!(
+            levels
+                .slice_for_chunk(&Chunk {
+                    level_offset: 1,
+                    num_levels: 2,
+                    value_offset: 1,
+                    num_values: 2
+                })
+                .non_null_indices,
+            vec![1]
+        );
+        // idx 2 excluded from [1,2)
+        assert_eq!(
+            levels
+                .slice_for_chunk(&Chunk {
+                    level_offset: 1,
+                    num_levels: 1,
+                    value_offset: 1,
+                    num_values: 1
+                })
+                .non_null_indices,
+            Vec::<usize>::new()
+        );
     }
 }

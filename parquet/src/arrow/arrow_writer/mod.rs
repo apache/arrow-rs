@@ -933,19 +933,7 @@ impl ArrowColumnWriter {
 
         let num_chunks = chunks.len();
         for (i, chunk) in chunks.iter().enumerate() {
-            // Compute the number of values in this chunk
-            let num_values = if i + 1 < num_chunks {
-                chunks[i + 1].value_offset - chunk.value_offset
-            } else {
-                leaf_array.len() - chunk.value_offset
-            };
-
-            let chunk_levels = levels.slice_for_chunk(
-                chunk.level_offset,
-                chunk.levels_to_write,
-                chunk.value_offset,
-                num_values,
-            );
+            let chunk_levels = levels.slice_for_chunk(chunk);
             let chunk_col = ArrowLeafColumn(chunk_levels);
 
             self.write_without_cdc(&chunk_col)?;

@@ -219,20 +219,24 @@ impl ContentDefinedChunker {
             for offset in 0..num_levels {
                 self.roll_value_bytes(value_bytes(offset).as_ref());
                 if self.need_new_chunk() {
+                    let levels_to_write = offset - prev_offset;
                     chunks.push(Chunk {
                         level_offset: prev_offset,
                         value_offset: prev_offset,
-                        levels_to_write: offset - prev_offset,
+                        num_levels: levels_to_write,
+                        num_values: levels_to_write,
                     });
                     prev_offset = offset;
                 }
             }
             // Last chunk
             if prev_offset < num_levels {
+                let levels_to_write = num_levels - prev_offset;
                 chunks.push(Chunk {
                     level_offset: prev_offset,
                     value_offset: prev_offset,
-                    levels_to_write: num_levels - prev_offset,
+                    num_levels: levels_to_write,
+                    num_values: levels_to_write,
                 });
             }
         } else if !has_rep_levels {
@@ -248,20 +252,24 @@ impl ContentDefinedChunker {
                     self.roll_value_bytes(value_bytes(offset).as_ref());
                 }
                 if self.need_new_chunk() {
+                    let levels_to_write = offset - prev_offset;
                     chunks.push(Chunk {
                         level_offset: prev_offset,
                         value_offset: prev_offset,
-                        levels_to_write: offset - prev_offset,
+                        num_levels: levels_to_write,
+                        num_values: levels_to_write,
                     });
                     prev_offset = offset;
                 }
             }
             // Last chunk
             if prev_offset < num_levels {
+                let levels_to_write = num_levels - prev_offset;
                 chunks.push(Chunk {
                     level_offset: prev_offset,
                     value_offset: prev_offset,
-                    levels_to_write: num_levels - prev_offset,
+                    num_levels: levels_to_write,
+                    num_values: levels_to_write,
                 });
             }
         } else {
@@ -292,7 +300,8 @@ impl ContentDefinedChunker {
                         chunks.push(Chunk {
                             level_offset: prev_offset,
                             value_offset: prev_value_offset,
-                            levels_to_write,
+                            num_levels: levels_to_write,
+                            num_values: value_offset - prev_value_offset,
                         });
                         prev_offset = offset;
                         prev_value_offset = value_offset;
@@ -310,7 +319,8 @@ impl ContentDefinedChunker {
                 chunks.push(Chunk {
                     level_offset: prev_offset,
                     value_offset: prev_value_offset,
-                    levels_to_write: num_levels - prev_offset,
+                    num_levels: num_levels - prev_offset,
+                    num_values: value_offset - prev_value_offset,
                 });
             }
         }
@@ -329,27 +339,27 @@ impl ContentDefinedChunker {
         assert_eq!(first.level_offset, 0, "first chunk must start at level 0");
         assert_eq!(first.value_offset, 0, "first chunk must start at value 0");
 
-        let mut sum_levels = first.levels_to_write;
+        let mut sum_levels = first.num_levels;
         for i in 1..chunks.len() {
             let chunk = &chunks[i];
             let prev = &chunks[i - 1];
-            assert!(chunk.levels_to_write > 0, "chunk must have levels");
+            assert!(chunk.num_levels > 0, "chunk must have levels");
             assert!(
                 chunk.value_offset >= prev.value_offset,
                 "value offsets must be monotonically increasing"
             );
             assert_eq!(
                 chunk.level_offset,
-                prev.level_offset + prev.levels_to_write,
+                prev.level_offset + prev.num_levels,
                 "chunks must be contiguous"
             );
-            sum_levels += chunk.levels_to_write;
+            sum_levels += chunk.num_levels;
         }
         assert_eq!(sum_levels, num_levels, "chunks must cover all levels");
 
         let last = chunks.last().unwrap();
         assert_eq!(
-            last.level_offset + last.levels_to_write,
+            last.level_offset + last.num_levels,
             num_levels,
             "last chunk must end at num_levels"
         );
@@ -413,7 +423,7 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].level_offset, 0);
         assert_eq!(chunks[0].value_offset, 0);
-        assert_eq!(chunks[0].levels_to_write, 4);
+        assert_eq!(chunks[0].num_levels, 4);
     }
 
     #[test]
@@ -438,9 +448,9 @@ mod tests {
         for (i, chunk) in chunks.iter().enumerate() {
             assert_eq!(chunk.level_offset, total_levels);
             if i < chunks.len() - 1 {
-                assert!(chunk.levels_to_write > 0);
+                assert!(chunk.num_levels > 0);
             }
-            total_levels += chunk.levels_to_write;
+            total_levels += chunk.num_levels;
         }
         assert_eq!(total_levels, num_values);
     }
@@ -465,7 +475,7 @@ mod tests {
         for (a, b) in chunks1.iter().zip(chunks2.iter()) {
             assert_eq!(a.level_offset, b.level_offset);
             assert_eq!(a.value_offset, b.value_offset);
-            assert_eq!(a.levels_to_write, b.levels_to_write);
+            assert_eq!(a.num_levels, b.num_levels);
         }
     }
 
@@ -489,7 +499,7 @@ mod tests {
         });
 
         assert!(!chunks.is_empty());
-        let total: usize = chunks.iter().map(|c| c.levels_to_write).sum();
+        let total: usize = chunks.iter().map(|c| c.num_levels).sum();
         assert_eq!(total, num_levels);
     }
 }

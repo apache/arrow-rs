@@ -34,5 +34,7 @@ pub(crate) struct Chunk {
     /// The start offset of this chunk inside the given values array.
     pub value_offset: usize,
     /// The number of levels in this chunk.
-    pub levels_to_write: usize,
+    pub num_levels: usize,
+    /// The number of values (Arrow array elements) in this chunk.
+    pub num_values: usize,
 }
