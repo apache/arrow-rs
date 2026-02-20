@@ -287,21 +287,21 @@ mod tests {
 
     #[test]
     fn test_from_unsliced_buffer_with_nulls() {
-        // Buffer with some nulls: 0b10110010 = valid, null, valid, valid, null, null, valid, null
+        // 0b10110010 → null(0), valid(1), null(2), null(3), valid(4), valid(5), null(6), valid(7)
         let buf = Buffer::from([0b10110010u8]);
         let result = NullBuffer::from_unsliced_buffer(buf, 8);
         assert!(result.is_some());
         let nb = result.unwrap();
         assert_eq!(nb.len(), 8);
         assert_eq!(nb.null_count(), 4);
-        assert!(nb.is_valid(0));
-        assert!(nb.is_null(1));
-        assert!(nb.is_valid(2));
-        assert!(nb.is_valid(3));
-        assert!(nb.is_null(4));
-        assert!(nb.is_null(5));
-        assert!(nb.is_valid(6));
-        assert!(nb.is_null(7));
+        assert!(nb.is_null(0));
+        assert!(nb.is_valid(1));
+        assert!(nb.is_null(2));
+        assert!(nb.is_null(3));
+        assert!(nb.is_valid(4));
+        assert!(nb.is_valid(5));
+        assert!(nb.is_null(6));
+        assert!(nb.is_valid(7));
     }
 
     #[test]

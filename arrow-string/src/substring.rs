@@ -22,7 +22,7 @@
 use arrow_array::builder::BufferBuilder;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use num_traits::Zero;
@@ -217,7 +217,11 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
             GenericStringArray::<OffsetSize>::DATA_TYPE,
             array.len(),
             None,
-            array.nulls().map(|b| b.inner().sliced()),
+            array
+                .nulls()
+                .map(|b| b.inner().sliced())
+                .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()))
+                .map(|nb| nb.into_inner().into_inner()),
             0,
             vec![new_offsets.finish(), vals.finish()],
             vec![],
@@ -321,7 +325,11 @@ where
             GenericByteArray::<T>::DATA_TYPE,
             array.len(),
             None,
-            array.nulls().map(|b| b.inner().sliced()),
+            array
+                .nulls()
+                .map(|b| b.inner().sliced())
+                .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()))
+                .map(|nb| nb.into_inner().into_inner()),
             0,
             vec![Buffer::from_vec(new_offsets), new_values.into()],
             vec![],
@@ -365,7 +373,11 @@ fn fixed_size_binary_substring(
             DataType::FixedSizeBinary(new_len),
             num_of_elements,
             None,
-            array.nulls().map(|b| b.inner().sliced()),
+            array
+                .nulls()
+                .map(|b| b.inner().sliced())
+                .and_then(|b| NullBuffer::from_unsliced_buffer(b, num_of_elements))
+                .map(|nb| nb.into_inner().into_inner()),
             0,
             vec![new_values.into()],
             vec![],

@@ -17,7 +17,7 @@
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray};
-use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, ScalarBuffer};
+use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
 use std::sync::Arc;
 
