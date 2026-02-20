@@ -154,7 +154,7 @@ There are several related crates in different repositories
 
 | Crate               | Description                                                  | Documentation                      |
 | ------------------- | ------------------------------------------------------------ | ---------------------------------- |
-| [`object_store`]    | Object Storage (aws, azure, gcp, local, in-memory) interface | [(README)](object_store-readme)    |
+| [`object_store`]    | Object Storage (aws, azure, gcp, local, in-memory) interface | [(README)][object_store-readme]    |
 | [`datafusion`]      | In-memory query engine with SQL support                      | [(README)][datafusion-readme]      |
 | [`ballista`]        | Distributed query execution                                  | [(README)][ballista-readme]        |
 | [`parquet_opendal`] | Use [`opendal`] for [`parquet`] Arrow IO                     | [(README)][parquet_opendal-readme] |
