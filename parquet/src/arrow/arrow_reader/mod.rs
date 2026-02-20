@@ -3510,7 +3510,7 @@ pub(crate) mod tests {
                     })
                     .collect()
             }
-            None => values.iter().flatten().map(|b| Some(b.clone())).collect(),
+            None => values.iter().flatten().cloned().map(Some).collect(),
         };
         data
     }
