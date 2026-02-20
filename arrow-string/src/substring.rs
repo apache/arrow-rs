@@ -357,7 +357,10 @@ fn fixed_size_binary_substring(
         .map(|n| n.inner().sliced())
         .and_then(|b| NullBuffer::from_unsliced_buffer(b, num_of_elements));
 
-    // FixedSizeBinaryArray with size 0 requires a validity bitmap
+    // FixedSizeBinaryArray::new takes length from the values buffer, except when size == 0.
+    // In that case it uses the null buffer length, so preserve the original length here.
+    // Example: ["", "", ""] -> substring(..., 1, Some(2)) should keep len=3;
+    // otherwise it collapses to an empty array (len=0).
     if new_len == 0 && nulls.is_none() {
         nulls = Some(NullBuffer::new_valid(num_of_elements));
     }

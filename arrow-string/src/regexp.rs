@@ -180,11 +180,6 @@ pub fn regexp_is_match_scalar<'a, S>(
 where
     &'a S: StringArrayType<'a>,
 {
-    let null_bit_buffer = array
-        .nulls()
-        .map(|n| n.inner().sliced())
-        .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()))
-        .map(|nb| nb.into_inner().into_inner());
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let pattern = match flag {
@@ -208,8 +203,7 @@ where
     let nulls = array
         .nulls()
         .map(|n| n.inner().sliced())
-        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
-        .filter(|n| n.null_count() > 0);
+        .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()));
     Ok(BooleanArray::new(values, nulls))
 }
 
