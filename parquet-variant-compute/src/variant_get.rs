@@ -389,13 +389,13 @@ mod test {
 
     use super::{GetOptions, variant_get};
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
-    use crate::{VariantArray, VariantArrayBuilder, VariantValueArrayBuilder, json_to_variant};
+    use crate::{VariantArray, VariantArrayBuilder, json_to_variant, shred_variant};
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
         Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
-        ListViewArray, NullBuilder, StringArray, StringViewArray, StructArray,
+        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
+        ListArray, ListViewArray, NullBuilder, StringArray, StringViewArray, StructArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -1902,9 +1902,7 @@ mod test {
         let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(42)]));
         assert_eq!(&result, &expected);
     }
-    /// This test manually constructs a shredded variant array representing lists
-    /// like ["comedy", "drama"] and ["horror", 123]
-    /// as VariantArray using variant_get.
+    /// This test uses a pre-shredded list array and validates index-path access.
     #[test]
     fn test_shredded_list_index_access() {
         let array = shredded_list_variant_array();
@@ -1919,7 +1917,7 @@ mod test {
         // Row 1: expect 0 index = "horror"
         assert_eq!(result_variant.value(1), Variant::from("horror"));
     }
-    /// Test extracting shredded list field with type conversion
+    /// Test extracting shredded list field with type conversion.
     #[test]
     fn test_shredded_list_as_string() {
         let array = shredded_list_variant_array();
@@ -1932,65 +1930,21 @@ mod test {
         let expected: ArrayRef = Arc::new(StringArray::from(vec![Some("comedy"), Some("horror")]));
         assert_eq!(&result, &expected);
     }
-    /// Helper function to create a shredded variant array representing lists
+    /// Helper to create a shredded list variant array used by list index tests.
     ///
-    /// This creates an array that represents:
-    /// Row 0: ["comedy", "drama"] ([0] is shredded, [1] is shredded - perfectly shredded)
-    /// Row 1: ["horror", 123] ([0] is shredded, [1] is int - partially shredded)
-    ///
-    /// The physical layout follows the shredding spec where:
-    /// - metadata: contains list metadata
-    /// - typed_value: StructArray with 0 index value
-    /// - value: contains fallback for
+    /// Rows:
+    /// 1. `["comedy", "drama"]` (fully shred-able as `Utf8`)
+    /// 2. `["horror", 123]` (partially shredded, with fallback for the numeric element)
     fn shredded_list_variant_array() -> ArrayRef {
-        // Create metadata array
-        let metadata_array =
-            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 2));
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"["comedy", "drama"]"#),
+            Some(r#"["horror", 123]"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
 
-        // Building the typed_value ListArray
-
-        let mut variant_value_builder = VariantValueArrayBuilder::new(8);
-        variant_value_builder.append_null();
-        variant_value_builder.append_null();
-        variant_value_builder.append_null();
-        variant_value_builder.append_value(Variant::from(123i32));
-
-        let struct_array = StructArrayBuilder::new()
-            .with_field(
-                "value",
-                Arc::new(variant_value_builder.build().unwrap()),
-                true,
-            )
-            .with_field(
-                "typed_value",
-                Arc::new(StringArray::from(vec![
-                    Some("comedy"),
-                    Some("drama"),
-                    Some("horror"),
-                    None,
-                ])),
-                true,
-            )
-            .build();
-
-        let typed_value_array = GenericListArray::<i32>::new(
-            Arc::new(Field::new_list_field(
-                struct_array.data_type().clone(),
-                true,
-            )),
-            OffsetBuffer::from_lengths([2, 2]),
-            Arc::new(struct_array),
-            None,
-        );
-
-        // Build the main VariantArray
-        let main_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array), false)
-            // .with_field("value", Arc::new(value_array), true)
-            .with_field("typed_value", Arc::new(typed_value_array), true)
-            .build();
-
-        Arc::new(main_struct)
+        let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let shredded = shred_variant(&input, &list_schema).unwrap();
+        ArrayRef::from(shredded)
     }
     /// Helper function to create a shredded variant array representing objects
     ///
