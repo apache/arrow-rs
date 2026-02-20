@@ -115,7 +115,9 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// See [`Self::append_value`] for more panic information.
     #[inline]
     pub fn append_value_n(&mut self, value: impl AsRef<T::Native>, n: usize) {
-        let bytes = value.as_ref().as_ref();
+        let bytes: &[u8] = value.as_ref().as_ref();
+        self.value_builder.reserve(bytes.len() * n);
+        self.offsets_builder.reserve(n);
         for _ in 0..n {
             self.value_builder.extend_from_slice(bytes);
             self.offsets_builder.push(self.next_offset());
