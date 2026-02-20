@@ -135,11 +135,10 @@ struct AlpEncodedVectorView<Exact: AlpExact> {
 /// Parsed ALP page layout for one exact integer width (`u32` for float pages,
 /// `u64` for double pages).
 #[derive(Debug)]
-struct AlpPageLayout<Exact: AlpExact> {
+struct AlpPageLayout {
     header: AlpHeader,
     body: Bytes,
     offsets: Vec<u32>,
-    vectors: Vec<AlpEncodedVectorView<Exact>>,
 }
 
 /// Exact integer type used by FOR reconstruction.
@@ -321,7 +320,7 @@ impl AlpFloat for f64 {
 /// - non-negative `num_elements`
 /// - offsets bounds + monotonicity
 /// - per-vector metadata/data section lengths
-fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<Exact>> {
+fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout> {
     let data_ref = data.as_ref();
     if data_ref.len() < ALP_HEADER_SIZE {
         return Err(general_err!(
@@ -428,7 +427,6 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<E
         offsets.push(offset);
     }
 
-    let mut vectors = Vec::with_capacity(num_vectors);
     for (vector_idx, vector_offset) in offsets.iter().enumerate() {
         let vector_start = *vector_offset as usize;
         let vector_end = if vector_idx + 1 < offsets.len() {
@@ -445,19 +443,13 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<E
         }
 
         let vector_num_elements = header.vector_num_elements(vector_idx);
-        vectors.push(parse_vector_view::<Exact>(
-            body_ref,
-            vector_start,
-            vector_end,
-            vector_num_elements,
-        )?);
+        parse_vector_view::<Exact>(body_ref, vector_start, vector_end, vector_num_elements)?;
     }
 
     Ok(AlpPageLayout {
         header,
         body,
         offsets,
-        vectors,
     })
 }
 
@@ -674,12 +666,25 @@ fn decode_vector_values<Value: AlpFloat>(
     Ok(out)
 }
 
-fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout<Value::Exact>) -> Result<Vec<Value>> {
+fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout) -> Result<Vec<Value>> {
     let mut out = Vec::with_capacity(layout.header.num_elements_usize());
-    for vector in &layout.vectors {
+    for (vector_idx, vector_offset) in layout.offsets.iter().enumerate() {
+        let vector_start = *vector_offset as usize;
+        let vector_end = if vector_idx + 1 < layout.offsets.len() {
+            layout.offsets[vector_idx + 1] as usize
+        } else {
+            layout.body.len()
+        };
+        let vector_num_elements = layout.header.vector_num_elements(vector_idx);
+        let vector = parse_vector_view::<Value::Exact>(
+            layout.body.as_ref(),
+            vector_start,
+            vector_end,
+            vector_num_elements,
+        )?;
         out.extend_from_slice(&decode_vector_values::<Value>(
             layout.body.as_ref(),
-            vector,
+            &vector,
         )?);
     }
     Ok(out)
@@ -696,7 +701,7 @@ where
     T::T: AlpFloat,
     <T::T as AlpFloat>::Exact: Send,
 {
-    layout: Option<AlpPageLayout<<T::T as AlpFloat>::Exact>>,
+    layout: Option<AlpPageLayout>,
     decoded_values: Vec<T::T>,
     current_offset: usize,
     needs_decode: bool,
@@ -729,7 +734,6 @@ where
             general_err!("Invalid ALP decoder state: set_data must be called before get/skip")
         })?;
 
-        debug_assert_eq!(layout.offsets.len(), layout.vectors.len());
         self.decoded_values = decode_page_values::<T::T>(&layout)?;
         self.needs_decode = false;
 
@@ -1058,12 +1062,21 @@ mod tests {
         page.extend_from_slice(&vector);
 
         let parsed = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
-        assert_eq!(parsed.vectors.len(), 1);
-        assert_eq!(parsed.vectors[0].num_elements, 1);
-        assert_eq!(parsed.vectors[0].alp_info.num_exceptions, 1);
-        assert_eq!(parsed.vectors[0].for_info.bit_width, 0);
-        assert_eq!(parsed.vectors[0].exception_positions, vec![0]);
-        assert_eq!(parsed.vectors[0].exception_values, vec![42.5_f64.to_bits()]);
+        assert_eq!(parsed.offsets, vec![4]);
+        let vector_start = parsed.offsets[0] as usize;
+        let vector_end = parsed.body.len();
+        let parsed_vector = parse_vector_view::<u64>(
+            parsed.body.as_ref(),
+            vector_start,
+            vector_end,
+            parsed.header.vector_num_elements(0),
+        )
+        .unwrap();
+        assert_eq!(parsed_vector.num_elements, 1);
+        assert_eq!(parsed_vector.alp_info.num_exceptions, 1);
+        assert_eq!(parsed_vector.for_info.bit_width, 0);
+        assert_eq!(parsed_vector.exception_positions, vec![0]);
+        assert_eq!(parsed_vector.exception_values, vec![42.5_f64.to_bits()]);
     }
 
     #[test]
