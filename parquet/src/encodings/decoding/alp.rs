@@ -138,7 +138,6 @@ struct AlpEncodedVectorView<Exact: AlpExact> {
 struct AlpPageLayout<Exact: AlpExact> {
     header: AlpHeader,
     body: Bytes,
-    #[allow(dead_code)]
     offsets: Vec<u32>,
     vectors: Vec<AlpEncodedVectorView<Exact>>,
 }
@@ -153,7 +152,7 @@ struct AlpPageLayout<Exact: AlpExact> {
 /// - FOR stores non-negative deltas optimized for bitpacking.
 /// - Unsigned arithmetic avoids signed-overflow edge cases in FOR stage.
 /// - Signed interpretation is applied later during decimal reconstruction.
-trait AlpExact: Copy + std::fmt::Debug {
+pub(super) trait AlpExact: Copy + std::fmt::Debug {
     const WIDTH: usize;
     type Signed: Copy;
     fn from_le_slice(slice: &[u8]) -> Self;
@@ -264,7 +263,7 @@ const ALP_NEG_POW10_F64: [f64; 19] = [
     0.000000000000000001,
 ];
 
-trait AlpFloat: Copy + Default {
+pub(super) trait AlpFloat: Copy + Default {
     type Exact: AlpExact + FromBytes;
 
     /// Precompute vector-level ALP decimal scale for:
@@ -627,57 +626,6 @@ fn inverse_for<Exact: AlpExact>(deltas: &mut [Exact], frame_of_reference: Exact)
     }
 }
 
-/// Patch exception values at their original positions.
-#[cfg(test)]
-fn patch_exceptions<Exact: AlpExact>(
-    decoded: &mut [Exact],
-    exception_positions: &[u16],
-    exception_values: &[Exact],
-) -> Result<()> {
-    if exception_positions.len() != exception_values.len() {
-        return Err(general_err!(
-            "Invalid ALP page: exception positions ({}) and values ({}) length mismatch",
-            exception_positions.len(),
-            exception_values.len()
-        ));
-    }
-
-    for (pos, value) in exception_positions.iter().zip(exception_values.iter()) {
-        let pos = *pos as usize;
-        if pos >= decoded.len() {
-            return Err(general_err!(
-                "Invalid ALP page: exception position {} out of bounds for vector length {}",
-                pos,
-                decoded.len()
-            ));
-        }
-        decoded[pos] = *value;
-    }
-
-    Ok(())
-}
-
-/// Decode one vector to exact integers:
-/// bit-unpack -> inverse FOR -> exception patch.
-#[cfg(test)]
-fn decode_vector_exact<Exact: AlpExact + FromBytes>(
-    body: &[u8],
-    vector: &AlpEncodedVectorView<Exact>,
-) -> Result<Vec<Exact>> {
-    let mut decoded = bit_unpack_integers(
-        &body[vector.packed_values.clone()],
-        vector.for_info.bit_width,
-        vector.num_elements,
-    )?;
-    inverse_for(&mut decoded, vector.for_info.frame_of_reference);
-    patch_exceptions(
-        &mut decoded,
-        &vector.exception_positions,
-        &vector.exception_values,
-    )?;
-    Ok(decoded)
-}
-
 /// Decode one vector into output floating values:
 /// bit-unpack -> inverse FOR -> decimal decode -> patch exceptions.
 fn decode_vector_values<Value: AlpFloat>(
@@ -740,30 +688,59 @@ fn decode_page_values<Value: AlpFloat>(layout: &AlpPageLayout<Value::Exact>) -> 
 /// Decoder for ALP-encoded floating-point pages (`f32`/`f64`).
 ///
 /// Current behavior:
-/// - `set_data` parses + validates page layout and eagerly decodes all values.
-/// - `get` copies from the decoded buffer into the requested output slice.
-/// - `skip` advances the decoded cursor without additional parsing/decoding.
-///
-/// This keeps ALP decoding straightforward while functionality is being brought up.
-pub(crate) struct AlpDecoder<T: DataType> {
+/// - `set_data` parses + validates page metadata and stores ALP layout state.
+/// - `get` lazily decodes the full page once, then copies from the decoded buffer.
+/// - `skip` advances the decoded cursor.
+pub(crate) struct AlpDecoder<T: DataType>
+where
+    T::T: AlpFloat,
+    <T::T as AlpFloat>::Exact: Send,
+{
+    layout: Option<AlpPageLayout<<T::T as AlpFloat>::Exact>>,
     decoded_values: Vec<T::T>,
-    values_decoded: usize,
+    current_offset: usize,
+    needs_decode: bool,
+    num_values: usize,
     _marker: PhantomData<T>,
 }
 
-impl<T: DataType> AlpDecoder<T> {
+impl<T: DataType> AlpDecoder<T>
+where
+    T::T: AlpFloat,
+    <T::T as AlpFloat>::Exact: Send,
+{
     pub(crate) fn new() -> Self {
         Self {
+            layout: None,
             decoded_values: Vec::new(),
-            values_decoded: 0,
+            current_offset: 0,
+            needs_decode: false,
+            num_values: 0,
             _marker: PhantomData,
         }
+    }
+
+    fn ensure_decoded(&mut self) -> Result<()> {
+        if !self.needs_decode {
+            return Ok(());
+        }
+
+        let layout = self.layout.take().ok_or_else(|| {
+            general_err!("Invalid ALP decoder state: set_data must be called before get/skip")
+        })?;
+
+        debug_assert_eq!(layout.offsets.len(), layout.vectors.len());
+        self.decoded_values = decode_page_values::<T::T>(&layout)?;
+        self.needs_decode = false;
+
+        Ok(())
     }
 }
 
 impl<T: DataType> Decoder<T> for AlpDecoder<T>
 where
     T::T: AlpFloat,
+    <T::T as AlpFloat>::Exact: Send,
 {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         let layout = parse_alp_page_layout::<<T::T as AlpFloat>::Exact>(data)?;
@@ -776,23 +753,30 @@ where
             ));
         }
 
-        self.decoded_values = decode_page_values::<T::T>(&layout)?;
-        self.values_decoded = 0;
+        self.layout = Some(layout);
+        self.decoded_values.clear();
+        self.current_offset = 0;
+        self.needs_decode = num_values > 0;
+        self.num_values = num_values;
         Ok(())
     }
 
     fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
-        let num_values = buffer.len().min(self.values_left());
-        let end = self.values_decoded + num_values;
-        buffer[..num_values].copy_from_slice(&self.decoded_values[self.values_decoded..end]);
-        self.values_decoded = end;
-        Ok(num_values)
+        let target = buffer.len().min(self.num_values);
+        if target == 0 {
+            return Ok(0);
+        }
+
+        self.ensure_decoded()?;
+        let end = self.current_offset + target;
+        buffer[..target].copy_from_slice(&self.decoded_values[self.current_offset..end]);
+        self.current_offset = end;
+        self.num_values -= target;
+        Ok(target)
     }
 
     fn values_left(&self) -> usize {
-        self.decoded_values
-            .len()
-            .saturating_sub(self.values_decoded)
+        self.num_values
     }
 
     fn encoding(&self) -> Encoding {
@@ -800,15 +784,22 @@ where
     }
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
-        let skipped = num_values.min(self.values_left());
-        self.values_decoded += skipped;
-        Ok(skipped)
+        let to_skip = num_values.min(self.num_values);
+        if to_skip == 0 {
+            return Ok(0);
+        }
+
+        self.ensure_decoded()?;
+        self.current_offset += to_skip;
+        self.num_values -= to_skip;
+        Ok(to_skip)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_type::FloatType;
 
     fn make_alp_page_bytes(
         version: u8,
@@ -1088,35 +1079,10 @@ mod tests {
     }
 
     #[test]
-    fn test_inverse_for_and_patch_exceptions() {
+    fn test_inverse_for() {
         let mut decoded = vec![0u32, 3, 2];
         inverse_for(&mut decoded, 10);
         assert_eq!(decoded, vec![10, 13, 12]);
-
-        patch_exceptions(&mut decoded, &[1], &[99]).unwrap();
-        assert_eq!(decoded, vec![10, 99, 12]);
-    }
-
-    #[test]
-    fn test_decode_vector_exact() {
-        let vector = AlpEncodedVectorView::<u32> {
-            num_elements: 3,
-            alp_info: AlpEncodedVectorInfo {
-                exponent: 0,
-                factor: 0,
-                num_exceptions: 1,
-            },
-            for_info: AlpEncodedForVectorInfo {
-                frame_of_reference: 10,
-                bit_width: 2,
-            },
-            packed_values: 0..1,
-            exception_positions: vec![2],
-            exception_values: vec![77],
-        };
-
-        let decoded = decode_vector_exact(&[0b0010_1100], &vector).unwrap();
-        assert_eq!(decoded, vec![10, 13, 77]);
     }
 
     #[test]
@@ -1154,5 +1120,47 @@ mod tests {
         assert_eq!(decoded[1], -0.0);
         assert!(decoded[1].is_sign_negative());
         assert_eq!(decoded[2], f32::INFINITY);
+    }
+
+    #[test]
+    fn test_alp_decoder_get_across_vectors() {
+        let vector0 = make_vector_u32(0, 0, 0, 10, 1, &[0b0000_0010], &[], &[]);
+        let vector1 = make_vector_u32(0, 0, 0, 20, 1, &[0b0000_0010], &[], &[]);
+        let page = make_page_from_vectors(1, 4, &[vector0, vector1]);
+
+        let mut decoder = AlpDecoder::<FloatType>::new();
+        decoder.set_data(Bytes::from(page), 4).unwrap();
+
+        let mut first = [0.0f32; 3];
+        let read = decoder.get(&mut first).unwrap();
+        assert_eq!(read, 3);
+        assert_eq!(first, [10.0, 11.0, 20.0]);
+        assert_eq!(decoder.values_left(), 1);
+
+        let mut second = [0.0f32; 2];
+        let read = decoder.get(&mut second).unwrap();
+        assert_eq!(read, 1);
+        assert_eq!(second[0], 21.0);
+        assert_eq!(decoder.values_left(), 0);
+    }
+
+    #[test]
+    fn test_alp_decoder_skip_across_vectors() {
+        let vector0 = make_vector_u32(0, 0, 0, 10, 1, &[0b0000_0010], &[], &[]);
+        let vector1 = make_vector_u32(0, 0, 0, 20, 1, &[0b0000_0010], &[], &[]);
+        let page = make_page_from_vectors(1, 4, &[vector0, vector1]);
+
+        let mut decoder = AlpDecoder::<FloatType>::new();
+        decoder.set_data(Bytes::from(page), 4).unwrap();
+
+        let skipped = decoder.skip(3).unwrap();
+        assert_eq!(skipped, 3);
+        assert_eq!(decoder.values_left(), 1);
+
+        let mut out = [0.0f32; 1];
+        let read = decoder.get(&mut out).unwrap();
+        assert_eq!(read, 1);
+        assert_eq!(out[0], 21.0);
+        assert_eq!(decoder.values_left(), 0);
     }
 }
