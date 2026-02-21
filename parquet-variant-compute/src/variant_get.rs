@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 use arrow::{
-    array::{self, Array, ArrayRef, BinaryViewArray, GenericListArray, StructArray, UInt32Array},
+    array::{
+        self, Array, ArrayRef, BinaryViewArray, GenericListArray, OffsetSizeTrait, StructArray,
+        UInt64Array,
+    },
     compute::{CastOptions, take},
     datatypes::Field,
     error::Result,
@@ -43,11 +46,79 @@ pub(crate) enum ShreddedPathStep<'a> {
     NotShredded,
 }
 
+fn take_list_index_as_shredding_state<O: OffsetSizeTrait>(
+    list_array: &GenericListArray<O>,
+    index: usize,
+    cast_options: &CastOptions,
+) -> Result<Option<ShreddingState>> {
+    let offsets = list_array.offsets();
+    let values = list_array.values();
+
+    let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() else {
+        return Ok(None);
+    };
+
+    let value_array = struct_array.column_by_name("value");
+    let typed_array = struct_array.column_by_name("typed_value");
+
+    // If list elements have neither typed nor fallback value, this path step is missing.
+    if value_array.is_none() && typed_array.is_none() {
+        return Ok(None);
+    }
+
+    let mut take_indices = Vec::with_capacity(list_array.len());
+    for row in 0..list_array.len() {
+        let start = offsets[row].as_usize();
+        let end = offsets[row + 1].as_usize();
+        let len = end - start;
+
+        if index < len {
+            let absolute_index = start.checked_add(index).ok_or_else(|| {
+                ArrowError::ComputeError("List index overflow while building take indices".into())
+            })?;
+            let absolute_index = u64::try_from(absolute_index)
+                .map_err(|_| ArrowError::ComputeError("List index does not fit into u64".into()))?;
+            take_indices.push(Some(absolute_index));
+        } else if cast_options.safe {
+            take_indices.push(None);
+        } else {
+            return Err(ArrowError::CastError(format!(
+                "Cannot access index '{}' for row {} with list length {}",
+                index, row, len
+            )));
+        }
+    }
+
+    let index_array = UInt64Array::from(take_indices);
+
+    // Gather both typed and fallback values at the requested element index.
+    let taken_value = value_array
+        .map(|value| take(value, &index_array, None))
+        .transpose()?;
+    let taken_typed = typed_array
+        .map(|typed| take(typed, &index_array, None))
+        .transpose()?;
+
+    let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+        EMPTY_VARIANT_METADATA_BYTES,
+        index_array.len(),
+    ));
+
+    let mut builder =
+        StructArrayBuilder::new().with_field("metadata", Arc::new(metadata_array), false);
+    if let Some(taken_value) = taken_value {
+        builder = builder.with_field("value", taken_value, true);
+    }
+    if let Some(taken_typed) = taken_typed {
+        builder = builder.with_field("typed_value", taken_typed, true);
+    }
+
+    Ok(Some(ShreddingState::try_from(&builder.build())?))
+}
+
 /// Given a shredded variant field -- a `(value?, typed_value?)` pair -- try to take one path step
 /// deeper. For a `VariantPathElement::Field`, the step fails if there is no `typed_value` at this
 /// level, or if `typed_value` is not a struct, or if the requested field name does not exist.
-///
-/// TODO: Support `VariantPathElement::Index`? It wouldn't be easy, and maybe not even possible.
 pub(crate) fn follow_shredded_path_element<'a>(
     shredding_state: &BorrowedShreddingState<'a>,
     path_element: &VariantPathElement<'_>,
@@ -101,8 +172,15 @@ pub(crate) fn follow_shredded_path_element<'a>(
             Ok(ShreddedPathStep::Success(state.into()))
         }
         VariantPathElement::Index { index } => {
-            let Some(list_array) = typed_value.as_any().downcast_ref::<GenericListArray<i32>>()
-            else {
+            let state = if let Some(list_array) =
+                typed_value.as_any().downcast_ref::<GenericListArray<i32>>()
+            {
+                take_list_index_as_shredding_state(list_array, *index, cast_options)?
+            } else if let Some(list_array) =
+                typed_value.as_any().downcast_ref::<GenericListArray<i64>>()
+            {
+                take_list_index_as_shredding_state(list_array, *index, cast_options)?
+            } else {
                 // Downcast failure - if strict cast options are enabled, this should be an error
                 if !cast_options.safe {
                     return Err(ArrowError::CastError(format!(
@@ -115,62 +193,10 @@ pub(crate) fn follow_shredded_path_element<'a>(
                 return Ok(missing_path_step());
             };
 
-            let offsets = list_array.offsets();
-            let values = list_array.values(); // This is a StructArray
-
-            let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() else {
-                return Ok(missing_path_step());
-            };
-
-            let value_array = struct_array.column_by_name("value");
-            let typed_array = struct_array.column_by_name("typed_value");
-
-            // If list elements have neither typed nor fallback value, this path step is missing.
-            if value_array.is_none() && typed_array.is_none() {
-                return Ok(missing_path_step());
+            match state {
+                Some(state) => Ok(ShreddedPathStep::Success(state.into())),
+                None => Ok(missing_path_step()),
             }
-
-            // Build the list of indices to take
-            let mut take_indices = Vec::with_capacity(list_array.len());
-            for i in 0..list_array.len() {
-                let start = offsets[i] as usize;
-                let end = offsets[i + 1] as usize;
-                let len = end - start;
-
-                if *index < len {
-                    take_indices.push(Some((start + index) as u32));
-                } else {
-                    take_indices.push(None);
-                }
-            }
-
-            let index_array = UInt32Array::from(take_indices);
-
-            // Gather both typed and fallback values at the requested element index.
-            let taken_value = value_array
-                .map(|value| take(value, &index_array, None))
-                .transpose()?;
-            let taken_typed = typed_array
-                .map(|typed| take(typed, &index_array, None))
-                .transpose()?;
-
-            let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(
-                EMPTY_VARIANT_METADATA_BYTES,
-                index_array.len(),
-            ));
-
-            let mut builder =
-                StructArrayBuilder::new().with_field("metadata", Arc::new(metadata_array), false);
-            if let Some(taken_value) = taken_value {
-                builder = builder.with_field("value", taken_value, true);
-            }
-            if let Some(taken_typed) = taken_typed {
-                builder = builder.with_field("typed_value", taken_typed, true);
-            }
-            let struct_array = &builder.build();
-
-            let state = ShreddingState::try_from(struct_array)?;
-            Ok(ShreddedPathStep::Success(state.into()))
         }
     }
 }
@@ -399,7 +425,7 @@ mod test {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use super::{GetOptions, variant_get};
+    use super::{GetOptions, take_list_index_as_shredding_state, variant_get};
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::{
         ShreddedSchemaBuilder, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant,
@@ -1973,6 +1999,54 @@ mod test {
         assert_eq!(&result, &expected);
     }
 
+    // The tests below are temp before: https://github.com/apache/arrow-rs/issues/9455
+    #[test]
+    fn test_shredded_list_index_out_of_bounds_unsafe_cast_errors() {
+        let options =
+            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+
+        let err = variant_get(&shredded_list_variant_array(), options.clone()).unwrap_err();
+        assert!(err.to_string().contains("Cannot access index '10'"));
+    }
+
+    #[test]
+    fn test_large_list_index_path_helper() {
+        let large_list = large_list_of_shredded_elements();
+        let state = take_list_index_as_shredding_state(&large_list, 1, &CastOptions::default())
+            .unwrap()
+            .unwrap();
+
+        let typed = state
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let value = state.value_field().unwrap();
+        assert_eq!(typed.value(0), "drama");
+        assert!(typed.is_null(1));
+        assert!(value.is_null(0));
+        assert!(value.is_valid(1));
+    }
+
+    #[test]
+    fn test_large_list_index_out_of_bounds_unsafe_cast_errors() {
+        let large_list = large_list_of_shredded_elements();
+        let err = take_list_index_as_shredding_state(
+            &large_list,
+            10,
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Cannot access index '10'"));
+    }
+
     #[test]
     fn test_shredded_list_in_struct_index_access() {
         let array = shredded_struct_with_list_variant_array();
@@ -2074,6 +2148,41 @@ mod test {
         let outer_list = DataType::List(Arc::new(Field::new("item", inner_list, true)));
         let shredded = shred_variant(&input, &outer_list).unwrap();
         ArrayRef::from(shredded)
+    }
+
+    fn large_list_of_shredded_elements() -> LargeListArray {
+        let fallback_array: ArrayRef = {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(Variant::from(123i32));
+            let (_, value_bytes) = builder.finish();
+            Arc::new(BinaryViewArray::from(vec![
+                None,
+                None,
+                None,
+                Some(value_bytes.as_slice()),
+            ]))
+        };
+        let typed_array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("comedy"),
+            Some("drama"),
+            Some("horror"),
+            None,
+        ]));
+
+        let struct_array = StructArrayBuilder::new()
+            .with_field("value", fallback_array, true)
+            .with_field("typed_value", typed_array, true)
+            .build();
+
+        LargeListArray::new(
+            Arc::new(Field::new_list_field(
+                struct_array.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i64, 2, 4])),
+            Arc::new(struct_array),
+            None,
+        )
     }
     /// Helper function to create a shredded variant array representing objects
     ///
