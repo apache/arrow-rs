@@ -450,19 +450,19 @@ macro_rules! downcast_primitive_array_helper {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_primitive_array {
-    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
-        $crate::downcast_primitive_array!($values => {$e} $($p $(if $pred)* => $fallback)*)
+    ($values:ident => $e:expr, $($tail:tt)*) => {
+        $crate::downcast_primitive_array!($values => {$e} $($tail)*)
     };
-    (($($values:ident),+) => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
-        $crate::downcast_primitive_array!($($values),+ => {$e} $($p $(if $pred)* => $fallback)*)
+    (($($values:ident),+) => $e:expr, $($tail:tt)*) => {
+        $crate::downcast_primitive_array!($($values),+ => {$e} $($tail)*)
     };
-    ($($values:ident),+ => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
-        $crate::downcast_primitive_array!(($($values),+) => $e $($p $(if $pred)* => $fallback)*)
+    ($($values:ident),+ => $e:block $($tail:tt)*) => {
+        $crate::downcast_primitive_array!(($($values),+) => $e $($tail)*)
     };
-    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+    (($($values:ident),+) => $e:block $($tail:tt)*) => {
         $crate::downcast_primitive!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
-            $($p $(if $pred)* => $fallback,)*
+            $($tail)*
         }
     };
 }
