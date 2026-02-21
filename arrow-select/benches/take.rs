@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint;
 
 use arrow_array::builder::UInt32Builder;
 use arrow_array::types::*;
 use arrow_array::*;
+use arrow_select::take::{TakeOptions, take};
 use rand::distr::{Alphanumeric, Distribution, StandardUniform};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use arrow_select::take::{take, TakeOptions};
 
 fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
@@ -136,16 +136,7 @@ fn bench_take(values: &dyn Array, indices: &UInt32Array) {
 }
 
 fn bench_take_bounds_check(values: &dyn Array, indices: &UInt32Array) {
-    hint::black_box(
-        take(
-            values,
-            indices,
-            Some(TakeOptions {
-                check_bounds: true,
-            }),
-        )
-        .unwrap(),
-    );
+    hint::black_box(take(values, indices, Some(TakeOptions { check_bounds: true })).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -163,7 +154,6 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("take i32 null indices 1024", |b| {
         b.iter(|| bench_take(&values, &indices))
     });
-
 
     let values = create_primitive_array::<Int32Type>(1024, 0.5);
     let indices = create_random_index(1024, 0.0);
@@ -282,10 +272,9 @@ fn add_benchmark(c: &mut Criterion) {
     });
     let values = create_fsb_array(1024, 0.5, 12);
     let indices = create_random_index(1024, 0.0);
-    c.bench_function(
-        "take fsb value len: 12, null values, indices: 1024",
-        |b| b.iter(|| bench_take(&values, &indices)),
-    );
+    c.bench_function("take fsb value len: 12, null values, indices: 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
 }
 
 criterion_group!(benches, add_benchmark);
