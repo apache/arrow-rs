@@ -101,8 +101,6 @@ pub(crate) fn follow_shredded_path_element<'a>(
             Ok(ShreddedPathStep::Success(state.into()))
         }
         VariantPathElement::Index { index } => {
-            // TODO: Support array indexing. Among other things, it will require slicing not
-            // only the array we have here, but also the corresponding metadata and null masks.
             let Some(list_array) = typed_value.as_any().downcast_ref::<GenericListArray<i32>>()
             else {
                 // Downcast failure - if strict cast options are enabled, this should be an error
@@ -124,9 +122,13 @@ pub(crate) fn follow_shredded_path_element<'a>(
                 return Ok(missing_path_step());
             };
 
-            let Some(typed_array) = struct_array.column_by_name("typed_value") else {
+            let value_array = struct_array.column_by_name("value");
+            let typed_array = struct_array.column_by_name("typed_value");
+
+            // If list elements have neither typed nor fallback value, this path step is missing.
+            if value_array.is_none() && typed_array.is_none() {
                 return Ok(missing_path_step());
-            };
+            }
 
             // Build the list of indices to take
             let mut take_indices = Vec::with_capacity(list_array.len());
@@ -144,18 +146,28 @@ pub(crate) fn follow_shredded_path_element<'a>(
 
             let index_array = UInt32Array::from(take_indices);
 
-            // Use Arrow compute kernel to gather elements
-            let taken = take(typed_array, &index_array, None)?;
+            // Gather both typed and fallback values at the requested element index.
+            let taken_value = value_array
+                .map(|value| take(value, &index_array, None))
+                .transpose()?;
+            let taken_typed = typed_array
+                .map(|typed| take(typed, &index_array, None))
+                .transpose()?;
 
             let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(
                 EMPTY_VARIANT_METADATA_BYTES,
-                taken.len(),
+                index_array.len(),
             ));
 
-            let struct_array = &StructArrayBuilder::new()
-                .with_field("metadata", Arc::new(metadata_array), false)
-                .with_field("typed_value", taken, true)
-                .build();
+            let mut builder =
+                StructArrayBuilder::new().with_field("metadata", Arc::new(metadata_array), false);
+            if let Some(taken_value) = taken_value {
+                builder = builder.with_field("value", taken_value, true);
+            }
+            if let Some(taken_typed) = taken_typed {
+                builder = builder.with_field("typed_value", taken_typed, true);
+            }
+            let struct_array = &builder.build();
 
             let state = ShreddingState::try_from(struct_array)?;
             Ok(ShreddedPathStep::Success(state.into()))
