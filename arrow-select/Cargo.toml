@@ -44,4 +44,9 @@ num-traits = { version = "0.2.19", default-features = false, features = ["std"] 
 ahash = { version = "0.8", default-features = false}
 
 [dev-dependencies]
+criterion = { workspace = true, default-features = false }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+
+[[bench]]
+name = "take"
+harness = false
