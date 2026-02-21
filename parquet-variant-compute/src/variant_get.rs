@@ -389,13 +389,15 @@ mod test {
 
     use super::{GetOptions, variant_get};
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
-    use crate::{VariantArray, VariantArrayBuilder, json_to_variant, shred_variant};
+    use crate::{
+        ShreddedSchemaBuilder, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant,
+    };
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
         Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
-        ListArray, ListViewArray, NullBuilder, StringArray, StringViewArray, StructArray,
+        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
+        ListViewArray, NullBuilder, StringArray, StringViewArray, StructArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -1867,6 +1869,7 @@ mod test {
 
         Arc::new(struct_array)
     }
+
     /// This test manually constructs a shredded variant array representing objects
     /// like {"x": 1, "y": "foo"} and {"x": 42} and tests extracting the "x" field
     /// as VariantArray using variant_get.
@@ -1902,6 +1905,7 @@ mod test {
         let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(42)]));
         assert_eq!(&result, &expected);
     }
+
     /// This test uses a pre-shredded list array and validates index-path access.
     #[test]
     fn test_shredded_list_index_access() {
@@ -1917,6 +1921,7 @@ mod test {
         // Row 1: expect 0 index = "horror"
         assert_eq!(result_variant.value(1), Variant::from("horror"));
     }
+
     /// Test extracting shredded list field with type conversion.
     #[test]
     fn test_shredded_list_as_string() {
@@ -1930,6 +1935,75 @@ mod test {
         let expected: ArrayRef = Arc::new(StringArray::from(vec![Some("comedy"), Some("horror")]));
         assert_eq!(&result, &expected);
     }
+
+    #[test]
+    fn test_shredded_list_index_access_from_value_field() {
+        let array = shredded_list_variant_array();
+        // Index 1 maps to "drama" for row 0, and to fallback value 123 for row 1.
+        let options = GetOptions::new_with_path(VariantPath::from(1));
+        let result = variant_get(&array, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+
+        assert_eq!(result_variant.value(0), Variant::from("drama"));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
+    }
+
+    #[test]
+    fn test_shredded_list_index_access_from_value_field_as_int64() {
+        let array = shredded_list_variant_array();
+        let field = Field::new("typed_value", DataType::Int64, true);
+        let options = GetOptions::new_with_path(VariantPath::from(1))
+            .with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&array, options).unwrap();
+
+        // "drama" -> NULL, 123 -> 123.
+        let expected: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(123)]));
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn test_shredded_list_in_struct_index_access() {
+        let array = shredded_struct_with_list_variant_array();
+        let options = GetOptions::new_with_path(VariantPath::try_from("a").unwrap().join(1));
+        let result = variant_get(&array, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+
+        assert_eq!(result_variant.value(0), Variant::from("drama"));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
+    }
+
+    #[test]
+    fn test_shredded_struct_in_list_field_access() {
+        let array = shredded_list_of_struct_variant_array();
+        let field = Field::new("x", DataType::Int32, true);
+        let path = VariantPath::from(0).join("x");
+        let options = GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&array, options).unwrap();
+
+        let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(3)]));
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn test_shredded_list_of_lists_index_access() {
+        let array = shredded_list_of_lists_variant_array();
+        let path = VariantPath::from(0).join(1);
+
+        let result = variant_get(&array, GetOptions::new_with_path(path.clone())).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+        assert_eq!(result_variant.value(0), Variant::from("b"));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
+
+        let field = Field::new("typed_value", DataType::Int64, true);
+        let casted = variant_get(
+            &array,
+            GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field))),
+        )
+        .unwrap();
+        let expected: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(123)]));
+        assert_eq!(&casted, &expected);
+    }
+
     /// Helper to create a shredded list variant array used by list index tests.
     ///
     /// Rows:
@@ -1944,6 +2018,49 @@ mod test {
 
         let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
         let shredded = shred_variant(&input, &list_schema).unwrap();
+        ArrayRef::from(shredded)
+    }
+
+    fn shredded_struct_with_list_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a": ["comedy", "drama"]}"#),
+            Some(r#"{"a": ["horror", 123]}"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let shredding_schema = ShreddedSchemaBuilder::default()
+            .with_path("a", &list_schema)
+            .unwrap()
+            .build();
+        let shredded = shred_variant(&input, &shredding_schema).unwrap();
+        ArrayRef::from(shredded)
+    }
+
+    fn shredded_list_of_struct_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"[{"x": 1}, {"x": 2}]"#),
+            Some(r#"[{"x": 3}, {"y": 4}]"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let struct_type =
+            DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, true)]));
+        let list_schema = DataType::List(Arc::new(Field::new("item", struct_type, true)));
+        let shredded = shred_variant(&input, &list_schema).unwrap();
+        ArrayRef::from(shredded)
+    }
+
+    fn shredded_list_of_lists_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"[["a", "b"], ["c", "d"]]"#),
+            Some(r#"[["x", 123], ["y", "z"]]"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let inner_list = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let outer_list = DataType::List(Arc::new(Field::new("item", inner_list, true)));
+        let shredded = shred_variant(&input, &outer_list).unwrap();
         ArrayRef::from(shredded)
     }
     /// Helper function to create a shredded variant array representing objects
