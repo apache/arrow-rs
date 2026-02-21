@@ -1181,15 +1181,22 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
         FixedSizeBinary(16) => borrow!(),
         FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
 
-        // We can _possibly_ allow (some of) these some day?
-        ListView(_) | LargeList(_) | LargeListView(_) => {
-            fail!()
-        }
-
-        // Lists and struct are allowed, maps and unions are not
+        // List-like containers and struct are allowed, maps and unions are not
         List(field) => match canonicalize_and_verify_field(field)? {
             Cow::Borrowed(_) => borrow!(),
             Cow::Owned(new_field) => Cow::Owned(DataType::List(new_field)),
+        },
+        LargeList(field) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => borrow!(),
+            Cow::Owned(new_field) => Cow::Owned(DataType::LargeList(new_field)),
+        },
+        ListView(field) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => borrow!(),
+            Cow::Owned(new_field) => Cow::Owned(DataType::ListView(new_field)),
+        },
+        LargeListView(field) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => borrow!(),
+            Cow::Owned(new_field) => Cow::Owned(DataType::LargeListView(new_field)),
         },
         // Struct is used by the internal layout, and can also represent a shredded variant object.
         Struct(fields) => {
