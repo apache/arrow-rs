@@ -643,7 +643,7 @@ fn merge_run_ends<I: types::RunEndIndexType>(
     let mut l = left.run_ends().sliced_values().enumerate().peekable();
     let mut r = right.run_ends().sliced_values().enumerate().peekable();
 
-    let max_size = left.run_ends().len() * 2; // The actual size is at least half `max_size`.
+    let max_size = left.run_ends().len() + right.run_ends().len();
     let mut all_run_ends = Vec::with_capacity(max_size);
     let mut l_idx = Vec::with_capacity(max_size);
     let mut r_idx = Vec::with_capacity(max_size);
