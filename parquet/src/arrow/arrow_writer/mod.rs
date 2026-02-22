@@ -17,7 +17,7 @@
 
 //! Contains writer which writes arrow data into parquet data.
 
-use crate::column::chunker;
+use crate::column::ContentDefinedChunker;
 
 use bytes::Bytes;
 use std::io::{Read, Write};
@@ -860,7 +860,7 @@ impl ArrowColumnChunk {
 pub struct ArrowColumnWriter {
     writer: ArrowColumnWriterImpl,
     chunk: SharedColumnChunk,
-    pub(crate) chunker: Option<chunker::ContentDefinedChunker>,
+    chunker: Option<ContentDefinedChunker>,
 }
 
 impl std::fmt::Debug for ArrowColumnWriter {
@@ -877,70 +877,43 @@ enum ArrowColumnWriterImpl {
 impl ArrowColumnWriter {
     /// Write an [`ArrowLeafColumn`]
     pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
-        if self.chunker.is_some() {
-            self.write_with_cdc(col)
-        } else {
-            self.write_without_cdc(col)
-        }
-    }
+        let levels = &col.0;
 
-    fn write_without_cdc(&mut self, col: &ArrowLeafColumn) -> Result<()> {
-        match &mut self.writer {
-            ArrowColumnWriterImpl::Column(c) => {
-                let leaf = col.0.array();
-                match leaf.as_any_dictionary_opt() {
-                    Some(dictionary) => {
-                        let materialized =
-                            arrow_select::take::take(dictionary.values(), dictionary.keys(), None)?;
-                        write_leaf(c, &materialized, &col.0)?
-                    }
-                    None => write_leaf(c, leaf, &col.0)?,
-                };
+        if let Some(chunker) = self.chunker.as_mut() {
+            let chunks =
+                chunker.get_arrow_chunks(levels.def_levels(), levels.rep_levels(), levels.array())?;
+
+            let num_chunks = chunks.len();
+            for (i, chunk) in chunks.iter().enumerate() {
+                let chunk_levels = levels.slice_for_chunk(chunk);
+                self.write_internal(&chunk_levels)?;
+
+                // Flush the page after each chunk except the last
+                if i + 1 < num_chunks {
+                    self.flush_current_page()?;
+                }
             }
-            ArrowColumnWriterImpl::ByteArray(c) => {
-                write_primitive(c, col.0.array().as_ref(), &col.0)?;
-            }
+        } else {
+            self.write_internal(levels)?;
         }
         Ok(())
     }
 
-    fn write_with_cdc(&mut self, col: &ArrowLeafColumn) -> Result<()> {
-        let levels = &col.0;
-
-        // Dictionary-encoded arrays must be materialized before hashing because the
-        // CDC chunker must see the actual values, not dictionary indices. Two arrays
-        // with the same values but different dictionary orderings would otherwise
-        // produce different rolling hash states, breaking cross-file deduplication.
-        let leaf_array = match levels.array().as_any_dictionary_opt() {
-            Some(dictionary) => {
-                arrow_select::take::take(dictionary.values(), dictionary.keys(), None)?
+    fn write_internal(&mut self, levels: &ArrayLevels) -> Result<()> {
+        match &mut self.writer {
+            ArrowColumnWriterImpl::Column(c) => {
+                let leaf = levels.array();
+                match leaf.as_any_dictionary_opt() {
+                    Some(dictionary) => {
+                        let materialized =
+                            arrow_select::take::take(dictionary.values(), dictionary.keys(), None)?;
+                        write_leaf(c, &materialized, levels)?;
+                    }
+                    None => write_leaf(c, leaf, levels)?,
+                };
             }
-            None => levels.array().clone(),
-        };
-
-        let def_levels = levels.def_levels();
-        let rep_levels = levels.rep_levels();
-        let num_levels = def_levels
-            .map(|d| d.len())
-            .or_else(|| rep_levels.map(|r| r.len()))
-            .unwrap_or(leaf_array.len());
-
-        // Compute CDC chunk boundaries
-        let chunks = {
-            let chunker = self.chunker.as_mut().unwrap();
-            get_cdc_chunks(chunker, def_levels, rep_levels, num_levels, &leaf_array)?
-        };
-
-        let num_chunks = chunks.len();
-        for (i, chunk) in chunks.iter().enumerate() {
-            let chunk_levels = levels.slice_for_chunk(chunk);
-            let chunk_col = ArrowLeafColumn(chunk_levels);
-
-            self.write_without_cdc(&chunk_col)?;
-
-            // Flush the page after each chunk except the last
-            if i + 1 < num_chunks {
-                self.flush_current_page()?;
+            ArrowColumnWriterImpl::ByteArray(c) => {
+                write_primitive(c, levels.array().as_ref(), levels)?;
             }
         }
         Ok(())
@@ -1041,7 +1014,7 @@ impl ArrowRowGroupWriter {
         self,
     ) -> Result<(
         Vec<ArrowColumnChunk>,
-        Option<Vec<chunker::ContentDefinedChunker>>,
+        Option<Vec<ContentDefinedChunker>>,
     )> {
         let mut chunks = Vec::with_capacity(self.writers.len());
         let mut chunkers = Vec::new();
@@ -1073,7 +1046,7 @@ pub struct ArrowRowGroupWriterFactory {
     file_encryptor: Option<Arc<FileEncryptor>>,
     /// CDC chunkers persisted across row groups (one per leaf column).
     /// `None` when CDC is not enabled.
-    cdc_chunkers: Option<Vec<chunker::ContentDefinedChunker>>,
+    cdc_chunkers: Option<Vec<ContentDefinedChunker>>,
 }
 
 impl ArrowRowGroupWriterFactory {
@@ -1129,7 +1102,7 @@ impl ArrowRowGroupWriterFactory {
     }
 
     /// Create CDC chunkers for all leaf columns, or `None` if CDC is not enabled.
-    fn create_cdc_chunkers(&self) -> Result<Option<Vec<chunker::ContentDefinedChunker>>> {
+    fn create_cdc_chunkers(&self) -> Result<Option<Vec<ContentDefinedChunker>>> {
         let opts = match self.props.cdc_options() {
             Some(opts) => opts,
             None => return Ok(None),
@@ -1137,7 +1110,7 @@ impl ArrowRowGroupWriterFactory {
         self.schema
             .columns()
             .iter()
-            .map(|desc| chunker::ContentDefinedChunker::new(desc, opts))
+            .map(|desc| ContentDefinedChunker::new(desc, opts))
             .collect::<Result<Vec<_>>>()
             .map(Some)
     }
@@ -1701,64 +1674,6 @@ fn get_fsb_array_slice(
         values.push(FixedLenByteArray::from(ByteArray::from(value)))
     }
     values
-}
-
-/// Compute CDC chunk boundaries by dispatching on the Arrow array's data type
-/// to feed value bytes into the rolling hash.
-fn get_cdc_chunks(
-    chunker: &mut chunker::ContentDefinedChunker,
-    def_levels: Option<&[i16]>,
-    rep_levels: Option<&[i16]>,
-    num_levels: usize,
-    array: &dyn arrow_array::Array,
-) -> Result<Vec<chunker::Chunk>> {
-    // Downcasts `array` to a concrete type, binds it to `$a`, then calls
-    // `get_chunks` with a closure that yields value bytes for index `$i`.
-    macro_rules! chunk {
-        ($a:ident = $downcast:expr, |$i:ident| $bytes:expr) => {{
-            let $a = $downcast;
-            chunker.get_chunks(def_levels, rep_levels, num_levels, |$i| $bytes)
-        }};
-    }
-
-    let dtype = array.data_type();
-    let chunks = match dtype {
-        ArrowDataType::Null => {
-            chunker.get_chunks(def_levels, rep_levels, num_levels, |_| -> &[u8] { &[] })
-        }
-        ArrowDataType::Boolean => chunk!(a = array.as_boolean(), |i| [a.value(i) as u8]),
-        ArrowDataType::FixedSizeBinary(_) => {
-            chunk!(a = array.as_fixed_size_binary(), |i| a.value(i))
-        }
-        ArrowDataType::Binary => chunk!(a = array.as_binary::<i32>(), |i| a.value(i)),
-        ArrowDataType::Utf8 => chunk!(a = array.as_string::<i32>(), |i| a.value(i).as_bytes()),
-        ArrowDataType::LargeBinary => chunk!(a = array.as_binary::<i64>(), |i| a.value(i)),
-        ArrowDataType::LargeUtf8 => chunk!(a = array.as_string::<i64>(), |i| a.value(i).as_bytes()),
-        ArrowDataType::BinaryView => chunk!(a = array.as_binary_view(), |i| a.value(i)),
-        ArrowDataType::Utf8View => chunk!(a = array.as_string_view(), |i| a.value(i).as_bytes()),
-        // All fixed-width primitive types (ints, floats, dates, times, timestamps,
-        // durations, intervals, decimals, float16).
-        //
-        // Values are read directly from the underlying buffer. `data.offset()` accounts
-        // for sliced arrays (non-zero logical start), so `base + i * byte_width` always
-        // resolves to the correct physical byte position for logical index `i`.
-        _ => {
-            let byte_width = dtype.primitive_width().ok_or_else(|| {
-                ParquetError::General(format!(
-                    "content-defined chunking is not supported for data type {:?}",
-                    dtype
-                ))
-            })?;
-            let data = array.to_data();
-            let buffer = &data.buffers()[0];
-            let base = data.offset() * byte_width;
-            chunker.get_chunks(def_levels, rep_levels, num_levels, |i| {
-                let start = base + i * byte_width;
-                &buffer[start..start + byte_width]
-            })
-        }
-    };
-    Ok(chunks)
 }
 
 #[cfg(test)]

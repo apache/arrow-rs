@@ -22,28 +22,66 @@ use crate::schema::types::ColumnDescriptor;
 use super::Chunk;
 use super::cdc_generated::{GEARHASH_TABLE, NUM_GEARHASH_TABLES};
 
-/// Content-defined chunker that uses a rolling gear hash to find chunk boundaries.
+/// CDC (Content-Defined Chunking) divides data into variable-sized chunks based on
+/// content rather than fixed-size boundaries.
+///
+/// For example, given this sequence of values in a column:
+///
+/// ```text
+/// File1:    [1,2,3,   4,5,6,   7,8,9]
+///            chunk1   chunk2   chunk3
+/// ```
+///
+/// If a value is inserted between 3 and 4:
+///
+/// ```text
+/// File2:    [1,2,3,0,   4,5,6,   7,8,9]
+///            new-chunk  chunk2   chunk3
+/// ```
+///
+/// The chunking process adjusts to maintain stable boundaries across data modifications.
+/// Each chunk defines a new parquet data page which is contiguously written to the file.
+/// Since each page is compressed independently, the files' contents look like:
+///
+/// ```text
+/// File1:    [Page1][Page2][Page3]...
+/// File2:    [Page4][Page2][Page3]...
+/// ```
+///
+/// When uploaded to a content-addressable storage (CAS) system, the CAS splits the byte
+/// stream into content-defined blobs with unique identifiers. Identical blobs are stored
+/// only once, so Page2 and Page3 are deduplicated across File1 and File2.
+///
+/// ## Implementation
+///
+/// Only the parquet writer needs to be aware of content-defined chunking; the reader is
+/// unaffected. Each parquet column writer holds a `ContentDefinedChunker` instance
+/// depending on the writer's properties. The chunker's state is maintained across the
+/// entire column without being reset between pages and row groups.
 ///
 /// This implements a [FastCDC]-inspired algorithm using gear hashing. The input data is
 /// fed byte-by-byte into a rolling hash; when the hash matches a predefined mask, a new
 /// chunk boundary candidate is recorded. To reduce the exponential variance of chunk
 /// sizes inherent in a single gear hash, the algorithm requires **8 consecutive mask
 /// matches** — each against a different pre-computed gear hash table — before committing
-/// to a boundary. This central-limit-theorem normalization makes the chunk size
+/// to a boundary. This [central-limit-theorem normalization] makes the chunk size
 /// distribution approximately normal between `min_chunk_size` and `max_chunk_size`.
 ///
-/// The chunker's state (rolling hash, run counter, accumulated size) persists across the
-/// entire column (across pages and row groups), so boundaries are determined solely by
-/// data content and are reproducible given the same input.
+/// The chunker receives the record-shredded column data (def_levels, rep_levels, values)
+/// and iterates over the (def_level, rep_level, value) triplets while adjusting the
+/// column-global rolling hash. Whenever the rolling hash matches, the chunker creates a
+/// new chunk. For nested data (lists, maps, structs) chunk boundaries are restricted to
+/// top-level record boundaries (`rep_level == 0`) so that a nested row is never split
+/// across chunks.
 ///
-/// For nested data (lists, maps, structs) chunk boundaries are restricted to top-level
-/// record boundaries (`rep_level == 0`) so that a nested row is never split across
-/// chunks.
+/// Note that boundaries are deterministically calculated exclusively based on the data
+/// itself, so the same data always produces the same chunks given the same configuration.
 ///
 /// Ported from the C++ implementation in apache/arrow#45360
 /// (`cpp/src/parquet/chunker_internal.cc`).
 ///
 /// [FastCDC]: https://www.usenix.org/conference/atc16/technical-sessions/presentation/xia
+/// [central-limit-theorem normalization]: https://www.cidrdb.org/cidr2023/papers/p43-low.pdf
 #[derive(Debug)]
 pub(crate) struct ContentDefinedChunker {
     /// Maximum definition level for this column.
@@ -53,7 +91,18 @@ pub(crate) struct ContentDefinedChunker {
     /// Definition level at the nearest REPEATED ancestor.
     repeated_ancestor_def_level: i16,
 
+    /// Minimum chunk size in bytes.
+    /// The rolling hash will not be updated until this size is reached for each chunk.
+    /// All data sent through the hash function counts towards the chunk size, including
+    /// definition and repetition levels if present.
     min_chunk_size: i64,
+    /// Maximum chunk size in bytes.
+    /// A new chunk is created whenever the chunk size exceeds this value. The chunk size
+    /// distribution approximates a normal distribution between `min_chunk_size` and
+    /// `max_chunk_size`. Note that the parquet writer has a related `data_pagesize`
+    /// property that controls the maximum size of a parquet data page after encoding.
+    /// While setting `data_pagesize` smaller than `max_chunk_size` doesn't affect
+    /// chunking effectiveness, it results in more small parquet data pages.
     max_chunk_size: i64,
     /// Mask for matching against the rolling hash.
     rolling_hash_mask: u64,
@@ -136,7 +185,7 @@ impl ContentDefinedChunker {
     /// is the FastCDC optimization that prevents boundaries from appearing too early
     /// in a chunk.
     #[inline]
-    pub fn roll_value_bytes(&mut self, bytes: &[u8]) {
+    fn roll(&mut self, bytes: &[u8]) {
         self.chunk_size += bytes.len() as i64;
         if self.chunk_size < self.min_chunk_size {
             return;
@@ -151,10 +200,30 @@ impl ContentDefinedChunker {
         }
     }
 
+    /// Feed exactly `N` bytes into the rolling hash (compile-time width).
+    ///
+    /// Like [`roll`](Self::roll), but the byte count is known at compile time,
+    /// allowing the compiler to unroll the inner loop.
+    #[inline(always)]
+    fn roll_fixed<const N: usize>(&mut self, bytes: &[u8; N]) {
+        self.chunk_size += N as i64;
+        if self.chunk_size < self.min_chunk_size {
+            return;
+        }
+        for j in 0..N {
+            self.rolling_hash = self
+                .rolling_hash
+                .wrapping_shl(1)
+                .wrapping_add(GEARHASH_TABLE[self.nth_run][bytes[j] as usize]);
+            self.has_matched =
+                self.has_matched || ((self.rolling_hash & self.rolling_hash_mask) == 0);
+        }
+    }
+
     /// Feed a definition or repetition level (i16) into the rolling hash.
     #[inline]
     fn roll_level(&mut self, level: i16) {
-        self.roll_value_bytes(&level.to_le_bytes());
+        self.roll_fixed(&level.to_le_bytes());
     }
 
     /// Check whether a new chunk boundary should be created.
@@ -194,91 +263,77 @@ impl ContentDefinedChunker {
 
     /// Compute chunk boundaries for the given column data.
     ///
-    /// `value_bytes` returns the byte representation of the value at the given index.
-    /// The chunker feeds these bytes into the rolling hash to determine boundaries.
-    pub fn get_chunks<F, B>(
+    /// The chunking state is maintained across the entire column without being
+    /// reset between pages and row groups. This enables the chunking process to
+    /// be continued between different write calls.
+    ///
+    /// We go over the (def_level, rep_level, value) triplets one by one while
+    /// adjusting the column-global rolling hash based on the triplet. Whenever
+    /// the rolling hash matches a predefined mask it sets `has_matched` to true.
+    ///
+    /// After each triplet [`need_new_chunk`](Self::need_new_chunk) is called to
+    /// evaluate if we need to create a new chunk.
+    fn calculate<F>(
         &mut self,
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
         num_levels: usize,
-        value_bytes: F,
+        mut roll_value: F,
     ) -> Vec<Chunk>
     where
-        F: Fn(usize) -> B,
-        B: AsRef<[u8]>,
+        F: FnMut(&mut Self, usize),
     {
         let has_def_levels = self.max_def_level > 0;
         let has_rep_levels = self.max_rep_level > 0;
 
         let mut chunks = Vec::new();
+        let mut prev_offset: usize = 0;
+        let mut prev_value_offset: usize = 0;
+        // Total number of values seen; for non-nested data this equals num_levels.
+        let mut total_values: usize = num_levels;
 
         if !has_rep_levels && !has_def_levels {
             // Fastest path: non-nested, non-null data.
-            // level_offset == value_offset for this case.
-            let mut prev_offset: usize = 0;
             for offset in 0..num_levels {
-                self.roll_value_bytes(value_bytes(offset).as_ref());
+                roll_value(self, offset);
                 if self.need_new_chunk() {
-                    let levels_to_write = offset - prev_offset;
                     chunks.push(Chunk {
                         level_offset: prev_offset,
                         value_offset: prev_offset,
-                        num_levels: levels_to_write,
-                        num_values: levels_to_write,
+                        num_levels: offset - prev_offset,
+                        num_values: offset - prev_offset,
                     });
                     prev_offset = offset;
                 }
             }
-            // Last chunk
-            if prev_offset < num_levels {
-                let levels_to_write = num_levels - prev_offset;
-                chunks.push(Chunk {
-                    level_offset: prev_offset,
-                    value_offset: prev_offset,
-                    num_levels: levels_to_write,
-                    num_values: levels_to_write,
-                });
-            }
+            // Set the previous value offset to add the last chunk.
+            prev_value_offset = prev_offset;
         } else if !has_rep_levels {
-            // Non-nested data with nulls (def levels only).
-            // level_offset == value_offset for non-nested data.
+            // Non-nested data with nulls.
             let def_levels = def_levels.expect("def_levels required when max_def_level > 0");
-            let mut prev_offset: usize = 0;
             #[allow(clippy::needless_range_loop)]
             for offset in 0..num_levels {
                 let def_level = def_levels[offset];
                 self.roll_level(def_level);
                 if def_level == self.max_def_level {
-                    self.roll_value_bytes(value_bytes(offset).as_ref());
+                    roll_value(self, offset);
                 }
                 if self.need_new_chunk() {
-                    let levels_to_write = offset - prev_offset;
                     chunks.push(Chunk {
                         level_offset: prev_offset,
                         value_offset: prev_offset,
-                        num_levels: levels_to_write,
-                        num_values: levels_to_write,
+                        num_levels: offset - prev_offset,
+                        num_values: offset - prev_offset,
                     });
                     prev_offset = offset;
                 }
             }
-            // Last chunk
-            if prev_offset < num_levels {
-                let levels_to_write = num_levels - prev_offset;
-                chunks.push(Chunk {
-                    level_offset: prev_offset,
-                    value_offset: prev_offset,
-                    num_levels: levels_to_write,
-                    num_values: levels_to_write,
-                });
-            }
+            // Set the previous value offset to add the last chunk.
+            prev_value_offset = prev_offset;
         } else {
-            // Nested data (def + rep levels).
-            // value_offset tracks the leaf value index independently.
+            // Nested data with nulls.
             let def_levels = def_levels.expect("def_levels required for nested data");
             let rep_levels = rep_levels.expect("rep_levels required for nested data");
-            let mut prev_offset: usize = 0;
-            let mut prev_value_offset: usize = 0;
             let mut value_offset: usize = 0;
 
             for offset in 0..num_levels {
@@ -288,13 +343,11 @@ impl ContentDefinedChunker {
                 self.roll_level(def_level);
                 self.roll_level(rep_level);
                 if def_level == self.max_def_level {
-                    self.roll_value_bytes(value_bytes(value_offset).as_ref());
+                    roll_value(self, value_offset);
                 }
 
-                // Boundaries are only created at top-level record boundaries
-                // (rep_level == 0). Splitting inside a nested record would require
-                // writing a partial row, which is not valid in Parquet.
                 if rep_level == 0 && self.need_new_chunk() {
+                    // If we are at a record boundary and need a new chunk, create one.
                     let levels_to_write = offset - prev_offset;
                     if levels_to_write > 0 {
                         chunks.push(Chunk {
@@ -307,28 +360,114 @@ impl ContentDefinedChunker {
                         prev_value_offset = value_offset;
                     }
                 }
-                // Count a value whenever the definition level reaches the nearest
-                // repeated ancestor. This tracks position in the Arrow array (which
-                // includes null inner elements), matching how Arrow encodes lists.
                 if def_level >= self.repeated_ancestor_def_level {
+                    // We only increment the value offset if we have a leaf value.
                     value_offset += 1;
                 }
             }
-            // Last chunk
-            if prev_offset < num_levels {
-                chunks.push(Chunk {
-                    level_offset: prev_offset,
-                    value_offset: prev_value_offset,
-                    num_levels: num_levels - prev_offset,
-                    num_values: value_offset - prev_value_offset,
-                });
-            }
+            total_values = value_offset;
+        }
+
+        // Add the last chunk if we have any levels left.
+        if prev_offset < num_levels {
+            chunks.push(Chunk {
+                level_offset: prev_offset,
+                value_offset: prev_value_offset,
+                num_levels: num_levels - prev_offset,
+                num_values: total_values - prev_value_offset,
+            });
         }
 
         #[cfg(debug_assertions)]
         self.validate_chunks(&chunks, num_levels);
 
         chunks
+    }
+
+    /// Compute CDC chunk boundaries by dispatching on the Arrow array's data type
+    /// to feed value bytes into the rolling hash.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn get_arrow_chunks(
+        &mut self,
+        def_levels: Option<&[i16]>,
+        rep_levels: Option<&[i16]>,
+        array: &dyn arrow_array::Array,
+    ) -> Result<Vec<Chunk>> {
+        use arrow_array::cast::AsArray;
+        use arrow_schema::DataType;
+
+        let num_levels = match def_levels {
+            Some(def_levels) => def_levels.len(),
+            None => array.len(),
+        };
+
+        macro_rules! fixed_width {
+            ($N:literal) => {{
+                let data = array.to_data();
+                let raw = data.buffers()[0].as_slice();
+                self.calculate(def_levels, rep_levels, num_levels, |c, i| {
+                    c.roll_fixed::<$N>(raw[i * $N..(i + 1) * $N].try_into().unwrap());
+                })
+            }};
+        }
+
+        macro_rules! binary_like {
+            ($a:expr) => {{
+                let a = $a;
+                self.calculate(def_levels, rep_levels, num_levels, |c, i| {
+                    c.roll(a.value(i).as_ref());
+                })
+            }};
+        }
+
+        let dtype = array.data_type();
+        let chunks = match dtype {
+            DataType::Null => self.calculate(def_levels, rep_levels, num_levels, |_, _| {}),
+            DataType::Boolean => {
+                let a = array.as_boolean();
+                self.calculate(def_levels, rep_levels, num_levels, |c, i| {
+                    c.roll_fixed(&[a.value(i) as u8]);
+                })
+            }
+            DataType::Int8 | DataType::UInt8 => fixed_width!(1),
+            DataType::Int16 | DataType::UInt16 | DataType::Float16 => fixed_width!(2),
+            DataType::Int32
+            | DataType::UInt32
+            | DataType::Float32
+            | DataType::Date32
+            | DataType::Time32(_)
+            | DataType::Interval(arrow_schema::IntervalUnit::YearMonth)
+            | DataType::Decimal32(_, _) => fixed_width!(4),
+            DataType::Int64
+            | DataType::UInt64
+            | DataType::Float64
+            | DataType::Date64
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
+            | DataType::Duration(_)
+            | DataType::Interval(arrow_schema::IntervalUnit::DayTime)
+            | DataType::Decimal64(_, _) => fixed_width!(8),
+            DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano)
+            | DataType::Decimal128(_, _) => fixed_width!(16),
+            DataType::Decimal256(_, _) => fixed_width!(32),
+            DataType::FixedSizeBinary(_) => binary_like!(array.as_fixed_size_binary()),
+            DataType::Binary => binary_like!(array.as_binary::<i32>()),
+            DataType::LargeBinary => binary_like!(array.as_binary::<i64>()),
+            DataType::Utf8 => binary_like!(array.as_string::<i32>()),
+            DataType::LargeUtf8 => binary_like!(array.as_string::<i64>()),
+            DataType::BinaryView => binary_like!(array.as_binary_view()),
+            DataType::Utf8View => binary_like!(array.as_string_view()),
+            DataType::Dictionary(_, _) => {
+                let dict = array.as_any_dictionary();
+                self.get_arrow_chunks(def_levels, rep_levels, dict.keys())?
+            }
+            _ => {
+                return Err(ParquetError::General(format!(
+                    "content-defined chunking is not supported for data type {dtype:?}",
+                )));
+            }
+        };
+        Ok(chunks)
     }
 
     #[cfg(debug_assertions)]
@@ -419,7 +558,9 @@ mod tests {
 
         // Write a small amount of data — should produce exactly 1 chunk.
         let num_values = 4;
-        let chunks = chunker.get_chunks(None, None, num_values, |i| (i as i32).to_le_bytes());
+        let chunks = chunker.calculate(None, None, num_values, |c, i| {
+            c.roll_fixed::<4>(&(i as i32).to_le_bytes());
+        });
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].level_offset, 0);
         assert_eq!(chunks[0].value_offset, 0);
@@ -438,7 +579,9 @@ mod tests {
         // Write enough data to exceed max_chunk_size multiple times.
         // Each i32 = 4 bytes, max_chunk_size=1024, so ~256 values per chunk max.
         let num_values = 2000;
-        let chunks = chunker.get_chunks(None, None, num_values, |i| (i as i32).to_le_bytes());
+        let chunks = chunker.calculate(None, None, num_values, |c, i| {
+            c.roll_fixed::<4>(&(i as i32).to_le_bytes());
+        });
 
         // Should have multiple chunks
         assert!(chunks.len() > 1);
@@ -463,13 +606,15 @@ mod tests {
             norm_level: 0,
         };
 
-        let roll = |i: usize| (i as i64).to_le_bytes();
+        let roll = |c: &mut ContentDefinedChunker, i: usize| {
+            c.roll_fixed::<8>(&(i as i64).to_le_bytes());
+        };
 
         let mut chunker1 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
-        let chunks1 = chunker1.get_chunks(None, None, 200, roll);
+        let chunks1 = chunker1.calculate(None, None, 200, roll);
 
         let mut chunker2 = ContentDefinedChunker::new(&make_desc(0, 0), &options).unwrap();
-        let chunks2 = chunker2.get_chunks(None, None, 200, roll);
+        let chunks2 = chunker2.calculate(None, None, 200, roll);
 
         assert_eq!(chunks1.len(), chunks2.len());
         for (a, b) in chunks1.iter().zip(chunks2.iter()) {
@@ -494,8 +639,8 @@ mod tests {
             .map(|i| if i % 3 == 0 { 0 } else { 1 })
             .collect();
 
-        let chunks = chunker.get_chunks(Some(&def_levels), None, num_levels, |i| {
-            (i as i32).to_le_bytes()
+        let chunks = chunker.calculate(Some(&def_levels), None, num_levels, |c, i| {
+            c.roll_fixed::<4>(&(i as i32).to_le_bytes());
         });
 
         assert!(!chunks.is_empty());
@@ -860,6 +1005,29 @@ mod arrow_tests {
         let concat1 = concat_batches(&result1);
         let concat2 = concat_batches(&result2);
         assert_eq!(concat1, concat2);
+    }
+
+    #[test]
+    fn test_cdc_roundtrip_dictionary() {
+        let values = StringArray::from_iter_values((0..10_000).map(|i| format!("val_{}", i % 100)));
+        let array: ArrayRef = Arc::new(
+            arrow_cast::cast::cast(
+                &values,
+                &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            )
+            .unwrap(),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            array.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let data = write_batch_with_cdc(&batch);
+        let batches = read_batches(&data);
+        let result = concat_batches(&batches);
+        assert_eq!(batch.num_rows(), result.num_rows());
     }
 
     #[test]
