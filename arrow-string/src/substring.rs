@@ -374,6 +374,7 @@ fn fixed_size_binary_substring(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::BooleanBuffer;
     use arrow_buffer::Buffer;
 
     /// A helper macro to generate test cases.
