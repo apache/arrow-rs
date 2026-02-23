@@ -44,6 +44,38 @@ pub trait ArrowPredicate: Send + 'static {
     /// * `true`:the row should be returned
     /// * `false` or `null`: the row should not be returned
     fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError>;
+
+    /// Whether to use decoder-level dictionary pushdown for this predicate.
+    ///
+    /// When `true` and the projected column is a single, fully dictionary-encoded
+    /// `BYTE_ARRAY` column, the predicate is evaluated once on the small set of
+    /// unique dictionary values (~N entries) rather than on every row. The result
+    /// is mapped back to row-level booleans via the integer dictionary keys,
+    /// avoiding intermediate `DictionaryArray` or `StringViewArray` allocation
+    /// for data rows.
+    ///
+    /// **Important:** Dictionary values are always presented as **`Utf8View`**
+    /// regardless of the underlying Parquet physical type. Binary values are
+    /// reinterpreted as `Utf8View` without UTF-8 validation (matching the
+    /// existing reader behavior for `ConvertedType::NONE` columns).
+    /// Scalar arguments in the predicate function should therefore use
+    /// `StringViewArray::new_scalar(...)`.
+    ///
+    /// The predicate may receive a tiny batch containing only the unique dictionary
+    /// values instead of a full row batch. It is evaluated once per dictionary,
+    /// not once per batch. If the column is not dictionary-encoded or the
+    /// projection includes multiple columns, evaluation falls back to the normal
+    /// per-batch path.
+    ///
+    /// Only affects the sync reader ([`ParquetRecordBatchReaderBuilder`]). The async
+    /// reader ignores this flag due to predicate cache type constraints.
+    ///
+    /// Defaults to `false`.
+    ///
+    /// [`ParquetRecordBatchReaderBuilder`]: crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder
+    fn use_dict_pushdown(&self) -> bool {
+        false
+    }
 }
 
 /// An [`ArrowPredicate`] created from an [`FnMut`] and a [`ProjectionMask`]
@@ -106,6 +138,7 @@ pub trait ArrowPredicate: Send + 'static {
 pub struct ArrowPredicateFn<F> {
     f: F,
     projection: ProjectionMask,
+    use_dict_pushdown: bool,
 }
 
 impl<F> ArrowPredicateFn<F>
@@ -115,7 +148,19 @@ where
     /// Create a new [`ArrowPredicateFn`] that invokes `f` on the columns
     /// specified in `projection`.
     pub fn new(projection: ProjectionMask, f: F) -> Self {
-        Self { f, projection }
+        Self {
+            f,
+            projection,
+            use_dict_pushdown: false,
+        }
+    }
+
+    /// Enable or disable dictionary filter pushdown for this predicate.
+    ///
+    /// See [`ArrowPredicate::use_dict_pushdown`] for details.
+    pub fn with_dict_pushdown(mut self, enabled: bool) -> Self {
+        self.use_dict_pushdown = enabled;
+        self
     }
 }
 
@@ -129,6 +174,10 @@ where
 
     fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError> {
         (self.f)(batch)
+    }
+
+    fn use_dict_pushdown(&self) -> bool {
+        self.use_dict_pushdown
     }
 }
 

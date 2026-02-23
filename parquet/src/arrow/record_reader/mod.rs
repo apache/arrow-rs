@@ -17,10 +17,7 @@
 
 use arrow_buffer::Buffer;
 
-use crate::arrow::record_reader::{
-    buffer::ValuesBuffer,
-    definition_levels::{DefinitionLevelBuffer, DefinitionLevelBufferDecoder},
-};
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::column::reader::decoder::RepetitionLevelDecoderImpl;
 use crate::column::{
     page::PageReader,
@@ -34,7 +31,8 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 
 pub(crate) mod buffer;
-mod definition_levels;
+pub(crate) mod definition_levels;
+pub(crate) use definition_levels::{DefinitionLevelBuffer, DefinitionLevelBufferDecoder};
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
 pub type RecordReader<T> = GenericRecordReader<Vec<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
