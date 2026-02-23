@@ -914,9 +914,12 @@ impl ArrowColumnWriter {
             let chunk_levels = levels.slice_for_chunk(chunk);
             self.write_internal(&chunk_levels)?;
 
-            // Flush the page after each chunk except the last
+            // Add a page break after each chunk except the last
             if i + 1 < num_chunks {
-                self.flush_current_page()?;
+                match &mut self.writer {
+                    ArrowColumnWriterImpl::Column(c) => c.add_data_page()?,
+                    ArrowColumnWriterImpl::ByteArray(c) => c.add_data_page()?,
+                }
             }
         }
         Ok(())
@@ -940,13 +943,6 @@ impl ArrowColumnWriter {
             }
         }
         Ok(())
-    }
-
-    fn flush_current_page(&mut self) -> Result<()> {
-        match &mut self.writer {
-            ArrowColumnWriterImpl::Column(c) => c.flush_current_page(),
-            ArrowColumnWriterImpl::ByteArray(c) => c.flush_current_page(),
-        }
     }
 
     /// Close this column returning the written [`ArrowColumnChunk`]
