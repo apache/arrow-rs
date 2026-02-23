@@ -543,7 +543,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
     } else {
         Repetition::REQUIRED
     };
-    let id = field_id(field);
+    let id = field.id();
     // create type from field
     match field.data_type() {
         DataType::Null => Type::primitive_type_builder(name, PhysicalType::INT32)
@@ -858,11 +858,6 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             "Converting RunEndEncodedType to parquet not supported",
         )),
     }
-}
-
-fn field_id(field: &Field) -> Option<i32> {
-    let value = field.metadata().get(super::PARQUET_FIELD_ID_META_KEY)?;
-    value.parse().ok() // Fail quietly if not a valid integer
 }
 
 #[cfg(test)]

@@ -224,7 +224,7 @@ pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
 ///
 /// [`Field::metadata`]: arrow_schema::Field::metadata
 /// [`BasicTypeInfo::id`]: crate::schema::types::BasicTypeInfo::id
-pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
+pub use arrow_schema::PARQUET_FIELD_ID_META_KEY;
 
 /// A [`ProjectionMask`] identifies a set of columns within a potentially nested schema to project
 ///

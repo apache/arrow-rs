@@ -30,6 +30,9 @@ use crate::{
     extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType},
 };
 
+/// The metadata key for the Parquet field id of a [`Field`].
+pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
+
 /// A reference counted [`Field`]
 pub type FieldRef = Arc<Field>;
 
@@ -502,6 +505,16 @@ impl Field {
         self.metadata()
             .get(EXTENSION_TYPE_METADATA_KEY)
             .map(String::as_ref)
+    }
+
+    /// Returns the parquet field id of this [`Field`], if set.
+    ///
+    /// This returns the value of [`PARQUET_FIELD_ID_META_KEY`] metadata key, parsed
+    /// as an `i32`. Returns `None` if the key is not present or the value
+    /// is not a valid integer.
+    pub fn id(&self) -> Option<i32> {
+        let value = self.metadata().get(PARQUET_FIELD_ID_META_KEY)?;
+        value.parse().ok()
     }
 
     /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
