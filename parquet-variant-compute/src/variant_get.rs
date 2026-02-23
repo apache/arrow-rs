@@ -56,9 +56,10 @@ fn take_list_index_as_shredding_state<O: OffsetSizeTrait>(
     let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() else {
         return Ok(None);
     };
+    let shredding_state = ShreddingState::try_from(struct_array)?;
 
-    let value_array = struct_array.column_by_name("value");
-    let typed_array = struct_array.column_by_name("typed_value");
+    let value_array = shredding_state.value_field();
+    let typed_array = shredding_state.typed_value_field();
 
     // If list elements have neither typed nor fallback value, this path step is missing.
     if value_array.is_none() && typed_array.is_none() {
