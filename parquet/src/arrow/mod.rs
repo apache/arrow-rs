@@ -88,33 +88,6 @@
 //! writer.close().unwrap();
 //! ```
 //!
-//! ## EXPERIMENTAL: Content-Defined Chunking
-//!
-//! Enable content-defined chunking (CDC) via [`WriterProperties`] to improve
-//! deduplication efficiency in content-addressable storage (CAS) systems such as
-//! Hugging Face Hub. CDC creates data page boundaries based on content rather than
-//! fixed sizes, so unchanged data across file versions produces identical byte
-//! sequences that CAS backends can deduplicate at the page level.
-//!
-//! ```no_run
-//! # use parquet::arrow::arrow_writer::ArrowWriter;
-//! # use parquet::file::properties::WriterProperties;
-//! # use std::fs::File;
-//! # use arrow_array::RecordBatch;
-//! # fn write(batch: &RecordBatch) {
-//! let file = File::create("data.parquet").unwrap();
-//! let props = WriterProperties::builder()
-//!     .set_content_defined_chunking(true)
-//!     .build();
-//! let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
-//! writer.write(batch).unwrap();
-//! writer.close().unwrap();
-//! # }
-//! ```
-//!
-//! See [`CdcOptions`](crate::file::properties::CdcOptions) for chunk size and
-//! normalization level configuration.
-//!
 //! # Example: Reading Parquet file into Arrow `RecordBatch`
 //!
 //! ```rust
