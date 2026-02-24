@@ -278,7 +278,7 @@ mod tests {
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
     use crate::types::{
-        Decimal128Type, Int16Type, TimestampMicrosecondType, UInt32Type, UInt64Type,
+        Decimal128Type, Int16Type, TimestampMicrosecondType, UInt32Type,
     };
     use crate::{Array, Decimal128Array, TimestampMicrosecondArray, UInt32Array};
 
