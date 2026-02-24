@@ -688,13 +688,20 @@ fn override_selector_strategy_if_needed(
     projection_mask: &ProjectionMask,
     offset_index: Option<&[OffsetIndexMetaData]>,
 ) -> ReadPlanBuilder {
-    // override only applies to Auto policy, If the policy is already Mask or Selectors, respect that
-    let RowSelectionPolicy::Auto { .. } = plan_builder.row_selection_policy() else {
+    // If the policy is already Selectors, no override is needed
+    if matches!(
+        plan_builder.row_selection_policy(),
+        RowSelectionPolicy::Selectors
+    ) {
         return plan_builder;
-    };
+    }
 
     let preferred_strategy = plan_builder.resolve_selection_strategy();
 
+    // When the resolved strategy is Mask, check if any pages would be skipped
+    // during sparse fetching. If so, force Selectors to avoid "Invalid offset
+    // in sparse column chunk data" errors. This applies to both Auto and
+    // explicit Mask policies, since Mask + sparse fetching is always invalid.
     let force_selectors = matches!(preferred_strategy, RowSelectionStrategy::Mask)
         && plan_builder.selection().is_some_and(|selection| {
             selection.should_force_selectors(projection_mask, offset_index)

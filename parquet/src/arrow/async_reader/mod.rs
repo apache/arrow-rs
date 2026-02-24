@@ -772,7 +772,8 @@ mod tests {
     use super::*;
     use crate::arrow::arrow_reader::tests::test_row_numbers_with_multiple_row_groups_helper;
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
+        ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
+        RowSelectionPolicy, RowSelector,
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
@@ -1906,5 +1907,93 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// Test that explicitly setting `RowSelectionPolicy::Mask` with page indexes
+    /// and a selection that skips pages does not cause "Invalid offset in sparse
+    /// column chunk data" errors.
+    ///
+    /// When a Parquet file has OffsetIndex and a RowSelection skips some pages,
+    /// `InMemoryRowGroup::fetch_ranges()` does sparse fetching (only fetches
+    /// selected pages). The Mask strategy needs ALL pages within the read
+    /// region. If the override logic doesn't catch explicit `Mask` policy,
+    /// this combination causes a binary search miss on the sparse column
+    /// chunk data.
+    ///
+    /// The selection `select(1), skip(98), select(1)` triggers this because:
+    /// - scan_ranges fetches only page 0 (rows 0-9) and page 9 (rows 90-99)
+    /// - Pages 1-8 are NOT fetched (sparse column chunk)
+    /// - Mask strategy has initial_skip=0, chunk_rows=100 (reads all rows)
+    /// - When the array reader reaches page 1, it calls get_bytes() on the
+    ///   sparse data, binary search fails → "Invalid offset" error
+    #[tokio::test]
+    async fn test_sparse_column_chunk_mask_error() {
+        // Create a Parquet file with page indexes and multiple pages per row group.
+        // Using small data_page_row_count_limit to force multiple pages.
+        let num_rows: usize = 100;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let col_a = Int32Array::from((0..num_rows as i32).collect::<Vec<_>>());
+        let col_b = Int32Array::from((0..num_rows as i32).map(|x| x * 10).collect::<Vec<_>>());
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(col_a) as ArrayRef, Arc::new(col_b) as ArrayRef],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(10)
+            .set_data_page_row_count_limit(10)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(buffer);
+
+        // Selection: select first row, skip 98 rows, select last row.
+        // This causes scan_ranges to fetch only page 0 and page 9 (sparse).
+        // The Mask strategy will try to read ALL rows in the chunk including
+        // pages 1-8 which are not in the sparse column data.
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(98),
+            RowSelector::select(1),
+        ]);
+
+        // Read with page index enabled and explicit Mask policy.
+        // Before the fix, this would fail with "Invalid offset in sparse column chunk data"
+        // because override_selector_strategy_if_needed returned early for explicit Mask.
+        let reader = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional),
+        )
+        .await
+        .unwrap()
+        .with_row_selection(selection)
+        .with_row_selection_policy(RowSelectionPolicy::Mask)
+        .with_batch_size(1024)
+        .build()
+        .unwrap();
+
+        let batches: Vec<_> = reader.try_collect().await.unwrap();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2);
+
+        // Verify we got row 0 and row 99
+        let mut collected = Vec::new();
+        for batch in &batches {
+            collected.extend_from_slice(
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .values(),
+            );
+        }
+        assert_eq!(collected, vec![0, 99]);
     }
 }
