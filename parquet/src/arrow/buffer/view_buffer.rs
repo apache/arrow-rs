@@ -17,7 +17,7 @@
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray};
-use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, ScalarBuffer};
+use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
 use std::sync::Arc;
 
@@ -56,9 +56,7 @@ impl ViewBuffer {
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: &ArrowType) -> ArrayRef {
         let len = self.views.len();
         let views = ScalarBuffer::from(self.views);
-        let nulls = null_buffer
-            .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, len)))
-            .filter(|n| n.null_count() != 0);
+        let nulls = null_buffer.and_then(|b| NullBuffer::from_unsliced_buffer(b, len));
         match data_type {
             ArrowType::Utf8View => {
                 // Safety: views were created correctly, and checked that the data is utf8 when building the buffer
