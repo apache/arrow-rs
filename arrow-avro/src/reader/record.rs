@@ -2467,7 +2467,7 @@ impl Skipper {
                 Ok(())
             }
             Self::Int32 => {
-                buf.get_int()?;
+                buf.skip_int()?;
                 Ok(())
             }
             Self::Int64
@@ -2475,7 +2475,7 @@ impl Skipper {
             | Self::TimestampMillis
             | Self::TimestampMicros
             | Self::TimestampNanos => {
-                buf.get_long()?;
+                buf.skip_long()?;
                 Ok(())
             }
             Self::Float32 => {
@@ -2503,7 +2503,7 @@ impl Skipper {
                 Ok(())
             }
             Self::Enum => {
-                buf.get_int()?;
+                buf.skip_int()?;
                 Ok(())
             }
             Self::DurationFixed12 => {
