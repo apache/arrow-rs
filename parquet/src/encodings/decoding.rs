@@ -770,15 +770,44 @@ where
 
             // At this point we have read the deltas to `buffer` we now need to offset
             // these to get back to the original values that were encoded
-            for v in &mut buffer[read..read + batch_read] {
-                // It is OK for deltas to contain "overflowed" values after encoding,
-                // e.g. i64::MAX - i64::MIN, so we use `wrapping_add` to "overflow" again and
-                // restore original value.
-                *v = v
-                    .wrapping_add(&self.min_delta)
-                    .wrapping_add(&self.last_value);
+            //
+            // Optimization: if the bit_width for the miniblock is 0, then we can employ
+            // a faster decoding method than setting `value[i] = value[i-1] + value[i] + min_delta`.
+            // Where min_delta is 0 (all values in the miniblock are the same), we can simply
+            // set all values to `self.last_value`. In the case of non-zero min_delta (values
+            // in the mini-block form an arithmetic progression) each value can be computed via
+            // `value[i] = (i + 1) * min_delta + last_value`. In both cases we remove the
+            // dependence on the preceding value.
+            // Kudos to @pitrou for the idea https://github.com/apache/arrow/pull/49296
+            if bit_width == 0 {
+                let min_delta = self.min_delta.as_i64()?;
+                if min_delta == 0 {
+                    for v in &mut buffer[read..read + batch_read] {
+                        *v = self.last_value;
+                    }
+                } else {
+                    // the c++ version multiplies min_delta by the iter index, but doing
+                    // wrapping_mul through T::T was a bit slower. this is still
+                    // faster than before.
+                    let mut delta = self.min_delta;
+                    for v in &mut buffer[read..read + batch_read] {
+                        *v = self.last_value.wrapping_add(&delta);
+                        delta = delta.wrapping_add(&self.min_delta);
+                    }
 
-                self.last_value = *v;
+                    self.last_value = buffer[read + batch_read - 1];
+                }
+            } else {
+                for v in &mut buffer[read..read + batch_read] {
+                    // It is OK for deltas to contain "overflowed" values after encoding,
+                    // e.g. i64::MAX - i64::MIN, so we use `wrapping_add` to "overflow" again and
+                    // restore original value.
+                    *v = v
+                        .wrapping_add(&self.min_delta)
+                        .wrapping_add(&self.last_value);
+
+                    self.last_value = *v;
+                }
             }
 
             read += batch_read;
@@ -1800,6 +1829,30 @@ mod tests {
             "{}",
             err
         );
+    }
+
+    #[test]
+    fn test_delta_bit_packed_int32_single_value_large() {
+        let block_data = vec![3; 10240];
+        test_delta_bit_packed_decode::<Int32Type>(vec![block_data]);
+    }
+
+    #[test]
+    fn test_delta_bit_packed_int32_increasing_value_large() {
+        let block_data = (0i32..10240).collect();
+        test_delta_bit_packed_decode::<Int32Type>(vec![block_data]);
+    }
+
+    #[test]
+    fn test_delta_bit_packed_int64_single_value_large() {
+        let block_data = vec![5; 10240];
+        test_delta_bit_packed_decode::<Int64Type>(vec![block_data]);
+    }
+
+    #[test]
+    fn test_delta_bit_packed_int64_increasing_value_large() {
+        let block_data = (0i64..10240).collect();
+        test_delta_bit_packed_decode::<Int64Type>(vec![block_data]);
     }
 
     #[test]
