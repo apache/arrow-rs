@@ -58,7 +58,7 @@ ryu = "1.0.16"
 [dev-dependencies]
 criterion = { workspace = true, default-features = false }
 half = { version = "2.1", default-features = false }
-insta = { version = "1.46.3", default-features = false }
+insta = { workspace = true }
 rand = "0.9"
 
 [[bench]]
