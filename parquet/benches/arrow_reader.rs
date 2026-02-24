@@ -326,6 +326,53 @@ where
     InMemoryPageIterator::new(pages)
 }
 
+fn build_delta_encoded_incr_primitive_page_iterator<T>(
+    column_desc: ColumnDescPtr,
+    null_density: f32,
+    increment: usize,
+) -> impl PageIterator + Clone
+where
+    T: parquet::data_type::DataType,
+    T::T: SampleUniform + FromPrimitive,
+{
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    let rep_levels = vec![0; VALUES_PER_PAGE];
+    let mut rng = seedable_rng();
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    let mut running_val: usize = 1;
+    for _i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = Vec::new();
+        for _j in 0..PAGES_PER_GROUP {
+            // generate page
+            let mut values = Vec::with_capacity(VALUES_PER_PAGE);
+            let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
+            for _k in 0..VALUES_PER_PAGE {
+                let def_level = if rng.random::<f32>() < null_density {
+                    max_def_level - 1
+                } else {
+                    max_def_level
+                };
+                if def_level == max_def_level {
+                    let value = FromPrimitive::from_usize(running_val).unwrap();
+                    running_val += increment;
+                    values.push(value);
+                }
+                def_levels.push(def_level);
+            }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            page_builder.add_values::<T>(Encoding::DELTA_BINARY_PACKED, &values);
+            column_chunk_pages.push(page_builder.consume());
+        }
+        pages.push(column_chunk_pages);
+    }
+
+    InMemoryPageIterator::new(pages)
+}
+
 fn build_dictionary_encoded_primitive_page_iterator<T>(
     column_desc: ColumnDescPtr,
     null_density: f32,
@@ -1053,6 +1100,36 @@ fn bench_primitive<T>(
         max,
     );
     group.bench_function("binary packed skip, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader_skip(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary packed same value
+    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        0,
+    );
+    group.bench_function("binary packed single value", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader_skip(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary packed monotonically increasing
+    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        1,
+    );
+    group.bench_function("binary packed increasing value", |b| {
         b.iter(|| {
             let array_reader =
                 create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
