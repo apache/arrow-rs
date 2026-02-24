@@ -1987,12 +1987,7 @@ mod tests {
         // Verify we got row 0 and row 99
         let mut collected = Vec::new();
         for batch in &batches {
-            collected.extend_from_slice(
-                batch
-                    .column(0)
-                    .as_primitive::<Int32Type>()
-                    .values(),
-            );
+            collected.extend_from_slice(batch.column(0).as_primitive::<Int32Type>().values());
         }
         assert_eq!(collected, vec![0, 99]);
     }
