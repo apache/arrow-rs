@@ -518,7 +518,7 @@ mod test {
     fn get_primitive_variant_inside_object_of_list() {
         single_variant_get_test(
             r#"{"some_field": [1234]}"#,
-            VariantPath::try_from("some_field").unwrap().join(0),
+            VariantPath::try_from("some_field[0]").unwrap(),
             "1234",
         );
     }
@@ -2049,7 +2049,7 @@ mod test {
     #[test]
     fn test_shredded_list_in_struct_index_access() {
         let array = shredded_struct_with_list_variant_array();
-        let options = GetOptions::new_with_path(VariantPath::try_from("a").unwrap().join(1));
+        let options = GetOptions::new_with_path(VariantPath::try_from("a[1]").unwrap());
         let result = variant_get(&array, options).unwrap();
         let result_variant = VariantArray::try_new(&result).unwrap();
 
