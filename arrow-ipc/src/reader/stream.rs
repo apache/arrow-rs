@@ -25,7 +25,7 @@ use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{RecordBatchDecoder, read_dictionary_impl};
+use crate::reader::{RecordBatchDecoder, message_custom_metadata, read_dictionary_impl};
 use crate::{CONTINUATION_MARKER, MessageHeader};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -223,6 +223,7 @@ impl StreamDecoder {
                         }
                         MessageHeader::RecordBatch => {
                             let batch = message.header_as_record_batch().unwrap();
+                            let custom_metadata = message_custom_metadata(&message);
                             let schema = self.schema.clone().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
@@ -234,6 +235,7 @@ impl StreamDecoder {
                                 &version,
                             )?
                             .with_require_alignment(self.require_alignment)
+                            .with_custom_metadata(custom_metadata)
                             .read_record_batch()?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));

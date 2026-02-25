@@ -61,6 +61,8 @@ pub fn flight_data_to_arrow_batch(
     let message = arrow_ipc::root_as_message(&data.data_header[..])
         .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))?;
 
+    let custom_metadata = arrow_ipc::reader::message_custom_metadata(&message);
+
     message
         .header_as_record_batch()
         .ok_or_else(|| {
@@ -77,6 +79,13 @@ pub fn flight_data_to_arrow_batch(
                 None,
                 &message.version(),
             )
+            .map(|rb| {
+                if custom_metadata.is_empty() {
+                    rb
+                } else {
+                    rb.with_custom_metadata(custom_metadata)
+                }
+            })
         })?
 }
 
