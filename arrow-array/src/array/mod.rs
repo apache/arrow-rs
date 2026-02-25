@@ -506,6 +506,11 @@ unsafe impl Array for ArrayRef {
     fn get_array_memory_size(&self) -> usize {
         self.as_ref().get_array_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.as_ref().claim(pool)
+    }
 }
 
 unsafe impl<T: Array> Array for &T {
@@ -575,6 +580,11 @@ unsafe impl<T: Array> Array for &T {
 
     fn get_array_memory_size(&self) -> usize {
         T::get_array_memory_size(self)
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        T::claim(self, pool)
     }
 }
 
