@@ -75,14 +75,15 @@ use std::{borrow::Cow, ops::Deref};
 /// assert_eq!(path[1], VariantPathElement::field("bar"));
 /// ```
 ///
-/// # Example: Accessing filed with bracket
+/// # Example: Accessing field with bracket
 /// ```
 /// # use parquet_variant::{VariantPath, VariantPathElement};
-/// let path = VariantPath::try_from("a[b.c].d[2]").unwrap();
+/// let path = VariantPath::try_from("a[b.c].d[2]['3']").unwrap();
 /// let expected = VariantPath::from_iter([VariantPathElement::field("a"),
 ///     VariantPathElement::field("b.c"),
 ///     VariantPathElement::field("d"),
-///     VariantPathElement::index(2)]);
+///     VariantPathElement::index(2),
+///     VariantPathElement::field("3")]);
 /// assert_eq!(path, expected)
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct VariantPath<'a>(Vec<VariantPathElement<'a>>);
@@ -292,6 +293,32 @@ mod tests {
             VariantPathElement::field("foo"),
             VariantPathElement::field("bar"),
             VariantPathElement::field("abc"),
+        ]);
+        assert_eq!(path, expected);
+
+        // field with number field(a number quoted with `'` will be treated as field, not index)
+        let path = VariantPath::try_from("foo['0'].bar").unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("foo"),
+            VariantPathElement::field("0"),
+            VariantPathElement::field("bar"),
+        ]);
+        assert_eq!(path, expected);
+
+        // the mismatch `'` will be treated as field
+        let path = VariantPath::try_from("foo.bar[123']").unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("foo"),
+            VariantPathElement::field("bar"),
+            VariantPathElement::field("123'"),
+        ]);
+        assert_eq!(path, expected);
+
+        let path = VariantPath::try_from("a.b['234]").unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("a"),
+            VariantPathElement::field("b"),
+            VariantPathElement::field("'234"),
         ]);
         assert_eq!(path, expected);
     }

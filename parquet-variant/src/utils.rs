@@ -170,6 +170,7 @@ pub(crate) fn fits_precision<const N: u32>(n: impl Into<i64>) -> bool {
 /// - `"foo"` -> single field `foo`
 /// - `"foo.bar"` -> nested fields `foo`, `bar`
 /// - `"[1]"` -> array index 1
+/// - `"['1']" -> field `1`
 /// - `"foo[1].bar"` -> field `foo`, index 1, field `bar`
 /// - `"[a.b]"` -> field `a.b` (dot is literal inside bracket)
 /// - `"[a\\]b]"` -> field `a]b` (escaped `]`
@@ -267,9 +268,17 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
         }
     };
 
-    let element = match unescaped.parse() {
-        Ok(idx) => VariantPathElement::index(idx),
-        Err(_) => VariantPathElement::field(unescaped),
+    let element = if let Some(inner) = unescaped
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+    {
+        // Quoted field name, e.g., ['field'] or ['123']
+        VariantPathElement::field(inner.to_string())
+    } else {
+        match unescaped.parse() {
+            Ok(idx) => VariantPathElement::index(idx),
+            Err(_) => VariantPathElement::field(unescaped),
+        }
     };
 
     Ok((element, end + 1))
