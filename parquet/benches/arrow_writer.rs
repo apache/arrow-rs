@@ -348,7 +348,7 @@ fn write_batch_with_option(
         .with_coerce_types(props.coerce_types())
         .convert(batch.schema_ref())?;
     let writer = SerializedFileWriter::new(&mut file, parquet_schema.root_schema_ptr(), props)?;
-    let mut row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, batch.schema());
+    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, batch.schema());
 
     bench.iter(|| {
         let mut row_group = row_group_writer_factory.create_column_writers(0).unwrap();
