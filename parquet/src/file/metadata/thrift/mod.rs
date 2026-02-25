@@ -1832,9 +1832,10 @@ pub(crate) mod tests {
 
     #[test]
     fn test_convert_stats_preserves_missing_null_count() {
-        let primitive = crate::schema::types::Type::primitive_type_builder("col", PhysicalType::INT32)
-            .build()
-            .unwrap();
+        let primitive =
+            crate::schema::types::Type::primitive_type_builder("col", PhysicalType::INT32)
+                .build()
+                .unwrap();
         let column_descr = Arc::new(ColumnDescriptor::new(
             Arc::new(primitive),
             0,
