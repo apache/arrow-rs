@@ -180,17 +180,16 @@ pub(crate) fn follow_shredded_path_element(
                 typed_value.as_any().downcast_ref::<GenericListArray<i64>>()
             {
                 take_list_index_as_shredding_state(list_array, *index, cast_options)?
-            } else {
-                // Downcast failure - if strict cast options are enabled, this should be an error
-                if !cast_options.safe {
-                    return Err(ArrowError::CastError(format!(
-                        "Cannot access index '{}' on non-list type: {}",
-                        index,
-                        typed_value.data_type()
-                    )));
-                }
+            } else if cast_options.safe {
                 // With safe cast options, return NULL (missing_path_step)
                 return Ok(missing_path_step());
+            } else {
+                // Downcast failure - if strict cast options are enabled, this should be an error
+                return Err(ArrowError::CastError(format!(
+                    "Cannot access index '{}' on non-list type: {}",
+                    index,
+                    typed_value.data_type()
+                )));
             };
 
             match state {
