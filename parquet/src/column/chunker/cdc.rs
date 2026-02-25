@@ -721,7 +721,7 @@ mod arrow_tests {
 
     fn write_batch_with_cdc(batch: &RecordBatch) -> Vec<u8> {
         let props = WriterProperties::builder()
-            .set_content_defined_chunking(true)
+            .set_content_defined_chunking(Some(CdcOptions::default()))
             .build();
         let mut buf = Vec::new();
         let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
@@ -773,11 +773,11 @@ mod arrow_tests {
         let schema = batches[0].schema();
         let mut builder = WriterProperties::builder()
             .set_dictionary_enabled(false)
-            .set_cdc_options(CdcOptions {
+            .set_content_defined_chunking(Some(CdcOptions {
                 min_chunk_size,
                 max_chunk_size,
                 norm_level: 0,
-            });
+            }));
         if let Some(max_rows) = max_row_group_rows {
             builder = builder.set_max_row_group_row_count(Some(max_rows));
         }
@@ -998,7 +998,7 @@ mod arrow_tests {
         let data_one_rg = write_batch_with_cdc(&batch_all);
 
         let props = WriterProperties::builder()
-            .set_content_defined_chunking(true)
+            .set_content_defined_chunking(Some(CdcOptions::default()))
             .set_max_row_group_row_count(Some(n as usize / 2))
             .build();
         let mut buf = Vec::new();

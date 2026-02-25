@@ -811,7 +811,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// EXPERIMENTAL: Enables or disables content-defined chunking with default options.
+    /// EXPERIMENTAL: Sets content-defined chunking options, or disables CDC with `None`.
     ///
     /// When enabled, data page boundaries are determined by a rolling hash of the
     /// column values, so unchanged data produces identical byte sequences across
@@ -820,35 +820,25 @@ impl WriterPropertiesBuilder {
     ///
     /// Only supported through the Arrow writer interface ([`ArrowWriter`]).
     ///
-    /// [`ArrowWriter`]: crate::arrow::arrow_writer::ArrowWriter
-    pub fn set_content_defined_chunking(mut self, enabled: bool) -> Self {
-        self.cdc_options = if enabled {
-            Some(CdcOptions::default())
-        } else {
-            None
-        };
-        self
-    }
-
-    /// EXPERIMENTAL: Sets content-defined chunking options, implicitly enabling CDC.
-    ///
-    /// See [`CdcOptions`] for details on each parameter.
-    ///
     /// # Panics
     ///
     /// Panics if `min_chunk_size == 0` or `max_chunk_size <= min_chunk_size`.
-    pub fn set_cdc_options(mut self, options: CdcOptions) -> Self {
-        assert!(
-            options.min_chunk_size > 0,
-            "min_chunk_size must be positive"
-        );
-        assert!(
-            options.max_chunk_size > options.min_chunk_size,
-            "max_chunk_size ({}) must be greater than min_chunk_size ({})",
-            options.max_chunk_size,
-            options.min_chunk_size
-        );
-        self.cdc_options = Some(options);
+    ///
+    /// [`ArrowWriter`]: crate::arrow::arrow_writer::ArrowWriter
+    pub fn set_content_defined_chunking(mut self, options: Option<CdcOptions>) -> Self {
+        if let Some(ref options) = options {
+            assert!(
+                options.min_chunk_size > 0,
+                "min_chunk_size must be positive"
+            );
+            assert!(
+                options.max_chunk_size > options.min_chunk_size,
+                "max_chunk_size ({}) must be greater than min_chunk_size ({})",
+                options.max_chunk_size,
+                options.min_chunk_size
+            );
+        }
+        self.cdc_options = options;
         self
     }
 
