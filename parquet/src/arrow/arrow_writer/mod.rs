@@ -196,7 +196,6 @@ pub struct ArrowWriter<W: Write> {
     max_row_group_bytes: Option<usize>,
 
     /// CDC chunkers persisted across row groups (one per leaf column).
-    /// Moved into `ArrowRowGroupWriter` for each row group, then returned on close.
     cdc_chunkers: Option<Vec<ContentDefinedChunker>>,
 }
 
@@ -356,10 +355,9 @@ impl<W: Write + Send> ArrowWriter<W> {
         let in_progress = match &mut self.in_progress {
             Some(in_progress) => in_progress,
             x => {
-                let rg = self.row_group_writer_factory.create_row_group_writer(
-                    self.writer.flushed_row_groups().len(),
-                    self.cdc_chunkers.take(),
-                )?;
+                let rg = self
+                    .row_group_writer_factory
+                    .create_row_group_writer(self.writer.flushed_row_groups().len())?;
                 x.insert(rg)
             }
         };
@@ -406,7 +404,10 @@ impl<W: Write + Send> ArrowWriter<W> {
             }
         }
 
-        in_progress.write(batch)?;
+        match self.cdc_chunkers.as_mut() {
+            Some(chunkers) => in_progress.write_with_chunkers(batch, chunkers)?,
+            None => in_progress.write(batch)?,
+        }
 
         let should_flush = self
             .max_row_group_row_count
@@ -444,8 +445,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             None => return Ok(()),
         };
 
-        let (chunks, chunkers) = in_progress.close()?;
-        self.cdc_chunkers = chunkers;
+        let chunks = in_progress.close()?;
 
         let mut row_group_writer = self.writer.next_row_group()?;
         for chunk in chunks {
@@ -507,10 +507,9 @@ impl<W: Write + Send> ArrowWriter<W> {
     )]
     pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
         self.flush()?;
-        let in_progress = self.row_group_writer_factory.create_row_group_writer(
-            self.writer.flushed_row_groups().len(),
-            self.cdc_chunkers.take(),
-        )?;
+        let in_progress = self
+            .row_group_writer_factory
+            .create_row_group_writer(self.writer.flushed_row_groups().len())?;
         Ok(in_progress.writers)
     }
 
@@ -999,34 +998,42 @@ struct ArrowRowGroupWriter {
     writers: Vec<ArrowColumnWriter>,
     schema: SchemaRef,
     buffered_rows: usize,
-    chunkers: Option<Vec<ContentDefinedChunker>>,
 }
 
 impl ArrowRowGroupWriter {
-    fn new(
-        writers: Vec<ArrowColumnWriter>,
-        arrow: &SchemaRef,
-        chunkers: Option<Vec<ContentDefinedChunker>>,
-    ) -> Self {
+    fn new(writers: Vec<ArrowColumnWriter>, arrow: &SchemaRef) -> Self {
         Self {
             writers,
             schema: arrow.clone(),
             buffered_rows: 0,
-            chunkers,
         }
     }
 
     fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         self.buffered_rows += batch.num_rows();
         let mut writers = self.writers.iter_mut();
-        let mut chunkers = self.chunkers.as_mut().map(|c| c.iter_mut());
         for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
             for leaf in compute_leaves(field.as_ref(), column)? {
-                let writer = writers.next().unwrap();
-                match chunkers.as_mut().and_then(|c| c.next()) {
-                    Some(chunker) => writer.write_with_chunker(&leaf, chunker)?,
-                    None => writer.write(&leaf)?,
-                }
+                writers.next().unwrap().write(&leaf)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_with_chunkers(
+        &mut self,
+        batch: &RecordBatch,
+        chunkers: &mut [ContentDefinedChunker],
+    ) -> Result<()> {
+        self.buffered_rows += batch.num_rows();
+        let mut writers = self.writers.iter_mut();
+        let mut chunkers = chunkers.iter_mut();
+        for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column)? {
+                writers
+                    .next()
+                    .unwrap()
+                    .write_with_chunker(&leaf, chunkers.next().unwrap())?;
             }
         }
         Ok(())
@@ -1040,13 +1047,11 @@ impl ArrowRowGroupWriter {
             .sum()
     }
 
-    fn close(self) -> Result<(Vec<ArrowColumnChunk>, Option<Vec<ContentDefinedChunker>>)> {
-        let chunks = self
-            .writers
+    fn close(self) -> Result<Vec<ArrowColumnChunk>> {
+        self.writers
             .into_iter()
             .map(|writer| writer.close())
-            .collect::<Result<Vec<_>>>()?;
-        Ok((chunks, self.chunkers))
+            .collect()
     }
 }
 
@@ -1080,24 +1085,13 @@ impl ArrowRowGroupWriterFactory {
         }
     }
 
-    fn create_row_group_writer(
-        &mut self,
-        row_group_index: usize,
-        chunkers: Option<Vec<ContentDefinedChunker>>,
-    ) -> Result<ArrowRowGroupWriter> {
+    fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
         let writers = self.create_column_writers(row_group_index)?;
-        Ok(ArrowRowGroupWriter::new(
-            writers,
-            &self.arrow_schema,
-            chunkers,
-        ))
+        Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
 
     /// Create column writers for a new row group, with the given row group index
-    pub fn create_column_writers(
-        &mut self,
-        row_group_index: usize,
-    ) -> Result<Vec<ArrowColumnWriter>> {
+    pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
         let mut writers = Vec::with_capacity(self.arrow_schema.fields.len());
         let mut leaves = self.schema.columns().iter();
         let column_factory = self.column_writer_factory(row_group_index);
