@@ -1844,6 +1844,25 @@ mod tests {
     }
 
     #[test]
+    fn test_delta_bit_packed_int32_mixed_large() {
+        // should be enough for 4 mini-blocks plus a little so we get some
+        // mixed mini-blocks
+        const BLOCK_SIZE: i32 = 133;
+        let block1_data = (0..BLOCK_SIZE).map(|i| (i * 7) % 11).collect();
+        let block2_data = vec![3; BLOCK_SIZE as usize];
+        let block3_data = (0..BLOCK_SIZE).map(|i| (i * 5) % 13).collect();
+        let block4_data = (0..BLOCK_SIZE).collect();
+        let block5_data = (0..BLOCK_SIZE).map(|i| (i * 3) % 17).collect();
+        test_delta_bit_packed_decode::<Int32Type>(vec![
+            block1_data,
+            block2_data,
+            block3_data,
+            block4_data,
+            block5_data,
+        ]);
+    }
+
+    #[test]
     fn test_delta_bit_packed_int64_single_value_large() {
         let block_data = vec![5; 10240];
         test_delta_bit_packed_decode::<Int64Type>(vec![block_data]);
