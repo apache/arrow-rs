@@ -47,6 +47,21 @@ use crate::r#gen::Message::{self};
 use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
 use DataType::*;
 
+/// Extract `custom_metadata` key-value pairs from an IPC [`Message`].
+///
+/// Returns an empty [`HashMap`] if the message has no custom metadata.
+pub fn message_custom_metadata(message: &crate::Message) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    if let Some(list) = message.custom_metadata() {
+        for kv in list {
+            if let (Some(k), Some(v)) = (kv.key(), kv.value()) {
+                metadata.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+    metadata
+}
+
 /// Read a buffer based on offset and length
 /// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
 /// Each constituent buffer is first compressed with the indicated
@@ -470,6 +485,8 @@ pub struct RecordBatchDecoder<'a> {
     ///
     /// See [`FileDecoder::with_skip_validation`] for details.
     skip_validation: UnsafeFlag,
+    /// Per-batch custom metadata to attach to the decoded RecordBatch
+    custom_metadata: HashMap<String, String>,
 }
 
 impl<'a> RecordBatchDecoder<'a> {
@@ -506,6 +523,7 @@ impl<'a> RecordBatchDecoder<'a> {
             projection: None,
             require_alignment: false,
             skip_validation: UnsafeFlag::new(),
+            custom_metadata: HashMap::new(),
         })
     }
 
@@ -544,6 +562,12 @@ impl<'a> RecordBatchDecoder<'a> {
         self
     }
 
+    /// Set per-batch custom metadata to attach to the decoded [`RecordBatch`]
+    pub(crate) fn with_custom_metadata(mut self, custom_metadata: HashMap<String, String>) -> Self {
+        self.custom_metadata = custom_metadata;
+        self
+    }
+
     /// Read the record batch, consuming the reader
     fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
         let mut variadic_counts: VecDeque<i64> = self
@@ -554,9 +578,10 @@ impl<'a> RecordBatchDecoder<'a> {
             .collect();
 
         let options = RecordBatchOptions::new().with_row_count(Some(self.batch.length() as usize));
+        let custom_metadata = std::mem::take(&mut self.custom_metadata);
 
         let schema = Arc::clone(&self.schema);
-        if let Some(projection) = self.projection {
+        let batch = if let Some(projection) = self.projection {
             let mut arrays = vec![];
             // project fields
             for (idx, field) in schema.fields().iter().enumerate() {
@@ -608,7 +633,15 @@ impl<'a> RecordBatchDecoder<'a> {
                 assert!(variadic_counts.is_empty());
                 RecordBatch::try_new_with_options(schema, children, &options)
             }
-        }
+        };
+
+        batch.map(|b| {
+            if custom_metadata.is_empty() {
+                b
+            } else {
+                b.with_custom_metadata(custom_metadata)
+            }
+        })
     }
 
     fn next_buffer(&mut self) -> Result<Buffer, ArrowError> {
@@ -752,6 +785,11 @@ impl<'a> RecordBatchDecoder<'a> {
 /// and copy over the data if any array data in the input `buf` is not properly aligned.
 /// (Properly aligned array data will remain zero-copy.)
 /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct [`arrow_data::ArrayData`].
+///
+/// Note: this function operates on the inner `RecordBatch` flatbuffer, not the
+/// outer `Message` envelope. Message-level `custom_metadata` is not extracted.
+/// Callers who need it should use [`message_custom_metadata`] on the `Message`
+/// and apply it via [`RecordBatch::with_custom_metadata`].
 pub fn read_record_batch(
     buf: &Buffer,
     batch: crate::RecordBatch,
@@ -1114,6 +1152,7 @@ impl FileDecoder {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
+                let custom_metadata = message_custom_metadata(&message);
                 // read the block that makes up the record batch into a buffer
                 RecordBatchDecoder::try_new(
                     &buf.slice(block.metaDataLength() as _),
@@ -1125,6 +1164,7 @@ impl FileDecoder {
                 .with_projection(self.projection.as_deref())
                 .with_require_alignment(self.require_alignment)
                 .with_skip_validation(self.skip_validation.clone())
+                .with_custom_metadata(custom_metadata)
                 .read_record_batch()
                 .map(Some)
             }
@@ -1679,6 +1719,7 @@ impl<R: Read> StreamReader<R> {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
 
+                let custom_metadata = message_custom_metadata(&message);
                 let version = message.version();
                 let schema = self.schema.clone();
                 let record_batch = RecordBatchDecoder::try_new(
@@ -1691,6 +1732,7 @@ impl<R: Read> StreamReader<R> {
                 .with_projection(self.projection.as_ref().map(|x| x.0.as_ref()))
                 .with_require_alignment(false)
                 .with_skip_validation(self.skip_validation.clone())
+                .with_custom_metadata(custom_metadata)
                 .read_record_batch()?;
                 IpcMessage::RecordBatch(record_batch)
             }
