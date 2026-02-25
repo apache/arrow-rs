@@ -819,12 +819,16 @@ impl ArrayLevels {
             .map(|levels| levels[level_offset..level_offset + num_levels].to_vec());
 
         // Filter non_null_indices to [value_offset, value_offset + num_values)
-        // and shift by -value_offset.
+        // and shift by -value_offset. Use binary search since the slice is sorted.
         let value_end = value_offset + num_values;
-        let non_null_indices: Vec<usize> = self
+        let start = self
             .non_null_indices
+            .partition_point(|&idx| idx < value_offset);
+        let end = self
+            .non_null_indices
+            .partition_point(|&idx| idx < value_end);
+        let non_null_indices: Vec<usize> = self.non_null_indices[start..end]
             .iter()
-            .filter(|&&idx| idx >= value_offset && idx < value_end)
             .map(|&idx| idx - value_offset)
             .collect();
 

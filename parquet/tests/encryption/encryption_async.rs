@@ -778,8 +778,7 @@ async fn test_multi_threaded_encrypted_writing() {
     let temp_file = tempfile::tempfile().unwrap();
     let mut writer =
         SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
-    let row_group_writer_factory =
-        ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
 
     let (serialize_tx, mut serialize_rx) =
         tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(1);

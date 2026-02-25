@@ -379,7 +379,7 @@ impl ContentDefinedChunker {
         }
 
         #[cfg(debug_assertions)]
-        self.validate_chunks(&chunks, num_levels);
+        self.validate_chunks(&chunks, num_levels, total_values);
 
         chunks
     }
@@ -404,9 +404,12 @@ impl ContentDefinedChunker {
         macro_rules! fixed_width {
             ($N:literal) => {{
                 let data = array.to_data();
-                let raw = data.buffers()[0].as_slice();
+                let buffer = data.buffers()[0].as_slice();
+                let values = &buffer[data.offset() * $N..];
                 self.calculate(def_levels, rep_levels, num_levels, |c, i| {
-                    c.roll_fixed::<$N>(raw[i * $N..(i + 1) * $N].try_into().unwrap());
+                    let offset = i * $N;
+                    let slice = &values[offset..offset + $N];
+                    c.roll_fixed::<$N>(slice.try_into().unwrap());
                 })
             }};
         }
@@ -471,7 +474,7 @@ impl ContentDefinedChunker {
     }
 
     #[cfg(debug_assertions)]
-    fn validate_chunks(&self, chunks: &[Chunk], num_levels: usize) {
+    fn validate_chunks(&self, chunks: &[Chunk], num_levels: usize, total_values: usize) {
         assert!(!chunks.is_empty(), "chunks must be non-empty");
 
         let first = &chunks[0];
@@ -479,22 +482,26 @@ impl ContentDefinedChunker {
         assert_eq!(first.value_offset, 0, "first chunk must start at value 0");
 
         let mut sum_levels = first.num_levels;
+        let mut sum_values = first.num_values;
         for i in 1..chunks.len() {
             let chunk = &chunks[i];
             let prev = &chunks[i - 1];
             assert!(chunk.num_levels > 0, "chunk must have levels");
-            assert!(
-                chunk.value_offset >= prev.value_offset,
-                "value offsets must be monotonically increasing"
-            );
             assert_eq!(
                 chunk.level_offset,
                 prev.level_offset + prev.num_levels,
-                "chunks must be contiguous"
+                "level offsets must be contiguous"
+            );
+            assert_eq!(
+                chunk.value_offset,
+                prev.value_offset + prev.num_values,
+                "value offsets must be contiguous"
             );
             sum_levels += chunk.num_levels;
+            sum_values += chunk.num_values;
         }
         assert_eq!(sum_levels, num_levels, "chunks must cover all levels");
+        assert_eq!(sum_values, total_values, "chunks must cover all values");
 
         let last = chunks.last().unwrap();
         assert_eq!(
@@ -1617,5 +1624,114 @@ mod arrow_tests {
                 "Each diff should account for one insertion"
             );
         }
+    }
+
+    #[test]
+    fn test_cdc_array_offsets() {
+        // CDC boundaries are content-defined: once the gear hash converges (within
+        // a few dozen bytes), both the full and the sliced stream find boundaries
+        // at the same absolute content positions.  Slicing at offset=10 therefore
+        // produces page lengths of the form:
+        //
+        //   non-offsetted: [n,    a, b, c, ...]
+        //   offsetted:     [n-10, a, b, c, ...]
+        //
+        // Only the first page is shorter by `offset`; every subsequent page,
+        // including the last, is identical.
+        let n = i32_part_length(); // large enough to span many CDC pages
+        let offset = 10usize;
+        let full = make_i32_batch(n, 0);
+        let sliced = full.slice(offset, n - offset);
+
+        let full_data =
+            write_with_cdc_options(&[&full], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
+        let sliced_data =
+            write_with_cdc_options(&[&sliced], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
+
+        // Roundtrip correctness.
+        let read = read_batches(&sliced_data);
+        assert_eq!(sliced, concat_batches(&read));
+
+        let full_pages = get_page_lengths(&full_data, 0);
+        let sliced_pages = get_page_lengths(&sliced_data, 0);
+
+        assert_eq!(full_pages.len(), 1, "expected single row group");
+        assert_eq!(sliced_pages.len(), 1, "expected single row group");
+
+        let fp = &full_pages[0];
+        let sp = &sliced_pages[0];
+
+        assert!(fp.len() > 1, "expected multiple CDC pages, got {fp:?}");
+        assert_eq!(fp.len(), sp.len(), "page count must match");
+
+        // First page is shorter by exactly `offset`.
+        assert_eq!(
+            fp[0] - sp[0],
+            offset as i64,
+            "sliced first page should be {offset} values shorter: full={fp:?} sliced={sp:?}"
+        );
+
+        // All remaining pages — including the last — are identical.
+        assert_eq!(
+            &fp[1..],
+            &sp[1..],
+            "pages after the first must be identical: full={fp:?} sliced={sp:?}"
+        );
+    }
+
+    #[test]
+    fn test_cdc_array_offsets_direct() {
+        // Call get_arrow_chunks directly on the low-level chunker, bypassing the
+        // Arrow writer pipeline.  The same self-synchronisation property holds:
+        //
+        //   non-offsetted chunks: [n,    a, b, c, ...]
+        //   offsetted chunks:     [n-10, a, b, c, ...]
+        //
+        // Only the first chunk is shorter by `offset`; all subsequent chunks have
+        // identical num_values.
+        use crate::basic::Type as PhysicalType;
+        use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
+
+        let options = CdcOptions {
+            min_chunk_size: CDC_MIN_CHUNK_SIZE,
+            max_chunk_size: CDC_MAX_CHUNK_SIZE,
+            norm_level: 0,
+        };
+        let desc = {
+            let tp = Type::primitive_type_builder("col", PhysicalType::INT32)
+                .build()
+                .unwrap();
+            ColumnDescriptor::new(Arc::new(tp), 0, 0, ColumnPath::new(vec![]))
+        };
+
+        let n = i32_part_length(); // large enough for multiple CDC chunks
+        let offset = 10usize;
+
+        // Non-offsetted: plain fresh array of n values.
+        let array = generate_i32_array(n, 0);
+        let mut chunker = super::ContentDefinedChunker::new(&desc, &options).unwrap();
+        let chunks = chunker.get_arrow_chunks(None, None, &array).unwrap();
+
+        // Offsetted: same backing buffer sliced by `offset` elements.
+        let sliced = array.slice(offset, n - offset);
+        let mut chunker2 = super::ContentDefinedChunker::new(&desc, &options).unwrap();
+        let chunks2 = chunker2.get_arrow_chunks(None, None, &sliced).unwrap();
+
+        let values: Vec<usize> = chunks.iter().map(|c| c.num_values).collect();
+        let values2: Vec<usize> = chunks2.iter().map(|c| c.num_values).collect();
+
+        assert!(values.len() > 1, "expected multiple chunks, got {values:?}");
+        assert_eq!(values.len(), values2.len(), "chunk count must match");
+
+        assert_eq!(
+            values[0] - values2[0],
+            offset,
+            "offsetted first chunk should be {offset} values shorter: {values:?} vs {values2:?}"
+        );
+        assert_eq!(
+            &values[1..],
+            &values2[1..],
+            "all chunks after the first must be identical: {values:?} vs {values2:?}"
+        );
     }
 }

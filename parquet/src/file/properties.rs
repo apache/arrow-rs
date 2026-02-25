@@ -64,33 +64,41 @@ pub const DEFAULT_COERCE_TYPES: bool = false;
 
 /// EXPERIMENTAL: Options for content-defined chunking (CDC).
 ///
-/// CDC creates data page boundaries based on content rather than fixed sizes,
-/// enabling efficient deduplication in content-addressable storage (CAS) systems.
-/// When enabled, unchanged data across file versions will produce identical byte
-/// sequences, allowing storage-level deduplication.
+/// Content-defined chunking is an experimental feature that optimizes parquet
+/// files for content addressable storage (CAS) systems by writing data pages
+/// according to content-defined chunk boundaries. This allows for more
+/// efficient deduplication of data across files, hence more efficient network
+/// transfers and storage.
 ///
-/// Each content-defined chunk is written as a separate parquet data page. These
-/// options control the chunk size and the chunking process. Note that the chunk
-/// size is calculated based on the logical value of the data, before any encoding
-/// or compression is applied.
+/// Each content-defined chunk is written as a separate parquet data page. The
+/// following options control the chunks' size and the chunking process. Note
+/// that the chunk size is calculated based on the logical value of the data,
+/// before any encoding or compression is applied.
 #[derive(Debug, Clone, Copy)]
 pub struct CdcOptions {
     /// Minimum chunk size in bytes, default is 256 KiB.
-    /// The rolling hash will not be evaluated until this many bytes have been
-    /// accumulated in the current chunk. All data fed through the hash function
-    /// counts towards the chunk size, including definition and repetition levels.
+    /// The rolling hash will not be updated until this size is reached for each chunk.
+    /// Note that all data sent through the hash function is counted towards the chunk
+    /// size, including definition and repetition levels if present.
     pub min_chunk_size: usize,
     /// Maximum chunk size in bytes, default is 1024 KiB.
-    /// A chunk boundary is forced when the chunk size reaches this value,
-    /// regardless of hash state. The parquet writer's `data_page_size_limit`
-    /// still applies independently.
+    /// The chunker will create a new chunk whenever the chunk size exceeds this value.
+    /// Note that the parquet writer has a related `data_page_size_limit` property that
+    /// controls the maximum size of a parquet data page after encoding. While setting
+    /// `data_page_size_limit` to a smaller value than `max_chunk_size` doesn't affect
+    /// the chunking effectiveness, it results in more small parquet data pages.
     pub max_chunk_size: usize,
-    /// Normalization level to center the chunk size distribution around the
-    /// average size more aggressively, default is 0.
-    /// Increasing the normalization level increases the probability of finding
-    /// a chunk boundary, improving the deduplication ratio, but also increases
-    /// the number of small chunks. Use 1 or 2 for higher deduplication at the
-    /// expense of fragmentation.
+    /// Number of bit adjustment to the gearhash mask in order to center the chunk size
+    /// around the average size more aggressively, default is 0.
+    /// Increasing the normalization level increases the probability of finding a chunk,
+    /// improving the deduplication ratio, but also increasing the number of small chunks
+    /// resulting in many small parquet data pages. The default value provides a good
+    /// balance between deduplication ratio and fragmentation.
+    /// Use norm_level=1 or norm_level=2 to reach a higher deduplication ratio at the
+    /// expense of fragmentation. Negative values can also be used to reduce the
+    /// probability of finding a chunk, resulting in larger chunks and fewer data pages.
+    /// Note that values outside [-3, 3] are not recommended, prefer using the default
+    /// value of 0 for most use cases.
     pub norm_level: i32,
 }
 
@@ -825,7 +833,21 @@ impl WriterPropertiesBuilder {
     /// EXPERIMENTAL: Sets content-defined chunking options, implicitly enabling CDC.
     ///
     /// See [`CdcOptions`] for details on each parameter.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `min_chunk_size == 0` or `max_chunk_size <= min_chunk_size`.
     pub fn set_cdc_options(mut self, options: CdcOptions) -> Self {
+        assert!(
+            options.min_chunk_size > 0,
+            "min_chunk_size must be positive"
+        );
+        assert!(
+            options.max_chunk_size > options.min_chunk_size,
+            "max_chunk_size ({}) must be greater than min_chunk_size ({})",
+            options.max_chunk_size,
+            options.min_chunk_size
+        );
         self.cdc_options = Some(options);
         self
     }
