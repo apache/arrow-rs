@@ -309,20 +309,6 @@ where
                 });
 
                 if let Some(rows) = rows {
-                    // If there is a pending partial record from a previous page,
-                    // count it before considering the whole-page skip. When the
-                    // next page provides num_rows (e.g. a V2 data page or via
-                    // offset index), its records are self-contained, so the
-                    // partial from the previous page is complete at this boundary.
-                    if let Some(decoder) = self.rep_level_decoder.as_mut() {
-                        if decoder.flush_partial() {
-                            remaining_records -= 1;
-                            if remaining_records == 0 {
-                                return Ok(num_records);
-                            }
-                        }
-                    }
-
                     if rows <= remaining_records {
                         self.page_reader.skip_next_page()?;
                         remaining_records -= rows;
