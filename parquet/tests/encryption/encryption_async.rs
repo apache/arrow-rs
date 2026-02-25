@@ -548,7 +548,7 @@ fn spawn_rg_join_and_finalize_task(
 }
 
 fn spawn_parquet_parallel_serialization_task(
-    mut writer_factory: ArrowRowGroupWriterFactory,
+    writer_factory: ArrowRowGroupWriterFactory,
     mut data: Receiver<RecordBatch>,
     serialize_tx: Sender<JoinHandle<RBStreamSerializeResult>>,
     schema: Arc<Schema>,

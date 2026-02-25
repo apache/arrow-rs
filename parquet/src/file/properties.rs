@@ -218,7 +218,7 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
-    cdc_options: Option<CdcOptions>,
+    content_defined_chunking: Option<CdcOptions>,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -418,8 +418,8 @@ impl WriterProperties {
     /// EXPERIMENTAL: Returns content-defined chunking options, or `None` if CDC is disabled.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_content_defined_chunking`]
-    pub fn cdc_options(&self) -> Option<&CdcOptions> {
-        self.cdc_options.as_ref()
+    pub fn content_defined_chunking(&self) -> Option<&CdcOptions> {
+        self.content_defined_chunking.as_ref()
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
@@ -545,7 +545,7 @@ pub struct WriterPropertiesBuilder {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
-    cdc_options: Option<CdcOptions>,
+    content_defined_chunking: Option<CdcOptions>,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -569,7 +569,7 @@ impl Default for WriterPropertiesBuilder {
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
-            cdc_options: None,
+            content_defined_chunking: None,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -595,7 +595,7 @@ impl WriterPropertiesBuilder {
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
-            cdc_options: self.cdc_options,
+            content_defined_chunking: self.content_defined_chunking,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -838,7 +838,7 @@ impl WriterPropertiesBuilder {
                 options.min_chunk_size
             );
         }
-        self.cdc_options = options;
+        self.content_defined_chunking = options;
         self
     }
 
@@ -1125,7 +1125,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             column_index_truncate_length: props.column_index_truncate_length,
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
-            cdc_options: props.cdc_options,
+            content_defined_chunking: props.content_defined_chunking,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }

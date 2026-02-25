@@ -266,7 +266,7 @@ impl<W: Write + Send> ArrowWriter<W> {
         let row_group_writer_factory =
             ArrowRowGroupWriterFactory::new(&file_writer, arrow_schema.clone());
 
-        let cdc_chunkers = match props_ptr.cdc_options() {
+        let cdc_chunkers = match props_ptr.content_defined_chunking() {
             Some(opts) => {
                 let chunkers = file_writer
                     .schema_descr()
@@ -818,7 +818,7 @@ impl ArrowColumnChunk {
 ///   .unwrap();
 ///
 /// // Create a factory for building Arrow column writers
-/// let mut row_group_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+/// let row_group_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
 /// // Create column writers for the 0th row group
 /// let col_writers = row_group_factory.create_column_writers(0).unwrap();
 ///
