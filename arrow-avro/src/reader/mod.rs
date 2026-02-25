@@ -1401,6 +1401,7 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 #[cfg(test)]
 mod test {
     use crate::codec::AvroFieldBuilder;
+    use crate::reader::header::HeaderDecoder;
     use crate::reader::record::RecordDecoder;
     use crate::reader::{Decoder, Reader, ReaderBuilder};
     use crate::schema::{
@@ -6824,6 +6825,154 @@ mod test {
     }
 
     #[test]
+    fn test_bad_varint_bug_nullable_array_items() {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let gz_path = format!("{manifest_dir}/test/data/bad-varint-bug.avro.gz");
+        let gz_file = File::open(&gz_path).expect("test file should exist");
+        let mut decoder = GzDecoder::new(gz_file);
+        let mut avro_bytes = Vec::new();
+        decoder
+            .read_to_end(&mut avro_bytes)
+            .expect("should decompress");
+        let reader_arrow_schema = Schema::new(vec![Field::new(
+            "int_array",
+            DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+            true,
+        )])
+        .with_metadata(HashMap::from([("avro.name".into(), "table".into())]));
+        let reader_schema = AvroSchema::try_from(&reader_arrow_schema)
+            .expect("should convert Arrow schema to Avro");
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(avro_bytes))
+            .expect("should build reader");
+        let batch = reader
+            .next()
+            .expect("should have one batch")
+            .expect("reading should succeed without bad varint error");
+        assert_eq!(batch.num_rows(), 1);
+        let list_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("should be ListArray");
+        assert_eq!(list_col.len(), 1);
+        let values = list_col.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 2);
+        assert_eq!(int_values.value(0), 1);
+        assert_eq!(int_values.value(1), 2);
+    }
+
+    fn corrupt_first_block_payload_byte(
+        mut bytes: Vec<u8>,
+        field_offset: usize,
+        expected_original: u8,
+        replacement: u8,
+    ) -> Vec<u8> {
+        let mut header_decoder = HeaderDecoder::default();
+        let header_len = header_decoder.decode(&bytes).expect("decode header");
+        assert!(header_decoder.flush().is_some(), "decode complete header");
+
+        let mut cursor = &bytes[header_len..];
+        let (_, count_len) = crate::reader::vlq::read_varint(cursor).expect("decode block count");
+        cursor = &cursor[count_len..];
+        let (_, size_len) = crate::reader::vlq::read_varint(cursor).expect("decode block size");
+        let data_start = header_len + count_len + size_len;
+        let target = data_start + field_offset;
+
+        assert!(
+            target < bytes.len(),
+            "target byte offset {target} out of bounds for input length {}",
+            bytes.len()
+        );
+        assert_eq!(
+            bytes[target], expected_original,
+            "unexpected original byte at payload offset {field_offset}"
+        );
+        bytes[target] = replacement;
+        bytes
+    }
+
+    #[test]
+    fn ocf_projection_rejects_overflowing_varint_in_skipped_long_field() {
+        // Writer row payload is [bad_long=i64::MIN][keep=7]. The first field is encoded as
+        // 10-byte VLQ ending in 0x01. Flipping that terminator to 0x02 creates an overflow
+        // varint that must fail.
+        let writer_schema = Schema::new(vec![
+            Field::new("bad_long", DataType::Int64, false),
+            Field::new("keep", DataType::Int32, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![
+                Arc::new(Int64Array::from(vec![i64::MIN])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![7])) as ArrayRef,
+            ],
+        )
+        .expect("build writer batch");
+        let bytes = write_ocf(&writer_schema, &[batch]);
+        let mutated = corrupt_first_block_payload_byte(bytes, 9, 0x01, 0x02);
+
+        let err = ReaderBuilder::new()
+            .build(Cursor::new(mutated.clone()))
+            .expect("build full reader")
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("full decode should reject malformed varint");
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("bad varint"));
+
+        let err = ReaderBuilder::new()
+            .with_projection(vec![1])
+            .build(Cursor::new(mutated))
+            .expect("build projected reader")
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("projection must also reject malformed skipped varint");
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("bad varint"));
+    }
+
+    #[test]
+    fn ocf_projection_rejects_i32_overflow_in_skipped_int_field() {
+        // Writer row payload is [bad_int=i32::MIN][keep=11]. The first field encodes to
+        // ff ff ff ff 0f. Flipping 0x0f -> 0x10 keeps a syntactically valid varint, but now
+        // its value exceeds u32::MAX and must fail Int32 validation even when projected out.
+        let writer_schema = Schema::new(vec![
+            Field::new("bad_int", DataType::Int32, false),
+            Field::new("keep", DataType::Int64, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![i32::MIN])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![11])) as ArrayRef,
+            ],
+        )
+        .expect("build writer batch");
+        let bytes = write_ocf(&writer_schema, &[batch]);
+        let mutated = corrupt_first_block_payload_byte(bytes, 4, 0x0f, 0x10);
+
+        let err = ReaderBuilder::new()
+            .build(Cursor::new(mutated.clone()))
+            .expect("build full reader")
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("full decode should reject int overflow");
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("varint overflow"));
+
+        let err = ReaderBuilder::new()
+            .with_projection(vec![1])
+            .build(Cursor::new(mutated))
+            .expect("build projected reader")
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("projection must also reject skipped int overflow");
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("varint overflow"));
+    }
+
+    #[test]
     fn comprehensive_e2e_test() {
         let path = "test/data/comprehensive_e2e.avro";
         let batch = read_file(path, 1024, false);
@@ -9088,47 +9237,5 @@ mod test {
             expected, batch,
             "entire RecordBatch mismatch (schema, all columns, all rows)"
         );
-    }
-
-    #[test]
-    fn test_bad_varint_bug_nullable_array_items() {
-        use flate2::read::GzDecoder;
-        use std::io::Read;
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let gz_path = format!("{manifest_dir}/test/data/bad-varint-bug.avro.gz");
-        let gz_file = File::open(&gz_path).expect("test file should exist");
-        let mut decoder = GzDecoder::new(gz_file);
-        let mut avro_bytes = Vec::new();
-        decoder
-            .read_to_end(&mut avro_bytes)
-            .expect("should decompress");
-        let reader_arrow_schema = Schema::new(vec![Field::new(
-            "int_array",
-            DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
-            true,
-        )])
-        .with_metadata(HashMap::from([("avro.name".into(), "table".into())]));
-        let reader_schema = AvroSchema::try_from(&reader_arrow_schema)
-            .expect("should convert Arrow schema to Avro");
-        let mut reader = ReaderBuilder::new()
-            .with_reader_schema(reader_schema)
-            .build(Cursor::new(avro_bytes))
-            .expect("should build reader");
-        let batch = reader
-            .next()
-            .expect("should have one batch")
-            .expect("reading should succeed without bad varint error");
-        assert_eq!(batch.num_rows(), 1);
-        let list_col = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .expect("should be ListArray");
-        assert_eq!(list_col.len(), 1);
-        let values = list_col.values();
-        let int_values = values.as_primitive::<Int32Type>();
-        assert_eq!(int_values.len(), 2);
-        assert_eq!(int_values.value(0), 1);
-        assert_eq!(int_values.value(1), 2);
     }
 }

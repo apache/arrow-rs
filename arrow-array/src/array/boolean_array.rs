@@ -534,12 +534,7 @@ impl BooleanArray {
         });
 
         let values = BooleanBuffer::new(val_builder.into(), 0, data_len);
-        let nulls = Some(NullBuffer::new(BooleanBuffer::new(
-            null_builder.into(),
-            0,
-            data_len,
-        )))
-        .filter(|n| n.null_count() > 0);
+        let nulls = NullBuffer::from_unsliced_buffer(null_builder, data_len);
         BooleanArray::new(values, nulls)
     }
 }
