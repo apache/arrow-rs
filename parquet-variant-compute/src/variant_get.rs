@@ -45,6 +45,10 @@ pub(crate) enum ShreddedPathStep {
     NotShredded,
 }
 
+/// Build the next shredding state by taking one list element (at `index`) per input row.
+///
+/// With `cast_options.safe = true`, out-of-bounds indices become nulls for those rows.
+/// With `cast_options.safe = false`, out-of-bounds indices return [`ArrowError::CastError`].
 fn take_list_index_as_shredding_state<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     index: usize,
@@ -119,6 +123,16 @@ fn take_list_index_as_shredding_state<O: OffsetSizeTrait>(
 /// Given a shredded variant field -- a `(value?, typed_value?)` pair -- try to take one path step
 /// deeper. For a `VariantPathElement::Field`, the step fails if there is no `typed_value` at this
 /// level, or if `typed_value` is not a struct, or if the requested field name does not exist.
+///
+/// Safe-cast behavior (`cast_options.safe = true`):
+/// - Type mismatch during path traversal (for example field access on non-struct, index access on
+///   non-list) returns [`ShreddedPathStep::Missing`] or [`ShreddedPathStep::NotShredded`], allowing
+///   the caller to continue with null/fallback semantics.
+/// - List index out-of-bounds produces nulls for the corresponding rows.
+///
+/// Unsafe-cast behavior (`cast_options.safe = false`):
+/// - Type mismatch during path traversal returns [`ArrowError::CastError`].
+/// - List index out-of-bounds returns [`ArrowError::CastError`].
 pub(crate) fn follow_shredded_path_element(
     shredding_state: &ShreddingState,
     path_element: &VariantPathElement<'_>,
