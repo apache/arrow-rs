@@ -548,7 +548,7 @@ fn spawn_rg_join_and_finalize_task(
 }
 
 fn spawn_parquet_parallel_serialization_task(
-    writer_factory: ArrowRowGroupWriterFactory,
+    mut writer_factory: ArrowRowGroupWriterFactory,
     mut data: Receiver<RecordBatch>,
     serialize_tx: Sender<JoinHandle<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
@@ -713,7 +713,7 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
 
     let writer =
         SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
-    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(schema));
+    let mut row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(schema));
     let max_row_groups = 1;
 
     let (serialize_tx, serialize_rx) =
@@ -778,7 +778,7 @@ async fn test_multi_threaded_encrypted_writing() {
     let temp_file = tempfile::tempfile().unwrap();
     let mut writer =
         SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
-    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+    let mut row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
 
     let (serialize_tx, mut serialize_rx) =
         tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(1);
