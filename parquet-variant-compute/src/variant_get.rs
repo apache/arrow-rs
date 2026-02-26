@@ -16,8 +16,8 @@
 // under the License.
 use arrow::{
     array::{
-        self, Array, ArrayRef, BinaryViewArray, GenericListArray, OffsetSizeTrait, StructArray,
-        UInt64Array,
+        self, Array, ArrayRef, BinaryViewArray, GenericListArray, GenericListViewArray,
+        StructArray, UInt64Array,
     },
     compute::{CastOptions, take},
     datatypes::Field,
@@ -27,6 +27,7 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, VariantPath, VariantPathElement};
 
 use crate::VariantArray;
+use crate::arrow_to_variant::ListLikeArray;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 use crate::{ShreddingState, variant_array::StructArrayBuilder};
 
@@ -45,16 +46,15 @@ pub(crate) enum ShreddedPathStep {
     NotShredded,
 }
 
-/// Build the next shredding state by taking one list element (at `index`) per input row.
+/// Build the next shredding state by taking one list-like element (at `index`) per input row.
 ///
 /// With `cast_options.safe = true`, out-of-bounds indices become nulls for those rows.
 /// With `cast_options.safe = false`, out-of-bounds indices return [`ArrowError::CastError`].
-fn take_list_index_as_shredding_state<O: OffsetSizeTrait>(
-    list_array: &GenericListArray<O>,
+fn take_list_like_index_as_shredding_state<L: ListLikeArray>(
+    list_array: &L,
     index: usize,
     cast_options: &CastOptions,
 ) -> Result<Option<ShreddingState>> {
-    let offsets = list_array.offsets();
     let values = list_array.values();
 
     let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() else {
@@ -72,16 +72,18 @@ fn take_list_index_as_shredding_state<O: OffsetSizeTrait>(
 
     let mut take_indices = Vec::with_capacity(list_array.len());
     for row in 0..list_array.len() {
-        let start = offsets[row].as_usize();
-        let end = offsets[row + 1].as_usize();
-        let len = end - start;
+        let row_range = list_array.element_range(row);
+        let len = row_range.len();
 
         if index < len {
-            let absolute_index = start.checked_add(index).ok_or_else(|| {
-                ArrowError::ComputeError("List index overflow while building take indices".into())
+            let absolute_index = row_range.start.checked_add(index).ok_or_else(|| {
+                ArrowError::ComputeError(
+                    "List-like index overflow while building take indices".into(),
+                )
             })?;
-            let absolute_index = u64::try_from(absolute_index)
-                .map_err(|_| ArrowError::ComputeError("List index does not fit into u64".into()))?;
+            let absolute_index = u64::try_from(absolute_index).map_err(|_| {
+                ArrowError::ComputeError("List-like index does not fit into u64".into())
+            })?;
             take_indices.push(Some(absolute_index));
         } else if cast_options.safe {
             take_indices.push(None);
@@ -189,11 +191,21 @@ pub(crate) fn follow_shredded_path_element(
             let state = if let Some(list_array) =
                 typed_value.as_any().downcast_ref::<GenericListArray<i32>>()
             {
-                take_list_index_as_shredding_state(list_array, *index, cast_options)?
+                take_list_like_index_as_shredding_state(list_array, *index, cast_options)?
             } else if let Some(list_array) =
                 typed_value.as_any().downcast_ref::<GenericListArray<i64>>()
             {
-                take_list_index_as_shredding_state(list_array, *index, cast_options)?
+                take_list_like_index_as_shredding_state(list_array, *index, cast_options)?
+            } else if let Some(list_view_array) = typed_value
+                .as_any()
+                .downcast_ref::<GenericListViewArray<i32>>()
+            {
+                take_list_like_index_as_shredding_state(list_view_array, *index, cast_options)?
+            } else if let Some(list_view_array) = typed_value
+                .as_any()
+                .downcast_ref::<GenericListViewArray<i64>>()
+            {
+                take_list_like_index_as_shredding_state(list_view_array, *index, cast_options)?
             } else if cast_options.safe {
                 // With safe cast options, return NULL (missing_path_step)
                 return Ok(missing_path_step());
@@ -437,7 +449,7 @@ mod test {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use super::{GetOptions, take_list_index_as_shredding_state, variant_get};
+    use super::{GetOptions, variant_get};
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::{
         ShreddedSchemaBuilder, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant,
@@ -2011,7 +2023,6 @@ mod test {
         assert_eq!(&result, &expected);
     }
 
-    // The tests below are temp before: https://github.com/apache/arrow-rs/issues/9455
     #[test]
     fn test_shredded_list_index_out_of_bounds_unsafe_cast_errors() {
         let options =
@@ -2025,37 +2036,72 @@ mod test {
     }
 
     #[test]
-    fn test_large_list_index_path_helper() {
-        let large_list = large_list_of_shredded_elements();
-        let state = take_list_index_as_shredding_state(&large_list, 1, &CastOptions::default())
-            .unwrap()
-            .unwrap();
+    fn test_shredded_large_list_index_access_from_value_field() {
+        let array = shredded_large_list_variant_array();
+        // Index 1 maps to "drama" for row 0, and to fallback value 123 for row 1.
+        let options = GetOptions::new_with_path(VariantPath::from(1));
+        let result = variant_get(&array, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
 
-        let typed = state
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        let value = state.value_field().unwrap();
-        assert_eq!(typed.value(0), "drama");
-        assert!(typed.is_null(1));
-        assert!(value.is_null(0));
-        assert!(value.is_valid(1));
+        assert_eq!(result_variant.value(0), Variant::from("drama"));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
     }
 
     #[test]
-    fn test_large_list_index_out_of_bounds_unsafe_cast_errors() {
-        let large_list = large_list_of_shredded_elements();
-        let err = take_list_index_as_shredding_state(
-            &large_list,
-            10,
-            &CastOptions {
+    fn test_shredded_large_list_index_out_of_bounds_unsafe_cast_errors() {
+        let options =
+            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
                 safe: false,
                 ..Default::default()
-            },
-        )
-        .unwrap_err();
+            });
+
+        let err = variant_get(&shredded_large_list_variant_array(), options).unwrap_err();
+        assert!(err.to_string().contains("Cannot access index '10'"));
+    }
+
+    #[test]
+    fn test_shredded_list_view_index_access_from_value_field() {
+        let array = shredded_list_view_variant_array();
+        let options = GetOptions::new_with_path(VariantPath::from(1));
+        let result = variant_get(&array, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+
+        assert_eq!(result_variant.value(0), Variant::from("drama"));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
+    }
+
+    #[test]
+    fn test_shredded_list_view_index_out_of_bounds_unsafe_cast_errors() {
+        let options =
+            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+
+        let err = variant_get(&shredded_list_view_variant_array(), options).unwrap_err();
+        assert!(err.to_string().contains("Cannot access index '10'"));
+    }
+
+    #[test]
+    fn test_shredded_large_list_view_index_access_from_value_field() {
+        let array = shredded_large_list_view_variant_array();
+        let options = GetOptions::new_with_path(VariantPath::from(1));
+        let result = variant_get(&array, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+
+        assert_eq!(result_variant.value(0), Variant::from("drama"));
+        assert_eq!(result_variant.value(1).as_int64(), Some(123));
+    }
+
+    #[test]
+    fn test_shredded_large_list_view_index_out_of_bounds_unsafe_cast_errors() {
+        let options =
+            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+
+        let err = variant_get(&shredded_large_list_view_variant_array(), options).unwrap_err();
         assert!(err.to_string().contains("Cannot access index '10'"));
     }
 
@@ -2162,39 +2208,41 @@ mod test {
         ArrayRef::from(shredded)
     }
 
-    fn large_list_of_shredded_elements() -> LargeListArray {
-        let fallback_array: ArrayRef = {
-            let mut builder = VariantBuilder::new();
-            builder.append_value(Variant::from(123i32));
-            let (_, value_bytes) = builder.finish();
-            Arc::new(BinaryViewArray::from(vec![
-                None,
-                None,
-                None,
-                Some(value_bytes.as_slice()),
-            ]))
-        };
-        let typed_array: ArrayRef = Arc::new(StringArray::from(vec![
-            Some("comedy"),
-            Some("drama"),
-            Some("horror"),
-            None,
+    fn shredded_large_list_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"["comedy", "drama"]"#),
+            Some(r#"["horror", 123]"#),
         ]));
+        let input = json_to_variant(&json_rows).unwrap();
 
-        let struct_array = StructArrayBuilder::new()
-            .with_field("value", fallback_array, true)
-            .with_field("typed_value", typed_array, true)
-            .build();
+        let list_schema = DataType::LargeList(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let shredded = shred_variant(&input, &list_schema).unwrap();
+        ArrayRef::from(shredded)
+    }
 
-        LargeListArray::new(
-            Arc::new(Field::new_list_field(
-                struct_array.data_type().clone(),
-                true,
-            )),
-            OffsetBuffer::new(ScalarBuffer::from(vec![0_i64, 2, 4])),
-            Arc::new(struct_array),
-            None,
-        )
+    fn shredded_list_view_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"["comedy", "drama"]"#),
+            Some(r#"["horror", 123]"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let list_schema = DataType::ListView(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let shredded = shred_variant(&input, &list_schema).unwrap();
+        ArrayRef::from(shredded)
+    }
+
+    fn shredded_large_list_view_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"["comedy", "drama"]"#),
+            Some(r#"["horror", 123]"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let list_schema =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let shredded = shred_variant(&input, &list_schema).unwrap();
+        ArrayRef::from(shredded)
     }
     /// Helper function to create a shredded variant array representing objects
     ///
