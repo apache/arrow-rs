@@ -78,7 +78,7 @@ use std::{borrow::Cow, ops::Deref};
 /// # Example: Accessing field with bracket
 /// ```
 /// # use parquet_variant::{VariantPath, VariantPathElement};
-/// let path = VariantPath::try_from("a[b.c].d[2]['3']").unwrap();
+/// let path = VariantPath::try_from("a['b.c'].d[2]['3']").unwrap();
 /// let expected = VariantPath::from_iter([VariantPathElement::field("a"),
 ///     VariantPathElement::field("b.c"),
 ///     VariantPathElement::field("d"),
@@ -288,37 +288,22 @@ mod tests {
         assert_eq!(path, expected);
 
         // invalid index will be treated as field
-        let path = VariantPath::try_from("foo.bar[abc]").unwrap();
+        let path = VariantPath::try_from("foo.bar['abc'][\"def\"]").unwrap();
         let expected = VariantPath::from_iter([
             VariantPathElement::field("foo"),
             VariantPathElement::field("bar"),
             VariantPathElement::field("abc"),
+            VariantPathElement::field("def"),
         ]);
         assert_eq!(path, expected);
 
-        // field with number field(a number quoted with `'` will be treated as field, not index)
-        let path = VariantPath::try_from("foo['0'].bar").unwrap();
+        // a number quoted with `'` is treated as field, not index
+        let path = VariantPath::try_from("foo['0'].bar[\"1\"]").unwrap();
         let expected = VariantPath::from_iter([
             VariantPathElement::field("foo"),
             VariantPathElement::field("0"),
             VariantPathElement::field("bar"),
-        ]);
-        assert_eq!(path, expected);
-
-        // the mismatch `'` will be treated as field
-        let path = VariantPath::try_from("foo.bar[123']").unwrap();
-        let expected = VariantPath::from_iter([
-            VariantPathElement::field("foo"),
-            VariantPathElement::field("bar"),
-            VariantPathElement::field("123'"),
-        ]);
-        assert_eq!(path, expected);
-
-        let path = VariantPath::try_from("a.b['234]").unwrap();
-        let expected = VariantPath::from_iter([
-            VariantPathElement::field("a"),
-            VariantPathElement::field("b"),
-            VariantPathElement::field("'234"),
+            VariantPathElement::field("1"),
         ]);
         assert_eq!(path, expected);
     }
@@ -348,5 +333,18 @@ mod tests {
         // No '[' before ']'
         let err = VariantPath::try_from("foo.bar]baz").unwrap_err();
         assert_eq!(err.to_string(), "Parser error: Unexpected ']' at byte 7");
+
+        // Invalid number(without quote) parse
+        let err = VariantPath::try_from("foo.bar[123abc]").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parser error: Invalid token in bracket request: `123abc`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+        );
+
+        let err = VariantPath::try_from("foo.bar[abc]").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parser error: Invalid token in bracket request: `abc`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+        );
     }
 }
