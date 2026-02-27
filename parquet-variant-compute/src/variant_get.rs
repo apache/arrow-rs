@@ -390,7 +390,7 @@ mod test {
     fn get_primitive_variant_field() {
         single_variant_get_test(
             r#"{"some_field": 1234}"#,
-            VariantPath::from("some_field"),
+            VariantPath::try_from("some_field").unwrap(),
             "1234",
         );
     }
@@ -404,7 +404,9 @@ mod test {
     fn get_primitive_variant_inside_object_of_object() {
         single_variant_get_test(
             r#"{"top_level_field": {"inner_field": 1234}}"#,
-            VariantPath::from("top_level_field").join("inner_field"),
+            VariantPath::try_from("top_level_field")
+                .unwrap()
+                .join("inner_field"),
             "1234",
         );
     }
@@ -422,7 +424,7 @@ mod test {
     fn get_primitive_variant_inside_object_of_list() {
         single_variant_get_test(
             r#"{"some_field": [1234]}"#,
-            VariantPath::from("some_field").join(0),
+            VariantPath::try_from("some_field").unwrap().join(0),
             "1234",
         );
     }
@@ -431,7 +433,7 @@ mod test {
     fn get_complex_variant() {
         single_variant_get_test(
             r#"{"top_level_field": {"inner_field": 1234}}"#,
-            VariantPath::from("top_level_field"),
+            VariantPath::try_from("top_level_field").unwrap(),
             r#"{"inner_field": 1234}"#,
         );
     }
@@ -1818,7 +1820,7 @@ mod test {
         let array = shredded_object_with_x_field_variant_array();
 
         // Test: Extract the "x" field as VariantArray first
-        let options = GetOptions::new_with_path(VariantPath::from("x"));
+        let options = GetOptions::new_with_path(VariantPath::try_from("x").unwrap());
         let result = variant_get(&array, options).unwrap();
 
         let result_variant = VariantArray::try_new(&result).unwrap();
@@ -1837,7 +1839,7 @@ mod test {
 
         // Test: Extract the "x" field as Int32Array (type conversion)
         let field = Field::new("x", DataType::Int32, false);
-        let options = GetOptions::new_with_path(VariantPath::from("x"))
+        let options = GetOptions::new_with_path(VariantPath::try_from("x").unwrap())
             .with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&array, options).unwrap();
 
@@ -1930,11 +1932,11 @@ mod test {
         // Check: How does VariantPath parse different strings?
         println!("Testing path parsing:");
 
-        let path_x = VariantPath::from("x");
+        let path_x = VariantPath::try_from("x").unwrap();
         let elements_x: Vec<_> = path_x.iter().collect();
         println!("  'x' -> {} elements: {:?}", elements_x.len(), elements_x);
 
-        let path_ax = VariantPath::from("a.x");
+        let path_ax = VariantPath::try_from("a.x").unwrap();
         let elements_ax: Vec<_> = path_ax.iter().collect();
         println!(
             "  'a.x' -> {} elements: {:?}",
@@ -1942,7 +1944,7 @@ mod test {
             elements_ax
         );
 
-        let path_ax_alt = VariantPath::from("$.a.x");
+        let path_ax_alt = VariantPath::try_from("$.a.x").unwrap();
         let elements_ax_alt: Vec<_> = path_ax_alt.iter().collect();
         println!(
             "  '$.a.x' -> {} elements: {:?}",
@@ -1950,10 +1952,10 @@ mod test {
             elements_ax_alt
         );
 
-        let path_nested = VariantPath::from("a").join("x");
+        let path_nested = VariantPath::try_from("a").unwrap().join("x");
         let elements_nested: Vec<_> = path_nested.iter().collect();
         println!(
-            "  VariantPath::from('a').join('x') -> {} elements: {:?}",
+            "  VariantPath::try_from('a').unwrap().join('x') -> {} elements: {:?}",
             elements_nested.len(),
             elements_nested
         );
@@ -1962,7 +1964,7 @@ mod test {
         let array = shredded_object_with_x_field_variant_array();
 
         // Test if variant_get with REAL nested path throws not implemented error
-        let real_nested_path = VariantPath::from("a").join("x");
+        let real_nested_path = VariantPath::try_from("a").unwrap().join("x");
         let options = GetOptions::new_with_path(real_nested_path);
         let result = variant_get(&array, options);
 
@@ -1995,7 +1997,7 @@ mod test {
         let unshredded_array = create_depth_0_test_data();
 
         let field = Field::new("result", DataType::Int32, true);
-        let path = VariantPath::from("x");
+        let path = VariantPath::try_from("x").unwrap();
         let options = GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&unshredded_array, options).unwrap();
 
@@ -2011,7 +2013,7 @@ mod test {
         let shredded_array = create_depth_0_shredded_test_data_simple();
 
         let field = Field::new("result", DataType::Int32, true);
-        let path = VariantPath::from("x");
+        let path = VariantPath::try_from("x").unwrap();
         let options = GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&shredded_array, options).unwrap();
 
@@ -2033,7 +2035,7 @@ mod test {
         let unshredded_array = create_nested_path_test_data();
 
         let field = Field::new("result", DataType::Int32, true);
-        let path = VariantPath::from("a.x"); // Dot notation!
+        let path = VariantPath::try_from("a.x").unwrap(); // Dot notation!
         let options = GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&unshredded_array, options).unwrap();
 
@@ -2048,7 +2050,7 @@ mod test {
         let shredded_array = create_depth_1_shredded_test_data_working();
 
         let field = Field::new("result", DataType::Int32, true);
-        let path = VariantPath::from("a.x"); // Dot notation!
+        let path = VariantPath::try_from("a.x").unwrap(); // Dot notation!
         let options = GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&shredded_array, options).unwrap();
 
@@ -2070,7 +2072,7 @@ mod test {
         let unshredded_array = create_depth_2_test_data();
 
         let field = Field::new("result", DataType::Int32, true);
-        let path = VariantPath::from("a.b.x"); // Double nested dot notation!
+        let path = VariantPath::try_from("a.b.x").unwrap(); // Double nested dot notation!
         let options = GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&unshredded_array, options).unwrap();
 
@@ -2086,7 +2088,7 @@ mod test {
         let shredded_array = create_depth_2_shredded_test_data_working();
 
         let field = Field::new("result", DataType::Int32, true);
-        let path = VariantPath::from("a.b.x"); // Double nested dot notation!
+        let path = VariantPath::try_from("a.b.x").unwrap(); // Double nested dot notation!
         let options = GetOptions::new_with_path(path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&shredded_array, options).unwrap();
 
@@ -2108,7 +2110,7 @@ mod test {
         let array = shredded_object_with_x_field_variant_array();
 
         // Test: Extract the "x" field (single level) - this works
-        let single_path = VariantPath::from("x");
+        let single_path = VariantPath::try_from("x").unwrap();
         let field = Field::new("result", DataType::Int32, true);
         let options =
             GetOptions::new_with_path(single_path).with_as_type(Some(FieldRef::from(field)));
@@ -2117,7 +2119,7 @@ mod test {
         println!("Single path 'x' works - result: {:?}", result);
 
         // Test: Try nested path "a.x" - this is what we need to implement
-        let nested_path = VariantPath::from("a").join("x");
+        let nested_path = VariantPath::try_from("a").unwrap().join("x");
         let field = Field::new("result", DataType::Int32, true);
         let options =
             GetOptions::new_with_path(nested_path).with_as_type(Some(FieldRef::from(field)));
@@ -2584,7 +2586,7 @@ mod test {
 
         // Try to access a field with safe cast options (should return NULLs)
         let safe_options = GetOptions {
-            path: VariantPath::from("nonexistent_field"),
+            path: VariantPath::try_from("nonexistent_field").unwrap(),
             as_type: Some(Arc::new(Field::new("result", DataType::Int32, true))),
             cast_options: CastOptions::default(), // safe = true
         };
@@ -2601,7 +2603,7 @@ mod test {
 
         // Try to access a field with strict cast options (should error)
         let strict_options = GetOptions {
-            path: VariantPath::from("nonexistent_field"),
+            path: VariantPath::try_from("nonexistent_field").unwrap(),
             as_type: Some(Arc::new(Field::new("result", DataType::Int32, true))),
             cast_options: CastOptions {
                 safe: false,
@@ -2710,7 +2712,7 @@ mod test {
         // 2. The "a" field's typed_value nulls
         // 3. The "x" field's typed_value nulls
         let options = GetOptions {
-            path: VariantPath::from("a.x"),
+            path: VariantPath::try_from("a.x").unwrap(),
             as_type: Some(Arc::new(Field::new("result", DataType::Int32, true))),
             cast_options: CastOptions::default(),
         };
@@ -2844,7 +2846,7 @@ mod test {
         // Test 1: nullable field (should allow nulls from cast failures)
         let nullable_field = Arc::new(Field::new("result", DataType::Int32, true));
         let options_nullable = GetOptions {
-            path: VariantPath::from("x"),
+            path: VariantPath::try_from("x").unwrap(),
             as_type: Some(nullable_field.clone()),
             cast_options: CastOptions::default(),
         };
@@ -2897,7 +2899,7 @@ mod test {
         // Test 2: non-nullable field (behavior should be the same with safe casting)
         let non_nullable_field = Arc::new(Field::new("result", DataType::Int32, false));
         let options_non_nullable = GetOptions {
-            path: VariantPath::from("x"),
+            path: VariantPath::try_from("x").unwrap(),
             as_type: Some(non_nullable_field.clone()),
             cast_options: CastOptions::default(), // safe=true by default
         };
@@ -3072,7 +3074,7 @@ mod test {
         let variant_array = create_comprehensive_nested_shredded_variant();
 
         // Extract "outer" field using path-based variant_get
-        let path = VariantPath::from("outer");
+        let path = VariantPath::try_from("outer").unwrap();
         let inner_field = Field::new("inner", DataType::Int32, true);
         let result_type = DataType::Struct(Fields::from(vec![inner_field]));
 
@@ -3117,7 +3119,7 @@ mod test {
         let variant_array = create_comprehensive_nested_shredded_variant();
 
         // Extract "outer.inner" field using path-based variant_get
-        let path = VariantPath::from("outer").join("inner");
+        let path = VariantPath::try_from("outer").unwrap().join("inner");
 
         let options = GetOptions {
             path,
@@ -4113,7 +4115,7 @@ mod test {
         let all_nulls_field_ref = FieldRef::from(Field::new("result", DataType::Int32, true));
         let all_nulls_result = variant_get(
             &variant_array,
-            GetOptions::new_with_path(VariantPath::from("all_nulls"))
+            GetOptions::new_with_path(VariantPath::try_from("all_nulls").unwrap())
                 .with_as_type(Some(all_nulls_field_ref)),
         )
         .unwrap();
@@ -4123,7 +4125,7 @@ mod test {
         let some_nulls_field_ref = FieldRef::from(Field::new("result", DataType::Int32, true));
         let some_nulls_result = variant_get(
             &variant_array,
-            GetOptions::new_with_path(VariantPath::from("some_nulls"))
+            GetOptions::new_with_path(VariantPath::try_from("some_nulls").unwrap())
                 .with_as_type(Some(some_nulls_field_ref)),
         )
         .unwrap();
@@ -4138,7 +4140,7 @@ mod test {
         ));
         let struct_result = variant_get(
             &variant_array,
-            GetOptions::new_with_path(VariantPath::from("struct_field"))
+            GetOptions::new_with_path(VariantPath::try_from("struct_field").unwrap())
                 .with_as_type(Some(struct_field_ref)),
         )
         .unwrap();
@@ -4237,12 +4239,13 @@ mod test {
         ];
 
         for (request_type, expected) in expectations {
-            let options = GetOptions::new_with_path(VariantPath::from("outer").join("list"))
-                .with_as_type(Some(FieldRef::from(Field::new(
-                    "result",
-                    request_type.clone(),
-                    true,
-                ))));
+            let options =
+                GetOptions::new_with_path(VariantPath::try_from("outer").unwrap().join("list"))
+                    .with_as_type(Some(FieldRef::from(Field::new(
+                        "result",
+                        request_type.clone(),
+                        true,
+                    ))));
 
             let result = variant_get(&variant_array, options).unwrap();
             assert_eq!(result.data_type(), expected.data_type());
@@ -4254,13 +4257,17 @@ mod test {
             (1, vec![None, None]),
             (2, vec![Some(3), None]),
         ] {
-            let index_options =
-                GetOptions::new_with_path(VariantPath::from("outer").join("list").join(idx))
-                    .with_as_type(Some(FieldRef::from(Field::new(
-                        "result",
-                        DataType::Int64,
-                        true,
-                    ))));
+            let index_options = GetOptions::new_with_path(
+                VariantPath::try_from("outer")
+                    .unwrap()
+                    .join("list")
+                    .join(idx),
+            )
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::Int64,
+                true,
+            ))));
             let index_result = variant_get(&variant_array, index_options).unwrap();
             let index_expected: ArrayRef = Arc::new(Int64Array::from(expected));
             assert_eq!(&index_result, &index_expected);
