@@ -15,118 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::ValueIter;
-use arrow_schema::{ArrowError, DataType, Field, Fields, Schema};
-use indexmap::map::IndexMap as HashMap;
-use indexmap::set::IndexSet as HashSet;
-use serde_json::Value;
 use std::borrow::Borrow;
 use std::io::{BufRead, Seek};
-use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-enum InferredType {
-    Scalar(HashSet<DataType>),
-    Array(Box<InferredType>),
-    Object(HashMap<String, InferredType>),
-    Any,
-}
+use arrow_schema::{ArrowError, Schema};
+use bumpalo::Bump;
+use serde_json::Value;
 
-impl InferredType {
-    fn merge(&mut self, other: InferredType) -> Result<(), ArrowError> {
-        match (self, other) {
-            (InferredType::Array(s), InferredType::Array(o)) => {
-                s.merge(*o)?;
-            }
-            (InferredType::Scalar(self_hs), InferredType::Scalar(other_hs)) => {
-                other_hs.into_iter().for_each(|v| {
-                    self_hs.insert(v);
-                });
-            }
-            (InferredType::Object(self_map), InferredType::Object(other_map)) => {
-                for (k, v) in other_map {
-                    self_map.entry(k).or_insert(InferredType::Any).merge(v)?;
-                }
-            }
-            (s @ InferredType::Any, v) => {
-                *s = v;
-            }
-            (_, InferredType::Any) => {}
-            // convert a scalar type to a single-item scalar array type.
-            (InferredType::Array(self_inner_type), other_scalar @ InferredType::Scalar(_)) => {
-                self_inner_type.merge(other_scalar)?;
-            }
-            (s @ InferredType::Scalar(_), InferredType::Array(mut other_inner_type)) => {
-                other_inner_type.merge(s.clone())?;
-                *s = InferredType::Array(other_inner_type);
-            }
-            // incompatible types
-            (s, o) => {
-                return Err(ArrowError::JsonError(format!(
-                    "Incompatible type found during schema inference: {s:?} v.s. {o:?}",
-                )));
-            }
-        }
+use self::infer::{EMPTY_OBJECT_TY, infer_json_type};
+use super::ValueIter;
 
-        Ok(())
-    }
-
-    fn is_none_or_any(ty: Option<&Self>) -> bool {
-        matches!(ty, Some(Self::Any) | None)
-    }
-}
-
-/// Shorthand for building list data type of `ty`
-fn list_type_of(ty: DataType) -> DataType {
-    DataType::List(Arc::new(Field::new_list_field(ty, true)))
-}
-
-/// Coerce data type during inference
-///
-/// * `Int64` and `Float64` should be `Float64`
-/// * Lists and scalars are coerced to a list of a compatible scalar
-/// * All other types are coerced to `Utf8`
-fn coerce_data_type(dt: Vec<&DataType>) -> DataType {
-    let mut dt_iter = dt.into_iter().cloned();
-    let dt_init = dt_iter.next().unwrap_or(DataType::Utf8);
-
-    dt_iter.fold(dt_init, |l, r| match (l, r) {
-        (DataType::Null, o) | (o, DataType::Null) => o,
-        (DataType::Boolean, DataType::Boolean) => DataType::Boolean,
-        (DataType::Int64, DataType::Int64) => DataType::Int64,
-        (DataType::Float64, DataType::Float64)
-        | (DataType::Float64, DataType::Int64)
-        | (DataType::Int64, DataType::Float64) => DataType::Float64,
-        (DataType::List(l), DataType::List(r)) => {
-            list_type_of(coerce_data_type(vec![l.data_type(), r.data_type()]))
-        }
-        // coerce scalar and scalar array into scalar array
-        (DataType::List(e), not_list) | (not_list, DataType::List(e)) => {
-            list_type_of(coerce_data_type(vec![e.data_type(), &not_list]))
-        }
-        _ => DataType::Utf8,
-    })
-}
-
-fn generate_datatype(t: &InferredType) -> Result<DataType, ArrowError> {
-    Ok(match t {
-        InferredType::Scalar(hs) => coerce_data_type(hs.iter().collect()),
-        InferredType::Object(spec) => DataType::Struct(generate_fields(spec)?),
-        InferredType::Array(ele_type) => list_type_of(generate_datatype(ele_type)?),
-        InferredType::Any => DataType::Null,
-    })
-}
-
-fn generate_fields(spec: &HashMap<String, InferredType>) -> Result<Fields, ArrowError> {
-    spec.iter()
-        .map(|(k, types)| Ok(Field::new(k, generate_datatype(types)?, true)))
-        .collect()
-}
-
-/// Generate schema from JSON field names and inferred data types
-fn generate_schema(spec: HashMap<String, InferredType>) -> Result<Schema, ArrowError> {
-    Ok(Schema::new(generate_fields(&spec)?))
-}
+mod infer;
 
 /// Infer the fields of a JSON file by reading the first n records of the file, with
 /// `max_read_records` controlling the maximum number of records to read.
@@ -209,205 +108,6 @@ pub fn infer_json_schema<R: BufRead>(
     Ok((schema, values.record_count()))
 }
 
-fn set_object_scalar_field_type(
-    field_types: &mut HashMap<String, InferredType>,
-    key: &str,
-    ftype: DataType,
-) -> Result<(), ArrowError> {
-    if InferredType::is_none_or_any(field_types.get(key)) {
-        field_types.insert(key.to_string(), InferredType::Scalar(HashSet::new()));
-    }
-
-    match field_types.get_mut(key).unwrap() {
-        InferredType::Scalar(hs) => {
-            hs.insert(ftype);
-            Ok(())
-        }
-        // in case of column contains both scalar type and scalar array type, we convert type of
-        // this column to scalar array.
-        scalar_array @ InferredType::Array(_) => {
-            let mut hs = HashSet::new();
-            hs.insert(ftype);
-            scalar_array.merge(InferredType::Scalar(hs))?;
-            Ok(())
-        }
-        t => Err(ArrowError::JsonError(format!(
-            "Expected scalar or scalar array JSON type, found: {t:?}",
-        ))),
-    }
-}
-
-fn infer_scalar_array_type(array: &[Value]) -> Result<InferredType, ArrowError> {
-    let mut hs = HashSet::new();
-
-    for v in array {
-        match v {
-            Value::Null => {}
-            Value::Number(n) => {
-                if n.is_i64() {
-                    hs.insert(DataType::Int64);
-                } else {
-                    hs.insert(DataType::Float64);
-                }
-            }
-            Value::Bool(_) => {
-                hs.insert(DataType::Boolean);
-            }
-            Value::String(_) => {
-                hs.insert(DataType::Utf8);
-            }
-            Value::Array(_) | Value::Object(_) => {
-                return Err(ArrowError::JsonError(format!(
-                    "Expected scalar value for scalar array, got: {v:?}"
-                )));
-            }
-        }
-    }
-
-    Ok(InferredType::Scalar(hs))
-}
-
-fn infer_nested_array_type(array: &[Value]) -> Result<InferredType, ArrowError> {
-    let mut inner_ele_type = InferredType::Any;
-
-    for v in array {
-        match v {
-            Value::Array(inner_array) => {
-                inner_ele_type.merge(infer_array_element_type(inner_array)?)?;
-            }
-            x => {
-                return Err(ArrowError::JsonError(format!(
-                    "Got non array element in nested array: {x:?}"
-                )));
-            }
-        }
-    }
-
-    Ok(InferredType::Array(Box::new(inner_ele_type)))
-}
-
-fn infer_struct_array_type(array: &[Value]) -> Result<InferredType, ArrowError> {
-    let mut field_types = HashMap::new();
-
-    for v in array {
-        match v {
-            Value::Object(map) => {
-                collect_field_types_from_object(&mut field_types, map)?;
-            }
-            _ => {
-                return Err(ArrowError::JsonError(format!(
-                    "Expected struct value for struct array, got: {v:?}"
-                )));
-            }
-        }
-    }
-
-    Ok(InferredType::Object(field_types))
-}
-
-fn infer_array_element_type(array: &[Value]) -> Result<InferredType, ArrowError> {
-    match array.iter().take(1).next() {
-        None => Ok(InferredType::Any), // empty array, return any type that can be updated later
-        Some(a) => match a {
-            Value::Array(_) => infer_nested_array_type(array),
-            Value::Object(_) => infer_struct_array_type(array),
-            _ => infer_scalar_array_type(array),
-        },
-    }
-}
-
-fn collect_field_types_from_object(
-    field_types: &mut HashMap<String, InferredType>,
-    map: &serde_json::map::Map<String, Value>,
-) -> Result<(), ArrowError> {
-    for (k, v) in map {
-        match v {
-            Value::Array(array) => {
-                let ele_type = infer_array_element_type(array)?;
-
-                if InferredType::is_none_or_any(field_types.get(k)) {
-                    match ele_type {
-                        InferredType::Scalar(_) => {
-                            field_types.insert(
-                                k.to_string(),
-                                InferredType::Array(Box::new(InferredType::Scalar(HashSet::new()))),
-                            );
-                        }
-                        InferredType::Object(_) => {
-                            field_types.insert(
-                                k.to_string(),
-                                InferredType::Array(Box::new(InferredType::Object(HashMap::new()))),
-                            );
-                        }
-                        InferredType::Any | InferredType::Array(_) => {
-                            // set inner type to any for nested array as well
-                            // so it can be updated properly from subsequent type merges
-                            field_types.insert(
-                                k.to_string(),
-                                InferredType::Array(Box::new(InferredType::Any)),
-                            );
-                        }
-                    }
-                }
-
-                match field_types.get_mut(k).unwrap() {
-                    InferredType::Array(inner_type) => {
-                        inner_type.merge(ele_type)?;
-                    }
-                    // in case of column contains both scalar type and scalar array type, we
-                    // convert type of this column to scalar array.
-                    field_type @ InferredType::Scalar(_) => {
-                        field_type.merge(ele_type)?;
-                        *field_type = InferredType::Array(Box::new(field_type.clone()));
-                    }
-                    t => {
-                        return Err(ArrowError::JsonError(format!(
-                            "Expected array json type, found: {t:?}",
-                        )));
-                    }
-                }
-            }
-            Value::Bool(_) => {
-                set_object_scalar_field_type(field_types, k, DataType::Boolean)?;
-            }
-            Value::Null => {
-                // we treat json as nullable by default when inferring, so just
-                // mark existence of a field if it wasn't known before
-                if !field_types.contains_key(k) {
-                    field_types.insert(k.to_string(), InferredType::Any);
-                }
-            }
-            Value::Number(n) => {
-                if n.is_i64() {
-                    set_object_scalar_field_type(field_types, k, DataType::Int64)?;
-                } else {
-                    set_object_scalar_field_type(field_types, k, DataType::Float64)?;
-                }
-            }
-            Value::String(_) => {
-                set_object_scalar_field_type(field_types, k, DataType::Utf8)?;
-            }
-            Value::Object(inner_map) => {
-                if let InferredType::Any = field_types.get(k).unwrap_or(&InferredType::Any) {
-                    field_types.insert(k.to_string(), InferredType::Object(HashMap::new()));
-                }
-                match field_types.get_mut(k).unwrap() {
-                    InferredType::Object(inner_field_types) => {
-                        collect_field_types_from_object(inner_field_types, inner_map)?;
-                    }
-                    t => {
-                        return Err(ArrowError::JsonError(format!(
-                            "Expected object json type, found: {t:?}",
-                        )));
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
 /// Infer the fields of a JSON file by reading all items from the JSON Value Iterator.
 ///
 /// The following type coercion logic is implemented:
@@ -426,30 +126,31 @@ where
     I: Iterator<Item = Result<V, ArrowError>>,
     V: Borrow<Value>,
 {
-    let mut field_types: HashMap<String, InferredType> = HashMap::new();
+    let arena = &Bump::new();
 
-    for record in value_iter {
-        match record?.borrow() {
-            Value::Object(map) => {
-                collect_field_types_from_object(&mut field_types, map)?;
-            }
-            value => {
-                return Err(ArrowError::JsonError(format!(
-                    "Expected JSON record to be an object, found {value:?}"
-                )));
-            }
-        };
-    }
-
-    generate_schema(field_types)
+    value_iter
+        .into_iter()
+        .try_fold(EMPTY_OBJECT_TY, |ty, record| {
+            infer_json_type(record?.borrow(), ty, arena)
+        })?
+        .into_schema()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::read::GzDecoder;
+
     use std::fs::File;
     use std::io::{BufReader, Cursor};
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, Fields};
+    use flate2::read::GzDecoder;
+
+    /// Shorthand for building list data type of `ty`
+    fn list_type_of(ty: DataType) -> DataType {
+        DataType::List(Arc::new(Field::new_list_field(ty, true)))
+    }
 
     #[test]
     fn test_json_infer_schema() {
@@ -598,27 +299,6 @@ mod tests {
         assert_eq!(big_field.data_type(), &DataType::Float64);
         let (_, small_field) = fields.find("smaller_than_i64_min").unwrap();
         assert_eq!(small_field.data_type(), &DataType::Float64);
-    }
-
-    #[test]
-    fn test_coercion_scalar_and_list() {
-        assert_eq!(
-            list_type_of(DataType::Float64),
-            coerce_data_type(vec![&DataType::Float64, &list_type_of(DataType::Float64)])
-        );
-        assert_eq!(
-            list_type_of(DataType::Float64),
-            coerce_data_type(vec![&DataType::Float64, &list_type_of(DataType::Int64)])
-        );
-        assert_eq!(
-            list_type_of(DataType::Int64),
-            coerce_data_type(vec![&DataType::Int64, &list_type_of(DataType::Int64)])
-        );
-        // boolean and number are incompatible, return utf8
-        assert_eq!(
-            list_type_of(DataType::Utf8),
-            coerce_data_type(vec![&DataType::Boolean, &list_type_of(DataType::Float64)])
-        );
     }
 
     #[test]

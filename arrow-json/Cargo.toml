@@ -52,6 +52,7 @@ memchr = "2.7.4"
 simdutf8 = { workspace = true }
 ryu = "1.0"
 itoa = "1.0"
+bumpalo = "3.20.2"
 
 [dev-dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
