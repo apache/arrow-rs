@@ -30,7 +30,7 @@ use serde_json::Value;
 /// use arrow_json::reader::ValueIter;
 ///
 /// let mut reader =
-///     BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
+///     BufReader::new(File::open("test/data/arrays.json").unwrap());
 /// let mut value_reader = ValueIter::new(&mut reader, None);
 /// for value in value_reader {
 ///     println!("JSON value: {}", value.unwrap());
