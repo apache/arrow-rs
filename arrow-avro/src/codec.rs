@@ -141,7 +141,7 @@ impl Display for Promotion {
 pub(crate) struct ResolvedUnion {
     /// For each writer branch index, the reader branch index and how to read it.
     /// `None` means the writer branch doesn't resolve against the reader.
-    pub(crate) writer_to_reader: Arc<[Option<(usize, Promotion)>]>,
+    pub(crate) writer_to_reader: Arc<[Option<(usize, ResolutionInfo)>]>,
     /// Whether the writer schema at this site is a union
     pub(crate) writer_is_union: bool,
     /// Whether the reader schema at this site is a union
@@ -1748,9 +1748,21 @@ impl<'a> Maker<'a> {
                     nullable_union_variants(writer_variants),
                     nullable_union_variants(reader_variants),
                 ) {
-                    (Some((w_nb, w_nonnull)), Some((_r_nb, r_nonnull))) => {
-                        let mut dt = self.make_data_type(w_nonnull, Some(r_nonnull), namespace)?;
+                    (Some((w_nb, w_nonnull)), Some((r_nb, r_nonnull))) => {
+                        let mut dt = self.resolve_type(w_nonnull, r_nonnull, namespace)?;
+                        let mut writer_to_reader = vec![None, None];
+                        writer_to_reader[w_nb.non_null_index()] = Some((
+                            r_nb.non_null_index(),
+                            dt.resolution
+                                .take()
+                                .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct)),
+                        ));
                         dt.nullability = Some(w_nb);
+                        dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
+                            writer_to_reader: Arc::from(writer_to_reader),
+                            writer_is_union: true,
+                            reader_is_union: true,
+                        }));
                         #[cfg(feature = "avro_custom_types")]
                         Self::propagate_nullability_into_ree(&mut dt, w_nb);
                         Ok(dt)
@@ -1759,12 +1771,17 @@ impl<'a> Maker<'a> {
                 }
             }
             (Schema::Union(writer_variants), reader_non_union) => {
-                let writer_to_reader: Vec<Option<(usize, Promotion)>> = writer_variants
+                let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
                     .iter()
                     .map(|writer| {
                         self.resolve_type(writer, reader_non_union, namespace)
                             .ok()
-                            .map(|tmp| (0usize, Self::coercion_from(&tmp)))
+                            .map(|tmp| {
+                                let resolution = tmp
+                                    .resolution
+                                    .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
+                                (0usize, resolution)
+                            })
                     })
                     .collect();
                 let mut dt = self.parse_type(reader_non_union, namespace)?;
@@ -1780,54 +1797,44 @@ impl<'a> Maker<'a> {
                     nullable_union_variants(reader_variants)
                 {
                     let mut dt = self.resolve_type(writer_non_union, non_null_branch, namespace)?;
-                    let non_null_idx = match nullability {
-                        Nullability::NullFirst => 1,
-                        Nullability::NullSecond => 0,
-                    };
                     #[cfg(feature = "avro_custom_types")]
                     Self::propagate_nullability_into_ree(&mut dt, nullability);
                     dt.nullability = Some(nullability);
-                    let promotion = Self::coercion_from(&dt);
-                    dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
-                        writer_to_reader: Arc::from(vec![Some((non_null_idx, promotion))]),
-                        writer_is_union: false,
-                        reader_is_union: true,
-                    }));
+                    // Ensure resolution is set to a non-Union variant to suppress
+                    // reading the union tag which is the default behavior.
+                    if dt.resolution.is_none() {
+                        dt.resolution = Some(ResolutionInfo::Promotion(Promotion::Direct));
+                    }
                     Ok(dt)
                 } else {
-                    let mut best_match: Option<(usize, AvroDataType, Promotion)> = None;
-                    for (i, variant) in reader_variants.iter().enumerate() {
-                        if let Ok(resolved_dt) =
-                            self.resolve_type(writer_non_union, variant, namespace)
-                        {
-                            let promotion = Self::coercion_from(&resolved_dt);
-                            if promotion == Promotion::Direct {
-                                best_match = Some((i, resolved_dt, promotion));
-                                break;
-                            } else if best_match.is_none() {
-                                best_match = Some((i, resolved_dt, promotion));
-                            }
-                        }
-                    }
-                    let Some((match_idx, match_dt, promotion)) = best_match else {
+                    let Some((match_idx, mut match_dt)) =
+                        self.find_best_union_match(writer_non_union, reader_variants, namespace)
+                    else {
                         return Err(ArrowError::SchemaError(
                             "Writer schema does not match any reader union branch".to_string(),
                         ));
                     };
-                    let mut children = Vec::with_capacity(reader_variants.len());
+                    // Steal the resolution info from the matching reader branch
+                    // for the Union resolution, but preserve possible resolution
+                    // information on its inner types.
+                    // For other branches, resolution is irrelevant,
+                    // so just parse them.
+                    let resolution = match_dt
+                        .resolution
+                        .take()
+                        .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
                     let mut match_dt = Some(match_dt);
-                    for (i, variant) in reader_variants.iter().enumerate() {
-                        if i == match_idx {
-                            if let Some(mut dt) = match_dt.take() {
-                                if matches!(dt.resolution, Some(ResolutionInfo::Promotion(_))) {
-                                    dt.resolution = None;
-                                }
-                                children.push(dt);
+                    let children = reader_variants
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, variant)| {
+                            if idx == match_idx {
+                                Ok(match_dt.take().unwrap())
+                            } else {
+                                self.parse_type(variant, namespace)
                             }
-                        } else {
-                            children.push(self.parse_type(variant, namespace)?);
-                        }
-                    }
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let union_fields = build_union_fields(&children)?;
                     let mut dt = AvroDataType::new(
                         Codec::Union(children.into(), union_fields, UnionMode::Dense),
@@ -1835,7 +1842,7 @@ impl<'a> Maker<'a> {
                         None,
                     );
                     dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
-                        writer_to_reader: Arc::from(vec![Some((match_idx, promotion))]),
+                        writer_to_reader: Arc::from(vec![Some((match_idx, resolution))]),
                         writer_is_union: false,
                         reader_is_union: true,
                     }));
@@ -1870,34 +1877,30 @@ impl<'a> Maker<'a> {
         }
     }
 
-    #[inline]
-    fn coercion_from(dt: &AvroDataType) -> Promotion {
-        match dt.resolution.as_ref() {
-            Some(ResolutionInfo::Promotion(promotion)) => *promotion,
-            _ => Promotion::Direct,
-        }
-    }
-
-    fn find_best_promotion(
+    fn find_best_union_match(
         &mut self,
         writer: &Schema<'a>,
         reader_variants: &[Schema<'a>],
         namespace: Option<&'a str>,
-    ) -> Option<(usize, Promotion)> {
-        let mut first_promotion: Option<(usize, Promotion)> = None;
+    ) -> Option<(usize, AvroDataType)> {
+        let mut first_resolution = None;
         for (reader_index, reader) in reader_variants.iter().enumerate() {
-            if let Ok(tmp) = self.resolve_type(writer, reader, namespace) {
-                let promotion = Self::coercion_from(&tmp);
-                if promotion == Promotion::Direct {
-                    // An exact match is best, return immediately.
-                    return Some((reader_index, promotion));
-                } else if first_promotion.is_none() {
-                    // Store the first valid promotion but keep searching for a direct match.
-                    first_promotion = Some((reader_index, promotion));
-                }
+            if let Ok(dt) = self.resolve_type(writer, reader, namespace) {
+                match &dt.resolution {
+                    None | Some(ResolutionInfo::Promotion(Promotion::Direct)) => {
+                        // An exact match is best, return immediately.
+                        return Some((reader_index, dt));
+                    }
+                    Some(_) => {
+                        if first_resolution.is_none() {
+                            // Store the first valid promotion but keep searching for a direct match.
+                            first_resolution = Some((reader_index, dt));
+                        }
+                    }
+                };
             }
         }
-        first_promotion
+        first_resolution
     }
 
     fn resolve_unions<'s>(
@@ -1906,15 +1909,34 @@ impl<'a> Maker<'a> {
         reader_variants: &'s [Schema<'a>],
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
+        let mut resolved_reader_encodings = HashMap::new();
+        let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
+            .iter()
+            .map(|writer| {
+                self.find_best_union_match(writer, reader_variants, namespace)
+                    .map(|(match_idx, mut match_dt)| {
+                        let resolution = match_dt
+                            .resolution
+                            .take()
+                            .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
+                        // TODO: check for overlapping reader variants?
+                        // They should not be possible in a valid schema.
+                        resolved_reader_encodings.insert(match_idx, match_dt);
+                        (match_idx, resolution)
+                    })
+            })
+            .collect();
         let reader_encodings: Vec<AvroDataType> = reader_variants
             .iter()
-            .map(|reader_schema| self.parse_type(reader_schema, namespace))
+            .enumerate()
+            .map(|(reader_idx, reader_schema)| {
+                if let Some(resolved) = resolved_reader_encodings.remove(&reader_idx) {
+                    Ok(resolved)
+                } else {
+                    self.parse_type(reader_schema, namespace)
+                }
+            })
             .collect::<Result<_, _>>()?;
-        let mut writer_to_reader: Vec<Option<(usize, Promotion)>> =
-            Vec::with_capacity(writer_variants.len());
-        for writer in writer_variants {
-            writer_to_reader.push(self.find_best_promotion(writer, reader_variants, namespace));
-        }
         let union_fields = build_union_fields(&reader_encodings)?;
         let mut dt = AvroDataType::new(
             Codec::Union(reader_encodings.into(), union_fields, UnionMode::Dense),
@@ -2179,7 +2201,14 @@ impl<'a> Maker<'a> {
         )?;
         let writer_ns = writer_record.namespace.or(namespace);
         let reader_ns = reader_record.namespace.or(namespace);
-        let reader_md = reader_record.attributes.field_metadata();
+        let mut reader_md = reader_record.attributes.field_metadata();
+        reader_md.insert(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            reader_record.name.to_string(),
+        );
+        if let Some(ns) = reader_ns {
+            reader_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), ns.to_string());
+        }
         // Build writer lookup and ambiguous alias set.
         let (writer_lookup, ambiguous_writer_aliases) = Self::build_writer_lookup(writer_record);
         let mut writer_to_reader: Vec<Option<usize>> = vec![None; writer_record.fields.len()];
@@ -2620,7 +2649,15 @@ mod tests {
         assert!(matches!(result.codec, Codec::Float64));
         assert_eq!(
             result.resolution,
-            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::IntToDouble)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true,
+            }))
         );
         assert_eq!(result.nullability, Some(Nullability::NullFirst));
     }
@@ -2642,7 +2679,10 @@ mod tests {
         assert!(resolved.writer_is_union && !resolved.reader_is_union);
         assert_eq!(
             resolved.writer_to_reader.as_ref(),
-            &[Some((0, Promotion::StringToBytes)), None]
+            &[
+                Some((0, ResolutionInfo::Promotion(Promotion::StringToBytes))),
+                None
+            ]
         );
     }
 
@@ -2662,7 +2702,7 @@ mod tests {
         assert!(!resolved.writer_is_union && resolved.reader_is_union);
         assert_eq!(
             resolved.writer_to_reader.as_ref(),
-            &[Some((0, Promotion::Direct))]
+            &[Some((0, ResolutionInfo::Promotion(Promotion::Direct)))]
         );
     }
 
@@ -2682,7 +2722,200 @@ mod tests {
         };
         assert_eq!(
             resolved.writer_to_reader.as_ref(),
-            &[Some((1, Promotion::IntToLong))]
+            &[Some((1, ResolutionInfo::Promotion(Promotion::IntToLong)))]
+        );
+    }
+
+    #[test]
+    fn test_resolve_writer_non_union_to_reader_union_preserves_inner_record_defaults() {
+        // Writer: record Inner{a: int}
+        // Reader: union [Inner{a: int, b: int default 42}, string]
+        // The matching child (Inner) should preserve DefaultValue(Int(42)) on field b.
+        let writer = Schema::Complex(ComplexType::Record(Record {
+            name: "Inner",
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![AvroFieldSchema {
+                name: "a",
+                doc: None,
+                r#type: mk_primitive(PrimitiveType::Int),
+                default: None,
+                aliases: vec![],
+            }],
+            attributes: Attributes::default(),
+        }));
+        let reader = mk_union(vec![
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![
+                    AvroFieldSchema {
+                        name: "a",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: None,
+                        aliases: vec![],
+                    },
+                    AvroFieldSchema {
+                        name: "b",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: Some(Value::Number(serde_json::Number::from(42))),
+                        aliases: vec![],
+                    },
+                ],
+                attributes: Attributes::default(),
+            })),
+            mk_primitive(PrimitiveType::String),
+        ]);
+        let mut maker = Maker::new(false, false);
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None)
+            .expect("resolution should succeed");
+        // Verify the union resolution structure
+        let resolved = match dt.resolution.as_ref() {
+            Some(ResolutionInfo::Union(u)) => u,
+            other => panic!("expected union resolution info, got {other:?}"),
+        };
+        assert!(!resolved.writer_is_union && resolved.reader_is_union);
+        assert_eq!(
+            resolved.writer_to_reader.len(),
+            1,
+            "expected the non-union record to resolve to a union variant"
+        );
+        let resolution = match resolved.writer_to_reader.first().unwrap() {
+            Some((0, resolution)) => resolution,
+            other => panic!("unexpected writer-to-reader table value {other:?}"),
+        };
+        match resolution {
+            ResolutionInfo::Record(ResolvedRecord {
+                writer_to_reader,
+                default_fields,
+                skip_fields,
+            }) => {
+                assert_eq!(writer_to_reader.len(), 1);
+                assert_eq!(writer_to_reader[0], Some(0));
+                assert_eq!(default_fields.len(), 1);
+                assert_eq!(default_fields[0], 1);
+                assert_eq!(skip_fields.len(), 1);
+                assert_eq!(skip_fields[0], None);
+            }
+            other => panic!("unexpected resolution {other:?}"),
+        }
+        // The matching child (Inner at index 0) should have field b with DefaultValue
+        let children = match dt.codec() {
+            Codec::Union(children, _, _) => children,
+            other => panic!("expected union codec, got {other:?}"),
+        };
+        let inner_fields = match children[0].codec() {
+            Codec::Struct(f) => f,
+            other => panic!("expected struct codec for Inner, got {other:?}"),
+        };
+        assert_eq!(inner_fields.len(), 2);
+        assert_eq!(inner_fields[1].name(), "b");
+        assert_eq!(
+            inner_fields[1].data_type().resolution,
+            Some(ResolutionInfo::DefaultValue(AvroLiteral::Int(42))),
+            "field b should have DefaultValue(Int(42)) from schema resolution"
+        );
+    }
+
+    #[test]
+    fn test_resolve_writer_union_to_reader_union_preserves_inner_record_defaults() {
+        // Writer: record [string, Inner{a: int}]
+        // Reader: union [Inner{a: int, b: int default 42}, string]
+        // The matching child (Inner) should preserve DefaultValue(Int(42)) on field b.
+        let writer = mk_union(vec![
+            mk_primitive(PrimitiveType::String),
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![AvroFieldSchema {
+                    name: "a",
+                    doc: None,
+                    r#type: mk_primitive(PrimitiveType::Int),
+                    default: None,
+                    aliases: vec![],
+                }],
+                attributes: Attributes::default(),
+            })),
+        ]);
+        let reader = mk_union(vec![
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![
+                    AvroFieldSchema {
+                        name: "a",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: None,
+                        aliases: vec![],
+                    },
+                    AvroFieldSchema {
+                        name: "b",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: Some(Value::Number(serde_json::Number::from(42))),
+                        aliases: vec![],
+                    },
+                ],
+                attributes: Attributes::default(),
+            })),
+            mk_primitive(PrimitiveType::String),
+        ]);
+        let mut maker = Maker::new(false, false);
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None)
+            .expect("resolution should succeed");
+        // Verify the union resolution structure
+        let resolved = match dt.resolution.as_ref() {
+            Some(ResolutionInfo::Union(u)) => u,
+            other => panic!("expected union resolution info, got {other:?}"),
+        };
+        assert!(resolved.writer_is_union && resolved.reader_is_union);
+        assert_eq!(resolved.writer_to_reader.len(), 2);
+        let resolution = match resolved.writer_to_reader[1].as_ref() {
+            Some((0, resolution)) => resolution,
+            other => panic!("unexpected writer-to-reader table value {other:?}"),
+        };
+        match resolution {
+            ResolutionInfo::Record(ResolvedRecord {
+                writer_to_reader,
+                default_fields,
+                skip_fields,
+            }) => {
+                assert_eq!(writer_to_reader.len(), 1);
+                assert_eq!(writer_to_reader[0], Some(0));
+                assert_eq!(default_fields.len(), 1);
+                assert_eq!(default_fields[0], 1);
+                assert_eq!(skip_fields.len(), 1);
+                assert_eq!(skip_fields[0], None);
+            }
+            other => panic!("unexpected resolution {other:?}"),
+        }
+        // The matching child (Inner at index 0) should have field b with DefaultValue
+        let children = match dt.codec() {
+            Codec::Union(children, _, _) => children,
+            other => panic!("expected union codec, got {other:?}"),
+        };
+        let inner_fields = match children[0].codec() {
+            Codec::Struct(f) => f,
+            other => panic!("expected struct codec for Inner, got {other:?}"),
+        };
+        assert_eq!(inner_fields.len(), 2);
+        assert_eq!(inner_fields[1].name(), "b");
+        assert_eq!(
+            inner_fields[1].data_type().resolution,
+            Some(ResolutionInfo::DefaultValue(AvroLiteral::Int(42))),
+            "field b should have DefaultValue(Int(42)) from schema resolution"
         );
     }
 
@@ -2700,7 +2933,18 @@ mod tests {
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(dt.codec(), Codec::Utf8));
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
-        assert!(dt.resolution.is_none());
+        assert_eq!(
+            dt.resolution,
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::Direct)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true
+            }))
+        );
     }
 
     #[test]
@@ -2719,7 +2963,15 @@ mod tests {
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
         assert_eq!(
             dt.resolution,
-            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::IntToDouble)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true
+            }))
         );
     }
 
@@ -3316,14 +3568,7 @@ mod tests {
             assert_eq!(inner.nullability(), Some(Nullability::NullFirst));
             assert!(matches!(inner.codec(), Codec::Int32));
             match inner.resolution.as_ref() {
-                Some(ResolutionInfo::Union(info)) => {
-                    assert!(!info.writer_is_union, "writer should be non-union");
-                    assert!(info.reader_is_union, "reader should be union");
-                    assert_eq!(
-                        info.writer_to_reader.as_ref(),
-                        &[Some((1, Promotion::Direct))]
-                    );
-                }
+                Some(ResolutionInfo::Promotion(Promotion::Direct)) => {}
                 other => panic!("expected Union resolution, got {other:?}"),
             }
         } else {
