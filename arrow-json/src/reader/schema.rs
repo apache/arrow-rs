@@ -43,7 +43,7 @@ mod infer;
 /// use std::io::BufReader;
 /// use arrow_json::reader::infer_json_schema_from_seekable;
 ///
-/// let file = File::open("test/data/mixed_arrays.json").unwrap();
+/// let file = File::open("test/data/arrays.json").unwrap();
 /// // file's cursor's offset at 0
 /// let mut reader = BufReader::new(file);
 /// let inferred_schema = infer_json_schema_from_seekable(&mut reader, None).unwrap();
@@ -89,7 +89,7 @@ pub fn infer_json_schema_from_seekable<R: BufRead + Seek>(
 /// use flate2::read::GzDecoder;
 /// use arrow_json::reader::infer_json_schema;
 ///
-/// let mut file = File::open("test/data/mixed_arrays.json.gz").unwrap();
+/// let mut file = File::open("test/data/arrays.json.gz").unwrap();
 ///
 /// // file's cursor's offset at 0
 /// let mut reader = BufReader::new(GzDecoder::new(&file));
@@ -158,21 +158,21 @@ mod tests {
             Field::new("a", DataType::Int64, true),
             Field::new("b", list_type_of(DataType::Float64), true),
             Field::new("c", list_type_of(DataType::Boolean), true),
-            Field::new("d", list_type_of(DataType::Utf8), true),
+            Field::new("d", DataType::Utf8, true),
         ]);
 
-        let mut reader = BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
+        let mut reader = BufReader::new(File::open("test/data/arrays.json").unwrap());
         let (inferred_schema, n_rows) = infer_json_schema_from_seekable(&mut reader, None).unwrap();
 
         assert_eq!(inferred_schema, schema);
-        assert_eq!(n_rows, 4);
+        assert_eq!(n_rows, 3);
 
-        let file = File::open("test/data/mixed_arrays.json.gz").unwrap();
+        let file = File::open("test/data/arrays.json.gz").unwrap();
         let mut reader = BufReader::new(GzDecoder::new(&file));
         let (inferred_schema, n_rows) = infer_json_schema(&mut reader, None).unwrap();
 
         assert_eq!(inferred_schema, schema);
-        assert_eq!(n_rows, 4);
+        assert_eq!(n_rows, 3);
     }
 
     #[test]
