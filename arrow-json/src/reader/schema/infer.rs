@@ -20,6 +20,8 @@ use std::collections::HashMap;
 use arrow_schema::{ArrowError, DataType, Field, Fields, Schema};
 use bumpalo::Bump;
 
+use crate::reader::tape::{Tape, TapeElement};
+
 #[derive(Clone, Copy, Debug)]
 pub struct InferredType<'t>(&'t TyKind<'t>);
 
@@ -255,6 +257,54 @@ pub enum JsonType {
     String,
     Array,
     Object,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct TapeValue<'a> {
+    tape: &'a Tape<'a>,
+    idx: u32,
+}
+
+impl<'a> TapeValue<'a> {
+    pub fn new(tape: &'a Tape<'a>, idx: u32) -> Self {
+        Self { tape, idx }
+    }
+}
+
+impl<'a> JsonValue<'a> for TapeValue<'a> {
+    fn get(&self) -> JsonType {
+        match self.tape.get(self.idx) {
+            TapeElement::Null => JsonType::Null,
+            TapeElement::False => JsonType::Bool,
+            TapeElement::True => JsonType::Bool,
+            TapeElement::I64(_) | TapeElement::I32(_) => JsonType::Int64,
+            TapeElement::F64(_) | TapeElement::F32(_) => JsonType::Float64,
+            TapeElement::Number(s) => {
+                if self.tape.get_string(s).parse::<i64>().is_ok() {
+                    JsonType::Int64
+                } else {
+                    JsonType::Float64
+                }
+            }
+            TapeElement::String(_) => JsonType::String,
+            TapeElement::StartList(_) => JsonType::Array,
+            TapeElement::EndList(_) => unreachable!(),
+            TapeElement::StartObject(_) => JsonType::Object,
+            TapeElement::EndObject(_) => unreachable!(),
+        }
+    }
+
+    fn elements(&self) -> impl Iterator<Item = Self> {
+        self.tape
+            .iter_elements(self.idx)
+            .map(move |idx| Self { idx, ..*self })
+    }
+
+    fn fields(&self) -> impl Iterator<Item = (&'a str, Self)> {
+        self.tape
+            .iter_fields(self.idx)
+            .map(move |(key, idx)| (key, Self { idx, ..*self }))
+    }
 }
 
 impl<'a> JsonValue<'a> for &'a serde_json::Value {
