@@ -429,6 +429,21 @@ impl Statistics {
 
     /// Returns number of null values for the column, if known.
     /// Note that this includes all nulls when column is part of the complex type.
+    ///
+    /// Note: Versions of this library prior to `58.1.0` returned `0` if the null count
+    /// was not available. This method now returns `None` in that case.
+    ///
+    /// Also, versions of this library prior to `53.1.0` did not store a null count
+    /// statistic when the null count was `0`.
+    ///
+    /// It is unsound to assume that missing nullcount stats mean the column contains no nulls,
+    /// but code that depends on the old behavior can restore it by defaulting to zero:
+    ///
+    /// ```no_run
+    /// # use parquet::file::statistics::Statistics;
+    /// # let statistics: Statistics = todo!();
+    /// let null_count = statistics.null_count_opt().unwrap_or(0);
+    /// ```
     pub fn null_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, null_count_opt]
     }
