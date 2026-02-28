@@ -138,14 +138,14 @@ macro_rules! downcast_integer {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_integer_array {
-    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
-        $crate::downcast_integer_array!($values => {$e} $($p $(if $pred)? => $fallback)*)
+    ($values:ident => $e:expr, $($tail:tt)*) => {
+        $crate::downcast_integer_array!($values => {$e} $($tail)*)
     };
-    (($($values:ident),+) => $e:expr, $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
-        $crate::downcast_integer_array!($($values),+ => {$e} $($p $(if $pred)? => $fallback)*)
+    (($($values:ident),+) => $e:expr, $($tail:tt)*) => {
+        $crate::downcast_integer_array!(($($values),+) => {$e} $($tail)*)
     };
-    ($($values:ident),+ => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
-        $crate::downcast_integer_array!(($($values),+) => $e $($p $(if $pred)? => $fallback)*)
+    ($($values:ident),+ => $e:block $($tail:tt)*) => {
+        $crate::downcast_integer_array!(($($values),+) => $e $($tail)*)
     };
     (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
         $crate::downcast_integer!{
@@ -304,14 +304,14 @@ macro_rules! downcast_temporal {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_temporal_array {
-    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
-        $crate::downcast_temporal_array!($values => {$e} $($p $(if $pred)? => $fallback)*)
+    ($values:ident => $e:expr, $($tail:tt)*) => {
+        $crate::downcast_temporal_array!($values => {$e} $($tail)*)
     };
-    (($($values:ident),+) => $e:expr, $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
-        $crate::downcast_temporal_array!($($values),+ => {$e} $($p $(if $pred)? => $fallback)*)
+    (($($values:ident),+) => $e:expr, $($tail:tt)*) => {
+        $crate::downcast_temporal_array!(($($values),+) => {$e} $($tail)*)
     };
-    ($($values:ident),+ => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
-        $crate::downcast_temporal_array!(($($values),+) => $e $($p $(if $pred)? => $fallback)*)
+    ($($values:ident),+ => $e:block $($tail:tt)*) => {
+        $crate::downcast_temporal_array!(($($values),+) => $e $($tail)*)
     };
     (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
         $crate::downcast_temporal!{
@@ -546,8 +546,8 @@ macro_rules! downcast_dictionary_array_helper {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_dictionary_array {
-    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
-        downcast_dictionary_array!($values => {$e} $($p $(if $pred)? => $fallback)*)
+    ($values:ident => $e:expr, $($tail:tt)*) => {
+        downcast_dictionary_array!($values => {$e} $($tail)*)
     };
 
     ($values:ident => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
@@ -654,8 +654,8 @@ macro_rules! downcast_run_array_helper {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_run_array {
-    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
-        downcast_run_array!($values => {$e} $($p $(if $pred)? => $fallback)*)
+    ($values:ident => $e:expr, $($tail:tt)*) => {
+        downcast_run_array!($values => {$e} $($tail)*)
     };
 
     ($values:ident => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
