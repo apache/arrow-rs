@@ -22,8 +22,8 @@ use arrow_schema::{ArrowError, Schema};
 use bumpalo::Bump;
 use serde_json::Value;
 
-use self::infer::{EMPTY_OBJECT_TY, infer_json_type};
-use super::ValueIter;
+use super::tape::TapeDecoder;
+use infer::{ANY_TY, EMPTY_OBJECT_TY, InferredType, TapeValue, infer_json_type};
 
 mod infer;
 
@@ -100,12 +100,29 @@ pub fn infer_json_schema_from_seekable<R: BufRead + Seek>(
 /// file.seek(SeekFrom::Start(0)).unwrap();
 /// ```
 pub fn infer_json_schema<R: BufRead>(
-    reader: R,
+    mut reader: R,
     max_read_records: Option<usize>,
 ) -> Result<(Schema, usize), ArrowError> {
-    let mut values = ValueIter::new(reader, max_read_records);
-    let schema = infer_json_schema_from_iterator(&mut values)?;
-    Ok((schema, values.record_count()))
+    let arena = Bump::new();
+    let mut decoder = SchemaDecoder::new(max_read_records, &arena);
+
+    loop {
+        let buf = reader.fill_buf()?;
+        let read = buf.len();
+
+        if read == 0 {
+            break;
+        }
+
+        let decoded = decoder.decode(buf)?;
+        reader.consume(decoded);
+
+        if decoded != read {
+            break;
+        }
+    }
+
+    decoder.finish()
 }
 
 /// Infer the fields of a JSON file by reading all items from the JSON Value Iterator.
@@ -134,6 +151,60 @@ where
             infer_json_type(record?.borrow(), ty, arena)
         })?
         .into_schema()
+}
+
+struct SchemaDecoder<'a> {
+    decoder: TapeDecoder,
+    max_read_records: Option<usize>,
+    record_count: usize,
+    schema: InferredType<'a>,
+    arena: &'a Bump,
+}
+
+impl<'a> SchemaDecoder<'a> {
+    pub fn new(max_read_records: Option<usize>, arena: &'a Bump) -> Self {
+        Self {
+            decoder: TapeDecoder::new(1024, 8),
+            max_read_records,
+            record_count: 0,
+            schema: ANY_TY,
+            arena,
+        }
+    }
+
+    pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
+        let read = self.decoder.decode(buf)?;
+        if read != buf.len() {
+            self.infer_batch()?;
+        }
+        Ok(read)
+    }
+
+    pub fn finish(mut self) -> Result<(Schema, usize), ArrowError> {
+        self.infer_batch()?;
+        Ok((self.schema.into_schema()?, self.record_count))
+    }
+
+    fn infer_batch(&mut self) -> Result<(), ArrowError> {
+        let tape = self.decoder.finish()?;
+
+        let remaining_records = self
+            .max_read_records
+            .map_or(usize::MAX, |max| max - self.record_count);
+
+        let records = tape
+            .iter_rows()
+            .map(|idx| TapeValue::new(&tape, idx))
+            .take(remaining_records);
+
+        for record in records {
+            self.schema = infer_json_type(record, self.schema, self.arena)?;
+            self.record_count += 1;
+        }
+
+        self.decoder.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -306,7 +377,7 @@ mod tests {
         let re = infer_json_schema_from_seekable(Cursor::new(b"}"), None);
         assert_eq!(
             re.err().unwrap().to_string(),
-            "Json error: Not valid JSON: expected value at line 1 column 1",
+            "Json error: Encountered unexpected '}' whilst parsing value"
         );
     }
 
@@ -320,14 +391,14 @@ mod tests {
         let (inferred_schema, _) =
             infer_json_schema_from_seekable(Cursor::new(data), None).expect("infer");
         let schema = Schema::new(vec![
-            Field::new("an", list_type_of(DataType::Null), true),
             Field::new("in", DataType::Int64, true),
-            Field::new("n", DataType::Null, true),
-            Field::new("na", list_type_of(DataType::Null), true),
-            Field::new("nas", list_type_of(DataType::Utf8), true),
             Field::new("ni", DataType::Int64, true),
             Field::new("ns", DataType::Utf8, true),
             Field::new("sn", DataType::Utf8, true),
+            Field::new("n", DataType::Null, true),
+            Field::new("an", list_type_of(DataType::Null), true),
+            Field::new("na", list_type_of(DataType::Null), true),
+            Field::new("nas", list_type_of(DataType::Utf8), true),
         ]);
         assert_eq!(inferred_schema, schema);
     }
