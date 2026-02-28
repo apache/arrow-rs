@@ -2,11 +2,11 @@
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.kind() (the
+// to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//   http://www.apache.org/licenses/LICENSE-2.kind()
+//   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -105,15 +105,14 @@ pub fn infer_json_type<'a, 't>(
             let elem = value
                 .elements()
                 .try_fold(expected_elem, |expected, value| {
-                    let result = infer_json_type(value, expected, arena);
-                    result
+                    infer_json_type(value, expected, arena)
                 })?;
 
-            Ok(if elem.ptr_eq(expected_elem) {
-                expected
-            } else {
-                InferredType::new_array(elem, arena)
-            })
+            if elem.ptr_eq(expected_elem) {
+                return Ok(expected);
+            }
+
+            Ok(InferredType::new_array(elem, arena))
         }
         JsonType::Object => {
             let (expected, expected_fields) = match *expected.kind() {
