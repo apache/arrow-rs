@@ -221,6 +221,33 @@ impl<'a> SchemaDecoder<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum InferredTy<'a> {
+    Never,
+    Scalar(ScalarTy),
+    Array(&'a InferredTy<'a>),
+    Object(InferredFields<'a>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ScalarTy {
+    Bool,
+    Int64,
+    Float64,
+    String,
+    // NOTE: Null isn't needed because it's absorbed into Never
+}
+
+type InferredFields<'a> = &'a [(&'a str, &'a InferredTy<'a>)];
+
+static NEVER_TY: &InferredTy<'static> = &InferredTy::Never;
+static BOOL_TY: &InferredTy<'static> = &InferredTy::Scalar(ScalarTy::Bool);
+static INT64_TY: &InferredTy<'static> = &InferredTy::Scalar(ScalarTy::Int64);
+static FLOAT64_TY: &InferredTy<'static> = &InferredTy::Scalar(ScalarTy::Float64);
+static STRING_TY: &InferredTy<'static> = &InferredTy::Scalar(ScalarTy::String);
+static ARRAY_OF_NEVER_TY: &InferredTy<'static> = &InferredTy::Array(NEVER_TY);
+static EMPTY_OBJECT_TY: &InferredTy<'static> = &InferredTy::Object(&[]);
+
 fn infer_type<'a>(
     tape: &Tape,
     idx: u32,
@@ -234,7 +261,7 @@ fn infer_type<'a>(
             InferredTy::Array(_) => "an array",
             InferredTy::Object(_) => "an object",
         };
-        let msg = format!("incompatible types: expected {expected}, but got {got}");
+        let msg = format!("Expected {expected}, found {got}");
         ArrowError::JsonError(msg)
     };
 
@@ -365,92 +392,65 @@ fn iter_fields<'a>(tape: &'a Tape, start: u32, end: u32) -> impl Iterator<Item =
     })
 }
 
-#[derive(Clone, Copy, Debug)]
-enum InferredTy<'a> {
-    Never,
-    Scalar(ScalarTy),
-    Array(&'a InferredTy<'a>),
-    Object(InferredFields<'a>),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ScalarTy {
-    Bool,
-    Int64,
-    Float64,
-    String,
-    // NOTE: Null isn't needed because it's absorbed into Never
-}
-
-static NEVER_TY: &InferredTy<'static> = &InferredTy::Never;
-static BOOL_TY: &InferredTy<'static> = &InferredTy::Scalar(ScalarTy::Bool);
-static INT64_TY: &InferredTy<'static> = &InferredTy::Scalar(ScalarTy::Int64);
-static FLOAT64_TY: &InferredTy<'static> = &InferredTy::Scalar(ScalarTy::Float64);
-static STRING_TY: &InferredTy<'static> = &InferredTy::Scalar(ScalarTy::String);
-static ARRAY_OF_NEVER_TY: &InferredTy<'static> = &InferredTy::Array(NEVER_TY);
-static EMPTY_OBJECT_TY: &InferredTy<'static> = &InferredTy::Object(&[]);
-
-type InferredFields<'a> = &'a [(&'a str, &'a InferredTy<'a>)];
-
 impl<'a> InferredTy<'a> {
-    fn make_array(elem: Self, arena: &'a Bump) -> Self {
-        Self::Array(arena.alloc(elem))
-    }
+    // fn make_array(elem: Self, arena: &'a Bump) -> Self {
+    //     Self::Array(arena.alloc(elem))
+    // }
 
-    fn make_object<I>(fields: I, arena: &'a Bump) -> Self
-    where
-        I: IntoIterator<Item = (&'a str, &'a InferredTy<'a>)>,
-        I::IntoIter: ExactSizeIterator,
-    {
-        let fields = arena.alloc_slice_fill_iter(fields);
-        Self::Object(fields)
-    }
+    // fn make_object<I>(fields: I, arena: &'a Bump) -> Self
+    // where
+    //     I: IntoIterator<Item = (&'a str, &'a InferredTy<'a>)>,
+    //     I::IntoIter: ExactSizeIterator,
+    // {
+    //     let fields = arena.alloc_slice_fill_iter(fields);
+    //     Self::Object(fields)
+    // }
 
-    fn union(self, other: Self, arena: &'a Bump) -> Result<Self> {
-        Ok(match (self, other) {
-            (ty, Self::Never) | (Self::Never, ty) => ty,
+    // fn union(self, other: Self, arena: &'a Bump) -> Result<Self> {
+    //     Ok(match (self, other) {
+    //         (ty, Self::Never) | (Self::Never, ty) => ty,
 
-            (Self::Scalar(left), Self::Scalar(right)) => Self::Scalar(ScalarTy::union(left, right)),
+    //         (Self::Scalar(left), Self::Scalar(right)) => Self::Scalar(ScalarTy::union(left, right)),
 
-            (Self::Array(left), Self::Array(right)) => {
-                let elem = left.union(*right, arena)?;
-                Self::make_array(elem, arena)
-            }
+    //         (Self::Array(left), Self::Array(right)) => {
+    //             let elem = left.union(*right, arena)?;
+    //             Self::make_array(elem, arena)
+    //         }
 
-            (Self::Object(left), Self::Object(right)) => Self::union_objects(left, right, arena)?,
+    //         (Self::Object(left), Self::Object(right)) => Self::union_objects(left, right, arena)?,
 
-            _ => Err(ArrowError::JsonError(format!(
-                "Incompatible type found during schema inference: {self:?} vs {other:?}"
-            )))?,
-        })
-    }
+    //         _ => Err(ArrowError::JsonError(format!(
+    //             "Incompatible type found during schema inference: {self:?} vs {other:?}"
+    //         )))?,
+    //     })
+    // }
 
-    fn union_objects(
-        left: InferredFields<'a>,
-        right: InferredFields<'a>,
-        arena: &'a Bump,
-    ) -> Result<Self> {
-        let mut fields = IndexMap::new();
+    // fn union_objects(
+    //     left: InferredFields<'a>,
+    //     right: InferredFields<'a>,
+    //     arena: &'a Bump,
+    // ) -> Result<Self> {
+    //     let mut fields = IndexMap::new();
 
-        for (key, ty) in left.iter().copied() {
-            fields.insert(key, ty);
-        }
+    //     for (key, ty) in left.iter().copied() {
+    //         fields.insert(key, ty);
+    //     }
 
-        for (key, ty) in right.iter().copied() {
-            use indexmap::map::Entry;
-            match fields.entry(key) {
-                Entry::Occupied(mut entry) => {
-                    let merged = &*arena.alloc(entry.get().union(*ty, arena)?);
-                    entry.insert(merged);
-                }
-                Entry::Vacant(entry) => {
-                    entry.insert(ty);
-                }
-            }
-        }
+    //     for (key, ty) in right.iter().copied() {
+    //         use indexmap::map::Entry;
+    //         match fields.entry(key) {
+    //             Entry::Occupied(mut entry) => {
+    //                 let merged = &*arena.alloc(entry.get().union(*ty, arena)?);
+    //                 entry.insert(merged);
+    //             }
+    //             Entry::Vacant(entry) => {
+    //                 entry.insert(ty);
+    //             }
+    //         }
+    //     }
 
-        Ok(Self::make_object(fields, arena))
-    }
+    //     Ok(Self::make_object(fields, arena))
+    // }
 
     fn into_datatype(self) -> DataType {
         match self {
@@ -474,7 +474,7 @@ impl<'a> InferredTy<'a> {
     fn into_schema(self) -> Result<Schema> {
         let Self::Object(fields) = self else {
             Err(ArrowError::JsonError(format!(
-                "Expected JSON object, found: {self:?}",
+                "Expected JSON object, found {self:?}",
             )))?
         };
 
