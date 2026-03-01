@@ -18,7 +18,7 @@
 //! Avro Decoder for Arrow types.
 
 use crate::codec::{
-    AvroDataType, AvroField, AvroLiteral, Codec, Promotion, ResolutionInfo, ResolvedRecord,
+    AvroDataType, AvroLiteral, Codec, EnumMapping, Promotion, ResolutionInfo, ResolvedRecord,
     ResolvedUnion,
 };
 use crate::errors::AvroError;
@@ -38,22 +38,14 @@ use arrow_schema::{
 };
 #[cfg(feature = "avro_custom_types")]
 use arrow_select::take::{TakeOptions, take};
-use std::cmp::Ordering;
-use std::sync::Arc;
 use strum_macros::AsRefStr;
 use uuid::Uuid;
 
-const DEFAULT_CAPACITY: usize = 1024;
+use std::cmp::Ordering;
+use std::mem;
+use std::sync::Arc;
 
-/// Runtime plan for decoding reader-side `["null", T]` types.
-#[derive(Clone, Copy, Debug)]
-enum NullablePlan {
-    /// Writer actually wrote a union (branch tag present).
-    ReadTag,
-    /// Writer wrote a single (non-union) value resolved to the non-null branch
-    /// of the reader union; do NOT read a branch tag, but apply any promotion.
-    FromSingle { promotion: Promotion },
-}
+const DEFAULT_CAPACITY: usize = 1024;
 
 /// Macro to decode a decimal payload for a given width and integer type.
 macro_rules! decode_decimal {
@@ -121,13 +113,22 @@ impl RecordDecoder {
                 // Build Arrow schema fields and per-child decoders
                 let mut arrow_fields = Vec::with_capacity(reader_fields.len());
                 let mut encodings = Vec::with_capacity(reader_fields.len());
+                let mut field_defaults = Vec::with_capacity(reader_fields.len());
                 for avro_field in reader_fields.iter() {
                     arrow_fields.push(avro_field.field());
                     encodings.push(Decoder::try_new(avro_field.data_type())?);
+
+                    if let Some(ResolutionInfo::DefaultValue(lit)) =
+                        avro_field.data_type().resolution.as_ref()
+                    {
+                        field_defaults.push(Some(lit.clone()));
+                    } else {
+                        field_defaults.push(None);
+                    }
                 }
                 let projector = match data_type.resolution.as_ref() {
                     Some(ResolutionInfo::Record(rec)) => {
-                        Some(ProjectorBuilder::try_new(rec, reader_fields).build()?)
+                        Some(ProjectorBuilder::try_new(rec, &field_defaults).build()?)
                     }
                     _ => None,
                 };
@@ -177,12 +178,6 @@ impl RecordDecoder {
             .collect::<Result<Vec<_>, _>>()?;
         RecordBatch::try_new(self.schema.clone(), arrays).map_err(Into::into)
     }
-}
-
-#[derive(Debug)]
-struct EnumResolution {
-    mapping: Arc<[i32]>,
-    default_index: i32,
 }
 
 #[derive(Debug, AsRefStr)]
@@ -249,7 +244,12 @@ enum Decoder {
     /// String data encoded as UTF-8 bytes, but mapped to Arrow's StringViewArray
     StringView(OffsetBufferBuilder<i32>, Vec<u8>),
     Array(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
-    Record(Fields, Vec<Decoder>, Option<Projector>),
+    Record(
+        Fields,
+        Vec<Decoder>,
+        Vec<Option<AvroLiteral>>,
+        Option<Projector>,
+    ),
     Map(
         FieldRef,
         OffsetBufferBuilder<i32>,
@@ -270,7 +270,7 @@ enum Decoder {
     #[cfg(feature = "avro_custom_types")]
     RunEndEncoded(u8, usize, Box<Decoder>),
     Union(UnionDecoder),
-    Nullable(Nullability, NullBufferBuilder, Box<Decoder>, NullablePlan),
+    Nullable(NullablePlan, NullBufferBuilder, Box<Decoder>),
 }
 
 impl Decoder {
@@ -279,7 +279,7 @@ impl Decoder {
             if info.writer_is_union && !info.reader_is_union {
                 let mut clone = data_type.clone();
                 clone.resolution = None; // Build target base decoder without Union resolution
-                let target = Box::new(Self::try_new_internal(&clone)?);
+                let target = Self::try_new_internal(&clone)?;
                 let decoder = Self::Union(
                     UnionDecoderBuilder::new()
                         .with_resolved_union(info.clone())
@@ -295,7 +295,7 @@ impl Decoder {
     fn try_new_internal(data_type: &AvroDataType) -> Result<Self, AvroError> {
         // Extract just the Promotion (if any) to simplify pattern matching
         let promotion = match data_type.resolution.as_ref() {
-            Some(ResolutionInfo::Promotion(p)) => Some(p),
+            Some(ResolutionInfo::Promotion(p)) => Some(*p),
             _ => None,
         };
         let decoder = match (data_type.codec(), promotion) {
@@ -466,10 +466,9 @@ impl Decoder {
             }
             (Codec::Enum(symbols), _) => {
                 let res = match data_type.resolution.as_ref() {
-                    Some(ResolutionInfo::EnumMapping(mapping)) => Some(EnumResolution {
-                        mapping: mapping.mapping.clone(),
-                        default_index: mapping.default_index,
-                    }),
+                    Some(ResolutionInfo::EnumMapping(mapping)) => {
+                        Some(EnumResolution::new(mapping))
+                    }
                     _ => None,
                 };
                 Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone(), res)
@@ -477,18 +476,27 @@ impl Decoder {
             (Codec::Struct(fields), _) => {
                 let mut arrow_fields = Vec::with_capacity(fields.len());
                 let mut encodings = Vec::with_capacity(fields.len());
+                let mut field_defaults = Vec::with_capacity(fields.len());
                 for avro_field in fields.iter() {
                     let encoding = Self::try_new(avro_field.data_type())?;
                     arrow_fields.push(avro_field.field());
                     encodings.push(encoding);
+
+                    if let Some(ResolutionInfo::DefaultValue(lit)) =
+                        avro_field.data_type().resolution.as_ref()
+                    {
+                        field_defaults.push(Some(lit.clone()));
+                    } else {
+                        field_defaults.push(None);
+                    }
                 }
                 let projector =
                     if let Some(ResolutionInfo::Record(rec)) = data_type.resolution.as_ref() {
-                        Some(ProjectorBuilder::try_new(rec, fields).build()?)
+                        Some(ProjectorBuilder::try_new(rec, &field_defaults).build()?)
                     } else {
                         None
                     };
-                Self::Record(arrow_fields.into(), encodings, projector)
+                Self::Record(arrow_fields.into(), encodings, field_defaults, projector)
             }
             (Codec::Map(child), _) => {
                 let val_field = child.field_with_name("value");
@@ -568,20 +576,49 @@ impl Decoder {
         };
         Ok(match data_type.nullability() {
             Some(nullability) => {
-                // Default to reading a union branch tag unless the resolution proves otherwise.
-                let mut plan = NullablePlan::ReadTag;
-                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
-                    if !info.writer_is_union && info.reader_is_union {
-                        if let Some(Some((_reader_idx, promo))) = info.writer_to_reader.first() {
-                            plan = NullablePlan::FromSingle { promotion: *promo };
+                // Default to reading a union branch tag unless the resolution directs otherwise.
+                let plan = match &data_type.resolution {
+                    None => NullablePlan::ReadTag {
+                        nullability,
+                        resolution: ResolutionPlan::Promotion(Promotion::Direct),
+                    },
+                    Some(ResolutionInfo::Promotion(_)) => {
+                        // Promotions should have been incorporated
+                        // into the inner decoder.
+                        NullablePlan::FromSingle {
+                            resolution: ResolutionPlan::Promotion(Promotion::Direct),
                         }
                     }
-                }
+                    Some(ResolutionInfo::Union(info)) if !info.writer_is_union => {
+                        let Some(Some((_, resolution))) = info.writer_to_reader.first() else {
+                            return Err(AvroError::SchemaError(
+                                "unexpected union resolution info for non-union writer and union reader type".into(),
+                            ));
+                        };
+                        let resolution = ResolutionPlan::try_new(&decoder, resolution)?;
+                        NullablePlan::FromSingle { resolution }
+                    }
+                    Some(ResolutionInfo::Union(info)) => {
+                        let Some((_, resolution)) =
+                            info.writer_to_reader[nullability.non_null_index()].as_ref()
+                        else {
+                            return Err(AvroError::SchemaError(
+                                "unexpected union resolution info for nullable writer type".into(),
+                            ));
+                        };
+                        NullablePlan::ReadTag {
+                            nullability,
+                            resolution: ResolutionPlan::try_new(&decoder, resolution)?,
+                        }
+                    }
+                    Some(resolution) => NullablePlan::FromSingle {
+                        resolution: ResolutionPlan::try_new(&decoder, resolution)?,
+                    },
+                };
                 Self::Nullable(
-                    nullability,
+                    plan,
                     NullBufferBuilder::new(DEFAULT_CAPACITY),
                     Box::new(decoder),
-                    plan,
                 )
             }
             None => decoder,
@@ -645,7 +682,7 @@ impl Decoder {
             Self::Array(_, offsets, _) => {
                 offsets.push_length(0);
             }
-            Self::Record(_, e, _) => {
+            Self::Record(_, e, _, _) => {
                 for encoding in e.iter_mut() {
                     encoding.append_null()?;
                 }
@@ -670,7 +707,7 @@ impl Decoder {
                 inner.append_null()?;
             }
             Self::Union(u) => u.append_null()?,
-            Self::Nullable(_, null_buffer, inner, _) => {
+            Self::Nullable(_, null_buffer, inner) => {
                 null_buffer.append(false);
                 inner.append_null()?;
             }
@@ -681,7 +718,7 @@ impl Decoder {
     /// Append a single default literal into the decoder's buffers
     fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), AvroError> {
         match self {
-            Self::Nullable(_, nb, inner, _) => {
+            Self::Nullable(_, nb, inner) => {
                 if matches!(lit, AvroLiteral::Null) {
                     nb.append(false);
                     inner.append_null()
@@ -1087,14 +1124,14 @@ impl Decoder {
                 inner.append_default(lit)
             }
             Self::Union(u) => u.append_default(lit),
-            Self::Record(field_meta, decoders, projector) => match lit {
+            Self::Record(field_meta, decoders, field_defaults, _) => match lit {
                 AvroLiteral::Map(entries) => {
                     for (i, dec) in decoders.iter_mut().enumerate() {
                         let name = field_meta[i].name();
                         if let Some(sub) = entries.get(name) {
                             dec.append_default(sub)?;
-                        } else if let Some(proj) = projector.as_ref() {
-                            proj.project_default(dec, i)?;
+                        } else if let Some(default_literal) = field_defaults[i].as_ref() {
+                            dec.append_default(default_literal)?;
                         } else {
                             dec.append_null()?;
                         }
@@ -1103,8 +1140,8 @@ impl Decoder {
                 }
                 AvroLiteral::Null => {
                     for (i, dec) in decoders.iter_mut().enumerate() {
-                        if let Some(proj) = projector.as_ref() {
-                            proj.project_default(dec, i)?;
+                        if let Some(default_literal) = field_defaults[i].as_ref() {
+                            dec.append_default(default_literal)?;
                         } else {
                             dec.append_null()?;
                         }
@@ -1246,12 +1283,12 @@ impl Decoder {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
                 off.push_length(total_items);
             }
-            Self::Record(_, encodings, None) => {
+            Self::Record(_, encodings, _, None) => {
                 for encoding in encodings {
                     encoding.decode(buf)?;
                 }
             }
-            Self::Record(_, encodings, Some(proj)) => {
+            Self::Record(_, encodings, _, Some(proj)) => {
                 proj.project_record(buf, encodings)?;
             }
             Self::Map(_, koff, moff, kdata, valdec) => {
@@ -1286,18 +1323,8 @@ impl Decoder {
             }
             Self::Enum(indices, _, Some(res)) => {
                 let raw = buf.get_int()?;
-                let resolved = usize::try_from(raw)
-                    .ok()
-                    .and_then(|idx| res.mapping.get(idx).copied())
-                    .filter(|&idx| idx >= 0)
-                    .unwrap_or(res.default_index);
-                if resolved >= 0 {
-                    indices.push(resolved);
-                } else {
-                    return Err(AvroError::ParseError(format!(
-                        "Enum symbol index {raw} not resolvable and no default provided",
-                    )));
-                }
+                let resolved = res.resolve(raw)?;
+                indices.push(resolved);
             }
             Self::Duration(builder) => {
                 let b = buf.get_fixed(12)?;
@@ -1313,26 +1340,31 @@ impl Decoder {
                 inner.decode(buf)?;
             }
             Self::Union(u) => u.decode(buf)?,
-            Self::Nullable(order, nb, encoding, plan) => match *plan {
-                NullablePlan::FromSingle { promotion } => {
-                    encoding.decode_with_promotion(buf, promotion)?;
-                    nb.append(true);
-                }
-                NullablePlan::ReadTag => {
-                    let branch = buf.read_vlq()?;
-                    let is_not_null = match *order {
-                        Nullability::NullFirst => branch != 0,
-                        Nullability::NullSecond => branch == 0,
-                    };
-                    if is_not_null {
-                        // It is important to decode before appending to null buffer in case of decode error
-                        encoding.decode(buf)?;
-                    } else {
-                        encoding.append_null()?;
+            Self::Nullable(plan, nb, encoding) => {
+                match plan {
+                    NullablePlan::FromSingle { resolution } => {
+                        encoding.decode_with_resolution(buf, resolution)?;
+                        nb.append(true);
                     }
-                    nb.append(is_not_null);
+                    NullablePlan::ReadTag {
+                        nullability,
+                        resolution,
+                    } => {
+                        let branch = buf.read_vlq()?;
+                        let is_not_null = match *nullability {
+                            Nullability::NullFirst => branch != 0,
+                            Nullability::NullSecond => branch == 0,
+                        };
+                        if is_not_null {
+                            // It is important to decode before appending to null buffer in case of decode error
+                            encoding.decode_with_resolution(buf, resolution)?;
+                        } else {
+                            encoding.append_null()?;
+                        }
+                        nb.append(is_not_null);
+                    }
                 }
-            },
+            }
         }
         Ok(())
     }
@@ -1401,10 +1433,49 @@ impl Decoder {
         }
     }
 
+    fn decode_with_resolution<'d>(
+        &'d mut self,
+        buf: &mut AvroCursor<'_>,
+        resolution: &'d ResolutionPlan,
+    ) -> Result<(), AvroError> {
+        #[cfg(feature = "avro_custom_types")]
+        if let Self::RunEndEncoded(_, len, inner) = self {
+            *len += 1;
+            return inner.decode_with_resolution(buf, resolution);
+        }
+
+        match resolution {
+            ResolutionPlan::Promotion(promotion) => {
+                let promotion = *promotion;
+                self.decode_with_promotion(buf, promotion)
+            }
+            ResolutionPlan::DefaultValue(lit) => self.append_default(lit),
+            ResolutionPlan::EnumMapping(res) => {
+                let Self::Enum(indices, _, _) = self else {
+                    return Err(AvroError::SchemaError(
+                        "enum mapping resolution provided for non-enum decoder".into(),
+                    ));
+                };
+                let raw = buf.get_int()?;
+                let resolved = res.resolve(raw)?;
+                indices.push(resolved);
+                Ok(())
+            }
+            ResolutionPlan::Record(proj) => {
+                let Self::Record(_, encodings, _, _) = self else {
+                    return Err(AvroError::SchemaError(
+                        "record projection provided for non-record decoder".into(),
+                    ));
+                };
+                proj.project_record(buf, encodings)
+            }
+        }
+    }
+
     /// Flush decoded records to an [`ArrayRef`]
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, AvroError> {
         Ok(match self {
-            Self::Nullable(_, n, e, _) => e.flush(n.finish())?,
+            Self::Nullable(_, n, e) => e.flush(n.finish())?,
             Self::Null(size) => Arc::new(NullArray::new(std::mem::replace(size, 0))),
             Self::Boolean(b) => Arc::new(BooleanArray::new(b.finish(), nulls)),
             Self::Int32(values) => Arc::new(flush_primitive::<Int32Type>(values, nulls)),
@@ -1533,7 +1604,7 @@ impl Decoder {
                 let offsets = flush_offsets(offsets);
                 Arc::new(ListArray::try_new(field.clone(), offsets, values, nulls)?)
             }
-            Self::Record(fields, encodings, _) => {
+            Self::Record(fields, encodings, _, _) => {
                 let arrays = encodings
                     .iter_mut()
                     .map(|x| x.flush(None))
@@ -1678,6 +1749,83 @@ impl Decoder {
     }
 }
 
+/// Runtime plan for decoding reader-side `["null", T]` types.
+#[derive(Debug)]
+enum NullablePlan {
+    /// Writer actually wrote a union (branch tag present).
+    ReadTag {
+        nullability: Nullability,
+        resolution: ResolutionPlan,
+    },
+    /// Writer wrote a single (non-union) value resolved to the non-null branch
+    /// of the reader union; do NOT read a branch tag, but apply any resolution.
+    FromSingle { resolution: ResolutionPlan },
+}
+
+/// Runtime plan for resolving writer-reader type differences.
+#[derive(Debug)]
+enum ResolutionPlan {
+    /// Indicates that the writer's type should be promoted to the reader's type.
+    Promotion(Promotion),
+    /// Provides a default value for the field missing in the writer type.
+    DefaultValue(AvroLiteral),
+    /// Provides mapping information for resolving enums.
+    EnumMapping(EnumResolution),
+    /// Provides projection information for record fields.
+    Record(Projector),
+}
+
+impl ResolutionPlan {
+    fn try_new(decoder: &Decoder, resolution: &ResolutionInfo) -> Result<Self, AvroError> {
+        match (decoder, resolution) {
+            (_, ResolutionInfo::Promotion(p)) => Ok(ResolutionPlan::Promotion(*p)),
+            (_, ResolutionInfo::DefaultValue(lit)) => Ok(ResolutionPlan::DefaultValue(lit.clone())),
+            (_, ResolutionInfo::EnumMapping(m)) => {
+                Ok(ResolutionPlan::EnumMapping(EnumResolution::new(m)))
+            }
+            (Decoder::Record(_, _, field_defaults, _), ResolutionInfo::Record(r)) => Ok(
+                ResolutionPlan::Record(ProjectorBuilder::try_new(r, field_defaults).build()?),
+            ),
+            (_, ResolutionInfo::Record(_)) => Err(AvroError::SchemaError(
+                "record resolution on non-record decoder".into(),
+            )),
+            (_, ResolutionInfo::Union(_)) => Err(AvroError::SchemaError(
+                "union variant cannot be resolved to a union type".into(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EnumResolution {
+    mapping: Arc<[i32]>,
+    default_index: i32,
+}
+
+impl EnumResolution {
+    fn new(mapping: &EnumMapping) -> Self {
+        EnumResolution {
+            mapping: mapping.mapping.clone(),
+            default_index: mapping.default_index,
+        }
+    }
+
+    fn resolve(&self, index: i32) -> Result<i32, AvroError> {
+        let resolved = usize::try_from(index)
+            .ok()
+            .and_then(|idx| self.mapping.get(idx).copied())
+            .filter(|&idx| idx >= 0)
+            .unwrap_or(self.default_index);
+        if resolved >= 0 {
+            Ok(resolved)
+        } else {
+            Err(AvroError::ParseError(format!(
+                "Enum symbol index {index} not resolvable and no default provided",
+            )))
+        }
+    }
+}
+
 // A lookup table for resolving fields between writer and reader schemas during record projection.
 #[derive(Debug)]
 struct DispatchLookupTable {
@@ -1697,11 +1845,11 @@ struct DispatchLookupTable {
     // - `to_reader.len() == promotion.len()` and matches the reader field count.
     // - If `to_reader[r] == NO_SOURCE`, `promotion[r]` is ignored.
     to_reader: Box<[i8]>,
-    // For each reader field `r`, specifies the `Promotion` to apply to the writer's value.
+    // For each reader field `r`, specifies the resolution to apply to the writer's value.
     //
     // This is used when a writer field's type can be promoted to a reader field's type
     // (e.g., `Int` to `Long`). It is ignored if `to_reader[r] == NO_SOURCE`.
-    promotion: Box<[Promotion]>,
+    resolution: Box<[ResolutionPlan]>,
 }
 
 // Sentinel used in `DispatchLookupTable::to_reader` to mark
@@ -1710,64 +1858,94 @@ const NO_SOURCE: i8 = -1;
 
 impl DispatchLookupTable {
     fn from_writer_to_reader(
-        promotion_map: &[Option<(usize, Promotion)>],
+        reader_branches: &[Decoder],
+        resolution_map: &[Option<(usize, ResolutionInfo)>],
     ) -> Result<Self, AvroError> {
-        let mut to_reader = Vec::with_capacity(promotion_map.len());
-        let mut promotion = Vec::with_capacity(promotion_map.len());
-        for map in promotion_map {
-            match *map {
-                Some((idx, promo)) => {
+        let mut to_reader = Vec::with_capacity(resolution_map.len());
+        let mut resolution = Vec::with_capacity(resolution_map.len());
+        for map in resolution_map {
+            match map {
+                Some((idx, res)) => {
+                    let idx = *idx;
                     let idx_i8 = i8::try_from(idx).map_err(|_| {
                         AvroError::SchemaError(format!(
                             "Reader branch index {idx} exceeds i8 range (max {})",
                             i8::MAX
                         ))
                     })?;
+                    let plan = ResolutionPlan::try_new(&reader_branches[idx], res)?;
                     to_reader.push(idx_i8);
-                    promotion.push(promo);
+                    resolution.push(plan);
                 }
                 None => {
                     to_reader.push(NO_SOURCE);
-                    promotion.push(Promotion::Direct);
+                    resolution.push(ResolutionPlan::DefaultValue(AvroLiteral::Null));
                 }
             }
         }
         Ok(Self {
             to_reader: to_reader.into_boxed_slice(),
-            promotion: promotion.into_boxed_slice(),
+            resolution: resolution.into_boxed_slice(),
         })
     }
 
-    // Resolve a writer branch index to (reader_idx, promotion)
+    // Resolve a writer branch index to (reader_idx, resolution)
     #[inline]
-    fn resolve(&self, writer_index: usize) -> Option<(usize, Promotion)> {
+    fn resolve(&self, writer_index: usize) -> Option<(usize, &ResolutionPlan)> {
         let reader_index = *self.to_reader.get(writer_index)?;
-        (reader_index >= 0).then(|| (reader_index as usize, self.promotion[writer_index]))
+        (reader_index >= 0).then(|| (reader_index as usize, &self.resolution[writer_index]))
     }
 }
 
 #[derive(Debug)]
 struct UnionDecoder {
     fields: UnionFields,
-    type_ids: Vec<i8>,
-    offsets: Vec<i32>,
-    branches: Vec<Decoder>,
-    counts: Vec<i32>,
-    reader_type_codes: Vec<i8>,
+    branches: UnionDecoderBranches,
     default_emit_idx: usize,
     null_emit_idx: usize,
     plan: UnionReadPlan,
+}
+
+#[derive(Debug, Default)]
+struct UnionDecoderBranches {
+    decoders: Vec<Decoder>,
+    reader_type_codes: Vec<i8>,
+    type_ids: Vec<i8>,
+    offsets: Vec<i32>,
+    counts: Vec<i32>,
+}
+
+impl UnionDecoderBranches {
+    fn new(decoders: Vec<Decoder>, reader_type_codes: Vec<i8>) -> Self {
+        let branch_len = decoders.len().max(reader_type_codes.len());
+        Self {
+            decoders,
+            reader_type_codes,
+            type_ids: Vec::with_capacity(DEFAULT_CAPACITY),
+            offsets: Vec::with_capacity(DEFAULT_CAPACITY),
+            counts: vec![0; branch_len],
+        }
+    }
+
+    fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder, AvroError> {
+        let branches_len = self.decoders.len();
+        let Some(reader_branch) = self.decoders.get_mut(reader_idx) else {
+            return Err(AvroError::ParseError(format!(
+                "Union branch index {reader_idx} out of range ({branches_len} branches)"
+            )));
+        };
+        self.type_ids.push(self.reader_type_codes[reader_idx]);
+        self.offsets.push(self.counts[reader_idx]);
+        self.counts[reader_idx] += 1;
+        Ok(reader_branch)
+    }
 }
 
 impl Default for UnionDecoder {
     fn default() -> Self {
         Self {
             fields: UnionFields::empty(),
-            type_ids: Vec::new(),
-            offsets: Vec::new(),
-            branches: Vec::new(),
-            counts: Vec::new(),
-            reader_type_codes: Vec::new(),
+            branches: Default::default(),
             default_emit_idx: 0,
             null_emit_idx: 0,
             plan: UnionReadPlan::Passthrough,
@@ -1782,7 +1960,7 @@ enum UnionReadPlan {
     },
     FromSingle {
         reader_idx: usize,
-        promotion: Promotion,
+        resolution: ResolutionPlan,
     },
     ToSingle {
         target: Box<Decoder>,
@@ -1791,77 +1969,32 @@ enum UnionReadPlan {
     Passthrough,
 }
 
-impl UnionDecoder {
-    fn try_new(
-        fields: UnionFields,
-        branches: Vec<Decoder>,
+impl UnionReadPlan {
+    fn from_resolved(
+        reader_branches: &[Decoder],
         resolved: Option<ResolvedUnion>,
     ) -> Result<Self, AvroError> {
-        let reader_type_codes = fields.iter().map(|(tid, _)| tid).collect::<Vec<i8>>();
-        let null_branch = branches.iter().position(|b| matches!(b, Decoder::Null(_)));
-        let default_emit_idx = 0;
-        let null_emit_idx = null_branch.unwrap_or(default_emit_idx);
-        let branch_len = branches.len().max(reader_type_codes.len());
-        // Guard against impractically large unions that cannot be indexed by an Avro int
-        let max_addr = (i32::MAX as usize) + 1;
-        if branches.len() > max_addr {
-            return Err(AvroError::SchemaError(format!(
-                "Reader union has {} branches, which exceeds the maximum addressable \
-                 branches by an Avro int tag ({} + 1).",
-                branches.len(),
-                i32::MAX
-            )));
-        }
-        Ok(Self {
-            fields,
-            type_ids: Vec::with_capacity(DEFAULT_CAPACITY),
-            offsets: Vec::with_capacity(DEFAULT_CAPACITY),
-            branches,
-            counts: vec![0; branch_len],
-            reader_type_codes,
-            default_emit_idx,
-            null_emit_idx,
-            plan: Self::plan_from_resolved(resolved)?,
-        })
-    }
-
-    fn try_new_from_writer_union(
-        info: ResolvedUnion,
-        target: Box<Decoder>,
-    ) -> Result<Self, AvroError> {
-        // This constructor is only for writer-union to single-type resolution
-        debug_assert!(info.writer_is_union && !info.reader_is_union);
-        let lookup_table = DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader)?;
-        Ok(Self {
-            plan: UnionReadPlan::ToSingle {
-                target,
-                lookup_table,
-            },
-            ..Self::default()
-        })
-    }
-
-    fn plan_from_resolved(resolved: Option<ResolvedUnion>) -> Result<UnionReadPlan, AvroError> {
         let Some(info) = resolved else {
-            return Ok(UnionReadPlan::Passthrough);
+            return Ok(Self::Passthrough);
         };
         match (info.writer_is_union, info.reader_is_union) {
             (true, true) => {
                 let lookup_table =
-                    DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader)?;
-                Ok(UnionReadPlan::ReaderUnion { lookup_table })
+                    DispatchLookupTable::from_writer_to_reader(reader_branches, &info.writer_to_reader)?;
+                Ok(Self::ReaderUnion { lookup_table })
             }
             (false, true) => {
-                let Some(&(reader_idx, promotion)) =
+                let Some((idx, resolution)) =
                     info.writer_to_reader.first().and_then(Option::as_ref)
                 else {
                     return Err(AvroError::SchemaError(
                         "Writer type does not match any reader union branch".to_string(),
                     ));
                 };
-                Ok(UnionReadPlan::FromSingle {
+                let reader_idx = *idx;
+                Ok(Self::FromSingle {
                     reader_idx,
-                    promotion,
+                    resolution: ResolutionPlan::try_new(&reader_branches[reader_idx], resolution)?,
                 })
             }
             (true, false) => Err(AvroError::InvalidArgument(
@@ -1874,6 +2007,53 @@ impl UnionDecoder {
                     .to_string(),
             )),
         }
+    }
+}
+
+impl UnionDecoder {
+    fn try_new(
+        fields: UnionFields,
+        branches: Vec<Decoder>,
+        resolved: Option<ResolvedUnion>,
+    ) -> Result<Self, AvroError> {
+        let reader_type_codes = fields.iter().map(|(tid, _)| tid).collect::<Vec<i8>>();
+        let null_branch = branches.iter().position(|b| matches!(b, Decoder::Null(_)));
+        let default_emit_idx = 0;
+        let null_emit_idx = null_branch.unwrap_or(default_emit_idx);
+        // Guard against impractically large unions that cannot be indexed by an Avro int
+        let max_addr = (i32::MAX as usize) + 1;
+        if branches.len() > max_addr {
+            return Err(AvroError::SchemaError(format!(
+                "Reader union has {} branches, which exceeds the maximum addressable \
+                 branches by an Avro int tag ({} + 1).",
+                branches.len(),
+                i32::MAX
+            )));
+        }
+        let plan = UnionReadPlan::from_resolved(&branches, resolved)?;
+        Ok(Self {
+            fields,
+            branches: UnionDecoderBranches::new(branches, reader_type_codes),
+            default_emit_idx,
+            null_emit_idx,
+            plan,
+        })
+    }
+
+    fn with_single_target(target: Decoder, info: ResolvedUnion) -> Result<Self, AvroError> {
+        // This constructor is only for writer-union to single-type resolution
+        debug_assert!(info.writer_is_union && !info.reader_is_union);
+        let mut reader_branches = [target];
+        let lookup_table =
+            DispatchLookupTable::from_writer_to_reader(&reader_branches, &info.writer_to_reader)?;
+        let target = Box::new(mem::replace(&mut reader_branches[0], Decoder::Null(0)));
+        Ok(Self {
+            plan: UnionReadPlan::ToSingle {
+                target,
+                lookup_table,
+            },
+            ..Self::default()
+        })
     }
 
     #[inline]
@@ -1897,20 +2077,6 @@ impl UnionDecoder {
     }
 
     #[inline]
-    fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder, AvroError> {
-        let branches_len = self.branches.len();
-        let Some(reader_branch) = self.branches.get_mut(reader_idx) else {
-            return Err(AvroError::ParseError(format!(
-                "Union branch index {reader_idx} out of range ({branches_len} branches)"
-            )));
-        };
-        self.type_ids.push(self.reader_type_codes[reader_idx]);
-        self.offsets.push(self.counts[reader_idx]);
-        self.counts[reader_idx] += 1;
-        Ok(reader_branch)
-    }
-
-    #[inline]
     fn on_decoder<F>(&mut self, fallback_idx: usize, action: F) -> Result<(), AvroError>
     where
         F: FnOnce(&mut Decoder) -> Result<(), AvroError>,
@@ -1922,7 +2088,7 @@ impl UnionDecoder {
             UnionReadPlan::FromSingle { reader_idx, .. } => *reader_idx,
             _ => fallback_idx,
         };
-        self.emit_to(reader_idx).and_then(action)
+        self.branches.emit_to(reader_idx).and_then(action)
     }
 
     fn append_null(&mut self) -> Result<(), AvroError> {
@@ -1934,35 +2100,42 @@ impl UnionDecoder {
     }
 
     fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), AvroError> {
-        let (reader_idx, promotion) = match &mut self.plan {
-            UnionReadPlan::Passthrough => (Self::read_tag(buf)?, Promotion::Direct),
+        match &mut self.plan {
+            UnionReadPlan::Passthrough => {
+                let reader_idx = Self::read_tag(buf)?;
+                let decoder = self.branches.emit_to(reader_idx)?;
+                decoder.decode(buf)
+            }
             UnionReadPlan::ReaderUnion { lookup_table } => {
                 let idx = Self::read_tag(buf)?;
-                lookup_table.resolve(idx).ok_or_else(|| {
-                    AvroError::ParseError(format!(
+                let Some((reader_idx, resolution)) = lookup_table.resolve(idx) else {
+                    return Err(AvroError::ParseError(format!(
                         "Union branch index {idx} not resolvable by reader schema"
-                    ))
-                })?
+                    )));
+                };
+                let decoder = self.branches.emit_to(reader_idx)?;
+                decoder.decode_with_resolution(buf, resolution)
             }
             UnionReadPlan::FromSingle {
                 reader_idx,
-                promotion,
-            } => (*reader_idx, *promotion),
+                resolution,
+            } => {
+                let decoder = self.branches.emit_to(*reader_idx)?;
+                decoder.decode_with_resolution(buf, resolution)
+            }
             UnionReadPlan::ToSingle {
                 target,
                 lookup_table,
             } => {
                 let idx = Self::read_tag(buf)?;
-                return match lookup_table.resolve(idx) {
-                    Some((_, promotion)) => target.decode_with_promotion(buf, promotion),
-                    None => Err(AvroError::ParseError(format!(
-                        "Writer union branch {idx} does not resolve to reader type"
-                    ))),
+                let Some((_, resolution)) = lookup_table.resolve(idx) else {
+                    return Err(AvroError::ParseError(format!(
+                        "Writer union branch index {idx} not resolvable by reader schema"
+                    )));
                 };
+                target.decode_with_resolution(buf, resolution)
             }
-        };
-        let decoder = self.emit_to(reader_idx)?;
-        decoder.decode_with_promotion(buf, promotion)
+        }
     }
 
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, AvroError> {
@@ -1976,13 +2149,20 @@ impl UnionDecoder {
         );
         let children = self
             .branches
+            .decoders
             .iter_mut()
             .map(|d| d.flush(None))
             .collect::<Result<Vec<_>, _>>()?;
         let arr = UnionArray::try_new(
             self.fields.clone(),
-            flush_values(&mut self.type_ids).into_iter().collect(),
-            Some(flush_values(&mut self.offsets).into_iter().collect()),
+            flush_values(&mut self.branches.type_ids)
+                .into_iter()
+                .collect(),
+            Some(
+                flush_values(&mut self.branches.offsets)
+                    .into_iter()
+                    .collect(),
+            ),
             children,
         )
         .map_err(|e| AvroError::ParseError(e.to_string()))?;
@@ -1995,7 +2175,7 @@ struct UnionDecoderBuilder {
     fields: Option<UnionFields>,
     branches: Option<Vec<Decoder>>,
     resolved: Option<ResolvedUnion>,
-    target: Option<Box<Decoder>>,
+    target: Option<Decoder>,
 }
 
 impl UnionDecoderBuilder {
@@ -2018,7 +2198,7 @@ impl UnionDecoderBuilder {
         self
     }
 
-    fn with_target(mut self, target: Box<Decoder>) -> Self {
+    fn with_target(mut self, target: Decoder) -> Self {
         self.target = Some(target);
         self
     }
@@ -2031,7 +2211,7 @@ impl UnionDecoderBuilder {
             (Some(info), None, None, Some(target))
                 if info.writer_is_union && !info.reader_is_union =>
             {
-                UnionDecoder::try_new_from_writer_union(info, target)
+                UnionDecoder::with_single_target(target, info)
             }
             _ => Err(AvroError::InvalidArgument(
                 "Invalid UnionDecoderBuilder configuration: expected either \
@@ -2238,42 +2418,31 @@ fn values_equal_at(arr: &dyn Array, i: usize, j: usize) -> bool {
 struct Projector {
     writer_to_reader: Arc<[Option<usize>]>,
     skip_decoders: Vec<Option<Skipper>>,
-    field_defaults: Vec<Option<AvroLiteral>>,
     default_injections: Arc<[(usize, AvroLiteral)]>,
 }
 
 #[derive(Debug)]
 struct ProjectorBuilder<'a> {
     rec: &'a ResolvedRecord,
-    reader_fields: Arc<[AvroField]>,
+    field_defaults: &'a [Option<AvroLiteral>],
 }
 
 impl<'a> ProjectorBuilder<'a> {
     #[inline]
-    fn try_new(rec: &'a ResolvedRecord, reader_fields: &Arc<[AvroField]>) -> Self {
+    fn try_new(rec: &'a ResolvedRecord, field_defaults: &'a [Option<AvroLiteral>]) -> Self {
         Self {
             rec,
-            reader_fields: reader_fields.clone(),
+            field_defaults,
         }
     }
 
     #[inline]
     fn build(self) -> Result<Projector, AvroError> {
-        let reader_fields = self.reader_fields;
-        let mut field_defaults: Vec<Option<AvroLiteral>> = Vec::with_capacity(reader_fields.len());
-        for avro_field in reader_fields.as_ref() {
-            if let Some(ResolutionInfo::DefaultValue(lit)) =
-                avro_field.data_type().resolution.as_ref()
-            {
-                field_defaults.push(Some(lit.clone()));
-            } else {
-                field_defaults.push(None);
-            }
-        }
         let mut default_injections: Vec<(usize, AvroLiteral)> =
             Vec::with_capacity(self.rec.default_fields.len());
         for &idx in self.rec.default_fields.as_ref() {
-            let lit = field_defaults
+            let lit = self
+                .field_defaults
                 .get(idx)
                 .and_then(|lit| lit.clone())
                 .unwrap_or(AvroLiteral::Null);
@@ -2291,7 +2460,6 @@ impl<'a> ProjectorBuilder<'a> {
         Ok(Projector {
             writer_to_reader: self.rec.writer_to_reader.clone(),
             skip_decoders,
-            field_defaults,
             default_injections: default_injections.into(),
         })
     }
@@ -2299,23 +2467,8 @@ impl<'a> ProjectorBuilder<'a> {
 
 impl Projector {
     #[inline]
-    fn project_default(&self, decoder: &mut Decoder, index: usize) -> Result<(), AvroError> {
-        // SAFETY: `index` is obtained by listing the reader's record fields (i.e., from
-        // `decoders.iter_mut().enumerate()`), and `field_defaults` was built in
-        // `ProjectorBuilder::build` to have exactly one element per reader field.
-        // Therefore, `index < self.field_defaults.len()` always holds here, so
-        // `self.field_defaults[index]` cannot panic. We only take an immutable reference
-        // via `.as_ref()`, and `self` is borrowed immutably.
-        if let Some(default_literal) = self.field_defaults[index].as_ref() {
-            decoder.append_default(default_literal)
-        } else {
-            decoder.append_null()
-        }
-    }
-
-    #[inline]
     fn project_record(
-        &mut self,
+        &self,
         buf: &mut AvroCursor<'_>,
         encodings: &mut [Decoder],
     ) -> Result<(), AvroError> {
@@ -2327,10 +2480,10 @@ impl Projector {
         for (i, (mapping, skipper_opt)) in self
             .writer_to_reader
             .iter()
-            .zip(self.skip_decoders.iter_mut())
+            .zip(self.skip_decoders.iter())
             .enumerate()
         {
-            match (mapping, skipper_opt.as_mut()) {
+            match (mapping, skipper_opt.as_ref()) {
                 (Some(reader_index), _) => encodings[*reader_index].decode(buf)?,
                 (None, Some(skipper)) => skipper.skip(buf)?,
                 (None, None) => {
@@ -2459,7 +2612,7 @@ impl Skipper {
         Ok(base)
     }
 
-    fn skip(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), AvroError> {
+    fn skip(&self, buf: &mut AvroCursor<'_>) -> Result<(), AvroError> {
         match self {
             Self::Null => Ok(()),
             Self::Boolean => {
@@ -2522,7 +2675,7 @@ impl Skipper {
                 Ok(())
             }
             Self::Struct(fields) => {
-                for f in fields.iter_mut() {
+                for f in fields.iter() {
                     f.skip(buf)?
                 }
                 Ok(())
@@ -2541,7 +2694,7 @@ impl Skipper {
                         (usize::BITS as usize)
                     ))
                 })?;
-                let Some(encoding) = encodings.get_mut(idx) else {
+                let Some(encoding) = encodings.get(idx) else {
                     return Err(AvroError::ParseError(format!(
                         "Union branch index {idx} out of range for skipper ({} branches)",
                         encodings.len()
@@ -3488,10 +3641,12 @@ mod tests {
         let dt = avro_from_codec(Codec::Decimal(4, Some(1), None));
         let inner = Decoder::try_new(&dt).unwrap();
         let mut decoder = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
-            NullablePlan::ReadTag,
         );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(0));
@@ -3531,10 +3686,12 @@ mod tests {
         let dt = avro_from_codec(Codec::Decimal(6, Some(2), Some(16)));
         let inner = Decoder::try_new(&dt).unwrap();
         let mut decoder = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
-            NullablePlan::ReadTag,
         );
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
@@ -3992,10 +4149,10 @@ mod tests {
         Decoder::Record(
             fields,
             encodings,
+            vec![None; reader_fields.len()],
             Some(Projector {
                 writer_to_reader: Arc::from(writer_to_reader),
                 skip_decoders,
-                field_defaults: vec![None; reader_fields.len()],
                 default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
             }),
         )
@@ -4374,10 +4531,9 @@ mod tests {
         let projector = Projector {
             writer_to_reader: Arc::from(vec![None; writer_to_reader_len]),
             skip_decoders,
-            field_defaults,
             default_injections: Arc::from(default_injections),
         };
-        Decoder::Record(fields, encodings, Some(projector))
+        Decoder::Record(fields, encodings, field_defaults, Some(projector))
     }
 
     #[cfg(feature = "avro_custom_types")]
@@ -4631,10 +4787,12 @@ mod tests {
     fn test_default_append_nullable_int32_null_and_value() {
         let inner = Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY));
         let mut dec = Decoder::Nullable(
-            Nullability::NullFirst,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullFirst,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
-            NullablePlan::ReadTag,
         );
         dec.append_default(&AvroLiteral::Null).unwrap();
         dec.append_default(&AvroLiteral::Int(11)).unwrap();
@@ -4885,29 +5043,33 @@ mod tests {
             field_refs.push(Arc::new(ArrowField::new(*name, dt.clone(), *nullable)));
         }
         let enc_a = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY))),
-            NullablePlan::ReadTag,
         );
         let enc_b = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(Decoder::String(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             )),
-            NullablePlan::ReadTag,
         );
         encoders.push(enc_a);
         encoders.push(enc_b);
+        let field_defaults = vec![None, None]; // no defaults -> append_null
         let projector = Projector {
             writer_to_reader: Arc::from(vec![]),
             skip_decoders: vec![],
-            field_defaults: vec![None, None], // no defaults -> append_null
             default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
         };
-        let mut rec = Decoder::Record(field_refs.into(), encoders, Some(projector));
+        let mut rec = Decoder::Record(field_refs.into(), encoders, field_defaults, Some(projector));
         let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
         map.insert("a".to_string(), AvroLiteral::Int(9));
         rec.append_default(&AvroLiteral::Map(map)).unwrap();
@@ -5034,7 +5196,7 @@ mod tests {
             Codec::DurationSeconds,
         ] {
             let dt = make_avro_dt(codec.clone(), None);
-            let mut s = Skipper::from_avro(&dt)?;
+            let s = Skipper::from_avro(&dt)?;
             for &v in &values {
                 let bytes = encode_avro_long(v);
                 let mut cursor = AvroCursor::new(&bytes);
@@ -5055,7 +5217,7 @@ mod tests {
     #[test]
     fn skipper_nullable_custom_duration_respects_null_first() -> Result<(), AvroError> {
         let dt = make_avro_dt(Codec::DurationNanos, Some(Nullability::NullFirst));
-        let mut s = Skipper::from_avro(&dt)?;
+        let s = Skipper::from_avro(&dt)?;
         match &s {
             Skipper::Nullable(Nullability::NullFirst, inner) => match **inner {
                 Skipper::Int64 => {}
@@ -5084,7 +5246,7 @@ mod tests {
     #[test]
     fn skipper_nullable_custom_duration_respects_null_second() -> Result<(), AvroError> {
         let dt = make_avro_dt(Codec::DurationMicros, Some(Nullability::NullSecond));
-        let mut s = Skipper::from_avro(&dt)?;
+        let s = Skipper::from_avro(&dt)?;
         match &s {
             Skipper::Nullable(Nullability::NullSecond, inner) => match **inner {
                 Skipper::Int64 => {}
@@ -5115,7 +5277,7 @@ mod tests {
     #[test]
     fn skipper_interval_is_fixed12_and_skips_12_bytes() -> Result<(), AvroError> {
         let dt = make_avro_dt(Codec::Interval, None);
-        let mut s = Skipper::from_avro(&dt)?;
+        let s = Skipper::from_avro(&dt)?;
         match s {
             Skipper::DurationFixed12 => {}
             other => panic!("expected DurationFixed12, got {:?}", other),
@@ -5227,12 +5389,11 @@ mod tests {
             Box::new(inner_values),
         );
         let mut dec = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::FromSingle {
+                resolution: ResolutionPlan::Promotion(Promotion::IntToDouble),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(ree),
-            NullablePlan::FromSingle {
-                promotion: Promotion::IntToDouble,
-            },
         );
         for v in [1, 1, 2, 2, 2] {
             let bytes = encode_avro_int(v);

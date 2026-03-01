@@ -19,7 +19,7 @@ use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
 use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray, Scalar};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, bit_util};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -328,8 +328,7 @@ impl FixedSizeBinaryArray {
             ));
         }
 
-        let null_buf = BooleanBuffer::new(null_buf.into(), 0, len);
-        let nulls = Some(NullBuffer::new(null_buf)).filter(|n| n.null_count() > 0);
+        let nulls = NullBuffer::from_unsliced_buffer(null_buf, len);
 
         let size = size.unwrap_or(0) as i32;
         Ok(Self {
@@ -406,8 +405,7 @@ impl FixedSizeBinaryArray {
             Ok(())
         })?;
 
-        let null_buf = BooleanBuffer::new(null_buf.into(), 0, len);
-        let nulls = Some(NullBuffer::new(null_buf)).filter(|n| n.null_count() > 0);
+        let nulls = NullBuffer::from_unsliced_buffer(null_buf, len);
 
         Ok(Self {
             data_type: DataType::FixedSizeBinary(size),
