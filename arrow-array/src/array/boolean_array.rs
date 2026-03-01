@@ -93,6 +93,28 @@ impl BooleanArray {
         Self { values, nulls }
     }
 
+    /// It returns a new array with the same data and a new null buffer.
+    ///
+    /// The resulting null buffer is the union of the existing nulls and the provided nulls.
+    /// In other words, a slot is valid in the result only if it is valid in BOTH
+    /// the existing array AND the provided `nulls`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nulls` has a different length than the array.
+    pub fn with_nulls(self, nulls: Option<NullBuffer>) -> Self {
+        if let Some(n) = &nulls {
+            assert_eq!(n.len(), self.len(), "Null buffer length mismatch");
+        }
+
+        let new_nulls = NullBuffer::union(self.nulls.as_ref(), nulls.as_ref());
+
+        Self {
+            values: self.values,
+            nulls: new_nulls,
+        }
+    }
+
     /// Create a new [`BooleanArray`] with length `len` consisting only of nulls
     pub fn new_null(len: usize) -> Self {
         Self {
