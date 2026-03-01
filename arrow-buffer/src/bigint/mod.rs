@@ -20,8 +20,8 @@ use crate::bigint::div::div_rem;
 use num_bigint::BigInt;
 use num_traits::{
     Bounded, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
-    Num, One, Signed, ToPrimitive, WrappingAdd, WrappingMul, WrappingNeg, WrappingSub, Zero,
-    cast::AsPrimitive,
+    Num, One, Signed, ToPrimitive, WrappingAdd, WrappingMul, WrappingNeg, WrappingShl, WrappingShr,
+    WrappingSub, Zero, cast::AsPrimitive,
 };
 use std::cmp::Ordering;
 use std::num::ParseIntError;
@@ -807,6 +807,46 @@ impl Shr<u8> for i256 {
     }
 }
 
+impl WrappingShl for i256 {
+    #[inline]
+    fn wrapping_shl(&self, rhs: u32) -> i256 {
+        (*self).shl(rhs)
+    }
+}
+
+impl WrappingShr for i256 {
+    #[inline]
+    fn wrapping_shr(&self, rhs: u32) -> i256 {
+        (*self).shr(rhs)
+    }
+}
+
+// Define Shr<T> and Shl<T> for specified integer types
+macro_rules! define_wrapping_shift {
+    // Handle multiple types
+    ($trait_name:ident, $method:ident, [$($t:ty),+]) => {
+        $(define_wrapping_shift!($trait_name, $method, $t);)+
+    };
+    // Handle single type
+    ($trait_name:ident, $method:ident, $t:ty) => {
+        impl $trait_name<$t> for i256 {
+            type Output = i256;
+
+            #[inline]
+            fn $method(self, rhs: $t) -> Self::Output {
+                // Take modulo 256
+                #[allow(clippy::suspicious_arithmetic_impl)]
+                let shift: u8 = (rhs % (256 as $t)) as u8;
+                // Use existing Shl<u8> / Shr<u8> implementation
+                <Self as $trait_name<u8>>::$method(self, shift)
+            }
+        }
+    };
+}
+
+define_wrapping_shift!(Shl, shl, [u16, u32, u64, usize, i16, i32, i64, isize]);
+define_wrapping_shift!(Shr, shr, [u16, u32, u64, usize, i16, i32, i64, isize]);
+
 macro_rules! define_as_primitive {
     ($native_ty:ty) => {
         impl AsPrimitive<i256> for $native_ty {
@@ -1190,9 +1230,19 @@ mod tests {
             let (expected, _) = i256::from_bigint_with_overflow(bl.clone() << shift);
             assert_eq!(actual.to_string(), expected.to_string());
 
+            let wrapping_actual = <i256 as WrappingShl>::wrapping_shl(&il, shift as u32);
+            assert_eq!(wrapping_actual.to_string(), expected.to_string());
+
             let actual = il >> shift;
             let (expected, _) = i256::from_bigint_with_overflow(bl.clone() >> shift);
             assert_eq!(actual.to_string(), expected.to_string());
+
+            let wrapping_actual = <i256 as WrappingShr>::wrapping_shr(&il, shift as u32);
+            assert_eq!(wrapping_actual.to_string(), expected.to_string());
+
+            // Check wrapping of the shift argument
+            let wrapping_actual = <i256 as WrappingShr>::wrapping_shr(&il, 512 + shift as u32);
+            assert_eq!(wrapping_actual.to_string(), expected.to_string());
         }
     }
 
