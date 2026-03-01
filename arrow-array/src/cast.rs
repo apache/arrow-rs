@@ -74,7 +74,7 @@ macro_rules! repeat_pat {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_integer {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)? => $fallback:expr $(,)?)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!($crate::cast::__private::DataType::Int8, $($data_type),+) => {
                 $m!($crate::types::Int8Type $(, $args)*)
@@ -147,7 +147,7 @@ macro_rules! downcast_integer_array {
     ($($values:ident),+ => $e:block $($tail:tt)*) => {
         $crate::downcast_integer_array!(($($values),+) => $e $($tail)*)
     };
-    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
+    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)?)*) => {
         $crate::downcast_integer!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
             $($p $(if $pred)? => $fallback,)*
@@ -189,7 +189,7 @@ macro_rules! downcast_integer_array {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_run_end_index {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)? => $fallback:expr $(,)?)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!($crate::cast::__private::DataType::Int16, $($data_type),+) => {
                 $m!($crate::types::Int16Type $(, $args)*)
@@ -234,7 +234,7 @@ macro_rules! downcast_run_end_index {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_temporal {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)? => $fallback:expr $(,)?)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!($crate::cast::__private::DataType::Time32($crate::cast::__private::TimeUnit::Second), $($data_type),+) => {
                 $m!($crate::types::Time32SecondType $(, $args)*)
@@ -313,7 +313,7 @@ macro_rules! downcast_temporal_array {
     ($($values:ident),+ => $e:block $($tail:tt)*) => {
         $crate::downcast_temporal_array!(($($values),+) => $e $($tail)*)
     };
-    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
+    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)?)*) => {
         $crate::downcast_temporal!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
             $($p $(if $pred)? => $fallback,)*
@@ -353,7 +353,7 @@ macro_rules! downcast_temporal_array {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_primitive {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)? => $fallback:expr $(,)?)*) => {
         $crate::downcast_integer! {
             $($data_type),+ => ($m $(, $args)*),
             $crate::repeat_pat!($crate::cast::__private::DataType::Float16, $($data_type),+) => {
@@ -459,7 +459,7 @@ macro_rules! downcast_primitive_array {
     ($($values:ident),+ => $e:block $($tail:tt)*) => {
         $crate::downcast_primitive_array!(($($values),+) => $e $($tail)*)
     };
-    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
+    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)?)*) => {
         $crate::downcast_primitive!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
             $($p $(if $pred)? => $fallback,)*
@@ -550,7 +550,7 @@ macro_rules! downcast_dictionary_array {
         downcast_dictionary_array!($values => {$e} $($tail)*)
     };
 
-    ($values:ident => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
+    ($values:ident => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)?)*) => {
         match $values.data_type() {
             $crate::cast::__private::DataType::Dictionary(k, _) => {
                 $crate::downcast_integer! {
@@ -658,7 +658,7 @@ macro_rules! downcast_run_array {
         downcast_run_array!($values => {$e} $($tail)*)
     };
 
-    ($values:ident => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)*)*) => {
+    ($values:ident => $e:block $($p:pat $(if $pred:expr)? => $fallback:expr $(,)?)*) => {
         match $values.data_type() {
             $crate::cast::__private::DataType::RunEndEncoded(k, _) => {
                 $crate::downcast_run_end_index! {
