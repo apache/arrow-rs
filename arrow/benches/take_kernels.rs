@@ -186,6 +186,32 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_take(&values, &indices))
     });
 
+    // Compact path benchmarks: indices.len() < values.len() / 2
+    // Simulates high-selectivity filtering (e.g., ClickBench Q22: 46/100K rows)
+    let values = create_string_view_array(4096, 0.0);
+    let indices = create_random_index(256, 0.0); // ~6% selectivity
+    c.bench_function("take stringview compact 4096 -> 256", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(4096, 0.0);
+    let indices = create_random_index(64, 0.0); // ~1.5% selectivity
+    c.bench_function("take stringview compact 4096 -> 64", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(4096, 0.5);
+    let indices = create_random_index(256, 0.0); // null values, sparse
+    c.bench_function("take stringview compact null values 4096 -> 256", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(4096, 0.0);
+    let indices = create_random_index(256, 0.5); // null indices, sparse
+    c.bench_function("take stringview compact null indices 4096 -> 256", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
     let values = create_primitive_run_array::<Int32Type, Int32Type>(1024, 512);
     let indices = create_random_index(1024, 0.0);
     c.bench_function(

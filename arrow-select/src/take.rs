@@ -28,7 +28,7 @@ use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
     bit_util,
 };
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
 
 use num_traits::{One, Zero};
@@ -596,16 +596,231 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 }
 
 /// `take` implementation for byte view arrays
+///
+/// Automatically compacts string data when the take is sparse (selecting less
+/// than half the rows), which avoids holding the original large buffers alive.
 fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
     array: &GenericByteViewArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
+    // If selecting less than half the rows, compact the string data to avoid
+    // keeping the original (potentially large) buffers alive via Arc.
+    if indices.len() < array.len() / 2 {
+        return take_byte_view_compact(array, indices);
+    }
     let new_views = take_native(array.views(), indices);
     let new_nulls = take_nulls(array.nulls(), indices);
     // Safety:  array.views was valid, and take_native copies only valid values, and verifies bounds
     Ok(unsafe {
         GenericByteViewArray::new_unchecked(new_views, array.data_buffers().to_vec(), new_nulls)
     })
+}
+
+/// `take` implementation for byte view arrays that compacts string data into
+/// new buffers rather than sharing the original buffers.
+///
+/// This fuses the gather (take) with string compaction in a single pass,
+/// producing an output array whose buffers contain only the referenced data.
+/// This is beneficial when `take` selects a small fraction of the source array,
+/// as it avoids keeping the original large buffers alive.
+///
+/// The output uses multiple buffers if a single buffer would exceed `u32::MAX`
+/// bytes, ensuring `ByteView::offset` never overflows.
+///
+/// # Safety contract
+/// Callers must ensure that all non-null indices are within bounds of
+/// `array` (i.e. `< array.len()`). This is guaranteed when called via
+/// `take()` with `check_bounds` enabled, or when the caller otherwise
+/// validates indices. Out-of-bounds indices will cause a panic (indexing
+/// `src_views`) or UB (via `get_unchecked` on `src_buffers`).
+#[inline(never)]
+fn take_byte_view_compact<T: ByteViewType, IndexType: ArrowPrimitiveType>(
+    array: &GenericByteViewArray<T>,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<GenericByteViewArray<T>, ArrowError> {
+    let src_views = array.views();
+    let src_buffers = array.data_buffers();
+    let index_nulls = indices.nulls();
+
+    // Phase 1: Calculate total non-inlined string bytes to pre-allocate.
+    // This avoids reallocations during the copy phase. We only read the u128
+    // view descriptors here, not the actual string data.
+    let total_bytes: usize = indices
+        .values()
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| {
+            // SAFETY: i < indices.len(), which equals index_nulls.len() by Arrow invariant
+            !index_nulls.is_some_and(|n| unsafe { !n.inner().value_unchecked(*i) })
+        })
+        .map(|(_, idx)| {
+            let raw_view = src_views[idx.as_usize()];
+            let len = raw_view as u32;
+            if len > MAX_INLINE_VIEW_LEN {
+                len as usize
+            } else {
+                0
+            }
+        })
+        .sum();
+
+    // Phase 2: Build output views and compact string data.
+    //
+    // Fast path: all selected strings are inlined (no buffers needed).
+    // This covers the case where the source has no buffers (all inlined)
+    // and the case where selected strings happen to all be short.
+    if total_bytes == 0 {
+        let new_views: Vec<u128> = indices
+            .values()
+            .iter()
+            .enumerate()
+            .map(|(i, idx)| {
+                // SAFETY: i < indices.len()
+                if index_nulls.is_some_and(|n| unsafe { !n.inner().value_unchecked(i) }) {
+                    0u128
+                } else {
+                    src_views[idx.as_usize()]
+                }
+            })
+            .collect();
+
+        let new_nulls = take_nulls(array.nulls(), indices);
+        return Ok(unsafe {
+            GenericByteViewArray::new_unchecked(ScalarBuffer::from(new_views), vec![], new_nulls)
+        });
+    }
+
+    // Fast path: all output fits in a single buffer (no spill checks needed).
+    // buffer_index is always 0 and we avoid the spill branch in the hot loop.
+    if total_bytes <= u32::MAX as usize {
+        let mut new_views: Vec<u128> = Vec::with_capacity(indices.len());
+        let mut current_buffer: Vec<u8> = Vec::with_capacity(total_bytes);
+
+        for (i, idx) in indices.values().iter().enumerate() {
+            // SAFETY: i < indices.len()
+            if index_nulls.is_some_and(|n| unsafe { !n.inner().value_unchecked(i) }) {
+                new_views.push(0u128);
+                continue;
+            }
+
+            let raw_view = src_views[idx.as_usize()];
+            let len = raw_view as u32;
+            if len <= MAX_INLINE_VIEW_LEN {
+                new_views.push(raw_view);
+                continue;
+            }
+
+            let mut view = ByteView::from(raw_view);
+            // SAFETY: source views are validly constructed
+            let src = unsafe { resolve_view_bytes(&view, src_buffers) };
+
+            view.buffer_index = 0;
+            view.offset = current_buffer.len() as u32;
+            current_buffer.extend_from_slice(src);
+
+            new_views.push(view.as_u128());
+        }
+
+        let new_nulls = take_nulls(array.nulls(), indices);
+        return Ok(unsafe {
+            GenericByteViewArray::new_unchecked(
+                ScalarBuffer::from(new_views),
+                vec![Buffer::from_vec(current_buffer)],
+                new_nulls,
+            )
+        });
+    }
+
+    // General path: output may span multiple buffers.
+    let mut new_views: Vec<u128> = Vec::with_capacity(indices.len());
+    let mut completed_buffers: Vec<Buffer> = Vec::new();
+    let initial_cap = total_bytes.min(u32::MAX as usize);
+    let mut current_buffer: Vec<u8> = Vec::with_capacity(initial_cap);
+    let mut written_bytes: usize = 0;
+
+    for (i, idx) in indices.values().iter().enumerate() {
+        // SAFETY: i < indices.len(), which equals index_nulls.len() by Arrow invariant
+        if index_nulls.is_some_and(|n| unsafe { !n.inner().value_unchecked(i) }) {
+            new_views.push(0u128);
+            continue;
+        }
+
+        let raw_view = src_views[idx.as_usize()];
+        let len = raw_view as u32;
+        if len <= MAX_INLINE_VIEW_LEN {
+            new_views.push(raw_view);
+            continue;
+        }
+
+        let mut view = ByteView::from(raw_view);
+        let str_len = view.length as usize;
+
+        // Spill to a new buffer if this string would overflow u32 offset
+        if current_buffer.len() + str_len > u32::MAX as usize {
+            spill_buffer(
+                &mut current_buffer,
+                &mut completed_buffers,
+                &mut written_bytes,
+                total_bytes,
+            );
+        }
+
+        // SAFETY: source views are validly constructed
+        let src = unsafe { resolve_view_bytes(&view, src_buffers) };
+
+        view.buffer_index = completed_buffers.len() as u32;
+        view.offset = current_buffer.len() as u32;
+        current_buffer.extend_from_slice(src);
+
+        new_views.push(view.as_u128());
+    }
+
+    // Finalize the last buffer
+    completed_buffers.push(Buffer::from_vec(current_buffer));
+
+    let new_nulls = take_nulls(array.nulls(), indices);
+
+    // SAFETY: views are constructed from valid source views with updated
+    // buffer_index and offset pointing into the newly built compact buffers.
+    Ok(unsafe {
+        GenericByteViewArray::new_unchecked(
+            ScalarBuffer::from(new_views),
+            completed_buffers,
+            new_nulls,
+        )
+    })
+}
+
+/// Flush `current_buffer` into `completed_buffers` and replace it with a
+/// fresh allocation sized for the remaining bytes.
+#[inline(always)]
+fn spill_buffer(
+    current_buffer: &mut Vec<u8>,
+    completed_buffers: &mut Vec<Buffer>,
+    written_bytes: &mut usize,
+    total_bytes: usize,
+) {
+    *written_bytes += current_buffer.len();
+    let remaining = (total_bytes - *written_bytes).min(u32::MAX as usize);
+    let full_buf = std::mem::replace(current_buffer, Vec::with_capacity(remaining));
+    completed_buffers.push(Buffer::from_vec(full_buf));
+}
+
+/// Resolve a non-inlined [`ByteView`] to its backing byte slice.
+///
+/// # Safety
+/// The view must have been produced from a valid `GenericByteViewArray`
+/// whose buffers are `src_buffers`.
+#[inline(always)]
+unsafe fn resolve_view_bytes<'a>(view: &ByteView, src_buffers: &'a [Buffer]) -> &'a [u8] {
+    let len = view.length as usize;
+    // SAFETY: caller guarantees the view was produced from a valid array
+    // backed by `src_buffers`.
+    unsafe {
+        src_buffers
+            .get_unchecked(view.buffer_index as usize)
+            .get_unchecked(view.offset as usize..view.offset as usize + len)
+    }
 }
 
 /// `take` implementation for list arrays
@@ -1708,6 +1923,160 @@ mod tests {
     #[test]
     fn test_take_binary_view() {
         _test_byte_view::<BinaryViewType>()
+    }
+
+    /// Helper to test the compact path of take_byte_view.
+    /// Creates an array with many rows and takes a small subset to trigger compaction.
+    fn _test_byte_view_compact<T>()
+    where
+        T: ByteViewType,
+        str: AsRef<T::Native>,
+        T::Native: PartialEq,
+    {
+        // Build a source array with 20 rows (mix of inlined and non-inlined strings)
+        let mut builder = GenericByteViewBuilder::<T>::new();
+        let values = [
+            "hello",                          // 5 bytes, inlined
+            "world",                          // 5 bytes, inlined
+            "this is a long string over 12b", // 30 bytes, non-inlined
+            "short",                          // 5 bytes, inlined
+            "another large payload string!!", // 30 bytes, non-inlined
+            "x",
+            "y",
+            "z",
+            "a medium str!!", // 14 bytes, non-inlined
+            "b",
+            "c",
+            "d",
+            "e",
+            "f",
+            "g",
+            "h",
+            "i",
+            "j",
+            "k",
+            "l",
+        ];
+        for v in &values {
+            builder.append_value(v);
+        }
+        let array = builder.finish();
+        assert_eq!(array.len(), 20);
+
+        // Take 3 rows out of 20 → 3 < 20/2 = 10, so compact path is taken
+        let indices = UInt32Array::from(vec![0, 2, 4]);
+        let result = take(&array, &indices, None).unwrap();
+
+        assert_eq!(result.len(), 3);
+        let result = result
+            .as_any()
+            .downcast_ref::<GenericByteViewArray<T>>()
+            .unwrap();
+
+        let expected = {
+            let mut b = GenericByteViewBuilder::<T>::new();
+            b.append_value(values[0]);
+            b.append_value(values[2]);
+            b.append_value(values[4]);
+            b.finish()
+        };
+        assert_eq!(result, &expected);
+
+        // Verify compaction: result should NOT share the original buffers.
+        // The original buffers hold all 20 rows' data. The compact result should
+        // only have the bytes for the 2 non-inlined strings we selected.
+        let original_buf_size: usize = array.data_buffers().iter().map(|b| b.len()).sum();
+        let result_buf_size: usize = result.data_buffers().iter().map(|b| b.len()).sum();
+        assert!(
+            result_buf_size < original_buf_size,
+            "compact result buffers ({result_buf_size}) should be smaller than original ({original_buf_size})"
+        );
+    }
+
+    #[test]
+    fn test_take_string_view_compact() {
+        _test_byte_view_compact::<StringViewType>()
+    }
+
+    #[test]
+    fn test_take_binary_view_compact() {
+        _test_byte_view_compact::<BinaryViewType>()
+    }
+
+    /// Test compact path with nullable indices
+    #[test]
+    fn test_take_byte_view_compact_with_nulls() {
+        let mut builder = GenericByteViewBuilder::<StringViewType>::new();
+        for i in 0..20 {
+            if i % 5 == 0 {
+                builder.append_value(format!("long string number {i} over twelve bytes"));
+            } else {
+                builder.append_value(format!("s{i}"));
+            }
+        }
+        let array = builder.finish();
+
+        // Take with some null indices; 4 < 20/2 so compact triggers
+        let indices = UInt32Array::from(vec![Some(0), None, Some(5), Some(1)]);
+        let result = take(&array, &indices, None).unwrap();
+
+        assert_eq!(result.len(), 4);
+        let sv = result.as_string_view();
+        assert_eq!(sv.value(0), "long string number 0 over twelve bytes");
+        assert!(result.is_null(1));
+        assert_eq!(sv.value(2), "long string number 5 over twelve bytes");
+        assert_eq!(sv.value(3), "s1");
+    }
+
+    /// Test compact path with nullable source array
+    #[test]
+    fn test_take_byte_view_compact_with_null_source() {
+        let mut builder = GenericByteViewBuilder::<StringViewType>::new();
+        for i in 0..20 {
+            if i == 3 {
+                builder.append_null();
+            } else if i % 5 == 0 {
+                builder.append_value(format!("long string number {i} over twelve bytes"));
+            } else {
+                builder.append_value(format!("s{i}"));
+            }
+        }
+        let array = builder.finish();
+
+        // indices.len() = 4 < 20/2 = 10 → compact
+        let indices = UInt32Array::from(vec![0, 3, 5, 1]);
+        let result = take(&array, &indices, None).unwrap();
+
+        assert_eq!(result.len(), 4);
+        let sv = result.as_string_view();
+        assert_eq!(sv.value(0), "long string number 0 over twelve bytes");
+        assert!(result.is_null(1)); // source was null at index 3
+        assert_eq!(sv.value(2), "long string number 5 over twelve bytes");
+        assert_eq!(sv.value(3), "s1");
+    }
+
+    /// Test that the non-compact (shared buffer) path still works when
+    /// selecting more than half the rows.
+    #[test]
+    fn test_take_byte_view_shared_path() {
+        let mut builder = GenericByteViewBuilder::<StringViewType>::new();
+        for i in 0..10 {
+            builder.append_value(format!("long string number {i} over twelve bytes"));
+        }
+        let array = builder.finish();
+
+        // Take 8 out of 10 → 8 >= 10/2 = 5, so shared (non-compact) path
+        let indices = UInt32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        let result = take(&array, &indices, None).unwrap();
+
+        assert_eq!(result.len(), 8);
+        let sv = result.as_string_view();
+        for i in 0..8 {
+            assert_eq!(
+                sv.value(i),
+                format!("long string number {i} over twelve bytes")
+            );
+        }
     }
 
     macro_rules! test_take_list {
