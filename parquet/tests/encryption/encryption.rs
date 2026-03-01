@@ -1247,6 +1247,828 @@ fn test_decrypt_page_index_non_uniform() {
     test_decrypt_page_index(&path, decryption_properties).unwrap();
 }
 
+#[test]
+fn test_aes256_non_uniform_encryption_plaintext_footer() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/aes256/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let footer_key = "01234567890123456789012345678901".as_bytes(); // 256bit/32
+    let column_1_key = "12345678901234567890123456789012".as_bytes();
+    let column_2_key = "12345678901234567890123456789013".as_bytes();
+    let column_3_key = "12345678901234567890123456789014".as_bytes();
+    let column_4_key = "12345678901234567890123456789015".as_bytes();
+    let column_5_key = "12345678901234567890123456789016".as_bytes();
+    let column_6_key = "12345678901234567890123456789017".as_bytes();
+    let column_7_key = "12345678901234567890123456789018".as_bytes();
+    let column_8_key = "12345678901234567890123456789019".as_bytes();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+        .with_column_key("double_field", column_1_key.to_vec())
+        .with_column_key("float_field", column_2_key.to_vec())
+        .with_column_key("boolean_field", column_3_key.to_vec())
+        .with_column_key("int32_field", column_4_key.to_vec())
+        .with_column_key("ba_field", column_5_key.to_vec())
+        .with_column_key("flba_field", column_6_key.to_vec())
+        .with_column_key("int64_list_field", column_7_key.to_vec())
+        .with_column_key("int64_field", column_8_key.to_vec())
+        .build()
+        .unwrap();
+
+    verify_encryption_test_file_read(file, decryption_properties);
+}
+
+#[test]
+fn test_aes256_plaintext_footer_signature_verification() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/aes256/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let file = File::open(path.clone()).unwrap();
+
+    let wrong_footer_key = "00000000000000000000000000000000".as_bytes(); // 256bit/32
+    let column_1_key = "12345678901234567890123456789012".as_bytes();
+    let column_2_key = "12345678901234567890123456789013".as_bytes();
+    let column_3_key = "12345678901234567890123456789014".as_bytes();
+    let column_4_key = "12345678901234567890123456789015".as_bytes();
+    let column_5_key = "12345678901234567890123456789016".as_bytes();
+    let column_6_key = "12345678901234567890123456789017".as_bytes();
+    let column_7_key = "12345678901234567890123456789018".as_bytes();
+    let column_8_key = "12345678901234567890123456789019".as_bytes();
+
+    let decryption_properties = FileDecryptionProperties::builder(wrong_footer_key.to_vec())
+        .disable_footer_signature_verification()
+        .with_column_key("double_field", column_1_key.to_vec())
+        .with_column_key("float_field", column_2_key.to_vec())
+        .with_column_key("boolean_field", column_3_key.to_vec())
+        .with_column_key("int32_field", column_4_key.to_vec())
+        .with_column_key("ba_field", column_5_key.to_vec())
+        .with_column_key("flba_field", column_6_key.to_vec())
+        .with_column_key("int64_list_field", column_7_key.to_vec())
+        .with_column_key("int64_field", column_8_key.to_vec())
+        .build()
+        .unwrap();
+
+    verify_encryption_test_file_read(file, decryption_properties);
+
+    let file = File::open(path.clone()).unwrap();
+
+    let decryption_properties = FileDecryptionProperties::builder(wrong_footer_key.to_vec())
+        .with_column_key("double_field", column_1_key.to_vec())
+        .with_column_key("float_field", column_2_key.to_vec())
+        .with_column_key("boolean_field", column_3_key.to_vec())
+        .with_column_key("int32_field", column_4_key.to_vec())
+        .with_column_key("ba_field", column_5_key.to_vec())
+        .with_column_key("flba_field", column_6_key.to_vec())
+        .with_column_key("int64_list_field", column_7_key.to_vec())
+        .with_column_key("int64_field", column_8_key.to_vec())
+        .build()
+        .unwrap();
+
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let result = ArrowReaderMetadata::load(&file, options.clone());
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Parquet error: Footer signature verification failed. Computed: [")
+    );
+}
+
+#[test]
+fn test_aes256_non_uniform_encryption_disabled_aad_storage() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!(
+        "{test_data}/aes256/encrypt_columns_and_footer_disable_aad_storage.parquet.encrypted"
+    );
+    let file = File::open(path.clone()).unwrap();
+
+    let footer_key = "01234567890123456789012345678901".as_bytes().to_vec(); // 256bit/32
+    let column_1_key = "12345678901234567890123456789012".as_bytes().to_vec();
+    let column_2_key = "12345678901234567890123456789013".as_bytes().to_vec();
+    let column_3_key = "12345678901234567890123456789014".as_bytes().to_vec();
+    let column_4_key = "12345678901234567890123456789015".as_bytes().to_vec();
+    let column_5_key = "12345678901234567890123456789016".as_bytes().to_vec();
+    let column_6_key = "12345678901234567890123456789017".as_bytes().to_vec();
+    let column_7_key = "12345678901234567890123456789018".as_bytes().to_vec();
+    let column_8_key = "12345678901234567890123456789019".as_bytes().to_vec();
+
+    // Can read successfully when providing the correct AAD prefix
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_2_key.clone())
+        .with_column_key("boolean_field", column_3_key.clone())
+        .with_column_key("int32_field", column_4_key.clone())
+        .with_column_key("ba_field", column_5_key.clone())
+        .with_column_key("flba_field", column_6_key.clone())
+        .with_column_key("int64_list_field", column_7_key.clone())
+        .with_column_key("int64_field", column_8_key.clone())
+        .with_aad_prefix(b"tester".to_vec())
+        .build()
+        .unwrap();
+
+    verify_encryption_test_file_read(file, decryption_properties);
+
+    // Using wrong AAD prefix should fail
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_2_key.clone())
+        .with_column_key("boolean_field", column_3_key.clone())
+        .with_column_key("int32_field", column_4_key.clone())
+        .with_column_key("ba_field", column_5_key.clone())
+        .with_column_key("flba_field", column_6_key.clone())
+        .with_column_key("int64_list_field", column_7_key.clone())
+        .with_column_key("int64_field", column_8_key.clone())
+        .with_aad_prefix(b"wrong_aad_prefix".to_vec())
+        .build()
+        .unwrap();
+
+    let file = File::open(path.clone()).unwrap();
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties.clone());
+    let result = ArrowReaderMetadata::load(&file, options.clone());
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer"
+    );
+
+    // Not providing any AAD prefix should fail as it isn't stored in the file
+    let decryption_properties = FileDecryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_2_key.clone())
+        .with_column_key("boolean_field", column_3_key.clone())
+        .with_column_key("int32_field", column_4_key.clone())
+        .with_column_key("ba_field", column_5_key.clone())
+        .with_column_key("flba_field", column_6_key.clone())
+        .with_column_key("int64_list_field", column_7_key.clone())
+        .with_column_key("int64_field", column_8_key.clone())
+        .build()
+        .unwrap();
+
+    let file = File::open(path).unwrap();
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let result = ArrowReaderMetadata::load(&file, options.clone());
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Parquet error: Parquet file was encrypted with an AAD prefix that is not stored in the file, \
+        but no AAD prefix was provided in the file decryption properties"
+    );
+}
+#[test]
+fn test_aes256_non_uniform_encryption() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/aes256/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    // There is always a footer key even with a plaintext footer,
+    // but this is used for signing the footer.
+    let footer_key = "01234567890123456789012345678901".as_bytes().to_vec(); // 256bit/32
+    let column_1_key = "12345678901234567890123456789012".as_bytes().to_vec();
+    let column_2_key = "12345678901234567890123456789013".as_bytes().to_vec();
+    let column_3_key = "12345678901234567890123456789014".as_bytes().to_vec();
+    let column_4_key = "12345678901234567890123456789015".as_bytes().to_vec();
+    let column_5_key = "12345678901234567890123456789016".as_bytes().to_vec();
+    let column_6_key = "12345678901234567890123456789017".as_bytes().to_vec();
+    let column_7_key = "12345678901234567890123456789018".as_bytes().to_vec();
+    let column_8_key = "12345678901234567890123456789019".as_bytes().to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
+        .with_column_key("boolean_field", column_3_key)
+        .with_column_key("int32_field", column_4_key)
+        .with_column_key("ba_field", column_5_key)
+        .with_column_key("flba_field", column_6_key)
+        .with_column_key("int64_list_field", column_7_key)
+        .with_column_key("int64_field", column_8_key)
+        .build()
+        .unwrap();
+
+    verify_encryption_test_file_read(file, decryption_properties);
+}
+
+#[test]
+fn test_aes256_uniform_encryption() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/aes256/uniform_encryption.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let key_code: &[u8] = "01234567890123456789012345678901".as_bytes();
+    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+        .build()
+        .unwrap();
+
+    verify_encryption_test_file_read(file, decryption_properties);
+}
+
+#[test]
+fn test_aes256_ctr_encryption() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/aes256/encrypt_columns_and_footer_ctr.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let footer_key = "01234567890123456789012345678901".as_bytes().to_vec();
+    let column_1_key = "12345678901234567890123456789012".as_bytes().to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_1_key)
+        .build()
+        .unwrap();
+
+    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+    let metadata = ArrowReaderMetadata::load(&file, options);
+
+    match metadata {
+        Err(ParquetError::NYI(s)) => {
+            assert!(s.contains("AES_GCM_CTR_V1"));
+        }
+        _ => {
+            panic!("Expected ParquetError::NYI");
+        }
+    };
+}
+
+#[test]
+fn test_aes256_non_uniform_encryption_plaintext_footer_with_key_retriever() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/aes256/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let key_retriever = TestKeyRetriever::new()
+        .with_key(
+            "kf".to_owned(),
+            "01234567890123456789012345678901".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc1".to_owned(),
+            "12345678901234567890123456789012".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc2".to_owned(),
+            "12345678901234567890123456789013".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc3".to_owned(),
+            "12345678901234567890123456789014".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc4".to_owned(),
+            "12345678901234567890123456789015".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc5".to_owned(),
+            "12345678901234567890123456789016".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc6".to_owned(),
+            "12345678901234567890123456789017".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc7".to_owned(),
+            "12345678901234567890123456789018".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc8".to_owned(),
+            "12345678901234567890123456789019".as_bytes().to_vec(),
+        );
+
+    let decryption_properties =
+        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+            .build()
+            .unwrap();
+
+    verify_encryption_test_file_read(file, decryption_properties);
+}
+
+#[test]
+fn test_aes256_uniform_encryption_plaintext_footer_with_key_retriever() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+
+    // Read example data with key retriever
+    let path = format!("{test_data}/aes256/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let key_retriever = Arc::new(
+        TestKeyRetriever::new()
+            .with_key(
+                "kf".to_owned(),
+                "01234567890123456789012345678901".as_bytes().to_vec(),
+            )
+            .with_key(
+                "kc1".to_owned(),
+                "12345678901234567890123456789012".as_bytes().to_vec(),
+            )
+            .with_key(
+                "kc2".to_owned(),
+                "12345678901234567890123456789013".as_bytes().to_vec(),
+            )
+            .with_key(
+                "kc3".to_owned(),
+                "12345678901234567890123456789014".as_bytes().to_vec(),
+            )
+            .with_key(
+                "kc4".to_owned(),
+                "12345678901234567890123456789015".as_bytes().to_vec(),
+            )
+            .with_key(
+                "kc5".to_owned(),
+                "12345678901234567890123456789016".as_bytes().to_vec(),
+            )
+            .with_key(
+                "kc6".to_owned(),
+                "12345678901234567890123456789017".as_bytes().to_vec(),
+            )
+            .with_key(
+                "kc7".to_owned(),
+                "12345678901234567890123456789018".as_bytes().to_vec(),
+            )
+            .with_key(
+                "kc8".to_owned(),
+                "12345678901234567890123456789019".as_bytes().to_vec(),
+            ),
+    );
+
+    let decryption_properties = FileDecryptionProperties::with_key_retriever(key_retriever.clone())
+        .build()
+        .unwrap();
+
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+
+    // Write data into temporary file with plaintext footer and footer key metadata
+    let temp_file = tempfile::tempfile().unwrap();
+    let encryption_properties =
+        FileEncryptionProperties::builder(b"01234567890123456789012345678901".to_vec())
+            .with_footer_key_metadata("kf".into())
+            .with_column_key_and_metadata(
+                "double_field",
+                b"12345678901234567890123456789012".to_vec(),
+                b"kc1".into(),
+            )
+            .with_column_key_and_metadata(
+                "float_field",
+                b"12345678901234567890123456789013".to_vec(),
+                b"kc2".into(),
+            )
+            .with_column_key_and_metadata(
+                "boolean_field",
+                b"12345678901234567890123456789014".to_vec(),
+                b"kc3".into(),
+            )
+            .with_column_key_and_metadata(
+                "int32_field",
+                b"12345678901234567890123456789015".to_vec(),
+                b"kc4".into(),
+            )
+            .with_column_key_and_metadata(
+                "ba_field",
+                b"12345678901234567890123456789016".to_vec(),
+                b"kc5".into(),
+            )
+            .with_column_key_and_metadata(
+                "flba_field",
+                b"12345678901234567890123456789017".to_vec(),
+                b"kc6".into(),
+            )
+            // .with_column_key_and_metadata("int64_list_field", b"12345678901234567890123456789018".to_vec(), b"kc7".into())
+            .with_column_key_and_metadata(
+                "int64_list_field.list.int64_list_field",
+                b"12345678901234567890123456789018".to_vec(),
+                b"kc7".into(),
+            )
+            .with_column_key_and_metadata(
+                "int64_field",
+                b"12345678901234567890123456789019".to_vec(),
+                b"kc8".into(),
+            )
+            .with_plaintext_footer(true)
+            .build()
+            .unwrap();
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+    let batch_reader = builder.build().unwrap();
+    let batches = batch_reader
+        .collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()
+        .unwrap();
+
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(encryption_properties)
+        .build();
+
+    let mut writer = ArrowWriter::try_new(
+        temp_file.try_clone().unwrap(),
+        metadata.schema().clone(),
+        Some(props),
+    )
+    .unwrap();
+    for batch in batches {
+        writer.write(&batch).unwrap();
+    }
+
+    writer.close().unwrap();
+
+    // Read temporary file with plaintext metadata using key retriever
+    let decryption_properties = FileDecryptionProperties::with_key_retriever(key_retriever)
+        .build()
+        .unwrap();
+
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let _ = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
+
+    // Read temporary file with plaintext metadata using key retriever with invalid key
+    let key_retriever = Arc::new(
+        TestKeyRetriever::new()
+            .with_key(
+                "kf".to_owned(),
+                b"01334567890123456789012345678901".to_vec(),
+            ) // wrong footer key
+            .with_key(
+                "kc1".to_owned(),
+                b"12345678901234567890123456789012".to_vec(),
+            )
+            .with_key(
+                "kc2".to_owned(),
+                b"12345678901234567890123456789013".to_vec(),
+            )
+            .with_key(
+                "kc3".to_owned(),
+                b"12345678901234567890123456789014".to_vec(),
+            )
+            .with_key(
+                "kc4".to_owned(),
+                b"12345678901234567890123456789015".to_vec(),
+            )
+            .with_key(
+                "kc5".to_owned(),
+                b"12345678901234567890123456789016".to_vec(),
+            )
+            .with_key(
+                "kc6".to_owned(),
+                b"12345678901234567890123456789017".to_vec(),
+            )
+            .with_key(
+                "kc7".to_owned(),
+                b"12345678901234567890123456789018".to_vec(),
+            )
+            .with_key(
+                "kc8".to_owned(),
+                b"12345678901234567890123456789019".to_vec(),
+            ),
+    );
+    let decryption_properties = FileDecryptionProperties::with_key_retriever(key_retriever)
+        .build()
+        .unwrap();
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let result = ArrowReaderMetadata::load(&temp_file, options.clone());
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Parquet error: Footer signature verification failed. Computed: [")
+    );
+}
+
+#[test]
+fn test_aes256_non_uniform_encryption_with_key_retriever() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/aes256/encrypt_columns_and_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let key_retriever = TestKeyRetriever::new()
+        .with_key(
+            "kf".to_owned(),
+            "01234567890123456789012345678901".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc1".to_owned(),
+            "12345678901234567890123456789012".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc2".to_owned(),
+            "12345678901234567890123456789013".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc3".to_owned(),
+            "12345678901234567890123456789014".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc4".to_owned(),
+            "12345678901234567890123456789015".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc5".to_owned(),
+            "12345678901234567890123456789016".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc6".to_owned(),
+            "12345678901234567890123456789017".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc7".to_owned(),
+            "12345678901234567890123456789018".as_bytes().to_vec(),
+        )
+        .with_key(
+            "kc8".to_owned(),
+            "12345678901234567890123456789019".as_bytes().to_vec(),
+        );
+
+    let decryption_properties =
+        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+            .build()
+            .unwrap();
+
+    verify_encryption_test_file_read(file, decryption_properties);
+}
+
+#[test]
+fn test_aes256_uniform_encryption_with_key_retriever() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/aes256/uniform_encryption.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let footer_key = b"01234567890123456789012345678901".to_vec(); // 256bit/32
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .build()
+        .unwrap();
+
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .build()
+        .unwrap();
+
+    read_and_roundtrip_to_encrypted_file(&file, decryption_properties, file_encryption_properties);
+}
+
+#[test]
+fn test_aes256_write_non_uniform_encryption() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/aes256/encrypt_columns_and_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let footer_key = b"01234567890123456789012345678901".to_vec(); // 256bit/32
+    let column_names = vec![
+        "double_field",
+        "float_field",
+        "boolean_field",
+        "int32_field",
+        "ba_field",
+        "flba_field",
+        "int64_list_field",
+        "int64_list_field.list.int64_list_field",
+        "int64_field",
+    ];
+    let column_keys = vec![
+        b"12345678901234567890123456789012".to_vec(),
+        b"12345678901234567890123456789013".to_vec(),
+        b"12345678901234567890123456789014".to_vec(),
+        b"12345678901234567890123456789015".to_vec(),
+        b"12345678901234567890123456789016".to_vec(),
+        b"12345678901234567890123456789017".to_vec(),
+        b"12345678901234567890123456789018".to_vec(),
+        b"12345678901234567890123456789018".to_vec(),
+        b"12345678901234567890123456789019".to_vec(),
+    ];
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_keys(column_names.clone(), column_keys.clone())
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let column_1_key = "12345678901234567890123456789012".as_bytes().to_vec();
+    let column_2_key = "12345678901234567890123456789013".as_bytes().to_vec();
+    let column_3_key = "12345678901234567890123456789014".as_bytes().to_vec();
+    let column_4_key = "12345678901234567890123456789015".as_bytes().to_vec();
+    let column_5_key = "12345678901234567890123456789016".as_bytes().to_vec();
+    let column_6_key = "12345678901234567890123456789017".as_bytes().to_vec();
+    let column_7_key = "12345678901234567890123456789018".as_bytes().to_vec();
+    let column_8_key = "12345678901234567890123456789019".as_bytes().to_vec();
+
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
+        .with_column_key("boolean_field", column_3_key)
+        .with_column_key("int32_field", column_4_key)
+        .with_column_key("ba_field", column_5_key)
+        .with_column_key("flba_field", column_6_key.clone())
+        .with_column_key("int64_list_field.list.int64_list_field", column_7_key)
+        .with_column_key("int64_field", column_8_key)
+        .build()
+        .unwrap();
+
+    read_and_roundtrip_to_encrypted_file(&file, decryption_properties, file_encryption_properties);
+}
+
+#[test]
+fn test_aes256_write_uniform_encryption_plaintext_footer() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/aes256/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let footer_key = b"01234567890123456789012345678901".to_vec(); // 256bit/32
+    let wrong_footer_key = b"00000000000000000000000000000000".to_vec(); // 256bit/32
+    let column_1_key = "12345678901234567890123456789012".as_bytes().to_vec();
+    let column_2_key = "12345678901234567890123456789013".as_bytes().to_vec();
+    let column_3_key = "12345678901234567890123456789014".as_bytes().to_vec();
+    let column_4_key = "12345678901234567890123456789015".as_bytes().to_vec();
+    let column_5_key = "12345678901234567890123456789016".as_bytes().to_vec();
+    let column_6_key = "12345678901234567890123456789017".as_bytes().to_vec();
+    let column_7_key = "12345678901234567890123456789018".as_bytes().to_vec();
+    let column_8_key = "12345678901234567890123456789019".as_bytes().to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_2_key.clone())
+        .with_column_key("boolean_field", column_3_key.clone())
+        .with_column_key("int32_field", column_4_key.clone())
+        .with_column_key("ba_field", column_5_key.clone())
+        .with_column_key("flba_field", column_6_key.clone())
+        .with_column_key("int64_list_field", column_7_key.clone())
+        .with_column_key("int64_field", column_8_key.clone())
+        .build()
+        .unwrap();
+
+    let wrong_decryption_properties = FileDecryptionProperties::builder(wrong_footer_key)
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
+        .with_column_key("boolean_field", column_3_key)
+        .with_column_key("int32_field", column_4_key)
+        .with_column_key("ba_field", column_5_key)
+        .with_column_key("flba_field", column_6_key)
+        .with_column_key("int64_list_field", column_7_key)
+        .with_column_key("int64_field", column_8_key)
+        .build()
+        .unwrap();
+
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .with_plaintext_footer(true)
+        .build()
+        .unwrap();
+
+    // Try writing plaintext footer and then reading it with the correct footer key
+    read_and_roundtrip_to_encrypted_file(
+        &file,
+        Arc::clone(&decryption_properties),
+        file_encryption_properties.clone(),
+    );
+
+    // Try writing plaintext footer and then reading it with the wrong footer key
+    let temp_file = tempfile::tempfile().unwrap();
+
+    // read example data
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties.clone());
+    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+    let batch_reader = builder.build().unwrap();
+    let batches = batch_reader
+        .collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()
+        .unwrap();
+
+    // write example data
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(file_encryption_properties)
+        .build();
+
+    let mut writer = ArrowWriter::try_new(
+        temp_file.try_clone().unwrap(),
+        metadata.schema().clone(),
+        Some(props),
+    )
+    .unwrap();
+    for batch in batches {
+        writer.write(&batch).unwrap();
+    }
+    writer.close().unwrap();
+
+    // Try reading plaintext footer and with the wrong footer key
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(wrong_decryption_properties);
+    let result = ArrowReaderMetadata::load(&temp_file, options.clone());
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Parquet error: Footer signature verification failed. Computed: [")
+    );
+}
+
+#[test]
+fn test_aes256_write_non_uniform_encryption_column_missmatch() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/aes256/encrypt_columns_and_footer.parquet.encrypted");
+
+    let footer_key = b"01234567890123456789012345678901".to_vec(); // 256bit/32
+    let column_1_key = b"12345678901234567890123456789012".to_vec();
+    let column_2_key = b"12345678901234567890123456789013".to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_2_key.clone())
+        .build()
+        .unwrap();
+
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("other_field", column_1_key)
+        .with_column_key("yet_another_field", column_2_key)
+        .build()
+        .unwrap();
+
+    let temp_file = tempfile::tempfile().unwrap();
+
+    // read example data
+    let file = File::open(path).unwrap();
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties.clone());
+    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(file_encryption_properties)
+        .build();
+
+    let result = ArrowWriter::try_new(
+        temp_file.try_clone().unwrap(),
+        metadata.schema().clone(),
+        Some(props),
+    );
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Parquet error: The following columns with encryption keys specified were not found in the schema: other_field, yet_another_field"
+    );
+}
+
+#[test]
+fn test_aes256_write_uniform_encryption() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/aes256/uniform_encryption.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let footer_key = b"01234567890123456789012345678901".to_vec(); // 256bit/32
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .build()
+        .unwrap();
+
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .build()
+        .unwrap();
+
+    read_and_roundtrip_to_encrypted_file(&file, decryption_properties, file_encryption_properties);
+}
+
+#[test]
+fn test_aes256_decrypt_page_index_uniform() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/aes256/uniform_encryption.parquet.encrypted");
+
+    let key_code: &[u8] = "01234567890123456789012345678901".as_bytes();
+    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+        .build()
+        .unwrap();
+
+    test_decrypt_page_index(&path, decryption_properties).unwrap();
+}
+
+#[test]
+fn test_aes256_decrypt_page_index_non_uniform() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/aes256/encrypt_columns_and_footer.parquet.encrypted");
+
+    let footer_key = "01234567890123456789012345678901".as_bytes().to_vec();
+    let column_1_key = "12345678901234567890123456789012".as_bytes().to_vec();
+    let column_2_key = "12345678901234567890123456789013".as_bytes().to_vec();
+    let column_3_key = "12345678901234567890123456789014".as_bytes().to_vec();
+    let column_4_key = "12345678901234567890123456789015".as_bytes().to_vec();
+    let column_5_key = "12345678901234567890123456789016".as_bytes().to_vec();
+    let column_6_key = "12345678901234567890123456789017".as_bytes().to_vec();
+    let column_7_key = "12345678901234567890123456789018".as_bytes().to_vec();
+    let column_8_key = "12345678901234567890123456789019".as_bytes().to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
+        .with_column_key("boolean_field", column_3_key)
+        .with_column_key("int32_field", column_4_key)
+        .with_column_key("ba_field", column_5_key)
+        .with_column_key("flba_field", column_6_key)
+        .with_column_key("int64_list_field", column_7_key)
+        .with_column_key("int64_field", column_8_key)
+        .build()
+        .unwrap();
+
+    test_decrypt_page_index(&path, decryption_properties).unwrap();
+}
+
 fn test_decrypt_page_index(
     path: &str,
     decryption_properties: Arc<FileDecryptionProperties>,
