@@ -39,6 +39,7 @@ bench = false
 force_validate = []
 # Enable ffi support
 ffi = ["arrow-schema/ffi"]
+simdutf8 = ["dep:simdutf8"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -51,6 +52,7 @@ arrow-schema = { workspace = true }
 num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false }
+simdutf8 = { workspace = true, optional = true }
 
 [dev-dependencies]
 

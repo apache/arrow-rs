@@ -378,7 +378,7 @@ fn decode_binary_view_inner(
     if validate_utf8 {
         // the values contains all data, no matter if it is short or long
         // we can validate utf8 in one go.
-        std::str::from_utf8(values.as_slice()).unwrap();
+        arrow_data::utf8::check_utf8(values.as_slice()).unwrap();
     }
 
     let builder = ArrayDataBuilder::new(DataType::BinaryView)

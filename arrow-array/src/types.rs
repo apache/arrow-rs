@@ -1801,7 +1801,7 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericStringType<O> {
 
     fn validate(offsets: &OffsetBuffer<Self::Offset>, values: &Buffer) -> Result<(), ArrowError> {
         // Verify that the slice as a whole is valid UTF-8
-        let validated = std::str::from_utf8(values).map_err(|e| {
+        let validated = arrow_data::utf8::check_utf8(values).map_err(|e| {
             ArrowError::InvalidArgumentError(format!("Encountered non UTF-8 data: {e}"))
         })?;
 

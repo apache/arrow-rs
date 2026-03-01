@@ -38,11 +38,15 @@ all-features = true
 [dependencies]
 arrow-array = { workspace = true }
 arrow-cast = { workspace = true }
+arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 csv = { version = "1.1", default-features = false }
 csv-core = { version = "0.1" }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
+
+[features]
+simdutf8 = ["arrow-data/simdutf8"]
 
 [dev-dependencies]
 arrow-buffer = { workspace = true }

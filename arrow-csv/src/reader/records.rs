@@ -210,7 +210,7 @@ impl RecordDecoder {
             });
 
         // Need to truncate data t1o the actual amount of data read
-        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
+        let data = arrow_data::utf8::check_utf8(&self.data[..self.data_len]).map_err(|e| {
             let valid_up_to = e.valid_up_to();
 
             // We can't use binary search because of empty fields
