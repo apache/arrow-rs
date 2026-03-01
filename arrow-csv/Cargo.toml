@@ -43,6 +43,10 @@ chrono = { workspace = true }
 csv = { version = "1.1", default-features = false }
 csv-core = { version = "0.1" }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
+simdutf8 = { workspace = true, optional = true }
+
+[features]
+simdutf8 = ["dep:simdutf8"]
 
 [dev-dependencies]
 arrow-buffer = { workspace = true }

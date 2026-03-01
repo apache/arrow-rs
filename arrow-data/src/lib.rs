@@ -39,3 +39,5 @@ pub mod ffi;
 
 mod byte_view;
 pub use byte_view::*;
+
+pub mod utf8;

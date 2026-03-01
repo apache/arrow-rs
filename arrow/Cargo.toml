@@ -61,7 +61,7 @@ half = { version = "2.1", default-features = false, features = ["rand_distr"], o
 all-features = true
 
 [features]
-default = ["csv", "ipc", "json"]
+default = ["csv", "ipc", "json", "simdutf8"]
 async = ["arrow-array/async"]
 ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
 csv = ["arrow-csv"]
@@ -81,6 +81,7 @@ force_validate = ["arrow-array/force_validate", "arrow-data/force_validate"]
 # Enable ffi support
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "arrow-array/ffi"]
 chrono-tz = ["arrow-array/chrono-tz"]
+simdutf8 = ["arrow-data/simdutf8", "arrow-array/simdutf8", "arrow-row/simdutf8", "arrow-csv?/simdutf8"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 
 [dev-dependencies]
