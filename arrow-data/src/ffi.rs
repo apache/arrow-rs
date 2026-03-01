@@ -86,8 +86,6 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
 }
 
 /// Aligns the provided `nulls` to the provided `data_offset`
-///
-/// This is a temporary measure until offset is removed from ArrayData (#1799)
 fn align_nulls(data_offset: usize, nulls: Option<&NullBuffer>) -> Option<Buffer> {
     let nulls = nulls?;
     if data_offset == nulls.offset() {
