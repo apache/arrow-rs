@@ -50,11 +50,19 @@ pub(crate) enum ShreddedPathStep {
 ///
 /// With `cast_options.safe = true`, out-of-bounds indices become nulls for those rows.
 /// With `cast_options.safe = false`, out-of-bounds indices return [`ArrowError::CastError`].
-fn take_list_like_index_as_shredding_state<L: ListLikeArray>(
-    list_array: &L,
+fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
+    typed_value: &dyn Array,
     index: usize,
     cast_options: &CastOptions,
 ) -> Result<Option<ShreddingState>> {
+    let list_array = typed_value.as_any().downcast_ref::<L>().ok_or_else(|| {
+        ArrowError::ComputeError(format!(
+            "Expected array type '{}' while handling list-like path step, got '{}'",
+            std::any::type_name::<L>(),
+            typed_value.data_type()
+        ))
+    })?;
+
     let values = list_array.values();
 
     let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() else {
@@ -188,34 +196,37 @@ pub(crate) fn follow_shredded_path_element(
             Ok(ShreddedPathStep::Success(state))
         }
         VariantPathElement::Index { index } => {
-            let state = if let Some(list_array) =
-                typed_value.as_any().downcast_ref::<GenericListArray<i32>>()
-            {
-                take_list_like_index_as_shredding_state(list_array, *index, cast_options)?
-            } else if let Some(list_array) =
-                typed_value.as_any().downcast_ref::<GenericListArray<i64>>()
-            {
-                take_list_like_index_as_shredding_state(list_array, *index, cast_options)?
-            } else if let Some(list_view_array) = typed_value
-                .as_any()
-                .downcast_ref::<GenericListViewArray<i32>>()
-            {
-                take_list_like_index_as_shredding_state(list_view_array, *index, cast_options)?
-            } else if let Some(list_view_array) = typed_value
-                .as_any()
-                .downcast_ref::<GenericListViewArray<i64>>()
-            {
-                take_list_like_index_as_shredding_state(list_view_array, *index, cast_options)?
-            } else if cast_options.safe {
-                // With safe cast options, return NULL (missing_path_step)
-                return Ok(missing_path_step());
-            } else {
-                // Downcast failure - if strict cast options are enabled, this should be an error
-                return Err(ArrowError::CastError(format!(
-                    "Cannot access index '{}' on non-list type: {}",
-                    index,
-                    typed_value.data_type()
-                )));
+            let state = match typed_value.data_type() {
+                DataType::List(_) => take_list_like_index_as_shredding_state::<
+                    GenericListArray<i32>,
+                >(typed_value.as_ref(), *index, cast_options)?,
+                DataType::LargeList(_) => take_list_like_index_as_shredding_state::<
+                    GenericListArray<i64>,
+                >(
+                    typed_value.as_ref(), *index, cast_options
+                )?,
+                DataType::ListView(_) => take_list_like_index_as_shredding_state::<
+                    GenericListViewArray<i32>,
+                >(
+                    typed_value.as_ref(), *index, cast_options
+                )?,
+                DataType::LargeListView(_) => take_list_like_index_as_shredding_state::<
+                    GenericListViewArray<i64>,
+                >(
+                    typed_value.as_ref(), *index, cast_options
+                )?,
+                _ if cast_options.safe => {
+                    // With safe cast options, return NULL (missing_path_step)
+                    return Ok(missing_path_step());
+                }
+                _ => {
+                    // Downcast failure - if strict cast options are enabled, this should be an error
+                    return Err(ArrowError::CastError(format!(
+                        "Cannot access index '{}' on non-list type: {}",
+                        index,
+                        typed_value.data_type()
+                    )));
+                }
             };
 
             match state {
