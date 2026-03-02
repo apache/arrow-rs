@@ -170,9 +170,10 @@ pub(crate) fn fits_precision<const N: u32>(n: impl Into<i64>) -> bool {
 /// - `"foo"` -> single field `foo`
 /// - `"foo.bar"` -> nested fields `foo`, `bar`
 /// - `"[1]"` -> array index 1
+/// - `"['1']"` or `"["1"]"`-> field `1`
 /// - `"foo[1].bar"` -> field `foo`, index 1, field `bar`
-/// - `"[a.b]"` -> field `a.b` (dot is literal inside bracket)
-/// - `"[a\\]b]"` -> field `a]b` (escaped `]`
+/// - `"['a.b']"` -> field `a.b` (dot is literal inside bracket)
+/// - `"['a\]b']"` -> field `a]b` (escaped `]`
 /// - etc.
 ///
 /// # Errors
@@ -267,9 +268,23 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
         }
     };
 
-    let element = match unescaped.parse() {
-        Ok(idx) => VariantPathElement::index(idx),
-        Err(_) => VariantPathElement::field(unescaped),
+    let element = if let Some(inner) = unescaped
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+        .or_else(|| {
+            unescaped
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+        }) {
+        // Quoted field name, e.g., ['field'] or ['123'] or ["123"]
+        VariantPathElement::field(inner.to_string())
+    } else {
+        let Ok(idx) = unescaped.parse() else {
+            return Err(ArrowError::ParseError(format!(
+                "Invalid token in bracket request: `{unescaped}`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+            )));
+        };
+        VariantPathElement::index(idx)
     };
 
     Ok((element, end + 1))
