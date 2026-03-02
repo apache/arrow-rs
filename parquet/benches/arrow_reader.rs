@@ -1424,6 +1424,20 @@ fn decimal_benches(c: &mut Criterion) {
     );
     group.finish();
 
+    let mut group = c.benchmark_group("arrow_array_reader/BYTE_ARRAY/Decimal128Array");
+    let mandatory_decimal3_leaf_desc = schema.column(10);
+    let optional_decimal3_leaf_desc = schema.column(11);
+    bench_byte_decimal::<ByteArrayType>(
+        &mut group,
+        &mandatory_decimal3_leaf_desc,
+        &optional_decimal3_leaf_desc,
+        Encoding::DELTA_LENGTH_BYTE_ARRAY,
+        // precision is 16: the max is 9999999999999999
+        9999999999999000,
+        9999999999999999,
+    );
+    group.finish();
+
     // parquet FIXED_LEN_BYTE_ARRAY, logical type decimal(16,2)
     let mut group = c.benchmark_group("arrow_array_reader/FIXED_LEN_BYTE_ARRAY/Decimal128Array");
     let mandatory_decimal4_leaf_desc = schema.column(12);
