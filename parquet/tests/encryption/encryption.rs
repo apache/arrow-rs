@@ -1270,8 +1270,8 @@ fn test_aes256_non_uniform_encryption_plaintext_footer() {
         .with_column_key("int32_field", column_4_key.to_vec())
         .with_column_key("ba_field", column_5_key.to_vec())
         .with_column_key("flba_field", column_6_key.to_vec())
-        .with_column_key("int64_list_field", column_7_key.to_vec())
-        .with_column_key("int64_field", column_8_key.to_vec())
+        .with_column_key("int64_field", column_7_key.to_vec())
+        .with_column_key("int96_field", column_8_key.to_vec())
         .build()
         .unwrap();
 
@@ -1302,8 +1302,8 @@ fn test_aes256_plaintext_footer_signature_verification() {
         .with_column_key("int32_field", column_4_key.to_vec())
         .with_column_key("ba_field", column_5_key.to_vec())
         .with_column_key("flba_field", column_6_key.to_vec())
-        .with_column_key("int64_list_field", column_7_key.to_vec())
-        .with_column_key("int64_field", column_8_key.to_vec())
+        .with_column_key("int64_field", column_7_key.to_vec())
+        .with_column_key("int96_field", column_8_key.to_vec())
         .build()
         .unwrap();
 
@@ -1318,8 +1318,8 @@ fn test_aes256_plaintext_footer_signature_verification() {
         .with_column_key("int32_field", column_4_key.to_vec())
         .with_column_key("ba_field", column_5_key.to_vec())
         .with_column_key("flba_field", column_6_key.to_vec())
-        .with_column_key("int64_list_field", column_7_key.to_vec())
-        .with_column_key("int64_field", column_8_key.to_vec())
+        .with_column_key("int64_field", column_7_key.to_vec())
+        .with_column_key("int96_field", column_8_key.to_vec())
         .build()
         .unwrap();
 
@@ -1361,8 +1361,8 @@ fn test_aes256_non_uniform_encryption_disabled_aad_storage() {
         .with_column_key("int32_field", column_4_key.clone())
         .with_column_key("ba_field", column_5_key.clone())
         .with_column_key("flba_field", column_6_key.clone())
-        .with_column_key("int64_list_field", column_7_key.clone())
-        .with_column_key("int64_field", column_8_key.clone())
+        .with_column_key("int64_field", column_7_key.clone())
+        .with_column_key("int96_field", column_8_key.clone())
         .with_aad_prefix(b"tester".to_vec())
         .build()
         .unwrap();
@@ -1377,8 +1377,8 @@ fn test_aes256_non_uniform_encryption_disabled_aad_storage() {
         .with_column_key("int32_field", column_4_key.clone())
         .with_column_key("ba_field", column_5_key.clone())
         .with_column_key("flba_field", column_6_key.clone())
-        .with_column_key("int64_list_field", column_7_key.clone())
-        .with_column_key("int64_field", column_8_key.clone())
+        .with_column_key("int64_field", column_7_key.clone())
+        .with_column_key("int96_field", column_8_key.clone())
         .with_aad_prefix(b"wrong_aad_prefix".to_vec())
         .build()
         .unwrap();
@@ -1401,8 +1401,8 @@ fn test_aes256_non_uniform_encryption_disabled_aad_storage() {
         .with_column_key("int32_field", column_4_key.clone())
         .with_column_key("ba_field", column_5_key.clone())
         .with_column_key("flba_field", column_6_key.clone())
-        .with_column_key("int64_list_field", column_7_key.clone())
-        .with_column_key("int64_field", column_8_key.clone())
+        .with_column_key("int64_field", column_7_key.clone())
+        .with_column_key("int96_field", column_8_key.clone())
         .build()
         .unwrap();
 
@@ -1442,8 +1442,8 @@ fn test_aes256_non_uniform_encryption() {
         .with_column_key("int32_field", column_4_key)
         .with_column_key("ba_field", column_5_key)
         .with_column_key("flba_field", column_6_key)
-        .with_column_key("int64_list_field", column_7_key)
-        .with_column_key("int64_field", column_8_key)
+        .with_column_key("int64_field", column_7_key)
+        .with_column_key("int96_field", column_8_key)
         .build()
         .unwrap();
 
@@ -1635,14 +1635,14 @@ fn test_aes256_uniform_encryption_plaintext_footer_with_key_retriever() {
                 b"12345678901234567890123456789017".to_vec(),
                 b"kc6".into(),
             )
-            // .with_column_key_and_metadata("int64_list_field", b"12345678901234567890123456789018".to_vec(), b"kc7".into())
+            // .with_column_key_and_metadata("int64_field", b"12345678901234567890123456789018".to_vec(), b"kc7".into())
             .with_column_key_and_metadata(
-                "int64_list_field.list.int64_list_field",
+                "int64_field.list.int64_field",
                 b"12345678901234567890123456789018".to_vec(),
                 b"kc7".into(),
             )
             .with_column_key_and_metadata(
-                "int64_field",
+                "int96_field",
                 b"12345678901234567890123456789019".to_vec(),
                 b"kc8".into(),
             )
@@ -1821,9 +1821,9 @@ fn test_aes256_write_non_uniform_encryption() {
         "int32_field",
         "ba_field",
         "flba_field",
-        "int64_list_field",
-        "int64_list_field.list.int64_list_field",
         "int64_field",
+        "int64_field.list.int64_field",
+        "int96_field",
     ];
     let column_keys = vec![
         b"12345678901234567890123456789012".to_vec(),
@@ -1859,8 +1859,8 @@ fn test_aes256_write_non_uniform_encryption() {
         .with_column_key("int32_field", column_4_key)
         .with_column_key("ba_field", column_5_key)
         .with_column_key("flba_field", column_6_key.clone())
-        .with_column_key("int64_list_field.list.int64_list_field", column_7_key)
-        .with_column_key("int64_field", column_8_key)
+        .with_column_key("int64_field.list.int64_field", column_7_key)
+        .with_column_key("int96_field", column_8_key)
         .build()
         .unwrap();
 
@@ -1891,8 +1891,8 @@ fn test_aes256_write_uniform_encryption_plaintext_footer() {
         .with_column_key("int32_field", column_4_key.clone())
         .with_column_key("ba_field", column_5_key.clone())
         .with_column_key("flba_field", column_6_key.clone())
-        .with_column_key("int64_list_field", column_7_key.clone())
-        .with_column_key("int64_field", column_8_key.clone())
+        .with_column_key("int64_field", column_7_key.clone())
+        .with_column_key("int96_field", column_8_key.clone())
         .build()
         .unwrap();
 
@@ -1903,8 +1903,8 @@ fn test_aes256_write_uniform_encryption_plaintext_footer() {
         .with_column_key("int32_field", column_4_key)
         .with_column_key("ba_field", column_5_key)
         .with_column_key("flba_field", column_6_key)
-        .with_column_key("int64_list_field", column_7_key)
-        .with_column_key("int64_field", column_8_key)
+        .with_column_key("int64_field", column_7_key)
+        .with_column_key("int96_field", column_8_key)
         .build()
         .unwrap();
 
@@ -2061,8 +2061,8 @@ fn test_aes256_decrypt_page_index_non_uniform() {
         .with_column_key("int32_field", column_4_key)
         .with_column_key("ba_field", column_5_key)
         .with_column_key("flba_field", column_6_key)
-        .with_column_key("int64_list_field", column_7_key)
-        .with_column_key("int64_field", column_8_key)
+        .with_column_key("int64_field", column_7_key)
+        .with_column_key("int96_field", column_8_key)
         .build()
         .unwrap();
 

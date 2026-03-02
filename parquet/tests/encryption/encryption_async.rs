@@ -461,8 +461,8 @@ async fn test_aes256_non_uniform_encryption_plaintext_footer() {
         .with_column_key("int32_field", column_4_key)
         .with_column_key("ba_field", column_5_key)
         .with_column_key("flba_field", column_6_key)
-        .with_column_key("int64_list_field", column_7_key)
-        .with_column_key("int64_field", column_8_key)
+        .with_column_key("int64_field", column_7_key)
+        .with_column_key("int96_field", column_8_key)
         .build()
         .unwrap();
 
@@ -516,8 +516,8 @@ async fn test_aes256_misspecified_encryption_keys() {
             .with_column_key("int32_field", column_4_key)
             .with_column_key("ba_field", column_5_key)
             .with_column_key("flba_field", column_6_key)
-            .with_column_key("int64_list_field", column_7_key)
-            .with_column_key("int64_field", column_8_key)
+            .with_column_key("int64_field", column_7_key)
+            .with_column_key("int96_field", column_8_key)
             .build()
             .unwrap();
 
@@ -621,8 +621,8 @@ async fn test_aes256_non_uniform_encryption() {
         .with_column_key("int32_field", column_4_key)
         .with_column_key("ba_field", column_5_key)
         .with_column_key("flba_field", column_6_key)
-        .with_column_key("int64_list_field", column_7_key)
-        .with_column_key("int64_field", column_8_key)
+        .with_column_key("int64_field", column_7_key)
+        .with_column_key("int96_field", column_8_key)
         .build()
         .unwrap();
 
@@ -703,9 +703,9 @@ async fn test_aes256_write_non_uniform_encryption() {
         "int32_field",
         "ba_field",
         "flba_field",
-        "int64_list_field",
-        "int64_list_field.list.int64_list_field",
         "int64_field",
+        "int64_field.list.int64_field",
+        "int96_field",
     ];
     let column_keys = vec![
         b"12345678901234567890123456789012".to_vec(),
@@ -741,8 +741,8 @@ async fn test_aes256_write_non_uniform_encryption() {
         .with_column_key("int32_field", column_4_key)
         .with_column_key("ba_field", column_5_key)
         .with_column_key("flba_field", column_6_key.clone())
-        .with_column_key("int64_list_field.list.int64_list_field", column_7_key)
-        .with_column_key("int64_field", column_8_key)
+        .with_column_key("int64_field.list.int64_field", column_7_key)
+        .with_column_key("int96_field", column_8_key)
         .build()
         .unwrap();
 
@@ -921,8 +921,8 @@ async fn test_aes256_decrypt_page_index_non_uniform() {
         .with_column_key("int32_field", column_4_key)
         .with_column_key("ba_field", column_5_key)
         .with_column_key("flba_field", column_6_key)
-        .with_column_key("int64_list_field", column_7_key)
-        .with_column_key("int64_field", column_8_key)
+        .with_column_key("int64_field", column_7_key)
+        .with_column_key("int96_field", column_8_key)
         .build()
         .unwrap();
 
