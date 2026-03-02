@@ -486,6 +486,51 @@ fn build_plain_encoded_byte_array_page_iterator_inner(
     InMemoryPageIterator::new(pages)
 }
 
+fn build_constant_prefix_delta_encoded_byte_array_page_iterator(
+    column_desc: ColumnDescPtr,
+    null_density: f32,
+    const_string: bool,
+) -> impl PageIterator + Clone {
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    let rep_levels = vec![0; VALUES_PER_PAGE];
+    let mut rng = seedable_rng();
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = Vec::new();
+        for j in 0..PAGES_PER_GROUP {
+            // generate page
+            let mut values = Vec::with_capacity(VALUES_PER_PAGE);
+            let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
+            for k in 0..VALUES_PER_PAGE {
+                let def_level = if rng.random::<f32>() < null_density {
+                    max_def_level - 1
+                } else {
+                    max_def_level
+                };
+                if def_level == max_def_level {
+                    let string_value = if const_string {
+                        "01234567890123456789012345678901".to_string()
+                    } else {
+                        format!("01234567890123456789012345678901:{k}{j}{i}")
+                    };
+                    values.push(parquet::data_type::ByteArray::from(string_value.as_str()));
+                }
+                def_levels.push(def_level);
+            }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            page_builder.add_values::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, &values);
+            column_chunk_pages.push(page_builder.consume());
+        }
+        pages.push(column_chunk_pages);
+    }
+
+    InMemoryPageIterator::new(pages)
+}
+
 fn build_plain_encoded_byte_array_page_iterator(
     column_desc: ColumnDescPtr,
     null_density: f32,
@@ -1679,6 +1724,40 @@ fn add_benches(c: &mut Criterion) {
             let array_reader = create_byte_array_reader(
                 dictionary_string_half_null_data.clone(),
                 optional_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let delta_string_const_no_null_data =
+        build_constant_prefix_delta_encoded_byte_array_page_iterator(
+            mandatory_string_column_desc.clone(),
+            0.0,
+            true,
+        );
+    group.bench_function("const delta byte array encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                delta_string_const_no_null_data.clone(),
+                mandatory_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let delta_string_const_prefix_no_null_data =
+        build_constant_prefix_delta_encoded_byte_array_page_iterator(
+            mandatory_string_column_desc.clone(),
+            0.0,
+            false,
+        );
+    group.bench_function("const prefix delta byte array encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                delta_string_const_prefix_no_null_data.clone(),
+                mandatory_string_column_desc.clone(),
             );
             count = bench_array_reader(array_reader);
         });
