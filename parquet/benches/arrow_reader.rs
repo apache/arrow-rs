@@ -486,9 +486,10 @@ fn build_plain_encoded_byte_array_page_iterator_inner(
     InMemoryPageIterator::new(pages)
 }
 
-fn build_constant_prefix_delta_encoded_byte_array_page_iterator(
+fn build_constant_prefix_byte_array_page_iterator(
     column_desc: ColumnDescPtr,
     null_density: f32,
+    encoding: Encoding,
     const_string: bool,
 ) -> impl PageIterator + Clone {
     let max_def_level = column_desc.max_def_level();
@@ -522,7 +523,7 @@ fn build_constant_prefix_delta_encoded_byte_array_page_iterator(
                 DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
             page_builder.add_rep_levels(max_rep_level, &rep_levels);
             page_builder.add_def_levels(max_def_level, &def_levels);
-            page_builder.add_values::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, &values);
+            page_builder.add_values::<ByteArrayType>(encoding, &values);
             column_chunk_pages.push(page_builder.consume());
         }
         pages.push(column_chunk_pages);
@@ -1469,20 +1470,6 @@ fn decimal_benches(c: &mut Criterion) {
     );
     group.finish();
 
-    let mut group = c.benchmark_group("arrow_array_reader/BYTE_ARRAY/Decimal128Array");
-    let mandatory_decimal3_leaf_desc = schema.column(10);
-    let optional_decimal3_leaf_desc = schema.column(11);
-    bench_byte_decimal::<ByteArrayType>(
-        &mut group,
-        &mandatory_decimal3_leaf_desc,
-        &optional_decimal3_leaf_desc,
-        Encoding::DELTA_LENGTH_BYTE_ARRAY,
-        // precision is 16: the max is 9999999999999999
-        9999999999999000,
-        9999999999999999,
-    );
-    group.finish();
-
     // parquet FIXED_LEN_BYTE_ARRAY, logical type decimal(16,2)
     let mut group = c.benchmark_group("arrow_array_reader/FIXED_LEN_BYTE_ARRAY/Decimal128Array");
     let mandatory_decimal4_leaf_desc = schema.column(12);
@@ -1731,9 +1718,10 @@ fn add_benches(c: &mut Criterion) {
     });
 
     let delta_string_const_no_null_data =
-        build_constant_prefix_delta_encoded_byte_array_page_iterator(
+        build_constant_prefix_byte_array_page_iterator(
             mandatory_string_column_desc.clone(),
             0.0,
+            Encoding::DELTA_BYTE_ARRAY,
             true,
         );
     group.bench_function("const delta byte array encoded, mandatory, no NULLs", |b| {
@@ -1748,9 +1736,10 @@ fn add_benches(c: &mut Criterion) {
     });
 
     let delta_string_const_prefix_no_null_data =
-        build_constant_prefix_delta_encoded_byte_array_page_iterator(
+        build_constant_prefix_byte_array_page_iterator(
             mandatory_string_column_desc.clone(),
             0.0,
+            Encoding::DELTA_BYTE_ARRAY,
             false,
         );
     group.bench_function(
@@ -1766,6 +1755,24 @@ fn add_benches(c: &mut Criterion) {
             assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
+
+    let delta_string_const_no_null_data =
+        build_constant_prefix_byte_array_page_iterator(
+            mandatory_string_column_desc.clone(),
+            0.0,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            true,
+        );
+    group.bench_function("const delta length byte array encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                delta_string_const_no_null_data.clone(),
+                mandatory_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
 
     group.finish();
 
