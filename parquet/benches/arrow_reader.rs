@@ -1717,23 +1717,7 @@ fn add_benches(c: &mut Criterion) {
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
 
-    let delta_string_const_no_null_data = build_constant_prefix_byte_array_page_iterator(
-        mandatory_string_column_desc.clone(),
-        0.0,
-        Encoding::DELTA_BYTE_ARRAY,
-        true,
-    );
-    group.bench_function("const delta byte array encoded, mandatory, no NULLs", |b| {
-        b.iter(|| {
-            let array_reader = create_byte_array_reader(
-                delta_string_const_no_null_data.clone(),
-                mandatory_string_column_desc.clone(),
-            );
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
-
+    // delta byte array with constant prefix and suffix lengths
     let delta_string_const_prefix_no_null_data = build_constant_prefix_byte_array_page_iterator(
         mandatory_string_column_desc.clone(),
         0.0,
@@ -1754,6 +1738,25 @@ fn add_benches(c: &mut Criterion) {
         },
     );
 
+    // delta byte array with constant prefix and no suffix
+    let delta_string_const_no_null_data = build_constant_prefix_byte_array_page_iterator(
+        mandatory_string_column_desc.clone(),
+        0.0,
+        Encoding::DELTA_BYTE_ARRAY,
+        true,
+    );
+    group.bench_function("const delta byte array encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_byte_array_reader(
+                delta_string_const_no_null_data.clone(),
+                mandatory_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // delta length byte array with constant lengths
     let delta_string_const_no_null_data = build_constant_prefix_byte_array_page_iterator(
         mandatory_string_column_desc.clone(),
         0.0,
