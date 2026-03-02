@@ -24,22 +24,27 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
 
-pub struct ListArrayDecoder<O> {
+pub type ListArrayDecoder<O> = ListLikeArrayDecoder<O, false>;
+pub type ListViewArrayDecoder<O> = ListLikeArrayDecoder<O, true>;
+
+pub struct ListLikeArrayDecoder<O, const IS_VIEW: bool> {
     data_type: DataType,
     decoder: Box<dyn ArrayDecoder>,
     phantom: PhantomData<O>,
     is_nullable: bool,
 }
 
-impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
+impl<O: OffsetSizeTrait, const IS_VIEW: bool> ListLikeArrayDecoder<O, IS_VIEW> {
     pub fn new(
         ctx: &DecoderContext,
         data_type: &DataType,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
-        let field = match data_type {
-            DataType::List(f) if !O::IS_LARGE => f,
-            DataType::LargeList(f) if O::IS_LARGE => f,
+        let field = match (IS_VIEW, data_type) {
+            (false, DataType::List(f)) if !O::IS_LARGE => f,
+            (false, DataType::LargeList(f)) if O::IS_LARGE => f,
+            (true, DataType::ListView(f)) if !O::IS_LARGE => f,
+            (true, DataType::LargeListView(f)) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
         let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
@@ -53,11 +58,14 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
     }
 }
 
-impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
+impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDecoder<O, IS_VIEW> {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut child_pos = Vec::with_capacity(pos.len());
-        let mut offsets = BufferBuilder::<O>::new(pos.len() + 1);
-        offsets.append(O::from_usize(0).unwrap());
+        let mut offsets = BufferBuilder::<O>::new(pos.len() + usize::from(!IS_VIEW));
+        if !IS_VIEW {
+            offsets.append(O::from_usize(0).unwrap());
+        }
+        let mut sizes = IS_VIEW.then(|| BufferBuilder::<O>::new(pos.len()));
 
         let mut nulls = self
             .is_nullable
@@ -77,6 +85,14 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                 _ => return Err(tape.error(*p, "[")),
             };
 
+            let start_idx = child_pos.len();
+            if IS_VIEW {
+                let offset = O::from_usize(start_idx).ok_or_else(|| {
+                    ArrowError::JsonError(format!("offset overflow decoding {}", self.data_type))
+                })?;
+                offsets.append(offset);
+            }
+
             let mut cur_idx = *p + 1;
             while cur_idx < end_idx {
                 child_pos.push(cur_idx);
@@ -85,20 +101,31 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                 cur_idx = tape.next(cur_idx, "list value")?;
             }
 
-            let offset = O::from_usize(child_pos.len()).ok_or_else(|| {
-                ArrowError::JsonError(format!("offset overflow decoding {}", self.data_type))
-            })?;
-            offsets.append(offset)
+            if IS_VIEW {
+                let size = O::from_usize(child_pos.len() - start_idx).ok_or_else(|| {
+                    ArrowError::JsonError(format!("size overflow decoding {}", self.data_type))
+                })?;
+                sizes.as_mut().unwrap().append(size);
+            } else {
+                let offset = O::from_usize(child_pos.len()).ok_or_else(|| {
+                    ArrowError::JsonError(format!("offset overflow decoding {}", self.data_type))
+                })?;
+                offsets.append(offset);
+            }
         }
 
         let child_data = self.decoder.decode(tape, &child_pos)?;
         let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
-        let data = ArrayDataBuilder::new(self.data_type.clone())
+        let mut data = ArrayDataBuilder::new(self.data_type.clone())
             .len(pos.len())
             .nulls(nulls)
             .add_buffer(offsets.finish())
             .child_data(vec![child_data]);
+
+        if let Some(mut sizes) = sizes {
+            data = data.add_buffer(sizes.finish());
+        }
 
         // Safety
         // Validated lengths above

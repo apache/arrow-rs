@@ -153,8 +153,7 @@ pub use schema::*;
 
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
-use crate::reader::list_array::ListArrayDecoder;
-use crate::reader::list_view_array::ListViewArrayDecoder;
+use crate::reader::list_array::{ListArrayDecoder, ListViewArrayDecoder};
 use crate::reader::map_array::MapArrayDecoder;
 use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
@@ -169,7 +168,6 @@ mod binary_array;
 mod boolean_array;
 mod decimal_array;
 mod list_array;
-mod list_view_array;
 mod map_array;
 mod null_array;
 mod primitive_array;
