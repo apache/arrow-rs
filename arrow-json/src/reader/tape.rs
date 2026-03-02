@@ -627,11 +627,7 @@ impl TapeDecoder {
     /// True if the decoder is part way through decoding a row. If so, calling [`Self::finish`]
     /// would return an error.
     pub fn has_partial_row(&self) -> bool {
-        match self.stack.last() {
-            None => false,
-            Some(DecoderState::TopLevelList) => false,
-            _ => true,
-        }
+        !matches!(self.stack.last(), None | Some(DecoderState::TopLevelList))
     }
 
     /// Finishes the current [`Tape`]
