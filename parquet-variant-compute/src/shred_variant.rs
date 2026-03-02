@@ -652,10 +652,10 @@ impl VariantSchemaNode {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use crate::arrow_to_variant::ListLikeArray;
     use arrow::array::{
         Array, BinaryViewArray, FixedSizeBinaryArray, Float64Array, GenericListArray,
-        GenericListViewArray, Int64Array, ListArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+        GenericListViewArray, Int64Array, ListArray, ListLikeArray, OffsetSizeTrait,
+        PrimitiveArray, StringArray,
     };
     use arrow::datatypes::{
         ArrowPrimitiveType, DataType, Field, Fields, Int64Type, TimeUnit, UnionFields, UnionMode,
