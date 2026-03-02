@@ -216,6 +216,13 @@ impl<'a> Tape<'a> {
 /// States based on <https://www.json.org/json-en.html>
 #[derive(Debug, Copy, Clone)]
 enum DecoderState {
+    /// Decoding a top-level list, where each element is
+    /// treated as an individual row
+    ///
+    /// This can only appear as the first element on the stack,
+    /// and it is valid to flush a batch when this is the only
+    /// state on the stack
+    TopLevelList,
     /// Decoding an object
     ///
     /// Contains index of start [`TapeElement::StartObject`]
@@ -242,6 +249,7 @@ enum DecoderState {
 impl DecoderState {
     fn as_str(&self) -> &'static str {
         match self {
+            DecoderState::TopLevelList => "list",
             DecoderState::Object(_) => "object",
             DecoderState::List(_) => "list",
             DecoderState::String => "string",
@@ -295,7 +303,9 @@ macro_rules! next {
 }
 
 /// Implements a state machine for decoding JSON to a tape
+#[derive(Debug)]
 pub struct TapeDecoder {
+    /// The decoded elements
     elements: Vec<TapeElement>,
 
     /// The number of rows decoded, including any in progress if `!stack.is_empty()`
@@ -303,6 +313,12 @@ pub struct TapeDecoder {
 
     /// Number of rows to read per batch
     batch_size: usize,
+
+    /// Whether to flatten top-level arrays into the stream of JSON rows,
+    /// meaning that each of their elements will be treated as an individual row
+    ///
+    /// When `false` (the default), the entire top-level array will be treated as one row
+    flatten_top_level_arrays: bool,
 
     /// A buffer of parsed string data
     ///
@@ -317,10 +333,32 @@ pub struct TapeDecoder {
     stack: Vec<DecoderState>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct TapeDecoderOptions {
+    batch_size: usize,
+    num_fields: usize,
+    flatten_top_level_arrays: bool,
+}
+
 impl TapeDecoder {
     /// Create a new [`TapeDecoder`] with the provided batch size
     /// and an estimated number of fields in each row
     pub fn new(batch_size: usize, num_fields: usize) -> Self {
+        Self::new_with_options(TapeDecoderOptions {
+            batch_size,
+            num_fields,
+            flatten_top_level_arrays: false,
+        })
+    }
+
+    /// Create a new [`TapeDecoder`] with the provided options
+    pub fn new_with_options(options: TapeDecoderOptions) -> Self {
+        let TapeDecoderOptions {
+            batch_size,
+            num_fields,
+            flatten_top_level_arrays,
+        } = options;
+
         let tokens_per_row = 2 + num_fields * 2;
         let mut offsets = Vec::with_capacity(batch_size * (num_fields * 2) + 1);
         offsets.push(0);
@@ -332,6 +370,7 @@ impl TapeDecoder {
             offsets,
             elements,
             batch_size,
+            flatten_top_level_arrays,
             cur_row: 0,
             bytes: Vec::with_capacity(num_fields * 2 * 8),
             stack: Vec::with_capacity(10),
@@ -346,18 +385,52 @@ impl TapeDecoder {
                 Some(l) => l,
                 None => {
                     iter.skip_whitespace();
-                    if iter.is_empty() || self.cur_row >= self.batch_size {
+                    if self.cur_row >= self.batch_size {
                         break;
                     }
 
-                    // Start of row
-                    self.cur_row += 1;
-                    self.stack.push(DecoderState::Value);
+                    match iter.peek() {
+                        Some(b'[') if self.flatten_top_level_arrays => {
+                            // Consume the `[` without writing it
+                            iter.next();
+                            self.stack.push(DecoderState::TopLevelList);
+                        }
+                        Some(_) => {
+                            // Start of row
+                            self.cur_row += 1;
+                            self.stack.push(DecoderState::Value);
+                        }
+                        None => break,
+                    }
+
+                    // There is now a top-most state to process
                     self.stack.last_mut().unwrap()
                 }
             };
 
             match state {
+                // Decoding a top-level list
+                DecoderState::TopLevelList => {
+                    iter.advance_until(|b| !json_whitespace(b) && b != b',');
+                    if self.cur_row >= self.batch_size {
+                        break;
+                    }
+
+                    match iter.peek() {
+                        Some(b']') => {
+                            // Consume the `]` without writing it
+                            iter.next();
+                            self.stack.pop();
+                            continue;
+                        }
+                        Some(_) => {
+                            // Start of row
+                            self.cur_row += 1;
+                            self.stack.push(DecoderState::Value);
+                        }
+                        None => break,
+                    }
+                }
                 // Decoding an object
                 DecoderState::Object(start_idx) => {
                     iter.advance_until(|b| !json_whitespace(b) && b != b',');
@@ -554,16 +627,24 @@ impl TapeDecoder {
     /// True if the decoder is part way through decoding a row. If so, calling [`Self::finish`]
     /// would return an error.
     pub fn has_partial_row(&self) -> bool {
-        !self.stack.is_empty()
+        match self.stack.last() {
+            None => false,
+            Some(DecoderState::TopLevelList) => false,
+            _ => true,
+        }
     }
 
     /// Finishes the current [`Tape`]
     pub fn finish(&self) -> Result<Tape<'_>, ArrowError> {
-        if let Some(b) = self.stack.last() {
-            return Err(ArrowError::JsonError(format!(
-                "Truncated record whilst reading {}",
-                b.as_str()
-            )));
+        match self.stack.last() {
+            None => {}
+            Some(DecoderState::TopLevelList) => {}
+            Some(state) => {
+                return Err(ArrowError::JsonError(format!(
+                    "Truncated record whilst reading {}",
+                    state.as_str()
+                )));
+            }
         }
 
         if self.offsets.len() >= u32::MAX as usize {
@@ -607,7 +688,7 @@ impl TapeDecoder {
 
     /// Clears this [`TapeDecoder`] in preparation to read the next batch
     pub fn clear(&mut self) {
-        assert!(self.stack.is_empty());
+        assert!(!self.has_partial_row());
 
         self.cur_row = 0;
         self.bytes.clear();
@@ -971,5 +1052,190 @@ mod tests {
         let mut decoder = TapeDecoder::new(16, 2);
         let res = decoder.decode(b"{\"test\": \"\\udc00\\udc01\"}");
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_flatten_top_level_arrays() {
+        let input = r#"
+        [
+            {"hello": "world", "foo": 2, "bar": 45},
+            {"a": true, "b": false, "c": null}
+        ]
+        [
+            {"a": "b", "object": {"nested": "hello", "foo": 23}},
+            {"a": ["", "foo", ["bar", "c"]]},
+            {"hello": "world", "foo": 2, "bar": 27}
+        ]"#;
+        const TOTAL_ROWS: usize = 5;
+
+        // Check that regular decoding returns two rows
+        let mut decoder = TapeDecoder::new(16, 2);
+        decoder.decode(input.as_bytes()).unwrap();
+        assert!(!decoder.has_partial_row());
+        assert_eq!(decoder.num_buffered_rows(), 2);
+
+        let expected = TestCase::new()
+            // {"hello": "world", "foo": 2, "bar": 45}
+            .start_object(6)
+            .string("hello")
+            .string("world")
+            .string("foo")
+            .number("2")
+            .string("bar")
+            .number("45")
+            .end_object(6)
+            // {"a": true, "b": false, "c": null}
+            .start_object(6)
+            .string("a")
+            .r#true()
+            .string("b")
+            .r#false()
+            .string("c")
+            .null()
+            .end_object(6)
+            // {"a": "b", "object": {"nested": "hello", "foo": 23}}
+            .start_object(9)
+            .string("a")
+            .string("b")
+            .string("object")
+            .start_object(4)
+            .string("nested")
+            .string("hello")
+            .string("foo")
+            .number("23")
+            .end_object(4)
+            .end_object(9)
+            // {"a": ["", "foo", ["bar", "c"]]}
+            .start_object(9)
+            .string("a")
+            .start_list(6)
+            .string("")
+            .string("foo")
+            .start_list(2)
+            .string("bar")
+            .string("c")
+            .end_list(2)
+            .end_list(6)
+            .end_object(9)
+            // {"hello": "world", "foo": 2, "bar": 27}
+            .start_object(6)
+            .string("hello")
+            .string("world")
+            .string("foo")
+            .number("2")
+            .string("bar")
+            .number("27")
+            .end_object(6);
+
+        // Check that decoding with `flatten_top_level_arrays` yields rows correctly,
+        // and respects the configured batch size
+        for batch_size in [1, 2, 3, 4, 8] {
+            dbg!(batch_size);
+
+            let mut decoder = TapeDecoder::new_with_options(TapeDecoderOptions {
+                batch_size,
+                num_fields: 2,
+                flatten_top_level_arrays: true,
+            });
+            decoder.decode(input.as_bytes()).unwrap();
+            assert!(!decoder.has_partial_row());
+            assert_eq!(decoder.num_buffered_rows(), batch_size.min(TOTAL_ROWS));
+
+            let finished = decoder.finish().unwrap();
+            assert!(!decoder.has_partial_row());
+            assert_eq!(decoder.num_buffered_rows(), batch_size.min(TOTAL_ROWS)); // didn't call clear() yet
+            assert_eq!(
+                finished.elements,
+                &expected.elements[..finished.elements.len()]
+            );
+            assert_eq!(
+                finished.strings,
+                &expected.strings[..finished.strings.len()]
+            );
+            assert_eq!(
+                finished.string_offsets,
+                &expected.string_offsets[..finished.string_offsets.len()]
+            );
+
+            decoder.clear();
+            assert!(!decoder.has_partial_row());
+            assert_eq!(decoder.num_buffered_rows(), 0);
+        }
+    }
+
+    /// The expected elements, strings and string offsets for a test case
+    struct TestCase {
+        elements: Vec<TapeElement>,
+        strings: String,
+        string_offsets: Vec<usize>,
+    }
+
+    impl TestCase {
+        fn new() -> Self {
+            Self {
+                elements: vec![TapeElement::Null],
+                strings: String::new(),
+                string_offsets: vec![0],
+            }
+        }
+
+        fn start_object(mut self, len: usize) -> Self {
+            let end_idx = (self.elements.len() + len + 1) as u32;
+            self.elements.push(TapeElement::StartObject(end_idx));
+            self
+        }
+
+        fn end_object(mut self, len: usize) -> Self {
+            let start_idx = (self.elements.len() - len - 1) as u32;
+            self.elements.push(TapeElement::EndObject(start_idx));
+            self
+        }
+
+        fn start_list(mut self, len: usize) -> Self {
+            let end_idx = (self.elements.len() + len + 1) as u32;
+            self.elements.push(TapeElement::StartList(end_idx));
+            self
+        }
+
+        fn end_list(mut self, len: usize) -> Self {
+            let start_idx = (self.elements.len() - len - 1) as u32;
+            self.elements.push(TapeElement::EndList(start_idx));
+            self
+        }
+
+        fn string(mut self, raw: &str) -> Self {
+            let idx = (self.string_offsets.len() - 1) as u32;
+            let start = self.strings.len();
+            let end = start + raw.len();
+            self.elements.push(TapeElement::String(idx));
+            self.strings.push_str(raw);
+            self.string_offsets.push(end);
+            self
+        }
+
+        fn number(mut self, raw: &str) -> Self {
+            let idx = (self.string_offsets.len() - 1) as u32;
+            let start = self.strings.len();
+            let end = start + raw.len();
+            self.elements.push(TapeElement::Number(idx));
+            self.strings.push_str(raw);
+            self.string_offsets.push(end);
+            self
+        }
+
+        fn r#true(mut self) -> Self {
+            self.elements.push(TapeElement::True);
+            self
+        }
+
+        fn r#false(mut self) -> Self {
+            self.elements.push(TapeElement::False);
+            self
+        }
+
+        fn null(mut self) -> Self {
+            self.elements.push(TapeElement::Null);
+            self
+        }
     }
 }
