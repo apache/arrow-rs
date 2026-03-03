@@ -330,6 +330,7 @@ fn build_delta_encoded_incr_primitive_page_iterator<T>(
     column_desc: ColumnDescPtr,
     null_density: f32,
     increment: usize,
+    stepped: bool,
 ) -> impl PageIterator + Clone
 where
     T: parquet::data_type::DataType,
@@ -347,7 +348,7 @@ where
             // generate page
             let mut values = Vec::with_capacity(VALUES_PER_PAGE);
             let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
-            for _k in 0..VALUES_PER_PAGE {
+            for k in 0..VALUES_PER_PAGE {
                 let def_level = if rng.random::<f32>() < null_density {
                     max_def_level - 1
                 } else {
@@ -355,7 +356,11 @@ where
                 };
                 if def_level == max_def_level {
                     let value = FromPrimitive::from_usize(running_val).unwrap();
-                    running_val += increment;
+                    running_val = if !stepped || k % 2 == 1 {
+                        running_val + increment
+                    } else {
+                        running_val
+                    };
                     values.push(value);
                 }
                 def_levels.push(def_level);
@@ -1159,6 +1164,7 @@ fn bench_primitive<T>(
         mandatory_column_desc.clone(),
         0.0,
         0,
+        false,
     );
     group.bench_function("binary packed single value", |b| {
         b.iter(|| {
@@ -1174,8 +1180,25 @@ fn bench_primitive<T>(
         mandatory_column_desc.clone(),
         0.0,
         1,
+        false,
     );
     group.bench_function("binary packed increasing value", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader_skip(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary packed increasing stepped
+    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        1,
+        true,
+    );
+    group.bench_function("binary packed stepped increasing value", |b| {
         b.iter(|| {
             let array_reader =
                 create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
