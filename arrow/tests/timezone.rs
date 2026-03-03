@@ -58,7 +58,7 @@ fn test_parse_timezone_invalid() {
         ),
         (
             "2023-01-01 04:05:06.789 +07:30:00",
-            "Parser error: Invalid timezone \"+07:30:00\": failed to parse timezone"
+            "Parser error: Invalid timezone \"+07:30:00\": failed to parse timezone",
         ),
         (
             // Sunday, 12 March 2023, 02:00:00 clocks are turned forward 1 hour to

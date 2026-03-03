@@ -55,13 +55,14 @@ arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-half = { version = "2.1", default-features = false, optional = true }
+half = { version = "2.1", default-features = false, features = ["rand_distr"], optional = true }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
 default = ["csv", "ipc", "json"]
+async = ["arrow-array/async"]
 ipc_compression = ["ipc", "arrow-ipc/lz4", "arrow-ipc/zstd"]
 csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
@@ -84,8 +85,8 @@ canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 
 [dev-dependencies]
 chrono = { workspace = true }
-criterion = { version = "0.6", default-features = false }
-half = { version = "2.1", default-features = false }
+criterion = { workspace = true, default-features = false }
+half = { version = "2.1", default-features = false, features = ["rand_distr"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 # used in examples
@@ -120,8 +121,14 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
-name = "array_from_vec"
+name = "array_from"
 harness = false
+
+[[bench]]
+name = "array_iter"
+harness = false
+required-features = ["test_utils"]
+
 
 [[bench]]
 name = "builder"
@@ -166,7 +173,6 @@ name = "coalesce_kernels"
 harness = false
 required-features = ["test_utils"]
 
-
 [[bench]]
 name = "take_kernels"
 harness = false
@@ -174,6 +180,16 @@ required-features = ["test_utils"]
 
 [[bench]]
 name = "interleave_kernels"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "merge_kernels"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "zip_kernels"
 harness = false
 required-features = ["test_utils"]
 
@@ -292,6 +308,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 name = "lexsort"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "nullif_kernel"
 harness = false
 required-features = ["test_utils"]
 

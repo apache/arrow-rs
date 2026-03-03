@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::types::{Int32Type, Int8Type};
+use arrow_array::types::{Int8Type, Int32Type};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray,
-    FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray,
+    FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int8Array, Int16Array,
+    Int32Array, Int64Array, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
     StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
     Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_buffer::i256;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -33,17 +33,22 @@ use chrono::{Duration, TimeDelta};
 use half::f16;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{
-    EnabledStatistics, WriterProperties, DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
+    DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, EnabledStatistics, WriterProperties,
 };
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod bad_data;
+mod bloom_filter;
 #[cfg(feature = "crc")]
 mod checksum;
 mod int96_stats_roundtrip;
+mod invalid_utf8;
+mod io;
+mod large_string_overflow;
 #[cfg(feature = "async")]
 mod predicate_cache;
+mod row_filter;
 mod statistics;
 
 // returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values
@@ -336,9 +341,9 @@ fn make_uint_batches(start: u8, end: u8) -> RecordBatch {
         Field::new("u64", DataType::UInt64, true),
     ]));
     let v8: Vec<u8> = (start..end).collect();
-    let v16: Vec<u16> = (start as _..end as _).collect();
-    let v32: Vec<u32> = (start as _..end as _).collect();
-    let v64: Vec<u64> = (start as _..end as _).collect();
+    let v16: Vec<u16> = (start as _..end as u16).collect();
+    let v32: Vec<u32> = (start as _..end as u32).collect();
+    let v64: Vec<u64> = (start as _..end as u64).collect();
     RecordBatch::try_new(
         schema,
         vec![
@@ -1127,7 +1132,7 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .expect("tempfile creation");
 
     let mut builder = WriterProperties::builder()
-        .set_max_row_group_size(row_per_group)
+        .set_max_row_group_row_count(Some(row_per_group))
         .set_bloom_filter_enabled(true)
         .set_statistics_enabled(EnabledStatistics::Page);
     if scenario.truncate_stats() {

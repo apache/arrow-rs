@@ -28,7 +28,7 @@ jobs:
     if: (!github.event.issue.pull_request) && github.event.comment.body == 'take'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v8
         with:
           script: |
             github.rest.issues.addAssignees({

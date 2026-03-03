@@ -21,8 +21,9 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::filter_record_batch;
+use crate::take::take_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
-use arrow_array::{downcast_primitive, Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -142,6 +143,8 @@ pub struct BatchCoalescer {
     buffered_rows: usize,
     /// Completed batches
     completed: VecDeque<RecordBatch>,
+    /// Biggest coalesce batch size. See [`Self::with_biggest_coalesce_batch_size`]
+    biggest_coalesce_batch_size: Option<usize>,
 }
 
 impl BatchCoalescer {
@@ -166,7 +169,39 @@ impl BatchCoalescer {
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
+            biggest_coalesce_batch_size: None,
         }
+    }
+
+    /// Set the coalesce batch size limit (default `None`)
+    ///
+    /// This limit determine when batches should bypass coalescing. Intuitively,
+    /// batches that are already large are costly to coalesce and are efficient
+    /// enough to process directly without coalescing.
+    ///
+    /// If `Some(limit)`, batches larger than this limit will bypass coalescing
+    /// when there is no buffered data, or when the previously buffered data
+    /// already exceeds this limit.
+    ///
+    /// If `None`, all batches will be coalesced according to the
+    /// target_batch_size.
+    pub fn with_biggest_coalesce_batch_size(mut self, limit: Option<usize>) -> Self {
+        self.biggest_coalesce_batch_size = limit;
+        self
+    }
+
+    /// Get the current biggest coalesce batch size limit
+    ///
+    /// See [`Self::with_biggest_coalesce_batch_size`] for details
+    pub fn biggest_coalesce_batch_size(&self) -> Option<usize> {
+        self.biggest_coalesce_batch_size
+    }
+
+    /// Set the biggest coalesce batch size limit
+    ///
+    /// See [`Self::with_biggest_coalesce_batch_size`] for details
+    pub fn set_biggest_coalesce_batch_size(&mut self, limit: Option<usize>) {
+        self.biggest_coalesce_batch_size = limit;
     }
 
     /// Return the schema of the output batches
@@ -209,6 +244,39 @@ impl BatchCoalescer {
         self.push_batch(filtered_batch)
     }
 
+    /// Push a batch into the Coalescer after applying a set of indices
+    /// This is semantically equivalent of calling [`Self::push_batch`]
+    /// with the results from  [`take_record_batch`]
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{record_batch, UInt64Array};
+    /// # use arrow_select::coalesce::BatchCoalescer;
+    /// let batch1 = record_batch!(("a", Int32, [0, 0, 0])).unwrap();
+    /// let batch2 = record_batch!(("a", Int32, [1, 1, 4, 5, 1, 4])).unwrap();
+    /// // Sorted indices to create a sorted output, this can be obtained with
+    /// // `arrow-ord`'s sort_to_indices operation
+    /// let indices = UInt64Array::from(vec![0, 1, 4, 2, 5, 3]);
+    /// // create a new Coalescer that targets creating 1000 row batches
+    /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
+    /// coalescer.push_batch(batch1);
+    /// coalescer.push_batch_with_indices(batch2, &indices);
+    /// // finsh and retrieve the created batch
+    /// coalescer.finish_buffered_batch().unwrap();
+    /// let completed_batch = coalescer.next_completed_batch().unwrap();
+    /// let expected_batch = record_batch!(("a", Int32, [0, 0, 0, 1, 1, 1, 4, 4, 5])).unwrap();
+    /// assert_eq!(completed_batch, expected_batch);
+    /// ```
+    pub fn push_batch_with_indices(
+        &mut self,
+        batch: RecordBatch,
+        indices: &dyn Array,
+    ) -> Result<(), ArrowError> {
+        // todo: optimize this to avoid materializing (copying the results of take indices to a new batch)
+        let taken_batch = take_record_batch(&batch, indices)?;
+        self.push_batch(taken_batch)
+    }
+
     /// Push all the rows from `batch` into the Coalescer
     ///
     /// When buffered data plus incoming rows reach `target_batch_size` ,
@@ -236,13 +304,168 @@ impl BatchCoalescer {
     /// assert_eq!(completed_batch, expected_batch);
     /// ```
     pub fn push_batch(&mut self, batch: RecordBatch) -> Result<(), ArrowError> {
-        let (_schema, arrays, mut num_rows) = batch.into_parts();
-        if num_rows == 0 {
+        // Large batch bypass optimization:
+        // When biggest_coalesce_batch_size is configured and a batch exceeds this limit,
+        // we can avoid expensive split-and-merge operations by passing it through directly.
+        //
+        // IMPORTANT: This optimization is OPTIONAL and only active when biggest_coalesce_batch_size
+        // is explicitly set via with_biggest_coalesce_batch_size(Some(limit)).
+        // If not set (None), ALL batches follow normal coalescing behavior regardless of size.
+
+        // =============================================================================
+        // CASE 1: No buffer + large batch → Direct bypass
+        // =============================================================================
+        // Example scenario (target_batch_size=1000, biggest_coalesce_batch_size=Some(500)):
+        // Input sequence: [600, 1200, 300]
+        //
+        // With biggest_coalesce_batch_size=Some(500) (optimization enabled):
+        //   600 → large batch detected! buffered_rows=0 → Case 1: direct bypass
+        //        → output: [600] (bypass, preserves large batch)
+        //   1200 → large batch detected! buffered_rows=0 → Case 1: direct bypass
+        //         → output: [1200] (bypass, preserves large batch)
+        //   300 → normal batch, buffer: [300]
+        //   Result: [600], [1200], [300] - large batches preserved, mixed sizes
+
+        // =============================================================================
+        // CASE 2: Buffer too large + large batch → Flush first, then bypass
+        // =============================================================================
+        // This case prevents creating extremely large merged batches that would
+        // significantly exceed both target_batch_size and biggest_coalesce_batch_size.
+        //
+        // Example 1: Buffer exceeds limit before large batch arrives
+        // target_batch_size=1000, biggest_coalesce_batch_size=Some(400)
+        // Input: [350, 200, 800]
+        //
+        // Step 1: push_batch([350])
+        //   → batch_size=350 <= 400, normal path
+        //   → buffer: [350], buffered_rows=350
+        //
+        // Step 2: push_batch([200])
+        //   → batch_size=200 <= 400, normal path
+        //   → buffer: [350, 200], buffered_rows=550
+        //
+        // Step 3: push_batch([800])
+        //   → batch_size=800 > 400, large batch path
+        //   → buffered_rows=550 > 400 → Case 2: flush first
+        //   → flush: output [550] (combined [350, 200])
+        //   → then bypass: output [800]
+        //   Result: [550], [800] - buffer flushed to prevent oversized merge
+        //
+        // Example 2: Multiple small batches accumulate before large batch
+        // target_batch_size=1000, biggest_coalesce_batch_size=Some(300)
+        // Input: [150, 100, 80, 900]
+        //
+        // Step 1-3: Accumulate small batches
+        //   150 → buffer: [150], buffered_rows=150
+        //   100 → buffer: [150, 100], buffered_rows=250
+        //   80  → buffer: [150, 100, 80], buffered_rows=330
+        //
+        // Step 4: push_batch([900])
+        //   → batch_size=900 > 300, large batch path
+        //   → buffered_rows=330 > 300 → Case 2: flush first
+        //   → flush: output [330] (combined [150, 100, 80])
+        //   → then bypass: output [900]
+        //   Result: [330], [900] - prevents merge into [1230] which would be too large
+
+        // =============================================================================
+        // CASE 3: Small buffer + large batch → Normal coalescing (no bypass)
+        // =============================================================================
+        // When buffer is small enough, we still merge to maintain efficiency
+        // Example: target_batch_size=1000, biggest_coalesce_batch_size=Some(500)
+        // Input: [300, 1200]
+        //
+        // Step 1: push_batch([300])
+        //   → batch_size=300 <= 500, normal path
+        //   → buffer: [300], buffered_rows=300
+        //
+        // Step 2: push_batch([1200])
+        //   → batch_size=1200 > 500, large batch path
+        //   → buffered_rows=300 <= 500 → Case 3: normal merge
+        //   → buffer: [300, 1200] (1500 total)
+        //   → 1500 > target_batch_size → split: output [1000], buffer [500]
+        //   Result: [1000], [500] - normal split/merge behavior maintained
+
+        // =============================================================================
+        // Comparison: Default vs Optimized Behavior
+        // =============================================================================
+        // target_batch_size=1000, biggest_coalesce_batch_size=Some(500)
+        // Input: [600, 1200, 300]
+        //
+        // DEFAULT BEHAVIOR (biggest_coalesce_batch_size=None):
+        //   600 → buffer: [600]
+        //   1200 → buffer: [600, 1200] (1800 rows total)
+        //         → split: output [1000 rows], buffer [800 rows remaining]
+        //   300 → buffer: [800, 300] (1100 rows total)
+        //        → split: output [1000 rows], buffer [100 rows remaining]
+        //   Result: [1000], [1000], [100] - all outputs respect target_batch_size
+        //
+        // OPTIMIZED BEHAVIOR (biggest_coalesce_batch_size=Some(500)):
+        //   600 → Case 1: direct bypass → output: [600]
+        //   1200 → Case 1: direct bypass → output: [1200]
+        //   300 → normal path → buffer: [300]
+        //   Result: [600], [1200], [300] - large batches preserved
+
+        // =============================================================================
+        // Benefits and Trade-offs
+        // =============================================================================
+        // Benefits of the optimization:
+        // - Large batches stay intact (better for downstream vectorized processing)
+        // - Fewer split/merge operations (better CPU performance)
+        // - More predictable memory usage patterns
+        // - Maintains streaming efficiency while preserving batch boundaries
+        //
+        // Trade-offs:
+        // - Output batch sizes become variable (not always target_batch_size)
+        // - May produce smaller partial batches when flushing before large batches
+        // - Requires tuning biggest_coalesce_batch_size parameter for optimal performance
+
+        // TODO, for unsorted batches, we may can filter all large batches, and coalesce all
+        // small batches together?
+
+        let batch_size = batch.num_rows();
+
+        // Fast path: skip empty batches
+        if batch_size == 0 {
             return Ok(());
         }
 
-        // setup input rows
-        assert_eq!(arrays.len(), self.in_progress_arrays.len());
+        // Large batch optimization: bypass coalescing for oversized batches
+        if let Some(limit) = self.biggest_coalesce_batch_size {
+            if batch_size > limit {
+                // Case 1: No buffered data - emit large batch directly
+                // Example: [] + [1200] → output [1200], buffer []
+                if self.buffered_rows == 0 {
+                    self.completed.push_back(batch);
+                    return Ok(());
+                }
+
+                // Case 2: Buffer too large - flush then emit to avoid oversized merge
+                // Example: [850] + [1200] → output [850], then output [1200]
+                // This prevents creating batches much larger than both target_batch_size
+                // and biggest_coalesce_batch_size, which could cause memory issues
+                if self.buffered_rows > limit {
+                    self.finish_buffered_batch()?;
+                    self.completed.push_back(batch);
+                    return Ok(());
+                }
+
+                // Case 3: Small buffer - proceed with normal coalescing
+                // Example: [300] + [1200] → split and merge normally
+                // This ensures small batches still get properly coalesced
+                // while allowing some controlled growth beyond the limit
+            }
+        }
+
+        let (_schema, arrays, mut num_rows) = batch.into_parts();
+
+        // Validate column count matches the expected schema
+        if arrays.len() != self.in_progress_arrays.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Batch has {} columns but BatchCoalescer expects {}",
+                arrays.len(),
+                self.in_progress_arrays.len()
+            )));
+        }
         self.in_progress_arrays
             .iter_mut()
             .zip(arrays)
@@ -288,6 +511,11 @@ impl BatchCoalescer {
         }
 
         Ok(())
+    }
+
+    /// Returns the number of buffered rows
+    pub fn get_buffered_rows(&self) -> usize {
+        self.buffered_rows
     }
 
     /// Concatenates any buffered batches into a single `RecordBatch` and
@@ -393,10 +621,12 @@ mod tests {
     use crate::concat::concat_batches;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
     use arrow_array::{
-        BinaryViewArray, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
-        TimestampNanosecondArray, UInt32Array,
+        BinaryViewArray, Int32Array, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
+        TimestampNanosecondArray, UInt32Array, UInt64Array, make_array,
     };
+    use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
     use rand::{Rng, SeedableRng};
     use std::ops::Range;
@@ -404,7 +634,7 @@ mod tests {
     #[test]
     fn test_coalesce() {
         let batch = uint32_batch(0..8);
-        Test::new()
+        Test::new("coalesce")
             .with_batches(std::iter::repeat_n(batch, 10))
             // expected output is exactly 21 rows (except for the final batch)
             .with_batch_size(21)
@@ -415,7 +645,7 @@ mod tests {
     #[test]
     fn test_coalesce_one_by_one() {
         let batch = uint32_batch(0..1); // single row input
-        Test::new()
+        Test::new("coalesce_one_by_one")
             .with_batches(std::iter::repeat_n(batch, 97))
             // expected output is exactly 20 rows (except for the final batch)
             .with_batch_size(20)
@@ -427,7 +657,7 @@ mod tests {
     fn test_coalesce_empty() {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
 
-        Test::new()
+        Test::new("coalesce_empty")
             .with_batches(vec![])
             .with_schema(schema)
             .with_batch_size(21)
@@ -439,7 +669,7 @@ mod tests {
     fn test_single_large_batch_greater_than_target() {
         // test a single large batch
         let batch = uint32_batch(0..4096);
-        Test::new()
+        Test::new("coalesce_single_large_batch_greater_than_target")
             .with_batch(batch)
             .with_batch_size(1000)
             .with_expected_output_sizes(vec![1000, 1000, 1000, 1000, 96])
@@ -450,7 +680,7 @@ mod tests {
     fn test_single_large_batch_smaller_than_target() {
         // test a single large batch
         let batch = uint32_batch(0..4096);
-        Test::new()
+        Test::new("coalesce_single_large_batch_smaller_than_target")
             .with_batch(batch)
             .with_batch_size(8192)
             .with_expected_output_sizes(vec![4096])
@@ -461,7 +691,7 @@ mod tests {
     fn test_single_large_batch_equal_to_target() {
         // test a single large batch
         let batch = uint32_batch(0..4096);
-        Test::new()
+        Test::new("coalesce_single_large_batch_equal_to_target")
             .with_batch(batch)
             .with_batch_size(4096)
             .with_expected_output_sizes(vec![4096])
@@ -472,7 +702,7 @@ mod tests {
     fn test_single_large_batch_equally_divisible_in_target() {
         // test a single large batch
         let batch = uint32_batch(0..4096);
-        Test::new()
+        Test::new("coalesce_single_large_batch_equally_divisible_in_target")
             .with_batch(batch)
             .with_batch_size(1024)
             .with_expected_output_sizes(vec![1024, 1024, 1024, 1024])
@@ -483,7 +713,7 @@ mod tests {
     fn test_empty_schema() {
         let schema = Schema::empty();
         let batch = RecordBatch::new_empty(schema.into());
-        Test::new()
+        Test::new("coalesce_empty_schema")
             .with_batch(batch)
             .with_expected_output_sizes(vec![])
             .run();
@@ -501,7 +731,7 @@ mod tests {
         // add 10 batches of 8000 rows each
         // 80k rows, selecting 0.1% means 80 rows
         // not exactly 80 as the rows are random;
-        let mut test = Test::new();
+        let mut test = Test::new("coalesce_filtered_001");
         for _ in 0..10 {
             test = test
                 .with_batch(multi_column_batch(0..8000))
@@ -524,7 +754,7 @@ mod tests {
         // add 10 batches of 8000 rows each
         // 80k rows, selecting 1% means 800 rows
         // not exactly 800 as the rows are random;
-        let mut test = Test::new();
+        let mut test = Test::new("coalesce_filtered_01");
         for _ in 0..10 {
             test = test
                 .with_batch(multi_column_batch(0..8000))
@@ -537,7 +767,7 @@ mod tests {
 
     /// Coalesce multiple batches, 80k rows, with a 10% selectivity filter
     #[test]
-    fn test_coalesce_filtered_1() {
+    fn test_coalesce_filtered_10() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 8000,
             selectivity: 0.1,
@@ -547,7 +777,7 @@ mod tests {
         // add 10 batches of 8000 rows each
         // 80k rows, selecting 10% means 8000 rows
         // not exactly 800 as the rows are random;
-        let mut test = Test::new();
+        let mut test = Test::new("coalesce_filtered_10");
         for _ in 0..10 {
             test = test
                 .with_batch(multi_column_batch(0..8000))
@@ -570,7 +800,7 @@ mod tests {
         // add 10 batches of 800 rows each
         // 8k rows, selecting 99% means 7200 rows
         // not exactly 7200 as the rows are random;
-        let mut test = Test::new();
+        let mut test = Test::new("coalesce_filtered_90");
         for _ in 0..10 {
             test = test
                 .with_batch(multi_column_batch(0..800))
@@ -581,9 +811,46 @@ mod tests {
             .run();
     }
 
+    /// Coalesce multiple batches, 8k rows, with mixed filers, including 100%
+    #[test]
+    fn test_coalesce_filtered_mixed() {
+        let mut filter_builder = RandomFilterBuilder {
+            num_rows: 800,
+            selectivity: 0.90,
+            seed: 0,
+        };
+
+        let mut test = Test::new("coalesce_filtered_mixed");
+        for _ in 0..3 {
+            // also add in a batch that selects almost all rows and when
+            // sliced will have some batches that are entirely used
+            let mut all_filter_builder = BooleanBufferBuilder::new(1000);
+            all_filter_builder.append_n(500, true);
+            all_filter_builder.append_n(1, false);
+            all_filter_builder.append_n(499, false);
+            let all_filter = all_filter_builder.build();
+
+            test = test
+                .with_batch(multi_column_batch(0..1000))
+                .with_filter(BooleanArray::from(all_filter))
+                .with_batch(multi_column_batch(0..800))
+                .with_filter(filter_builder.next_filter());
+            // decrease selectivity
+            filter_builder.selectivity *= 0.6;
+        }
+
+        // use a small batch size to ensure the filter is appended in slices
+        // and some of those slides will select the entire thing.
+        test.with_batch_size(250)
+            .with_expected_output_sizes(vec![
+                250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 179,
+            ])
+            .run();
+    }
+
     #[test]
     fn test_coalesce_non_null() {
-        Test::new()
+        Test::new("coalesce_non_null")
             // 4040 rows of unit32
             .with_batch(uint32_batch_non_null(0..3000))
             .with_batch(uint32_batch_non_null(0..1040))
@@ -593,7 +860,7 @@ mod tests {
     }
     #[test]
     fn test_utf8_split() {
-        Test::new()
+        Test::new("coalesce_utf8")
             // 4040 rows of utf8 strings in total, split into batches of 1024
             .with_batch(utf8_batch(0..3000))
             .with_batch(utf8_batch(0..1040))
@@ -604,7 +871,7 @@ mod tests {
 
     #[test]
     fn test_string_view_no_views() {
-        let output_batches = Test::new()
+        let output_batches = Test::new("coalesce_string_view_no_views")
             // both input batches have no views, so no need to compact
             .with_batch(stringview_batch([Some("foo"), Some("bar")]))
             .with_batch(stringview_batch([Some("baz"), Some("qux")]))
@@ -621,7 +888,7 @@ mod tests {
     fn test_string_view_batch_small_no_compact() {
         // view with only short strings (no buffers) --> no need to compact
         let batch = stringview_batch_repeated(1000, [Some("a"), Some("b"), Some("c")]);
-        let output_batches = Test::new()
+        let output_batches = Test::new("coalesce_string_view_batch_small_no_compact")
             .with_batch(batch.clone())
             .with_expected_output_sizes(vec![1000])
             .run();
@@ -638,7 +905,7 @@ mod tests {
     fn test_string_view_batch_large_no_compact() {
         // view with large strings (has buffers) but full --> no need to compact
         let batch = stringview_batch_repeated(1000, [Some("This string is longer than 12 bytes")]);
-        let output_batches = Test::new()
+        let output_batches = Test::new("coalesce_string_view_batch_large_no_compact")
             .with_batch(batch.clone())
             .with_batch_size(1000)
             .with_expected_output_sizes(vec![1000])
@@ -686,7 +953,7 @@ mod tests {
         let batch = stringview_batch_repeated(1000, values)
             // take only 10 short strings (no long ones)
             .slice(5, 10);
-        let output_batches = Test::new()
+        let output_batches = Test::new("coalesce_string_view_batch_small_with_buffers_no_compact")
             .with_batch(batch.clone())
             .with_batch_size(1000)
             .with_expected_output_sizes(vec![10])
@@ -705,7 +972,7 @@ mod tests {
             // slice only 22 rows, so most of the buffer is not used
             .slice(11, 22);
 
-        let output_batches = Test::new()
+        let output_batches = Test::new("coalesce_string_view_batch_large_slice_compact")
             .with_batch(batch.clone())
             .with_batch_size(1000)
             .with_expected_output_sizes(vec![22])
@@ -744,7 +1011,7 @@ mod tests {
 
         // Several batches with mixed inline / non inline
         // 4k rows in
-        let output_batches = Test::new()
+        let output_batches = Test::new("coalesce_string_view_mixed")
             .with_batch(large_view_batch.clone())
             .with_batch(small_view_batch)
             // this batch needs to be compacted (less than 1/2 full)
@@ -791,7 +1058,7 @@ mod tests {
             200,
             [Some("This string is 28 bytes long"), Some("small string")],
         );
-        let output_batches = Test::new()
+        let output_batches = Test::new("coalesce_string_view_many_small_compact")
             // First allocated buffer is 8kb.
             // Appending 10 batches of 2800 bytes will use 2800 * 10 = 14kb (8kb, an 16kb and 32kbkb)
             .with_batch(batch.clone())
@@ -832,7 +1099,7 @@ mod tests {
     fn test_string_view_many_small_boundary() {
         // The strings are designed to exactly fit into buffers that are powers of 2 long
         let batch = stringview_batch_repeated(100, [Some("This string is a power of two=32")]);
-        let output_batches = Test::new()
+        let output_batches = Test::new("coalesce_string_view_many_small_boundary")
             .with_batches(std::iter::repeat_n(batch, 20))
             .with_batch_size(900)
             .with_expected_output_sizes(vec![900, 900, 200])
@@ -873,7 +1140,7 @@ mod tests {
             )],
         );
 
-        let output_batches = Test::new()
+        let output_batches = Test::new("coalesce_string_view_large_small")
             // First allocated buffer is 8kb.
             // Appending five batches of 2800 bytes will use 2800 * 10 = 28kb (8kb, an 16kb and 32kbkb)
             .with_batch(mixed_batch.clone())
@@ -922,7 +1189,7 @@ mod tests {
         let batch =
             RecordBatch::try_from_iter(vec![("c0", Arc::new(binary_view) as ArrayRef)]).unwrap();
 
-        Test::new()
+        Test::new("coalesce_binary_view")
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch_size(512)
@@ -956,9 +1223,13 @@ mod tests {
     /// Test for [`BatchCoalescer`]
     ///
     /// Pushes the input batches to the coalescer and verifies that the resulting
-    /// batches have the expected number of rows and contents.
+    /// batches have the
+    /// 1. expected number of rows
+    /// 2. The same results when the batches are filtered using the filter kernel
     #[derive(Debug, Clone)]
     struct Test {
+        /// A human readable name to assist in debugging
+        name: String,
         /// Batches to feed to the coalescer.
         input_batches: Vec<RecordBatch>,
         /// Filters to apply to the corresponding input batches.
@@ -977,6 +1248,7 @@ mod tests {
     impl Default for Test {
         fn default() -> Self {
             Self {
+                name: "".to_string(),
                 input_batches: vec![],
                 filters: vec![],
                 schema: None,
@@ -987,8 +1259,18 @@ mod tests {
     }
 
     impl Test {
-        fn new() -> Self {
-            Self::default()
+        fn new(name: impl Into<String>) -> Self {
+            Self {
+                name: name.into(),
+                ..Self::default()
+            }
+        }
+
+        /// Append the description to the test name
+        fn with_description(mut self, description: &str) -> Self {
+            self.name.push_str(": ");
+            self.name.push_str(description);
+            self
         }
 
         /// Set the target batch size
@@ -1009,9 +1291,9 @@ mod tests {
             self
         }
 
-        /// Extends the input batches with `batches`
+        /// Replaces the input batches with `batches`
         fn with_batches(mut self, batches: impl IntoIterator<Item = RecordBatch>) -> Self {
-            self.input_batches.extend(batches);
+            self.input_batches = batches.into_iter().collect();
             self
         }
 
@@ -1031,16 +1313,45 @@ mod tests {
         ///
         /// Returns the resulting output batches
         fn run(self) -> Vec<RecordBatch> {
+            // Test several permutations of input batches:
+            // 1. Removing nulls from some batches (test non-null fast paths)
+            // 2. Empty batches
+            // 3. One column (from the batch)
+            let mut extra_tests = vec![];
+            extra_tests.push(self.clone().make_half_non_nullable());
+            extra_tests.push(self.clone().insert_empty_batches());
+            let single_column_tests = self.make_single_column_tests();
+            for test in single_column_tests {
+                extra_tests.push(test.clone().make_half_non_nullable());
+                extra_tests.push(test);
+            }
+
+            // Run original test case first, so any obvious errors are caught
+            // by an easier to understand test case
+            let results = self.run_inner();
+            // Run the extra cases to expand coverage
+            for extra in extra_tests {
+                extra.run_inner();
+            }
+
+            results
+        }
+
+        /// Runs the current test instance
+        fn run_inner(self) -> Vec<RecordBatch> {
             let expected_output = self.expected_output();
             let schema = self.schema();
 
             let Self {
+                name,
                 input_batches,
                 filters,
                 schema: _,
                 target_batch_size,
                 expected_output_sizes,
             } = self;
+
+            println!("Running test '{name}'");
 
             let had_input = input_batches.iter().any(|b| b.num_rows() > 0);
 
@@ -1090,6 +1401,7 @@ mod tests {
                 .zip(output_batches.iter())
                 .enumerate();
 
+            // Verify that the actual contents of each output batch matches the expected output
             for (i, (expected_size, batch)) in iter {
                 // compare the contents of the batch after normalization (using
                 // `==` compares the underlying memory layout too)
@@ -1135,11 +1447,94 @@ mod tests {
                 .collect::<Vec<_>>();
             concat_batches(&schema, &filtered_batches).unwrap()
         }
+
+        /// Return a copy of self where every other batch has had its nulls removed
+        /// (there are often fast paths that are used when there are no nulls)
+        fn make_half_non_nullable(mut self) -> Self {
+            // remove the nulls from every other batch
+            self.input_batches = self
+                .input_batches
+                .iter()
+                .enumerate()
+                .map(|(i, batch)| {
+                    if i % 2 == 1 {
+                        batch.clone()
+                    } else {
+                        Self::remove_nulls_from_batch(batch)
+                    }
+                })
+                .collect();
+            self.with_description("non-nullable")
+        }
+
+        /// Insert several empty batches into the input before each existing input
+        fn insert_empty_batches(mut self) -> Self {
+            let empty_batch = RecordBatch::new_empty(self.schema());
+            self.input_batches = self
+                .input_batches
+                .into_iter()
+                .flat_map(|batch| [empty_batch.clone(), batch])
+                .collect();
+            let empty_filters = BooleanArray::builder(0).finish();
+            self.filters = self
+                .filters
+                .into_iter()
+                .flat_map(|filter| [empty_filters.clone(), filter])
+                .collect();
+            self.with_description("empty batches inserted")
+        }
+
+        /// Sets one batch to be non-nullable by removing nulls from all columns
+        fn remove_nulls_from_batch(batch: &RecordBatch) -> RecordBatch {
+            let new_columns = batch
+                .columns()
+                .iter()
+                .map(Self::remove_nulls_from_array)
+                .collect::<Vec<_>>();
+            let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            RecordBatch::try_new_with_options(batch.schema(), new_columns, &options).unwrap()
+        }
+
+        fn remove_nulls_from_array(array: &ArrayRef) -> ArrayRef {
+            make_array(array.to_data().into_builder().nulls(None).build().unwrap())
+        }
+
+        /// Returns a set of tests where each test that is the sae as self, but
+        /// has a single column from the original input batch
+        ///
+        /// This can be useful to single column optimizations, specifically
+        /// filter optimization.
+        fn make_single_column_tests(&self) -> Vec<Self> {
+            let original_schema = self.schema();
+            let mut new_tests = vec![];
+            for column in original_schema.fields() {
+                let single_column_schema = Arc::new(Schema::new(vec![column.clone()]));
+
+                let single_column_batches = self.input_batches.iter().map(|batch| {
+                    let single_column = batch.column_by_name(column.name()).unwrap();
+                    RecordBatch::try_new(
+                        Arc::clone(&single_column_schema),
+                        vec![single_column.clone()],
+                    )
+                    .unwrap()
+                });
+
+                let single_column_test = self
+                    .clone()
+                    .with_schema(Arc::clone(&single_column_schema))
+                    .with_batches(single_column_batches)
+                    .with_description("single column")
+                    .with_description(column.name());
+
+                new_tests.push(single_column_test);
+            }
+            new_tests
+        }
     }
 
     /// Return a RecordBatch with a UInt32Array with the specified range and
     /// every third value is null.
-    fn uint32_batch(range: Range<u32>) -> RecordBatch {
+    fn uint32_batch<T: std::iter::Iterator<Item = u32>>(range: T) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, true)]));
 
         let array = UInt32Array::from_iter(range.map(|i| if i % 3 == 0 { None } else { Some(i) }));
@@ -1147,10 +1542,18 @@ mod tests {
     }
 
     /// Return a RecordBatch with a UInt32Array with no nulls specified range
-    fn uint32_batch_non_null(range: Range<u32>) -> RecordBatch {
+    fn uint32_batch_non_null<T: std::iter::Iterator<Item = u32>>(range: T) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
 
         let array = UInt32Array::from_iter_values(range);
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
+    }
+
+    /// Return a RecordBatch with a UInt64Array with no nulls specified range
+    fn uint64_batch_non_null<T: std::iter::Iterator<Item = u64>>(range: T) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt64, false)]));
+
+        let array = UInt64Array::from_iter_values(range);
         RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
     }
 
@@ -1212,13 +1615,11 @@ mod tests {
 
     /// Return a RecordBatch of 100 rows
     fn multi_column_batch(range: Range<i32>) -> RecordBatch {
-        let int64_array = Int64Array::from_iter(range.clone().map(|v| {
-            if v % 5 == 0 {
-                None
-            } else {
-                Some(v as i64)
-            }
-        }));
+        let int64_array = Int64Array::from_iter(
+            range
+                .clone()
+                .map(|v| if v % 5 == 0 { None } else { Some(v as i64) }),
+        );
         let string_view_array = StringViewArray::from_iter(range.clone().map(|v| {
             if v % 5 == 0 {
                 None
@@ -1260,7 +1661,10 @@ mod tests {
     /// 90% of the rows.
     #[derive(Debug)]
     struct RandomFilterBuilder {
+        /// Number of rows to add to each filter
         num_rows: usize,
+        /// selectivity of the filter (between 0.0 and 1.0)
+        /// 0 selects no rows, 1.0 selects all rows
         selectivity: f64,
         /// seed for random number generator, increases by one each time
         /// `next_filter` is called
@@ -1313,5 +1717,530 @@ mod tests {
 
         let options = RecordBatchOptions::new().with_row_count(Some(row_count));
         RecordBatch::try_new_with_options(schema, columns, &options).unwrap()
+    }
+
+    /// Helper function to create a test batch with specified number of rows
+    fn create_test_batch(num_rows: usize) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)]));
+        let array = Int32Array::from_iter_values(0..num_rows as i32);
+        RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
+    }
+    #[test]
+    fn test_biggest_coalesce_batch_size_none_default() {
+        // Test that default behavior (None) coalesces all batches
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+
+        // Push a large batch (1000 rows) - should be coalesced normally
+        let large_batch = create_test_batch(1000);
+        coalescer.push_batch(large_batch).unwrap();
+
+        // Should produce multiple batches of target size (100)
+        let mut output_batches = vec![];
+        while let Some(batch) = coalescer.next_completed_batch() {
+            output_batches.push(batch);
+        }
+
+        coalescer.finish_buffered_batch().unwrap();
+        while let Some(batch) = coalescer.next_completed_batch() {
+            output_batches.push(batch);
+        }
+
+        // Should have 10 batches of 100 rows each
+        assert_eq!(output_batches.len(), 10);
+        for batch in output_batches {
+            assert_eq!(batch.num_rows(), 100);
+        }
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_bypass_large_batch() {
+        // Test that batches larger than biggest_coalesce_batch_size bypass coalescing
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(500));
+
+        // Push a large batch (1000 rows) - should bypass coalescing
+        let large_batch = create_test_batch(1000);
+        coalescer.push_batch(large_batch.clone()).unwrap();
+
+        // Should have one completed batch immediately (the original large batch)
+        assert!(coalescer.has_completed_batch());
+        let output_batch = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output_batch.num_rows(), 1000);
+
+        // Should be no more completed batches
+        assert!(!coalescer.has_completed_batch());
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_coalesce_small_batch() {
+        // Test that batches smaller than biggest_coalesce_batch_size are coalesced normally
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        )
+        .with_biggest_coalesce_batch_size(Some(500));
+
+        // Push small batches that should be coalesced
+        let small_batch = create_test_batch(50);
+        coalescer.push_batch(small_batch.clone()).unwrap();
+
+        // Should not have completed batch yet (only 50 rows, target is 100)
+        assert!(!coalescer.has_completed_batch());
+        assert_eq!(coalescer.get_buffered_rows(), 50);
+
+        // Push another small batch
+        coalescer.push_batch(small_batch).unwrap();
+
+        // Now should have a completed batch (100 rows total)
+        assert!(coalescer.has_completed_batch());
+        let output_batch = coalescer.next_completed_batch().unwrap();
+        let size = output_batch
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .get_buffer_memory_size();
+        assert_eq!(size, 400); // 100 rows * 4 bytes each
+        assert_eq!(output_batch.num_rows(), 100);
+
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_equal_boundary() {
+        // Test behavior when batch size equals biggest_coalesce_batch_size
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(500));
+
+        // Push a batch exactly equal to the limit
+        let boundary_batch = create_test_batch(500);
+        coalescer.push_batch(boundary_batch).unwrap();
+
+        // Should be coalesced (not bypass) since it's equal, not greater
+        let mut output_count = 0;
+        while coalescer.next_completed_batch().is_some() {
+            output_count += 1;
+        }
+
+        coalescer.finish_buffered_batch().unwrap();
+        while coalescer.next_completed_batch().is_some() {
+            output_count += 1;
+        }
+
+        // Should have 5 batches of 100 rows each
+        assert_eq!(output_count, 5);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_first_large_then_consecutive_bypass() {
+        // Test the new consecutive large batch bypass behavior
+        // Pattern: small batches -> first large batch (coalesced) -> consecutive large batches (bypass)
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(200));
+
+        let small_batch = create_test_batch(50);
+
+        // Push small batch first to create buffered data
+        coalescer.push_batch(small_batch).unwrap();
+        assert_eq!(coalescer.get_buffered_rows(), 50);
+        assert!(!coalescer.has_completed_batch());
+
+        // Push first large batch - should go through normal coalescing due to buffered data
+        let large_batch1 = create_test_batch(250);
+        coalescer.push_batch(large_batch1).unwrap();
+
+        // 50 + 250 = 300 -> 3 complete batches of 100, 0 rows buffered
+        let mut completed_batches = vec![];
+        while let Some(batch) = coalescer.next_completed_batch() {
+            completed_batches.push(batch);
+        }
+        assert_eq!(completed_batches.len(), 3);
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+
+        // Now push consecutive large batches - they should bypass
+        let large_batch2 = create_test_batch(300);
+        let large_batch3 = create_test_batch(400);
+
+        // Push second large batch - should bypass since it's consecutive and buffer is empty
+        coalescer.push_batch(large_batch2).unwrap();
+        assert!(coalescer.has_completed_batch());
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 300); // bypassed with original size
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+
+        // Push third large batch - should also bypass
+        coalescer.push_batch(large_batch3).unwrap();
+        assert!(coalescer.has_completed_batch());
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 400); // bypassed with original size
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_empty_batch() {
+        // Test that empty batches don't trigger the bypass logic
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(50));
+
+        let empty_batch = create_test_batch(0);
+        coalescer.push_batch(empty_batch).unwrap();
+
+        // Empty batch should be handled normally (no effect)
+        assert!(!coalescer.has_completed_batch());
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_with_buffered_data_no_bypass() {
+        // Test that when there is buffered data, large batches do NOT bypass (unless consecutive)
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(200));
+
+        // Add some buffered data first
+        let small_batch = create_test_batch(30);
+        coalescer.push_batch(small_batch.clone()).unwrap();
+        coalescer.push_batch(small_batch).unwrap();
+        assert_eq!(coalescer.get_buffered_rows(), 60);
+
+        // Push large batch that would normally bypass, but shouldn't because buffered_rows > 0
+        let large_batch = create_test_batch(250);
+        coalescer.push_batch(large_batch).unwrap();
+
+        // The large batch should be processed through normal coalescing logic
+        // Total: 60 (buffered) + 250 (new) = 310 rows
+        // Output: 3 complete batches of 100 rows each, 10 rows remain buffered
+
+        let mut completed_batches = vec![];
+        while let Some(batch) = coalescer.next_completed_batch() {
+            completed_batches.push(batch);
+        }
+
+        assert_eq!(completed_batches.len(), 3);
+        for batch in &completed_batches {
+            assert_eq!(batch.num_rows(), 100);
+        }
+        assert_eq!(coalescer.get_buffered_rows(), 10);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_zero_limit() {
+        // Test edge case where limit is 0 (all batches bypass when no buffered data)
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(0));
+
+        // Even a 1-row batch should bypass when there's no buffered data
+        let tiny_batch = create_test_batch(1);
+        coalescer.push_batch(tiny_batch).unwrap();
+
+        assert!(coalescer.has_completed_batch());
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 1);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_bypass_only_when_no_buffer() {
+        // Test that bypass only occurs when buffered_rows == 0
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(200));
+
+        // First, push a large batch with no buffered data - should bypass
+        let large_batch = create_test_batch(300);
+        coalescer.push_batch(large_batch.clone()).unwrap();
+
+        assert!(coalescer.has_completed_batch());
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 300); // bypassed
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+
+        // Now add some buffered data
+        let small_batch = create_test_batch(50);
+        coalescer.push_batch(small_batch).unwrap();
+        assert_eq!(coalescer.get_buffered_rows(), 50);
+
+        // Push the same large batch again - should NOT bypass this time (not consecutive)
+        coalescer.push_batch(large_batch).unwrap();
+
+        // Should process through normal coalescing: 50 + 300 = 350 rows
+        // Output: 3 complete batches of 100 rows, 50 rows buffered
+        let mut completed_batches = vec![];
+        while let Some(batch) = coalescer.next_completed_batch() {
+            completed_batches.push(batch);
+        }
+
+        assert_eq!(completed_batches.len(), 3);
+        for batch in &completed_batches {
+            assert_eq!(batch.num_rows(), 100);
+        }
+        assert_eq!(coalescer.get_buffered_rows(), 50);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_consecutive_large_batches_scenario() {
+        // Test your exact scenario: 20, 20, 30, 700, 600, 700, 900, 700, 600
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            1000,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(500));
+
+        // Push small batches first
+        coalescer.push_batch(create_test_batch(20)).unwrap();
+        coalescer.push_batch(create_test_batch(20)).unwrap();
+        coalescer.push_batch(create_test_batch(30)).unwrap();
+
+        assert_eq!(coalescer.get_buffered_rows(), 70);
+        assert!(!coalescer.has_completed_batch());
+
+        // Push first large batch (700) - should coalesce due to buffered data
+        coalescer.push_batch(create_test_batch(700)).unwrap();
+
+        // 70 + 700 = 770 rows, not enough for 1000, so all stay buffered
+        assert_eq!(coalescer.get_buffered_rows(), 770);
+        assert!(!coalescer.has_completed_batch());
+
+        // Push second large batch (600) - should bypass since previous was large
+        coalescer.push_batch(create_test_batch(600)).unwrap();
+
+        // Should flush buffer (770 rows) and bypass the 600
+        let mut outputs = vec![];
+        while let Some(batch) = coalescer.next_completed_batch() {
+            outputs.push(batch);
+        }
+        assert_eq!(outputs.len(), 2); // one flushed buffer batch (770) + one bypassed (600)
+        assert_eq!(outputs[0].num_rows(), 770);
+        assert_eq!(outputs[1].num_rows(), 600);
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+
+        // Push remaining large batches - should all bypass
+        let remaining_batches = [700, 900, 700, 600];
+        for &size in &remaining_batches {
+            coalescer.push_batch(create_test_batch(size)).unwrap();
+
+            assert!(coalescer.has_completed_batch());
+            let output = coalescer.next_completed_batch().unwrap();
+            assert_eq!(output.num_rows(), size);
+            assert_eq!(coalescer.get_buffered_rows(), 0);
+        }
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_truly_consecutive_large_bypass() {
+        // Test truly consecutive large batches that should all bypass
+        // This test ensures buffer is completely empty between large batches
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(200));
+
+        // Push consecutive large batches with no prior buffered data
+        let large_batches = vec![
+            create_test_batch(300),
+            create_test_batch(400),
+            create_test_batch(350),
+            create_test_batch(500),
+        ];
+
+        let mut all_outputs = vec![];
+
+        for (i, large_batch) in large_batches.into_iter().enumerate() {
+            let expected_size = large_batch.num_rows();
+
+            // Buffer should be empty before each large batch
+            assert_eq!(
+                coalescer.get_buffered_rows(),
+                0,
+                "Buffer should be empty before batch {}",
+                i
+            );
+
+            coalescer.push_batch(large_batch).unwrap();
+
+            // Each large batch should bypass and produce exactly one output batch
+            assert!(
+                coalescer.has_completed_batch(),
+                "Should have completed batch after pushing batch {}",
+                i
+            );
+
+            let output = coalescer.next_completed_batch().unwrap();
+            assert_eq!(
+                output.num_rows(),
+                expected_size,
+                "Batch {} should have bypassed with original size",
+                i
+            );
+
+            // Should be no more batches and buffer should be empty
+            assert!(
+                !coalescer.has_completed_batch(),
+                "Should have no more completed batches after batch {}",
+                i
+            );
+            assert_eq!(
+                coalescer.get_buffered_rows(),
+                0,
+                "Buffer should be empty after batch {}",
+                i
+            );
+
+            all_outputs.push(output);
+        }
+
+        // Verify we got exactly 4 output batches with original sizes
+        assert_eq!(all_outputs.len(), 4);
+        assert_eq!(all_outputs[0].num_rows(), 300);
+        assert_eq!(all_outputs[1].num_rows(), 400);
+        assert_eq!(all_outputs[2].num_rows(), 350);
+        assert_eq!(all_outputs[3].num_rows(), 500);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_reset_consecutive_on_small_batch() {
+        // Test that small batches reset the consecutive large batch tracking
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(200));
+
+        // Push first large batch - should bypass (no buffered data)
+        coalescer.push_batch(create_test_batch(300)).unwrap();
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 300);
+
+        // Push second large batch - should bypass (consecutive)
+        coalescer.push_batch(create_test_batch(400)).unwrap();
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 400);
+
+        // Push small batch - resets consecutive tracking
+        coalescer.push_batch(create_test_batch(50)).unwrap();
+        assert_eq!(coalescer.get_buffered_rows(), 50);
+
+        // Push large batch again - should NOT bypass due to buffered data
+        coalescer.push_batch(create_test_batch(350)).unwrap();
+
+        // Should coalesce: 50 + 350 = 400 -> 4 complete batches of 100
+        let mut outputs = vec![];
+        while let Some(batch) = coalescer.next_completed_batch() {
+            outputs.push(batch);
+        }
+        assert_eq!(outputs.len(), 4);
+        for batch in outputs {
+            assert_eq!(batch.num_rows(), 100);
+        }
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+    }
+
+    #[test]
+    fn test_coalasce_push_batch_with_indices() {
+        const MID_POINT: u32 = 2333;
+        const TOTAL_ROWS: u32 = 23333;
+        let batch1 = uint32_batch_non_null(0..MID_POINT);
+        let batch2 = uint32_batch_non_null((MID_POINT..TOTAL_ROWS).rev());
+
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)])),
+            TOTAL_ROWS as usize,
+        );
+        coalescer.push_batch(batch1).unwrap();
+
+        let rev_indices = (0..((TOTAL_ROWS - MID_POINT) as u64)).rev();
+        let reversed_indices_batch = uint64_batch_non_null(rev_indices);
+
+        let reverse_indices = UInt64Array::from(reversed_indices_batch.column(0).to_data());
+        coalescer
+            .push_batch_with_indices(batch2, &reverse_indices)
+            .unwrap();
+
+        coalescer.finish_buffered_batch().unwrap();
+        let actual = coalescer.next_completed_batch().unwrap();
+
+        let expected = uint32_batch_non_null(0..TOTAL_ROWS);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_push_batch_schema_mismatch_fewer_columns() {
+        // Coalescer expects 0 columns, batch has 1
+        let empty_schema = Arc::new(Schema::empty());
+        let mut coalescer = BatchCoalescer::new(empty_schema, 100);
+        let batch = uint32_batch(0..5);
+        let result = coalescer.push_batch(batch);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Batch has 1 columns but BatchCoalescer expects 0"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_push_batch_schema_mismatch_more_columns() {
+        // Coalescer expects 2 columns, batch has 1
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::UInt32, false),
+            Field::new("c1", DataType::UInt32, false),
+        ]));
+        let mut coalescer = BatchCoalescer::new(schema, 100);
+        let batch = uint32_batch(0..5);
+        let result = coalescer.push_batch(batch);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Batch has 1 columns but BatchCoalescer expects 2"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_push_batch_schema_mismatch_two_vs_zero() {
+        // Coalescer expects 0 columns, batch has 2
+        let empty_schema = Arc::new(Schema::empty());
+        let mut coalescer = BatchCoalescer::new(empty_schema, 100);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::UInt32, false),
+            Field::new("c1", DataType::UInt32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3])),
+                Arc::new(UInt32Array::from(vec![4, 5, 6])),
+            ],
+        )
+        .unwrap();
+        let result = coalescer.push_batch(batch);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Batch has 2 columns but BatchCoalescer expects 0"),
+            "unexpected error: {err}"
+        );
     }
 }

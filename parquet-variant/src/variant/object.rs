@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
+use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
 };
@@ -390,15 +390,15 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Returns the value of the field with the specified name, if any.
     ///
-    /// `Ok(None)` means the field does not exist; `Err` means the search encountered an error.
+    /// Returns `Some(Variant)` if the field exists, or `None` if the field does not exist.
     pub fn get(&self, name: &str) -> Option<Variant<'m, 'v>> {
         // Binary search through the field IDs of this object to find the requested field name.
         //
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let i = try_binary_search_range_by(0..self.len(), &name, |i| self.field_name(i))?.ok()?;
-
+        let cmp = |i| Some(self.field_name(i)?.cmp(name));
+        let i = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
         self.field(i)
     }
 }
@@ -419,13 +419,9 @@ impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
         // IFF two objects are valid and logically equal, they will have the same
         // field names in the same order, because the spec requires the object
         // fields to be sorted lexicographically.
-        for ((name_a, value_a), (name_b, value_b)) in self.iter().zip(other.iter()) {
-            if name_a != name_b || value_a != value_b {
-                return false;
-            }
-        }
-
-        true
+        self.iter()
+            .zip(other.iter())
+            .all(|((name_a, value_a), (name_b, value_b))| name_a == name_b && value_a == value_b)
     }
 }
 
@@ -550,7 +546,7 @@ mod tests {
     #[test]
     fn test_variant_object_empty_fields() {
         let mut builder = VariantBuilder::new();
-        builder.new_object().with_field("", 42).finish().unwrap();
+        builder.new_object().with_field("", 42).finish();
         let (metadata, value) = builder.finish();
 
         // Resulting object is valid and has a single empty field
@@ -676,7 +672,7 @@ mod tests {
             obj.insert(&field_names[i as usize], i);
         }
 
-        obj.finish().unwrap();
+        obj.finish();
         let (metadata, value) = builder.finish();
         let variant = Variant::new(&metadata, &value);
 
@@ -737,7 +733,7 @@ mod tests {
             obj.insert(&key, str_val.as_str());
         }
 
-        obj.finish().unwrap();
+        obj.finish();
         let (metadata, value) = builder.finish();
         let variant = Variant::new(&metadata, &value);
 
@@ -783,7 +779,7 @@ mod tests {
         o.insert("c", ());
         o.insert("a", ());
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
@@ -801,7 +797,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
         let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
@@ -812,7 +808,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
         let (m, v) = b.finish();
 
         let v2 = Variant::try_new(&m, &v).unwrap();
@@ -828,7 +824,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", 4.3);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
@@ -841,15 +837,15 @@ mod tests {
         o.insert("a", ());
         let mut inner_o = o.new_object("b");
         inner_o.insert("a", 3.3);
-        inner_o.finish().unwrap();
-        o.finish().unwrap();
+        inner_o.finish();
+        o.finish();
 
         let (m, v) = b.finish();
 
         let v2 = Variant::try_new(&m, &v).unwrap();
 
-        let m1 = v1.metadata().unwrap();
-        let m2 = v2.metadata().unwrap();
+        let m1 = v1.metadata();
+        let m2 = v2.metadata();
 
         // metadata would be equal since they contain the same keys
         assert_eq!(m1, m2);
@@ -866,7 +862,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", 4.3);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
@@ -879,7 +875,7 @@ mod tests {
         o.insert("aardvark", ());
         o.insert("barracuda", 3.3);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
         let v2 = Variant::try_new(&m, &v).unwrap();
@@ -895,29 +891,29 @@ mod tests {
         o.insert("b", false);
         o.insert("a", ());
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
-        assert!(!v1.metadata().unwrap().is_sorted());
+        assert!(!v1.metadata().is_sorted());
 
         // create another object pre-filled with field names, b and a
         // but insert the fields in the order of a, b
-        let mut b = VariantBuilder::new().with_field_names(["b", "a"].into_iter());
+        let mut b = VariantBuilder::new().with_field_names(["b", "a"]);
         let mut o = b.new_object();
 
         o.insert("a", ());
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
         let v2 = Variant::try_new(&m, &v).unwrap();
 
         // v2 should also have a unsorted dictionary
-        assert!(!v2.metadata().unwrap().is_sorted());
+        assert!(!v2.metadata().is_sorted());
 
         assert_eq!(v1, v2);
     }
@@ -930,28 +926,28 @@ mod tests {
         o.insert("a", ());
         o.insert("b", 4.3);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (meta1, value1) = b.finish();
 
         let v1 = Variant::try_new(&meta1, &value1).unwrap();
         // v1 is sorted
-        assert!(v1.metadata().unwrap().is_sorted());
+        assert!(v1.metadata().is_sorted());
 
         // create a second object with different insertion order
-        let mut b = VariantBuilder::new().with_field_names(["d", "c", "b", "a"].into_iter());
+        let mut b = VariantBuilder::new().with_field_names(["d", "c", "b", "a"]);
         let mut o = b.new_object();
 
         o.insert("b", 4.3);
         o.insert("a", ());
 
-        o.finish().unwrap();
+        o.finish();
 
         let (meta2, value2) = b.finish();
 
         let v2 = Variant::try_new(&meta2, &value2).unwrap();
         // v2 is not sorted
-        assert!(!v2.metadata().unwrap().is_sorted());
+        assert!(!v2.metadata().is_sorted());
 
         // object metadata are not the same
         assert_ne!(v1.metadata(), v2.metadata());
@@ -969,7 +965,7 @@ mod tests {
         o.insert("a", false);
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 

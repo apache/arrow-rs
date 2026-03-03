@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_arith::numeric::{add, sub};
-use arrow_arith::temporal::{date_part, DatePart};
+use arrow_arith::temporal::{DatePart, date_part};
 use arrow_array::cast::AsArray;
 use arrow_array::temporal_conversions::as_datetime_with_timezone;
 use arrow_array::timezone::Tz;
@@ -76,7 +76,7 @@ fn test_timestamp_with_timezone_impl<T: ArrowTimestampType>(tz_str: &str) {
             .naive_utc(),
     ]
     .into_iter()
-    .map(|x| T::make_value(x).unwrap())
+    .map(|x| T::from_naive_datetime(x, None).unwrap())
     .collect();
 
     let a = PrimitiveArray::<T>::new(values, None).with_timezone(tz_str);

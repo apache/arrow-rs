@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
-use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::record_reader::GenericRecordReader;
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
@@ -27,10 +27,10 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
 };
-use arrow_buffer::{i256, Buffer, IntervalDayTime};
+use arrow_buffer::{Buffer, IntervalDayTime, i256};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
@@ -59,7 +59,7 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid physical type for fixed length byte array reader - {}",
                 t
-            ))
+            ));
         }
     };
     match &data_type {
@@ -117,7 +117,7 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid data type for fixed length byte array reader - {}",
                 data_type
-            ))
+            ));
         }
     }
 
@@ -381,7 +381,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 offset: 0,
             },
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Decoder::Dict {
-                decoder: DictIndexDecoder::new(data, num_levels, num_values),
+                decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
             },
             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
                 decoder: DeltaByteArrayDecoder::new(data)?,
@@ -394,7 +394,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 return Err(general_err!(
                     "unsupported encoding for fixed length byte array: {}",
                     encoding
-                ))
+                ));
             }
         });
         Ok(())
@@ -518,8 +518,8 @@ enum Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ListArray};

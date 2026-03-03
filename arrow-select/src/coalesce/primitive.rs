@@ -55,7 +55,10 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
     /// This is done on write (when we know it is necessary) rather than
     /// eagerly to avoid allocations that are not used.
     fn ensure_capacity(&mut self) {
-        self.current.reserve(self.batch_size);
+        if self.current.capacity() == 0 {
+            self.current.reserve(self.batch_size);
+        }
+        debug_assert_eq!(self.current.capacity(), self.batch_size);
     }
 }
 

@@ -22,7 +22,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType::FixedSizeBinary;
 use arrow_schema::{ArrowError, DataType};
 use hashbrown::HashTable;
-use num::NumCast;
+use num_traits::NumCast;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -142,7 +142,7 @@ where
 
         let source_keys = source.keys_builder.finish();
         let new_keys: PrimitiveArray<K> = source_keys.try_unary(|value| {
-            num::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
+            num_traits::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
                 ArrowError::CastError(format!(
                     "Can't cast dictionary keys from source type {:?} to type {:?}",
                     K2::DATA_TYPE,
@@ -252,6 +252,28 @@ where
         }
     }
 
+    /// Append a value multiple times to the array.
+    /// This is the same as [`Self::append`] but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// Returns an error if the new index would overflow the key type.
+    pub fn append_n(
+        &mut self,
+        value: impl AsRef<[u8]>,
+        count: usize,
+    ) -> Result<K::Native, ArrowError> {
+        if self.byte_width != value.as_ref().len() as i32 {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
+                self.byte_width,
+                value.as_ref().len()
+            )))
+        } else {
+            let key = self.get_or_insert_key(value)?;
+            self.keys_builder.append_value_n(key, count);
+            Ok(key)
+        }
+    }
+
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
@@ -311,6 +333,41 @@ where
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
+
+    /// Builds the `DictionaryArray` without resetting the values builder or
+    /// the internal de-duplication map.
+    ///
+    /// The advantage of doing this is that the values will represent the entire
+    /// set of what has been built so-far by this builder and ensures
+    /// consistency in the assignment of keys to values across multiple calls
+    /// to `finish_preserve_values`. This enables ipc writers to efficiently
+    /// emit delta dictionaries.
+    ///
+    /// The downside to this is that building the record requires creating a
+    /// copy of the values, which can become slowly more expensive if the
+    /// dictionary grows.
+    ///
+    /// Additionally, if record batches from multiple different dictionary
+    /// builders for the same column are fed into a single ipc writer, beware
+    /// that entire dictionaries are likely to be re-sent frequently even when
+    /// the majority of the values are not used by the current record batch.
+    pub fn finish_preserve_values(&mut self) -> DictionaryArray<K> {
+        let values = self.values_builder.finish_cloned();
+        let keys = self.keys_builder.finish();
+
+        let data_type = DataType::Dictionary(
+            Box::new(K::DATA_TYPE),
+            Box::new(FixedSizeBinary(self.byte_width)),
+        );
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
 }
 
 fn get_bytes(values: &FixedSizeBinaryBuilder, byte_width: i32, idx: usize) -> &[u8] {
@@ -324,7 +381,7 @@ fn get_bytes(values: &FixedSizeBinaryBuilder, byte_width: i32, idx: usize) -> &[
 mod tests {
     use super::*;
 
-    use crate::types::{Int16Type, Int32Type, Int8Type, UInt16Type, UInt8Type};
+    use crate::types::{Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type};
     use crate::{ArrowPrimitiveType, FixedSizeBinaryArray, Int8Array};
 
     #[test]
@@ -367,12 +424,56 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_dictionary_builder_append_n() {
+        let values = ["abc", "def"];
+        let mut b = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
+        assert_eq!(b.append_n(values[0], 2).unwrap(), 0);
+        assert_eq!(b.append_n(values[1], 3).unwrap(), 1);
+        assert_eq!(b.append_n(values[0], 2).unwrap(), 0);
+        let array = b.finish();
+
+        assert_eq!(
+            array.keys(),
+            &Int8Array::from(vec![
+                Some(0),
+                Some(0),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(0),
+                Some(0),
+            ]),
+        );
+
+        // Values are polymorphic and so require a downcast.
+        let ava = array
+            .values()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+
+        assert_eq!(ava.value(0), values[0].as_bytes());
+        assert_eq!(ava.value(1), values[1].as_bytes());
+    }
+
+    #[test]
     fn test_fixed_size_dictionary_builder_wrong_size() {
         let mut b = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
         let err = b.append(b"too long").unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 8");
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 8"
+        );
         let err = b.append("").unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 0");
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 0"
+        );
+        let err = b.append_n("a", 3).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 1"
+        );
     }
 
     #[test]
@@ -507,5 +608,63 @@ mod tests {
                 "Cast error: Can't cast dictionary keys from source type UInt16 to type UInt8"
             );
         }
+    }
+
+    #[test]
+    fn test_finish_preserve_values() {
+        // Create the first dictionary
+        let mut builder = FixedSizeBinaryDictionaryBuilder::<Int32Type>::new(3);
+        builder.append_value("aaa");
+        builder.append_value("bbb");
+        builder.append_value("ccc");
+        let dict = builder.finish_preserve_values();
+        assert_eq!(dict.keys().values(), &[0, 1, 2]);
+        let values = dict
+            .downcast_dict::<FixedSizeBinaryArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec![
+                Some("aaa".as_bytes()),
+                Some("bbb".as_bytes()),
+                Some("ccc".as_bytes())
+            ]
+        );
+
+        // Create a new dictionary
+        builder.append_value("ddd");
+        builder.append_value("eee");
+        let dict2 = builder.finish_preserve_values();
+
+        // Make sure the keys are assigned after the old ones and we have the
+        // right values
+        assert_eq!(dict2.keys().values(), &[3, 4]);
+        let values = dict2
+            .downcast_dict::<FixedSizeBinaryArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, [Some("ddd".as_bytes()), Some("eee".as_bytes())]);
+
+        // Check that we have all of the expected values
+        let all_values = dict2
+            .values()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all_values,
+            [
+                Some("aaa".as_bytes()),
+                Some("bbb".as_bytes()),
+                Some("ccc".as_bytes()),
+                Some("ddd".as_bytes()),
+                Some("eee".as_bytes())
+            ]
+        );
     }
 }

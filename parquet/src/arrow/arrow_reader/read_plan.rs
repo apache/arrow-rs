@@ -19,8 +19,10 @@
 //! from a Parquet file
 
 use crate::arrow::array_reader::ArrayReader;
+use crate::arrow::arrow_reader::selection::RowSelectionPolicy;
+use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
-    ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelector,
+    ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
 use arrow_array::Array;
@@ -28,31 +30,46 @@ use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
 
 /// A builder for [`ReadPlan`]
-#[derive(Clone)]
-pub(crate) struct ReadPlanBuilder {
+#[derive(Clone, Debug)]
+pub struct ReadPlanBuilder {
     batch_size: usize,
-    /// Current to apply, includes all filters
+    /// Which rows to select. Includes the result of all filters applied so far
     selection: Option<RowSelection>,
+    /// Policy to use when materializing the row selection
+    row_selection_policy: RowSelectionPolicy,
 }
 
 impl ReadPlanBuilder {
     /// Create a `ReadPlanBuilder` with the given batch size
-    pub(crate) fn new(batch_size: usize) -> Self {
+    pub fn new(batch_size: usize) -> Self {
         Self {
             batch_size,
             selection: None,
+            row_selection_policy: RowSelectionPolicy::default(),
         }
     }
 
     /// Set the current selection to the given value
-    pub(crate) fn with_selection(mut self, selection: Option<RowSelection>) -> Self {
+    pub fn with_selection(mut self, selection: Option<RowSelection>) -> Self {
         self.selection = selection;
         self
     }
 
+    /// Configure the policy to use when materialising the [`RowSelection`]
+    ///
+    /// Defaults to [`RowSelectionPolicy::Auto`]
+    pub fn with_row_selection_policy(mut self, policy: RowSelectionPolicy) -> Self {
+        self.row_selection_policy = policy;
+        self
+    }
+
+    /// Returns the current row selection policy
+    pub fn row_selection_policy(&self) -> &RowSelectionPolicy {
+        &self.row_selection_policy
+    }
+
     /// Returns the current selection, if any
-    #[cfg(feature = "async")]
-    pub(crate) fn selection(&self) -> Option<&RowSelection> {
+    pub fn selection(&self) -> Option<&RowSelection> {
         self.selection.as_ref()
     }
 
@@ -68,7 +85,7 @@ impl ReadPlanBuilder {
     }
 
     /// Returns true if the current plan selects any rows
-    pub(crate) fn selects_any(&self) -> bool {
+    pub fn selects_any(&self) -> bool {
         self.selection
             .as_ref()
             .map(|s| s.selects_any())
@@ -76,9 +93,45 @@ impl ReadPlanBuilder {
     }
 
     /// Returns the number of rows selected, or `None` if all rows are selected.
-    #[cfg(feature = "async")]
-    pub(crate) fn num_rows_selected(&self) -> Option<usize> {
+    pub fn num_rows_selected(&self) -> Option<usize> {
         self.selection.as_ref().map(|s| s.row_count())
+    }
+
+    /// Returns the [`RowSelectionStrategy`] for this plan.
+    ///
+    /// Guarantees to return either `Selectors` or `Mask`, never `Auto`.
+    pub(crate) fn resolve_selection_strategy(&self) -> RowSelectionStrategy {
+        match self.row_selection_policy {
+            RowSelectionPolicy::Selectors => RowSelectionStrategy::Selectors,
+            RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
+            RowSelectionPolicy::Auto { threshold, .. } => {
+                let selection = match self.selection.as_ref() {
+                    Some(selection) => selection,
+                    None => return RowSelectionStrategy::Selectors,
+                };
+
+                // total_rows: total number of rows selected / skipped
+                // effective_count: number of non-empty selectors
+                let (total_rows, effective_count) =
+                    selection.iter().fold((0usize, 0usize), |(rows, count), s| {
+                        if s.row_count > 0 {
+                            (rows + s.row_count, count + 1)
+                        } else {
+                            (rows, count)
+                        }
+                    });
+
+                if effective_count == 0 {
+                    return RowSelectionStrategy::Mask;
+                }
+
+                if total_rows < effective_count.saturating_mul(threshold) {
+                    RowSelectionStrategy::Mask
+                } else {
+                    RowSelectionStrategy::Selectors
+                }
+            }
+        }
     }
 
     /// Evaluates an [`ArrowPredicate`], updating this plan's `selection`
@@ -90,7 +143,7 @@ impl ReadPlanBuilder {
     /// Note: pre-existing selections may come from evaluating a previous predicate
     /// or if the [`ParquetRecordBatchReader`] specified an explicit
     /// [`RowSelection`] in addition to one or more predicates.
-    pub(crate) fn with_predicate(
+    pub fn with_predicate(
         mut self,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
@@ -123,21 +176,39 @@ impl ReadPlanBuilder {
     }
 
     /// Create a final `ReadPlan` the read plan for the scan
-    pub(crate) fn build(mut self) -> ReadPlan {
+    pub fn build(mut self) -> ReadPlan {
         // If selection is empty, truncate
         if !self.selects_any() {
             self.selection = Some(RowSelection::from(vec![]));
         }
+
+        // Preferred strategy must not be Auto
+        let selection_strategy = self.resolve_selection_strategy();
+
         let Self {
             batch_size,
             selection,
+            row_selection_policy: _,
         } = self;
 
-        let selection = selection.map(|s| s.trim().into());
+        let selection = selection.map(|s| s.trim());
+
+        let row_selection_cursor = selection
+            .map(|s| {
+                let trimmed = s.trim();
+                let selectors: Vec<RowSelector> = trimmed.into();
+                match selection_strategy {
+                    RowSelectionStrategy::Mask => {
+                        RowSelectionCursor::new_mask_from_selectors(selectors)
+                    }
+                    RowSelectionStrategy::Selectors => RowSelectionCursor::new_selectors(selectors),
+                }
+            })
+            .unwrap_or(RowSelectionCursor::new_all());
 
         ReadPlan {
             batch_size,
-            selection,
+            row_selection_cursor,
         }
     }
 }
@@ -230,22 +301,63 @@ impl LimitedReadPlanBuilder {
 /// A plan reading specific rows from a Parquet Row Group.
 ///
 /// See [`ReadPlanBuilder`] to create `ReadPlan`s
-pub(crate) struct ReadPlan {
+#[derive(Debug)]
+pub struct ReadPlan {
     /// The number of rows to read in each batch
     batch_size: usize,
     /// Row ranges to be selected from the data source
-    selection: Option<VecDeque<RowSelector>>,
+    row_selection_cursor: RowSelectionCursor,
 }
 
 impl ReadPlan {
-    /// Returns a mutable reference to the selection, if any
-    pub(crate) fn selection_mut(&mut self) -> Option<&mut VecDeque<RowSelector>> {
-        self.selection.as_mut()
+    /// Returns a mutable reference to the selection selectors, if any
+    #[deprecated(since = "57.1.0", note = "Use `row_selection_cursor_mut` instead")]
+    pub fn selection_mut(&mut self) -> Option<&mut VecDeque<RowSelector>> {
+        if let RowSelectionCursor::Selectors(selectors_cursor) = &mut self.row_selection_cursor {
+            Some(selectors_cursor.selectors_mut())
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the row selection cursor
+    pub fn row_selection_cursor_mut(&mut self) -> &mut RowSelectionCursor {
+        &mut self.row_selection_cursor
     }
 
     /// Return the number of rows to read in each output batch
     #[inline(always)]
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn builder_with_selection(selection: RowSelection) -> ReadPlanBuilder {
+        ReadPlanBuilder::new(1024).with_selection(Some(selection))
+    }
+
+    #[test]
+    fn preferred_selection_strategy_prefers_mask_by_default() {
+        let selection = RowSelection::from(vec![RowSelector::select(8)]);
+        let builder = builder_with_selection(selection);
+        assert_eq!(
+            builder.resolve_selection_strategy(),
+            RowSelectionStrategy::Mask
+        );
+    }
+
+    #[test]
+    fn preferred_selection_strategy_prefers_selectors_when_threshold_small() {
+        let selection = RowSelection::from(vec![RowSelector::select(8)]);
+        let builder = builder_with_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1 });
+        assert_eq!(
+            builder.resolve_selection_strategy(),
+            RowSelectionStrategy::Selectors
+        );
     }
 }

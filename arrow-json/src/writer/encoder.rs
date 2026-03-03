@@ -26,7 +26,7 @@ use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use half::f16;
 use lexical_core::FormattedSize;
-use serde::Serializer;
+use serde_core::Serializer;
 
 /// Configuration options for the JSON encoder.
 #[derive(Debug, Clone, Default)]
@@ -37,6 +37,16 @@ pub struct EncoderOptions {
     struct_mode: StructMode,
     /// An optional hook for customizing encoding behavior.
     encoder_factory: Option<Arc<dyn EncoderFactory>>,
+    /// Optional date format for date arrays
+    date_format: Option<String>,
+    /// Optional datetime format for datetime arrays
+    datetime_format: Option<String>,
+    /// Optional timestamp format for timestamp arrays
+    timestamp_format: Option<String>,
+    /// Optional timestamp format for timestamp with timezone arrays
+    timestamp_tz_format: Option<String>,
+    /// Optional time format for time arrays
+    time_format: Option<String>,
 }
 
 impl EncoderOptions {
@@ -71,6 +81,61 @@ impl EncoderOptions {
     /// Get the optional hook for customizing encoding behavior.
     pub fn encoder_factory(&self) -> Option<&Arc<dyn EncoderFactory>> {
         self.encoder_factory.as_ref()
+    }
+
+    /// Set the JSON file's date format
+    pub fn with_date_format(mut self, format: String) -> Self {
+        self.date_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's date format if set, defaults to RFC3339
+    pub fn date_format(&self) -> Option<&str> {
+        self.date_format.as_deref()
+    }
+
+    /// Set the JSON file's datetime format
+    pub fn with_datetime_format(mut self, format: String) -> Self {
+        self.datetime_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's datetime format if set, defaults to RFC3339
+    pub fn datetime_format(&self) -> Option<&str> {
+        self.datetime_format.as_deref()
+    }
+
+    /// Set the JSON file's time format
+    pub fn with_time_format(mut self, format: String) -> Self {
+        self.time_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's datetime time if set, defaults to RFC3339
+    pub fn time_format(&self) -> Option<&str> {
+        self.time_format.as_deref()
+    }
+
+    /// Set the JSON file's timestamp format
+    pub fn with_timestamp_format(mut self, format: String) -> Self {
+        self.timestamp_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's timestamp format if set, defaults to RFC3339
+    pub fn timestamp_format(&self) -> Option<&str> {
+        self.timestamp_format.as_deref()
+    }
+
+    /// Set the JSON file's timestamp tz format
+    pub fn with_timestamp_tz_format(mut self, tz_format: String) -> Self {
+        self.timestamp_tz_format = Some(tz_format);
+        self
+    }
+
+    /// Get the JSON file's timestamp tz format if set, defaults to RFC3339
+    pub fn timestamp_tz_format(&self) -> Option<&str> {
+        self.timestamp_tz_format.as_deref()
     }
 }
 
@@ -281,6 +346,10 @@ pub fn make_encoder<'a>(
             let array = array.as_string_view();
             NullableEncoder::new(Box::new(StringViewEncoder(array)), array.nulls().cloned())
         }
+        DataType::BinaryView => {
+            let array = array.as_binary_view();
+            NullableEncoder::new(Box::new(BinaryViewEncoder(array)), array.nulls().cloned())
+        }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
             NullableEncoder::new(Box::new(ListEncoder::try_new(field, array, options)?), array.nulls().cloned())
@@ -297,6 +366,16 @@ pub fn make_encoder<'a>(
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             array => {
                 NullableEncoder::new(Box::new(DictionaryEncoder::try_new(field, array, options)?), array.nulls().cloned())
+            },
+            _ => unreachable!()
+        }
+
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            array => {
+                NullableEncoder::new(
+                    Box::new(RunEndEncodedEncoder::try_new(field, array, options)?),
+                    array.logical_nulls(),
+                )
             },
             _ => unreachable!()
         }
@@ -350,8 +429,14 @@ pub fn make_encoder<'a>(
                 // characters that would need to be escaped within a JSON string, e.g. `'"'`.
                 // If support for user-provided format specifications is added, this assumption
                 // may need to be revisited
-                let options = FormatOptions::new().with_display_error(true);
-                let formatter = ArrayFormatter::try_new(array, &options)?;
+                let fops = FormatOptions::new().with_display_error(true)
+                .with_date_format(options.date_format.as_deref())
+                .with_datetime_format(options.datetime_format.as_deref())
+                .with_timestamp_format(options.timestamp_format.as_deref())
+                .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
+                .with_time_format(options.time_format.as_deref());
+
+                let formatter = ArrayFormatter::try_new(array, &fops)?;
                 let formatter = JsonArrayFormatter::new(formatter);
                 NullableEncoder::new(Box::new(formatter) as Box<dyn Encoder + 'a>, nulls)
             }
@@ -367,6 +452,14 @@ pub fn make_encoder<'a>(
 fn encode_string(s: &str, out: &mut Vec<u8>) {
     let mut serializer = serde_json::Serializer::new(out);
     serializer.serialize_str(s).unwrap();
+}
+
+fn encode_binary(bytes: &[u8], out: &mut Vec<u8>) {
+    out.push(b'"');
+    for byte in bytes {
+        write!(out, "{byte:02x}").unwrap();
+    }
+    out.push(b'"');
 }
 
 struct FieldEncoder<'a> {
@@ -538,6 +631,14 @@ impl Encoder for StringViewEncoder<'_> {
     }
 }
 
+struct BinaryViewEncoder<'a>(&'a BinaryViewArray);
+
+impl Encoder for BinaryViewEncoder<'_> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        encode_binary(self.0.value(idx), out);
+    }
+}
+
 struct ListEncoder<'a, O: OffsetSizeTrait> {
     offsets: OffsetBuffer<O>,
     encoder: NullableEncoder<'a>,
@@ -659,6 +760,32 @@ impl<K: ArrowDictionaryKeyType> Encoder for DictionaryEncoder<'_, K> {
     }
 }
 
+struct RunEndEncodedEncoder<'a, R: RunEndIndexType> {
+    run_array: &'a RunArray<R>,
+    encoder: NullableEncoder<'a>,
+}
+
+impl<'a, R: RunEndIndexType> RunEndEncodedEncoder<'a, R> {
+    fn try_new(
+        field: &'a FieldRef,
+        array: &'a RunArray<R>,
+        options: &'a EncoderOptions,
+    ) -> Result<Self, ArrowError> {
+        let encoder = make_encoder(field, array.values().as_ref(), options)?;
+        Ok(Self {
+            run_array: array,
+            encoder,
+        })
+    }
+}
+
+impl<R: RunEndIndexType> Encoder for RunEndEncodedEncoder<'_, R> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let physical_idx = self.run_array.get_physical_index(idx);
+        self.encoder.encode(physical_idx, out)
+    }
+}
+
 /// A newtype wrapper around [`ArrayFormatter`] to keep our usage of it private and not implement `Encoder` for the public type
 struct JsonArrayFormatter<'a> {
     formatter: ArrayFormatter<'a>,
@@ -713,7 +840,10 @@ impl<'a> MapEncoder<'a> {
         let values = array.values();
         let keys = array.keys();
 
-        if !matches!(keys.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
+        if !matches!(
+            keys.data_type(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
             return Err(ArrowError::JsonError(format!(
                 "Only UTF8 keys supported by JSON MapArray Writer: got {:?}",
                 keys.data_type()

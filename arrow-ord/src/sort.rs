@@ -17,7 +17,7 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::ord::{make_comparator, DynComparator};
+use crate::ord::{DynComparator, make_comparator};
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
@@ -120,7 +120,7 @@ where
     }
 
     Ok(Arc::new(
-        PrimitiveArray::<T>::new(mutable_buffer.into(), null_bit_buffer)
+        PrimitiveArray::<T>::try_new(mutable_buffer.into(), null_bit_buffer)?
             .with_data_type(primitive_values.data_type().clone()),
     ))
 }
@@ -256,7 +256,9 @@ fn can_sort_to_indices(data_type: &DataType) -> bool {
         )
         || match data_type {
             DataType::List(f) if can_rank(f.data_type()) => true,
+            DataType::ListView(f) if can_rank(f.data_type()) => true,
             DataType::LargeList(f) if can_rank(f.data_type()) => true,
+            DataType::LargeListView(f) if can_rank(f.data_type()) => true,
             DataType::FixedSizeList(f, _) if can_rank(f.data_type()) => true,
             DataType::Dictionary(_, values) if can_rank(values.as_ref()) => true,
             DataType::RunEndEncoded(_, f) if can_sort_to_indices(f.data_type()) => true,
@@ -286,7 +288,9 @@ pub fn sort_to_indices(
         DataType::BinaryView => sort_byte_view(array.as_binary_view(), v, n, options, limit),
         DataType::FixedSizeBinary(_) => sort_fixed_size_binary(array.as_fixed_size_binary(), v, n, options, limit),
         DataType::List(_) => sort_list(array.as_list::<i32>(), v, n, options, limit)?,
+        DataType::ListView(_) => sort_list_view(array.as_list_view::<i32>(), v, n, options, limit)?,
         DataType::LargeList(_) => sort_list(array.as_list::<i64>(), v, n, options, limit)?,
+        DataType::LargeListView(_) => sort_list_view(array.as_list_view::<i64>(), v, n, options, limit)?,
         DataType::FixedSizeList(_, _) => sort_fixed_size_list(array.as_fixed_size_list(), v, n, options, limit)?,
         DataType::Dictionary(_, _) => downcast_dictionary_array!{
             array => sort_dictionary(array, v, n, options, limit)?,
@@ -304,7 +308,7 @@ pub fn sort_to_indices(
         },
         t => {
             return Err(ArrowError::ComputeError(format!(
-                "Sort not supported for data type {t:?}"
+                "Sort not supported for data type {t}"
             )));
         }
     })
@@ -581,6 +585,28 @@ fn sort_list<O: OffsetSizeTrait>(
     Ok(sort_impl(options, &mut valids, &null_indices, limit, Ord::cmp).into())
 }
 
+fn sort_list_view<O: OffsetSizeTrait>(
+    array: &GenericListViewArray<O>,
+    value_indices: Vec<u32>,
+    null_indices: Vec<u32>,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> Result<UInt32Array, ArrowError> {
+    let rank = child_rank(array.values().as_ref(), options)?;
+    let offsets = array.offsets();
+    let sizes = array.sizes();
+    let mut valids = value_indices
+        .into_iter()
+        .map(|index| {
+            let start = offsets[index as usize].as_usize();
+            let size = sizes[index as usize].as_usize();
+            let end = start + size;
+            (index, &rank[start..end])
+        })
+        .collect::<Vec<(u32, &[u32])>>();
+    Ok(sort_impl(options, &mut valids, &null_indices, limit, Ord::cmp).into())
+}
+
 fn sort_fixed_size_list(
     array: &FixedSizeListArray,
     value_indices: Vec<u32>,
@@ -841,12 +867,12 @@ pub struct SortColumn {
 
 /// Sort a list of `ArrayRef` using `SortOptions` provided for each array.
 ///
-/// Performs a stable lexicographical sort on values and indices.
+/// Performs an unstable lexicographical sort on values and indices.
 ///
 /// Returns an `ArrowError::ComputeError(String)` if any of the array type is either unsupported by
 /// `lexsort_to_indices` or `take`.
 ///
-/// Example:
+/// # Example:
 ///
 /// ```
 /// # use std::convert::From;
@@ -855,7 +881,6 @@ pub struct SortColumn {
 /// # use arrow_array::types::Int64Type;
 /// # use arrow_array::cast::AsArray;
 /// # use arrow_ord::sort::{SortColumn, SortOptions, lexsort};
-///
 /// let sorted_columns = lexsort(&vec![
 ///     SortColumn {
 ///         values: Arc::new(PrimitiveArray::<Int64Type>::from(vec![
@@ -1072,7 +1097,7 @@ mod tests {
         BooleanBuilder, FixedSizeListBuilder, GenericListBuilder, Int64Builder, ListBuilder,
         PrimitiveRunBuilder,
     };
-    use arrow_buffer::{i256, NullBuffer};
+    use arrow_buffer::{NullBuffer, i256};
     use arrow_schema::Field;
     use half::f16;
     use rand::rngs::StdRng;
@@ -1108,7 +1133,7 @@ mod tests {
     ) {
         let output = create_decimal_array::<T>(data, precision, scale);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1120,7 +1145,7 @@ mod tests {
     ) {
         let output = create_decimal256_array(data);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1135,8 +1160,8 @@ mod tests {
         let output = create_decimal_array::<T>(data, p, s);
         let expected = Arc::new(create_decimal_array::<T>(expected_data, p, s)) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected)
     }
@@ -1150,8 +1175,8 @@ mod tests {
         let output = create_decimal256_array(data);
         let expected = Arc::new(create_decimal256_array(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected)
     }
@@ -1164,7 +1189,7 @@ mod tests {
     ) {
         let output = BooleanArray::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1179,7 +1204,7 @@ mod tests {
     {
         let output = PrimitiveArray::<T>::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1195,8 +1220,8 @@ mod tests {
         let output = PrimitiveArray::<T>::from(data);
         let expected = Arc::new(PrimitiveArray::<T>::from(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected)
     }
@@ -1209,7 +1234,7 @@ mod tests {
     ) {
         let output = StringArray::from(data);
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -1223,24 +1248,24 @@ mod tests {
         let output = StringArray::from(data.clone());
         let expected = Arc::new(StringArray::from(expected_data.clone())) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected);
 
         let output = LargeStringArray::from(data.clone());
         let expected = Arc::new(LargeStringArray::from(expected_data.clone())) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected);
 
         let output = StringViewArray::from(data);
         let expected = Arc::new(StringViewArray::from(expected_data)) as ArrayRef;
         let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&output, options, limit).unwrap(),
+            _ => sort(&output, options).unwrap(),
         };
         assert_eq!(&output, &expected);
     }
@@ -1259,8 +1284,8 @@ mod tests {
             .expect("Unable to get dictionary values");
 
         let sorted = match limit {
-            Some(_) => sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(array) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&array, options, limit).unwrap(),
+            _ => sort(&array, options).unwrap(),
         };
         let sorted = sorted
             .as_any()
@@ -1301,8 +1326,8 @@ mod tests {
         let dict = array_values.as_primitive::<T>();
 
         let sorted = match limit {
-            Some(_) => sort_limit(&(Arc::new(array) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(array) as ArrayRef), options).unwrap(),
+            Some(_) => sort_limit(&array, options, limit).unwrap(),
+            _ => sort(&array, options).unwrap(),
         };
         let sorted = sorted
             .as_any()
@@ -1374,16 +1399,37 @@ mod tests {
 
         assert_eq!(&sorted, &expected);
 
+        // for ListView
+        let input = Arc::new(ListViewArray::from_iter_primitive::<T, _, _>(data.clone()));
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = Arc::new(ListViewArray::from_iter_primitive::<T, _, _>(
+            expected_data.clone(),
+        )) as ArrayRef;
+        assert_eq!(&sorted, &expected);
+
         // for LargeList
-        let input = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(data));
+        let input = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(data.clone()));
         let sorted = match limit {
             Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
             _ => sort(&(input as ArrayRef), options).unwrap(),
         };
         let expected = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(
+            expected_data.clone(),
+        )) as ArrayRef;
+        assert_eq!(&sorted, &expected);
+
+        // for LargeListView
+        let input = Arc::new(LargeListViewArray::from_iter_primitive::<T, _, _>(data));
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = Arc::new(LargeListViewArray::from_iter_primitive::<T, _, _>(
             expected_data,
         )) as ArrayRef;
-
         assert_eq!(&sorted, &expected);
     }
 
@@ -2308,6 +2354,16 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_indices_decimal32() {
+        test_sort_indices_decimal::<Decimal32Type>(8, 3);
+    }
+
+    #[test]
+    fn test_sort_indices_decimal64() {
+        test_sort_indices_decimal::<Decimal64Type>(17, 5);
+    }
+
+    #[test]
     fn test_sort_indices_decimal128() {
         test_sort_indices_decimal::<Decimal128Type>(23, 6);
     }
@@ -2458,6 +2514,16 @@ mod tests {
             precision,
             scale,
         );
+    }
+
+    #[test]
+    fn test_sort_decimal32() {
+        test_sort_decimal::<Decimal32Type>(8, 3);
+    }
+
+    #[test]
+    fn test_sort_decimal64() {
+        test_sort_decimal::<Decimal64Type>(17, 5);
     }
 
     #[test]
@@ -4782,11 +4848,13 @@ mod tests {
         ]);
 
         assert!(!can_sort_to_indices(struct_array.data_type()));
-        assert!(sort_to_indices(&struct_array, None, None)
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Sort not supported for data type"));
+        assert!(
+            sort_to_indices(&struct_array, None, None)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Sort not supported for data type")
+        );
 
         let sort_columns = vec![SortColumn {
             values: Arc::new(struct_array.clone()) as ArrayRef,

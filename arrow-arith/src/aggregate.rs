@@ -45,11 +45,7 @@ trait NumericAccumulator<T: ArrowNativeTypeOp>: Copy + Default {
 /// After verifying the generated assembly this can be a simple `if`.
 #[inline(always)]
 fn select<T: Copy>(m: bool, a: T, b: T) -> T {
-    if m {
-        a
-    } else {
-        b
-    }
+    if m { a } else { b }
 }
 
 #[derive(Clone, Copy)]
@@ -336,10 +332,10 @@ fn aggregate<T: ArrowNativeTypeOp, P: ArrowPrimitiveType<Native = T>, A: Numeric
 
 /// Returns the minimum value in the boolean array.
 ///
+/// # Example
 /// ```
 /// # use arrow_array::BooleanArray;
 /// # use arrow_arith::aggregate::min_boolean;
-///
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
 /// assert_eq!(min_boolean(&a), Some(false))
 /// ```
@@ -394,10 +390,10 @@ pub fn min_boolean(array: &BooleanArray) -> Option<bool> {
 
 /// Returns the maximum value in the boolean array
 ///
+/// # Example
 /// ```
 /// # use arrow_array::BooleanArray;
 /// # use arrow_arith::aggregate::max_boolean;
-///
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
 /// assert_eq!(max_boolean(&a), Some(true))
 /// ```
@@ -451,11 +447,7 @@ where
             let idx = nulls.valid_indices().reduce(|acc_idx, idx| {
                 let acc = array.value_unchecked(acc_idx);
                 let item = array.value_unchecked(idx);
-                if cmp(&acc, &item) {
-                    idx
-                } else {
-                    acc_idx
-                }
+                if cmp(&acc, &item) { idx } else { acc_idx }
             });
             idx.map(|idx| array.value_unchecked(idx))
         }
@@ -477,11 +469,7 @@ fn min_max_view_helper<T: ByteViewType>(
         let target_idx = (0..array.len()).reduce(|acc, item| {
             // SAFETY:  array's length is correct so item is within bounds
             let cmp = unsafe { GenericByteViewArray::compare_unchecked(array, item, array, acc) };
-            if cmp == swap_cond {
-                item
-            } else {
-                acc
-            }
+            if cmp == swap_cond { item } else { acc }
         });
         // SAFETY: idx came from valid range `0..array.len()`
         unsafe { target_idx.map(|idx| array.value_unchecked(idx)) }
@@ -491,11 +479,7 @@ fn min_max_view_helper<T: ByteViewType>(
         let target_idx = nulls.valid_indices().reduce(|acc_idx, idx| {
             let cmp =
                 unsafe { GenericByteViewArray::compare_unchecked(array, idx, array, acc_idx) };
-            if cmp == swap_cond {
-                idx
-            } else {
-                acc_idx
-            }
+            if cmp == swap_cond { idx } else { acc_idx }
         });
 
         // SAFETY: idx came from valid range `0..array.len()`
@@ -825,6 +809,15 @@ where
 
 /// Returns the minimum value in the array, according to the natural order.
 /// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// # Example
+/// ```rust
+/// # use arrow_array::Int32Array;
+/// # use arrow_arith::aggregate::min;
+/// let array = Int32Array::from(vec![8, 2, 4]);
+/// let result = min(&array);
+/// assert_eq!(result, Some(2));
+/// ```
 pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T::Native: PartialOrd,
@@ -834,6 +827,15 @@ where
 
 /// Returns the maximum value in the array, according to the natural order.
 /// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// # Example
+/// ```rust
+/// # use arrow_array::Int32Array;
+/// # use arrow_arith::aggregate::max;
+/// let array = Int32Array::from(vec![4, 8, 2]);
+/// let result = max(&array);
+/// assert_eq!(result, Some(8));
+/// ```
 pub fn max<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T::Native: PartialOrd,

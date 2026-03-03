@@ -17,15 +17,14 @@
 
 use std::any::Any;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
-use arrow_array::{new_empty_array, Array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait, new_empty_array};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::{dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -165,6 +164,10 @@ where
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
+        // advance the def & rep level buffers
+        self.def_levels_buffer = self.record_reader.consume_def_levels();
+        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
+
         if self.record_reader.num_values() == 0 {
             // once the record_reader has been consumed, we've replaced its values with the default
             // variant of DictionaryBuffer (Offset). If `consume_batch` then gets called again, we
@@ -175,9 +178,6 @@ where
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_bitmap_buffer();
         let array = buffer.into_array(null_buffer, &self.data_type)?;
-
-        self.def_levels_buffer = self.record_reader.consume_def_levels();
-        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
 
         Ok(array)
@@ -277,7 +277,7 @@ where
         decoder.read(&mut buffer, usize::MAX)?;
 
         let array = buffer.into_array(None, self.value_type.clone());
-        self.dict = Some(Arc::new(array));
+        self.dict = Some(array);
         Ok(())
     }
 
@@ -292,7 +292,7 @@ where
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
                 let bit_width = data[0];
                 let mut decoder = RleDecoder::new(bit_width);
-                decoder.set_data(data.slice(1..));
+                decoder.set_data(data.slice(1..))?;
                 MaybeDictionaryDecoder::Dict {
                     decoder,
                     max_remaining_values: num_values.unwrap_or(num_levels),

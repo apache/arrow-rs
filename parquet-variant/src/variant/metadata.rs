@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
-use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice};
+use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
+use crate::utils::{
+    first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice,
+    try_binary_search_range_by,
+};
 
 use arrow_schema::ArrowError;
 
@@ -127,6 +130,7 @@ impl VariantMetadataHeader {
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantMetadata<'m> {
+    /// (Only) the bytes that make up this metadata instance.
     pub(crate) bytes: &'m [u8],
     header: VariantMetadataHeader,
     dictionary_size: u32,
@@ -137,6 +141,39 @@ pub struct VariantMetadata<'m> {
 // We don't want this to grow because it increases the size of VariantList and VariantObject, which
 // could increase the size of Variant. All those size increases could hurt performance.
 const _: () = crate::utils::expect_size_of::<VariantMetadata>(32);
+
+/// The canonical byte slice corresponding to an empty metadata dictionary.
+///
+/// ```
+/// # use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, VariantMetadata, WritableMetadataBuilder};
+/// let mut metadata_builder = WritableMetadataBuilder::default();
+/// metadata_builder.finish();
+/// let metadata_bytes = metadata_builder.into_inner();
+/// assert_eq!(&metadata_bytes, EMPTY_VARIANT_METADATA_BYTES);
+/// ```
+pub const EMPTY_VARIANT_METADATA_BYTES: &[u8] = &[1, 0, 0];
+
+/// The empty metadata dictionary.
+///
+/// ```
+/// # use parquet_variant::{EMPTY_VARIANT_METADATA, VariantMetadata, WritableMetadataBuilder};
+/// let mut metadata_builder = WritableMetadataBuilder::default();
+/// metadata_builder.finish();
+/// let metadata_bytes = metadata_builder.into_inner();
+/// let empty_metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+/// assert_eq!(empty_metadata, EMPTY_VARIANT_METADATA);
+/// ```
+pub const EMPTY_VARIANT_METADATA: VariantMetadata = VariantMetadata {
+    bytes: EMPTY_VARIANT_METADATA_BYTES,
+    header: VariantMetadataHeader {
+        version: CORRECT_VERSION_VALUE,
+        is_sorted: false,
+        offset_size: OffsetSizeBytes::One,
+    },
+    dictionary_size: 0,
+    first_value_byte: 3,
+    validated: true,
+};
 
 impl<'m> VariantMetadata<'m> {
     /// Attempts to interpret `bytes` as a variant metadata instance, with full [validation] of all
@@ -248,14 +285,13 @@ impl<'m> VariantMetadata<'m> {
                 let mut current_offset = offsets.next().unwrap_or(0);
                 let mut prev_value: Option<&str> = None;
                 for next_offset in offsets {
-                    let current_value =
-                        value_buffer
-                            .get(current_offset..next_offset)
-                            .ok_or_else(|| {
-                                ArrowError::InvalidArgumentError(format!(
+                    let current_value = value_buffer.get(current_offset..next_offset).ok_or_else(
+                        || {
+                            ArrowError::InvalidArgumentError(format!(
                                 "range {current_offset}..{next_offset} is invalid or out of bounds"
                             ))
-                            })?;
+                        },
+                    )?;
 
                     if let Some(prev_val) = prev_value {
                         if current_value <= prev_val {
@@ -296,7 +332,7 @@ impl<'m> VariantMetadata<'m> {
         self.header.version
     }
 
-    /// Gets an offset array entry by index.
+    /// Gets an offset into the dictionary entry by index.
     ///
     /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
     /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
@@ -306,6 +342,15 @@ impl<'m> VariantMetadata<'m> {
         self.header.offset_size.unpack_u32(bytes, i)
     }
 
+    /// Returns the total size, in bytes, of the metadata.
+    ///
+    /// Note this value may be smaller than what was passed to [`Self::new`] or
+    /// [`Self::try_new`] if the input was larger than necessary to encode the
+    /// metadata dictionary.
+    pub fn size(&self) -> usize {
+        self.bytes.len()
+    }
+
     /// Attempts to retrieve a dictionary entry by index, failing if out of bounds or if the
     /// underlying bytes are [invalid].
     ///
@@ -313,6 +358,32 @@ impl<'m> VariantMetadata<'m> {
     pub fn get(&self, i: usize) -> Result<&'m str, ArrowError> {
         let byte_range = self.get_offset(i)? as _..self.get_offset(i + 1)? as _;
         string_from_slice(self.bytes, self.first_value_byte as _, byte_range)
+    }
+
+    // Helper method used by our `impl Index` and also by `get_entry`. Panics if the underlying
+    // bytes are invalid. Needed because the `Index` trait forces the returned result to have the
+    // lifetime of `self` instead of the string's own (longer) lifetime `'m`.
+    fn get_impl(&self, i: usize) -> &'m str {
+        self.get(i).expect("Invalid metadata dictionary entry")
+    }
+
+    /// Attempts to retrieve a dictionary entry and its field id, returning None if the requested field
+    /// name is not present. The search cost is logarithmic if [`Self::is_sorted`] and linear
+    /// otherwise.
+    ///
+    /// WARNING: This method panics if the underlying bytes are [invalid].
+    ///
+    /// [invalid]: Self#Validation
+    pub fn get_entry(&self, field_name: &str) -> Option<(u32, &'m str)> {
+        let field_id = if self.is_sorted() && self.len() > 10 {
+            // Binary search is faster for a not-tiny sorted metadata dictionary
+            let cmp = |i| Some(self.get_impl(i).cmp(field_name));
+            try_binary_search_range_by(0..self.len(), cmp)?.ok()?
+        } else {
+            // Fall back to Linear search for tiny or unsorted dictionary
+            (0..self.len()).find(|i| self.get_impl(*i) == field_name)?
+        };
+        Some((field_id as u32, self.get_impl(field_id)))
     }
 
     /// Returns an iterator that attempts to visit all dictionary entries, producing `Err` if the
@@ -341,7 +412,7 @@ impl std::ops::Index<usize> for VariantMetadata<'_> {
     type Output = str;
 
     fn index(&self, i: usize) -> &str {
-        self.get(i).expect("Invalid metadata dictionary entry")
+        self.get_impl(i)
     }
 }
 
@@ -544,7 +615,7 @@ mod tests {
         o.insert("a", false);
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, _) = b.finish();
 
@@ -579,7 +650,7 @@ mod tests {
         o.insert("a", false);
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, _) = b.finish();
 

@@ -17,7 +17,7 @@
 
 use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, GenericListViewArray, OffsetSizeTrait};
-use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
+use arrow_buffer::{Buffer, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
@@ -25,8 +25,8 @@ use std::sync::Arc;
 /// Builder for [`GenericListViewArray`]
 #[derive(Debug)]
 pub struct GenericListViewBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
-    offsets_builder: BufferBuilder<OffsetSize>,
-    sizes_builder: BufferBuilder<OffsetSize>,
+    offsets_builder: Vec<OffsetSize>,
+    sizes_builder: Vec<OffsetSize>,
     null_buffer_builder: NullBufferBuilder,
     values_builder: T,
     field: Option<FieldRef>,
@@ -83,8 +83,8 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListViewBuilder<Offset
     /// Creates a new [`GenericListViewBuilder`] from a given values array builder
     /// `capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(values_builder: T, capacity: usize) -> Self {
-        let offsets_builder = BufferBuilder::<OffsetSize>::new(capacity);
-        let sizes_builder = BufferBuilder::<OffsetSize>::new(capacity);
+        let offsets_builder = Vec::with_capacity(capacity);
+        let sizes_builder = Vec::with_capacity(capacity);
         Self {
             offsets_builder,
             null_buffer_builder: NullBufferBuilder::new(capacity),
@@ -132,8 +132,8 @@ where
     /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
-        self.offsets_builder.append(self.current_offset);
-        self.sizes_builder.append(
+        self.offsets_builder.push(self.current_offset);
+        self.sizes_builder.push(
             OffsetSize::from_usize(
                 self.values_builder.len() - self.current_offset.to_usize().unwrap(),
             )
@@ -158,9 +158,8 @@ where
     /// See [`Self::append_value`] for an example use.
     #[inline]
     pub fn append_null(&mut self) {
-        self.offsets_builder.append(self.current_offset);
-        self.sizes_builder
-            .append(OffsetSize::from_usize(0).unwrap());
+        self.offsets_builder.push(self.current_offset);
+        self.sizes_builder.push(OffsetSize::from_usize(0).unwrap());
         self.null_buffer_builder.append_null();
     }
 
@@ -183,12 +182,12 @@ where
     pub fn finish(&mut self) -> GenericListViewArray<OffsetSize> {
         let values = self.values_builder.finish();
         let nulls = self.null_buffer_builder.finish();
-        let offsets = self.offsets_builder.finish();
+        let offsets = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
         self.current_offset = OffsetSize::zero();
 
         // Safety: Safe by construction
         let offsets = ScalarBuffer::from(offsets);
-        let sizes = self.sizes_builder.finish();
+        let sizes = Buffer::from_vec(std::mem::take(&mut self.sizes_builder));
         let sizes = ScalarBuffer::from(sizes);
         let field = match &self.field {
             Some(f) => f.clone(),
@@ -246,7 +245,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{make_builder, Int32Builder, ListViewBuilder};
+    use crate::builder::{Int32Builder, ListViewBuilder, make_builder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Array, Int32Array};

@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{get_offsets, print_long_array};
+use crate::array::{get_offsets_from_buffer, print_long_array};
 use crate::iterator::MapArrayIter;
-use crate::{make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray};
+use crate::{Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
@@ -173,6 +173,15 @@ impl MapArray {
         &self.entries
     }
 
+    /// Returns a reference to the fields of the [`StructArray`] that backs this map.
+    pub fn entries_fields(&self) -> (&Field, &Field) {
+        let fields = self.entries.fields().iter().collect::<Vec<_>>();
+        let fields = TryInto::<[&FieldRef; 2]>::try_into(fields)
+            .expect("Every map has a key and value field");
+
+        (fields[0].as_ref(), fields[1].as_ref())
+    }
+
     /// Returns the data type of the map's keys.
     pub fn key_type(&self) -> &DataType {
         self.keys().data_type()
@@ -185,11 +194,14 @@ impl MapArray {
 
     /// Returns ith value of this map array.
     ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> StructArray {
-        let end = *self.value_offsets().get_unchecked(i + 1);
-        let start = *self.value_offsets().get_unchecked(i);
+        let end = *unsafe { self.value_offsets().get_unchecked(i + 1) };
+        let start = *unsafe { self.value_offsets().get_unchecked(i) };
         self.entries
             .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
     }
@@ -197,6 +209,12 @@ impl MapArray {
     /// Returns ith value of this map array.
     ///
     /// This is a [`StructArray`] containing two fields
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> StructArray {
         let end = self.value_offsets()[i + 1] as usize;
         let start = self.value_offsets()[i] as usize;
@@ -254,28 +272,29 @@ impl From<MapArray> for ArrayData {
 
 impl MapArray {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
-        if !matches!(data.data_type(), DataType::Map(_, _)) {
+        let (data_type, len, nulls, offset, mut buffers, mut child_data) = data.into_parts();
+
+        if !matches!(data_type, DataType::Map(_, _)) {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "MapArray expected ArrayData with DataType::Map got {}",
-                data.data_type()
+                "MapArray expected ArrayData with DataType::Map got {data_type}",
             )));
         }
 
-        if data.buffers().len() != 1 {
+        if buffers.len() != 1 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "MapArray data should contain a single buffer only (value offsets), had {}",
-                data.len()
+                buffers.len(),
             )));
         }
+        let buffer = buffers.pop().expect("checked above");
 
-        if data.child_data().len() != 1 {
+        if child_data.len() != 1 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "MapArray should contain a single child array (values array), had {}",
-                data.child_data().len()
+                child_data.len()
             )));
         }
-
-        let entries = data.child_data()[0].clone();
+        let entries = child_data.pop().expect("checked above");
 
         if let DataType::Struct(fields) = entries.data_type() {
             if fields.len() != 2 {
@@ -294,11 +313,11 @@ impl MapArray {
 
         // SAFETY:
         // ArrayData is valid, and verified type above
-        let value_offsets = unsafe { get_offsets(&data) };
+        let value_offsets = unsafe { get_offsets_from_buffer(buffer, offset, len) };
 
         Ok(Self {
-            data_type: data.data_type().clone(),
-            nulls: data.nulls().cloned(),
+            data_type,
+            nulls,
             entries,
             value_offsets,
         })
@@ -343,7 +362,8 @@ impl MapArray {
     }
 }
 
-impl Array for MapArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for MapArray {
     fn as_any(&self) -> &dyn Any {
         self
     }

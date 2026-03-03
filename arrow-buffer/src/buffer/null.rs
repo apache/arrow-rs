@@ -19,13 +19,14 @@ use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
 use crate::buffer::BooleanBuffer;
 use crate::{Buffer, MutableBuffer};
 
-/// A [`BooleanBuffer`] used to encode validity for Arrow arrays
+/// A [`BooleanBuffer`] used to encode validity (null values) for Arrow arrays
 ///
 /// In the [Arrow specification], array validity is encoded in a packed bitmask with a
 /// `true` value indicating the corresponding slot is not null, and `false` indicating
 /// that it is null.
 ///
-/// `NullBuffer`s can be creating using [`NullBufferBuilder`]
+/// # See also
+/// * [`NullBufferBuilder`] for creating `NullBuffer`s  
 ///
 /// [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html#validity-bitmaps
 /// [`NullBufferBuilder`]: crate::NullBufferBuilder
@@ -221,6 +222,15 @@ impl NullBuffer {
     pub fn buffer(&self) -> &Buffer {
         self.buffer.inner()
     }
+
+    /// Create a [`NullBuffer`] from an *unsliced* validity bitmap (`offset = 0` **bits**) of length `len`.
+    ///
+    /// Returns `None` if there are no nulls (all values valid).
+    pub fn from_unsliced_buffer(buffer: impl Into<Buffer>, len: usize) -> Option<Self> {
+        let bb = BooleanBuffer::new(buffer.into(), 0, len);
+        let nb = NullBuffer::new(bb);
+        (nb.null_count() > 0).then_some(nb)
+    }
 }
 
 impl<'a> IntoIterator for &'a NullBuffer {
@@ -265,6 +275,7 @@ impl FromIterator<bool> for NullBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_size() {
         // This tests that the niche optimisation eliminates the overhead of an option
@@ -272,5 +283,50 @@ mod tests {
             std::mem::size_of::<NullBuffer>(),
             std::mem::size_of::<Option<NullBuffer>>()
         );
+    }
+
+    #[test]
+    fn test_from_unsliced_buffer_with_nulls() {
+        // 0b10110010 → null(0), valid(1), null(2), null(3), valid(4), valid(5), null(6), valid(7)
+        let buf = Buffer::from([0b10110010u8]);
+        let result = NullBuffer::from_unsliced_buffer(buf, 8);
+        assert!(result.is_some());
+        let nb = result.unwrap();
+        assert_eq!(nb.len(), 8);
+        assert_eq!(nb.null_count(), 4);
+        assert!(nb.is_null(0));
+        assert!(nb.is_valid(1));
+        assert!(nb.is_null(2));
+        assert!(nb.is_null(3));
+        assert!(nb.is_valid(4));
+        assert!(nb.is_valid(5));
+        assert!(nb.is_null(6));
+        assert!(nb.is_valid(7));
+    }
+
+    #[test]
+    fn test_from_unsliced_buffer_all_valid() {
+        // All bits set = all valid, no nulls
+        let buf = Buffer::from([0b11111111u8]);
+        let result = NullBuffer::from_unsliced_buffer(buf, 8);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_from_unsliced_buffer_all_null() {
+        // No bits set = all null
+        let buf = Buffer::from([0b00000000u8]);
+        let result = NullBuffer::from_unsliced_buffer(buf, 8);
+        assert!(result.is_some());
+        let nb = result.unwrap();
+        assert_eq!(nb.len(), 8);
+        assert_eq!(nb.null_count(), 8);
+    }
+
+    #[test]
+    fn test_from_unsliced_buffer_empty() {
+        let buf = Buffer::from([]);
+        let result = NullBuffer::from_unsliced_buffer(buf, 0);
+        assert!(result.is_none());
     }
 }

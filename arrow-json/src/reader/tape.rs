@@ -18,7 +18,7 @@
 use crate::reader::serializer::TapeSerializer;
 use arrow_schema::ArrowError;
 use memchr::memchr2;
-use serde::Serialize;
+use serde_core::Serialize;
 use std::fmt::Write;
 
 /// We decode JSON to a flattened tape representation,
@@ -567,7 +567,10 @@ impl TapeDecoder {
         }
 
         if self.offsets.len() >= u32::MAX as usize {
-            return Err(ArrowError::JsonError(format!("Encountered more than {} bytes of string data, consider using a smaller batch size", u32::MAX)));
+            return Err(ArrowError::JsonError(format!(
+                "Encountered more than {} bytes of string data, consider using a smaller batch size",
+                u32::MAX
+            )));
         }
 
         if self.offsets.len() >= u32::MAX as usize {

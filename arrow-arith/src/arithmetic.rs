@@ -25,8 +25,8 @@
 use crate::arity::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::i256;
 use arrow_buffer::ArrowNativeType;
+use arrow_buffer::i256;
 use arrow_schema::*;
 use std::cmp::min;
 use std::sync::Arc;
@@ -208,9 +208,11 @@ mod tests {
             .unwrap();
 
         let err = mul(&a, &b).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Overflow happened on: 123456789000000000000000000 * 10000000000000000000"));
+        assert!(
+            err.to_string().contains(
+                "Overflow happened on: 123456789000000000000000000 * 10000000000000000000"
+            )
+        );
 
         // Allow precision loss.
         let result = multiply_fixed_point_checked(&a, &b, 28).unwrap();
@@ -278,9 +280,11 @@ mod tests {
 
         // Required scale cannot be larger than the product of the input scales.
         let result = multiply_fixed_point_checked(&a, &b, 5).unwrap_err();
-        assert!(result
-            .to_string()
-            .contains("Required scale 5 is greater than product scale 4"));
+        assert!(
+            result
+                .to_string()
+                .contains("Required scale 5 is greater than product scale 4")
+        );
     }
 
     #[test]
@@ -322,7 +326,10 @@ mod tests {
 
         // `multiply` overflows on this case.
         let err = mul(&a, &b).unwrap_err();
-        assert_eq!(err.to_string(), "Arithmetic overflow: Overflow happened on: 123456789000000000000000000 * 10000000000000000000");
+        assert_eq!(
+            err.to_string(),
+            "Arithmetic overflow: Overflow happened on: 123456789000000000000000000 * 10000000000000000000"
+        );
 
         // Avoid overflow by reducing the scale.
         let result = multiply_fixed_point(&a, &b, 28).unwrap();

@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{bit_util, ArrowNativeType, MutableBuffer};
-use num::{CheckedAdd, Integer};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, bit_util};
+use num_integer::Integer;
+use num_traits::CheckedAdd;
 
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
@@ -52,9 +53,9 @@ pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &Mutable
     //  Soundness
     //      * offset buffer is always extended in slices of T and aligned accordingly.
     //      * Buffer[0] is initialized with one element, 0, and thus `mutable_offsets.len() - 1` is always valid.
-    let (prefix, offsets, suffix) = offset_buffer.as_slice().align_to::<T>();
+    let (prefix, offsets, suffix) = unsafe { offset_buffer.as_slice().align_to::<T>() };
     debug_assert!(prefix.is_empty() && suffix.is_empty());
-    *offsets.get_unchecked(offsets.len() - 1)
+    *unsafe { offsets.get_unchecked(offsets.len() - 1) }
 }
 
 #[cfg(test)]

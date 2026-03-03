@@ -16,8 +16,10 @@
 // under the License.
 use std::{array::TryFromSliceError, ops::Range, str};
 
+use crate::VariantPathElement;
 use arrow_schema::ArrowError;
 
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::slice::SliceIndex;
 
@@ -115,23 +117,20 @@ pub(crate) fn string_from_slice(
 /// * `Some(Ok(index))` - Element found at the given index
 /// * `Some(Err(index))` - Element not found, but would be inserted at the given index
 /// * `None` - Key extraction failed
-pub(crate) fn try_binary_search_range_by<K, F>(
+pub(crate) fn try_binary_search_range_by<F>(
     range: Range<usize>,
-    target: &K,
-    key_extractor: F,
+    cmp: F,
 ) -> Option<Result<usize, usize>>
 where
-    K: Ord,
-    F: Fn(usize) -> Option<K>,
+    F: Fn(usize) -> Option<Ordering>,
 {
     let Range { mut start, mut end } = range;
     while start < end {
         let mid = start + (end - start) / 2;
-        let key = key_extractor(mid)?;
-        match key.cmp(target) {
-            std::cmp::Ordering::Equal => return Some(Ok(mid)),
-            std::cmp::Ordering::Greater => end = mid,
-            std::cmp::Ordering::Less => start = mid + 1,
+        match cmp(mid)? {
+            Ordering::Equal => return Some(Ok(mid)),
+            Ordering::Greater => end = mid,
+            Ordering::Less => start = mid + 1,
         }
     }
 
@@ -144,5 +143,162 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
     let size = std::mem::size_of::<T>();
     if size != expected {
         let _ = [""; 0][size];
+    }
+}
+
+pub(crate) fn fits_precision<const N: u32>(n: impl Into<i64>) -> bool {
+    n.into().unsigned_abs().leading_zeros() >= (i64::BITS - N)
+}
+
+/// Parse a path string into a vector of [`VariantPathElement`].
+///
+/// # Syntax
+/// - `.field` or `field` - access object field (do not support special char)
+/// - `[index]` - access array element by index
+/// - `[field]` - access object field (support special char with escape `\`)
+///
+/// # Escape Rules
+/// Inside brackets `[...]`:
+/// - `\\` -> literal `\`
+/// - `\]` -> literal `]`
+/// - Any other `\x` -> literal `x`
+///
+/// Outside brackets, no escaping is supported.
+///
+/// # Examples
+/// - `""` -> empty path
+/// - `"foo"` -> single field `foo`
+/// - `"foo.bar"` -> nested fields `foo`, `bar`
+/// - `"[1]"` -> array index 1
+/// - `"['1']"` or `"["1"]"`-> field `1`
+/// - `"foo[1].bar"` -> field `foo`, index 1, field `bar`
+/// - `"['a.b']"` -> field `a.b` (dot is literal inside bracket)
+/// - `"['a\]b']"` -> field `a]b` (escaped `]`
+/// - etc.
+///
+/// # Errors
+/// - Leading `.` (e.g., `".foo"`)
+/// - Trailing `.` (e.g., `"foo."`)
+/// - Unclosed '[' (e.g., `"foo[1"`)
+/// - Unexpected ']' (e.g., `"foo]"`)
+/// - Trailing '`' inside bracket (treated as unclosed bracket)
+#[inline]
+pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowError> {
+    let scan_field = |start: usize| {
+        s[start..]
+            .find(['.', '[', ']'])
+            .map_or_else(|| s.len(), |p| start + p)
+    };
+
+    let bytes = s.as_bytes();
+    if let Some(b'.') = bytes.first() {
+        return Err(ArrowError::ParseError("Unexpected leading '.'".into()));
+    }
+
+    let mut elements = Vec::new();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let (elem, end) = match bytes[i] {
+            b'.' => {
+                i += 1; // skip the dot; a field must follow
+                let end = scan_field(i);
+                if end == i {
+                    return Err(ArrowError::ParseError(match bytes.get(i) {
+                        None => "Unexpected trailing '.'".into(),
+                        Some(&c) => format!("Unexpected '{}' at byte {i}", c as char),
+                    }));
+                }
+                (VariantPathElement::field(&s[i..end]), end)
+            }
+            b'[' => {
+                let (element, end) = parse_in_bracket(s, i)?;
+                (element, end)
+            }
+            b']' => {
+                return Err(ArrowError::ParseError(format!(
+                    "Unexpected ']' at byte {i}"
+                )));
+            }
+            _ => {
+                let end = scan_field(i);
+                (VariantPathElement::field(&s[i..end]), end)
+            }
+        };
+        elements.push(elem);
+        i = end;
+    }
+
+    Ok(elements)
+}
+
+/// Parse `[digits | field]` starting at `i` (which points to `[`).
+/// Returns (VariantPathElement, position after `]`).
+fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize), ArrowError> {
+    let start = i + 1; // skip '['
+
+    let mut unescaped = String::new();
+    let mut chars = s[start..].char_indices().peekable();
+    let mut end = None;
+
+    while let Some((offset, c)) = chars.next() {
+        match c {
+            // Escape: take next char literally
+            '\\' => {
+                if let Some((_, next)) = chars.next() {
+                    unescaped.push(next);
+                }
+                // Trailing backslash will be handled as 'unclosed [' below
+            }
+            ']' => {
+                // Unescaped ']' ends the bracket
+                end = Some(start + offset);
+                break;
+            }
+            _ => {
+                unescaped.push(c);
+            }
+        }
+    }
+
+    let end = match end {
+        Some(e) => e,
+        None => {
+            return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
+        }
+    };
+
+    let element = if let Some(inner) = unescaped
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+        .or_else(|| {
+            unescaped
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+        }) {
+        // Quoted field name, e.g., ['field'] or ['123'] or ["123"]
+        VariantPathElement::field(inner.to_string())
+    } else {
+        let Ok(idx) = unescaped.parse() else {
+            return Err(ArrowError::ParseError(format!(
+                "Invalid token in bracket request: `{unescaped}`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+            )));
+        };
+        VariantPathElement::index(idx)
+    };
+
+    Ok((element, end + 1))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_fits_precision() {
+        assert!(fits_precision::<10>(1023));
+        assert!(!fits_precision::<10>(1024));
+        assert!(fits_precision::<10>(-1023));
+        assert!(!fits_precision::<10>(-1024));
     }
 }

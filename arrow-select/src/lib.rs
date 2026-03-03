@@ -21,7 +21,7 @@
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 
 pub mod coalesce;
@@ -29,6 +29,7 @@ pub mod concat;
 pub mod dictionary;
 pub mod filter;
 pub mod interleave;
+pub mod merge;
 pub mod nullif;
 pub mod take;
 pub mod union_extract;

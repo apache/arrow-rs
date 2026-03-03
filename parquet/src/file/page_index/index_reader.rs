@@ -15,17 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for reading [`Index`] and [`OffsetIndex`] from parquet metadata.
+//! Support for reading [`ColumnIndexMetaData`] and [`OffsetIndexMetaData`] from parquet metadata.
 
-use crate::basic::Type;
+use crate::basic::{BoundaryOrder, Type};
 use crate::data_type::Int96;
-use crate::errors::ParquetError;
+use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
-use crate::file::page_index::index::{Index, NativeIndex};
+use crate::file::page_index::column_index::{
+    ByteArrayColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
+};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
-use crate::format::{ColumnIndex, OffsetIndex};
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+use crate::parquet_thrift::{
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    ThriftSliceInputProtocol, WriteThrift, WriteThriftField, read_thrift_vec,
+};
+use crate::thrift_struct;
+use std::io::Write;
 use std::ops::Range;
 
 /// Computes the covering range of two optional ranges
@@ -38,7 +44,7 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
     }
 }
 
-/// Reads per-column [`Index`] for all columns of a row group by
+/// Reads per-column [`ColumnIndexMetaData`] for all columns of a row group by
 /// decoding [`ColumnIndex`] .
 ///
 /// Returns a vector of `index[column_number]`.
@@ -48,6 +54,7 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
 /// See [Page Index Documentation] for more details.
 ///
 /// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[deprecated(
     since = "55.2.0",
     note = "Use ParquetMetaDataReader instead; will be removed in 58.0.0"
@@ -55,7 +62,7 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
 pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
-) -> Result<Option<Vec<Index>>, ParquetError> {
+) -> Result<Option<Vec<ColumnIndexMetaData>>, ParquetError> {
     let fetch = chunks
         .iter()
         .fold(None, |range, c| acc_range(range, c.column_index_range()));
@@ -76,7 +83,7 @@ pub fn read_columns_indexes<R: ChunkReader>(
                         ..usize::try_from(r.end - fetch.start)?],
                     c.column_type(),
                 ),
-                None => Ok(Index::NONE),
+                None => Ok(ColumnIndexMetaData::NONE),
             })
             .collect(),
     )
@@ -93,6 +100,7 @@ pub fn read_columns_indexes<R: ChunkReader>(
 /// See [Page Index Documentation] for more details.
 ///
 /// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[deprecated(
     since = "55.2.0",
     note = "Use ParquetMetaDataReader instead; will be removed in 58.0.0"
@@ -128,25 +136,64 @@ pub fn read_offset_indexes<R: ChunkReader>(
 }
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
-    let mut prot = TCompactSliceInputProtocol::new(data);
-    let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
-    OffsetIndexMetaData::try_new(offset)
+    let mut prot = ThriftSliceInputProtocol::new(data);
+
+    // Try to read fast-path first. If that fails, fall back to slower but more robust
+    // decoder.
+    match OffsetIndexMetaData::try_from_fast(&mut prot) {
+        Ok(offset_index) => Ok(offset_index),
+        Err(_) => {
+            prot = ThriftSliceInputProtocol::new(data);
+            OffsetIndexMetaData::read_thrift(&mut prot)
+        }
+    }
 }
 
-pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Index, ParquetError> {
-    let mut prot = TCompactSliceInputProtocol::new(data);
+// private struct only used for decoding then discarded
+thrift_struct!(
+pub(super) struct ThriftColumnIndex<'a> {
+  1: required list<bool> null_pages
+  2: required list<'a><binary> min_values
+  3: required list<'a><binary> max_values
+  4: required BoundaryOrder boundary_order
+  5: optional list<i64> null_counts
+  6: optional list<i64> repetition_level_histograms;
+  7: optional list<i64> definition_level_histograms;
+}
+);
 
-    let index = ColumnIndex::read_from_in_protocol(&mut prot)?;
+pub(crate) fn decode_column_index(
+    data: &[u8],
+    column_type: Type,
+) -> Result<ColumnIndexMetaData, ParquetError> {
+    let mut prot = ThriftSliceInputProtocol::new(data);
+    let index = ThriftColumnIndex::read_thrift(&mut prot)?;
 
     let index = match column_type {
-        Type::BOOLEAN => Index::BOOLEAN(NativeIndex::<bool>::try_new(index)?),
-        Type::INT32 => Index::INT32(NativeIndex::<i32>::try_new(index)?),
-        Type::INT64 => Index::INT64(NativeIndex::<i64>::try_new(index)?),
-        Type::INT96 => Index::INT96(NativeIndex::<Int96>::try_new(index)?),
-        Type::FLOAT => Index::FLOAT(NativeIndex::<f32>::try_new(index)?),
-        Type::DOUBLE => Index::DOUBLE(NativeIndex::<f64>::try_new(index)?),
-        Type::BYTE_ARRAY => Index::BYTE_ARRAY(NativeIndex::try_new(index)?),
-        Type::FIXED_LEN_BYTE_ARRAY => Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new(index)?),
+        Type::BOOLEAN => {
+            ColumnIndexMetaData::BOOLEAN(PrimitiveColumnIndex::<bool>::try_from_thrift(index)?)
+        }
+        Type::INT32 => {
+            ColumnIndexMetaData::INT32(PrimitiveColumnIndex::<i32>::try_from_thrift(index)?)
+        }
+        Type::INT64 => {
+            ColumnIndexMetaData::INT64(PrimitiveColumnIndex::<i64>::try_from_thrift(index)?)
+        }
+        Type::INT96 => {
+            ColumnIndexMetaData::INT96(PrimitiveColumnIndex::<Int96>::try_from_thrift(index)?)
+        }
+        Type::FLOAT => {
+            ColumnIndexMetaData::FLOAT(PrimitiveColumnIndex::<f32>::try_from_thrift(index)?)
+        }
+        Type::DOUBLE => {
+            ColumnIndexMetaData::DOUBLE(PrimitiveColumnIndex::<f64>::try_from_thrift(index)?)
+        }
+        Type::BYTE_ARRAY => {
+            ColumnIndexMetaData::BYTE_ARRAY(ByteArrayColumnIndex::try_from_thrift(index)?)
+        }
+        Type::FIXED_LEN_BYTE_ARRAY => {
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(ByteArrayColumnIndex::try_from_thrift(index)?)
+        }
     };
 
     Ok(index)

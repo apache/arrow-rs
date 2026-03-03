@@ -40,8 +40,9 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
+arrow-select = { workspace = true}
 flatbuffers = { version = "25.2.10", default-features = false }
-lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
+lz4_flex = { version = "0.12", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13.0", default-features = false, optional = true }
 
 [features]
@@ -49,7 +50,7 @@ default = []
 lz4 = ["lz4_flex"]
 
 [dev-dependencies]
-criterion = "0.5.1"
+criterion = { workspace = true }
 tempfile = "3.3"
 tokio = "1.43.0"
 # used in benches

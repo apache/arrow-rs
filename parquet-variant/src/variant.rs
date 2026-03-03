@@ -15,19 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
+pub use self::decimal::{VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType};
 pub use self::list::VariantList;
-pub use self::metadata::VariantMetadata;
+pub use self::metadata::{EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VariantMetadata};
 pub use self::object::VariantObject;
+
+// Publically export types used in the API
+pub use half::f16;
+pub use uuid::Uuid;
+
 use crate::decoder::{
-    self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
+    self, VariantBasicType, VariantPrimitiveType, get_basic_type, get_primitive_type,
 };
 use crate::path::{VariantPath, VariantPathElement};
-use crate::utils::{first_byte_from_slice, slice_from_slice};
+use crate::utils::{first_byte_from_slice, fits_precision, slice_from_slice};
 use std::ops::Deref;
 
 use arrow_schema::ArrowError;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 
 mod decimal;
 mod list;
@@ -211,7 +216,7 @@ impl Deref for ShortString<'_> {
 /// [metadata]: VariantMetadata#Validation
 /// [object]: VariantObject#Validation
 /// [array]: VariantList#Validation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Variant<'m, 'v> {
     /// Primitive type: Null
     Null,
@@ -229,6 +234,10 @@ pub enum Variant<'m, 'v> {
     TimestampMicros(DateTime<Utc>),
     /// Primitive (type_id=1): TIMESTAMP(isAdjustedToUTC=false, MICROS)
     TimestampNtzMicros(NaiveDateTime),
+    /// Primitive (type_id=1): TIMESTAMP(isAdjustedToUTC=true, NANOS)
+    TimestampNanos(DateTime<Utc>),
+    /// Primitive (type_id=1): TIMESTAMP(isAdjustedToUTC=false, NANOS)
+    TimestampNtzNanos(NaiveDateTime),
     /// Primitive (type_id=1): DECIMAL(precision, scale) 32-bits
     Decimal4(VariantDecimal4),
     /// Primitive (type_id=1): DECIMAL(precision, scale) 64-bits
@@ -248,6 +257,10 @@ pub enum Variant<'m, 'v> {
     Binary(&'v [u8]),
     /// Primitive (type_id=1): STRING
     String(&'v str),
+    /// Primitive (type_id=1): TIME(isAdjustedToUTC=false, MICROS)
+    Time(NaiveTime),
+    /// Primitive (type_id=1): UUID
+    Uuid(Uuid),
     /// Short String (type_id=2): STRING
     ShortString(ShortString<'v>),
     // need both metadata & value
@@ -379,12 +392,20 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::TimestampNtzMicros => {
                     Variant::TimestampNtzMicros(decoder::decode_timestampntz_micros(value_data)?)
                 }
+                VariantPrimitiveType::TimestampNanos => {
+                    Variant::TimestampNanos(decoder::decode_timestamp_nanos(value_data)?)
+                }
+                VariantPrimitiveType::TimestampNtzNanos => {
+                    Variant::TimestampNtzNanos(decoder::decode_timestampntz_nanos(value_data)?)
+                }
+                VariantPrimitiveType::Uuid => Variant::Uuid(decoder::decode_uuid(value_data)?),
                 VariantPrimitiveType::Binary => {
                     Variant::Binary(decoder::decode_binary(value_data)?)
                 }
                 VariantPrimitiveType::String => {
                     Variant::String(decoder::decode_long_string(value_data)?)
                 }
+                VariantPrimitiveType::Time => Variant::Time(decoder::decode_time_ntz(value_data)?),
             },
             VariantBasicType::ShortString => {
                 Variant::ShortString(decoder::decode_short_string(value_metadata, value_data)?)
@@ -512,8 +533,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `DateTime<Utc>` if possible.
     ///
-    /// Returns `Some(DateTime<Utc>)` for timestamp variants,
-    /// `None` for non-timestamp variants.
+    /// Returns `Some(DateTime<Utc>)` for [`Variant::TimestampMicros`] variants,
+    /// `None` for other variants.
     ///
     /// # Examples
     ///
@@ -522,31 +543,34 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use chrono::NaiveDate;
     ///
     /// // you can extract a DateTime<Utc> from a UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap().and_utc();
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 34, 56, 780)
+    ///     .unwrap()
+    ///     .and_utc();
     /// let v1 = Variant::from(datetime);
-    /// assert_eq!(v1.as_datetime_utc(), Some(datetime));
+    /// assert_eq!(v1.as_timestamp_micros(), Some(datetime));
     ///
-    /// // or a non-UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap();
-    /// let v2 = Variant::from(datetime);
-    /// assert_eq!(v2.as_datetime_utc(), Some(datetime.and_utc()));
-    ///
-    /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_datetime_utc(), None);
+    /// // but not for other variants.
+    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 33, 54, 123456789)
+    ///     .unwrap()
+    ///     .and_utc();
+    /// let v2 = Variant::from(datetime_nanos);
+    /// assert_eq!(v2.as_timestamp_micros(), None);
     /// ```
-    pub fn as_datetime_utc(&self) -> Option<DateTime<Utc>> {
+    pub fn as_timestamp_micros(&self) -> Option<DateTime<Utc>> {
         match *self {
             Variant::TimestampMicros(d) => Some(d),
-            Variant::TimestampNtzMicros(d) => Some(d.and_utc()),
             _ => None,
         }
     }
 
     /// Converts this variant to a `NaiveDateTime` if possible.
     ///
-    /// Returns `Some(NaiveDateTime)` for timestamp variants,
-    /// `None` for non-timestamp variants.
+    /// Returns `Some(NaiveDateTime)` for [`Variant::TimestampNtzMicros`] variants,
+    /// `None` for other variants.
     ///
     /// # Examples
     ///
@@ -555,23 +579,104 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use chrono::NaiveDate;
     ///
     /// // you can extract a NaiveDateTime from a non-UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap();
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 34, 56, 780)
+    ///     .unwrap();
     /// let v1 = Variant::from(datetime);
-    /// assert_eq!(v1.as_naive_datetime(), Some(datetime));
+    /// assert_eq!(v1.as_timestamp_ntz_micros(), Some(datetime));
     ///
-    /// // or a UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap().and_utc();
-    /// let v2 = Variant::from(datetime);
-    /// assert_eq!(v2.as_naive_datetime(), Some(datetime.naive_utc()));
-    ///
-    /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_naive_datetime(), None);
+    /// // but not for other variants.
+    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 33, 54, 123456789)
+    ///     .unwrap();
+    /// let v2 = Variant::from(datetime_nanos);
+    /// assert_eq!(v2.as_timestamp_micros(), None);
     /// ```
-    pub fn as_naive_datetime(&self) -> Option<NaiveDateTime> {
+    pub fn as_timestamp_ntz_micros(&self) -> Option<NaiveDateTime> {
         match *self {
             Variant::TimestampNtzMicros(d) => Some(d),
-            Variant::TimestampMicros(d) => Some(d.naive_utc()),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `DateTime<Utc>` if possible.
+    ///
+    /// Returns `Some(DateTime<Utc>)` for timestamp variants,
+    /// `None` for other variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use chrono::NaiveDate;
+    ///
+    /// // you can extract a DateTime<Utc> from a UTC-adjusted nanosecond-precision variant
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 789123456)
+    ///     .unwrap()
+    ///     .and_utc();
+    /// let v1 = Variant::from(datetime);
+    /// assert_eq!(v1.as_timestamp_nanos(), Some(datetime));
+    ///
+    /// // or from UTC-adjusted microsecond-precision variant
+    /// let datetime_micros = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 33, 54, 123)
+    ///     .unwrap()
+    ///     .and_utc();
+    /// // this will convert to `Variant::TimestampMicros`.
+    /// let v2 = Variant::from(datetime_micros);
+    /// assert_eq!(v2.as_timestamp_nanos(), Some(datetime_micros));
+    ///
+    /// // but not for other variants.
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_timestamp_nanos(), None);
+    /// ```
+    pub fn as_timestamp_nanos(&self) -> Option<DateTime<Utc>> {
+        match *self {
+            Variant::TimestampNanos(d) | Variant::TimestampMicros(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `NaiveDateTime` if possible.
+    ///
+    /// Returns `Some(NaiveDateTime)` for timestamp variants,
+    /// `None` for other variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use chrono::NaiveDate;
+    ///
+    /// // you can extract a NaiveDateTime from a non-UTC-adjusted variant
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 789123456)
+    ///     .unwrap();
+    /// let v1 = Variant::from(datetime);
+    /// assert_eq!(v1.as_timestamp_ntz_nanos(), Some(datetime));
+    ///
+    /// // or from a microsecond-precision non-UTC-adjusted variant
+    /// let datetime_micros = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 33, 54, 123)
+    ///     .unwrap();
+    /// // this will convert to `Variant::TimestampMicros`.
+    /// let v2 = Variant::from(datetime_micros);
+    /// assert_eq!(v2.as_timestamp_ntz_nanos(), Some(datetime_micros));
+    ///
+    /// // but not for other variants.
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_timestamp_ntz_nanos(), None);
+    /// ```
+    pub fn as_timestamp_ntz_nanos(&self) -> Option<NaiveDateTime> {
+        match *self {
+            Variant::TimestampNtzNanos(d) | Variant::TimestampNtzMicros(d) => Some(d),
             _ => None,
         }
     }
@@ -625,6 +730,32 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn as_string(&'v self) -> Option<&'v str> {
         match self {
             Variant::String(s) | Variant::ShortString(ShortString(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `uuid hyphenated string` if possible.
+    ///
+    /// Returns `Some(String)` for UUID variants, `None` for non-UUID variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // You can extract a UUID from a UUID variant
+    /// let s = uuid::Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+    /// let v1 = Variant::Uuid(s);
+    /// assert_eq!(s, v1.as_uuid().unwrap());
+    /// assert_eq!("67e55044-10b1-426f-9247-bb680e5fe0c8", v1.as_uuid().unwrap().to_string());
+    ///
+    /// //but not from other variants
+    /// let v2 = Variant::from(1234);
+    /// assert_eq!(None, v2.as_uuid())
+    /// ```
+    pub fn as_uuid(&self) -> Option<Uuid> {
+        match self {
+            Variant::Uuid(u) => Some(*u),
             _ => None,
         }
     }
@@ -765,6 +896,166 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    fn generic_convert_unsigned_primitive<T>(&self) -> Option<T>
+    where
+        T: TryFrom<i8> + TryFrom<i16> + TryFrom<i32> + TryFrom<i64> + TryFrom<i128>,
+    {
+        match *self {
+            Variant::Int8(i) => i.try_into().ok(),
+            Variant::Int16(i) => i.try_into().ok(),
+            Variant::Int32(i) => i.try_into().ok(),
+            Variant::Int64(i) => i.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `u8` if possible.
+    ///
+    /// Returns `Some(u8)` for integer variants that fit in `u8`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::{Variant, VariantDecimal4};
+    ///
+    ///  // you can read an int64 variant into an u8
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u8(), Some(123u8));
+    ///
+    ///  // or a Decimal4 with scale 0 into u8
+    ///  let d = VariantDecimal4::try_new(26, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u8(), Some(26u8));
+    ///
+    ///  // but not a variant that can't fit into the range
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u8(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal4::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u8(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u8(), None);
+    /// ```
+    pub fn as_u8(&self) -> Option<u8> {
+        self.generic_convert_unsigned_primitive::<u8>()
+    }
+
+    /// Converts this variant to an `u16` if possible.
+    ///
+    /// Returns `Some(u16)` for integer variants that fit in `u16`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::{Variant, VariantDecimal4};
+    ///
+    ///  // you can read an int64 variant into an u16
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u16(), Some(123u16));
+    ///
+    ///  // or a Decimal4 with scale 0 into u8
+    ///  let d = VariantDecimal4::try_new(u16::MAX as i32, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u16(), Some(u16::MAX));
+    ///
+    ///  // but not a variant that can't fit into the range
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u16(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal4::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u16(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u16(), None);
+    /// ```
+    pub fn as_u16(&self) -> Option<u16> {
+        self.generic_convert_unsigned_primitive::<u16>()
+    }
+
+    /// Converts this variant to an `u32` if possible.
+    ///
+    /// Returns `Some(u32)` for integer variants that fit in `u32`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::{Variant, VariantDecimal8};
+    ///
+    ///  // you can read an int64 variant into an u32
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u32(), Some(123u32));
+    ///
+    ///  // or a Decimal4 with scale 0 into u8
+    ///  let d = VariantDecimal8::try_new(u32::MAX as i64, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u32(), Some(u32::MAX));
+    ///
+    ///  // but not a variant that can't fit into the range
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u32(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal8::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u32(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u32(), None);
+    /// ```
+    pub fn as_u32(&self) -> Option<u32> {
+        self.generic_convert_unsigned_primitive::<u32>()
+    }
+
+    /// Converts this variant to an `u64` if possible.
+    ///
+    /// Returns `Some(u64)` for integer variants that fit in `u64`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::{Variant, VariantDecimal16};
+    ///
+    ///  // you can read an int64 variant into an u64
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u64(), Some(123u64));
+    ///
+    ///  // or a Decimal16 with scale 0 into u8
+    ///  let d = VariantDecimal16::try_new(u64::MAX as i128, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u64(), Some(u64::MAX));
+    ///
+    ///  // but not a variant that can't fit into the range
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u64(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    /// let d = VariantDecimal16::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u64(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u64(), None);
+    /// ```
+    pub fn as_u64(&self) -> Option<u64> {
+        self.generic_convert_unsigned_primitive::<u64>()
+    }
+
     /// Converts this variant to tuple with a 4-byte unscaled value if possible.
     ///
     /// Returns `Some((i32, u8))` for decimal variants where the unscaled value
@@ -876,10 +1167,49 @@ impl<'m, 'v> Variant<'m, 'v> {
             _ => None,
         }
     }
+
+    /// Converts this variant to an `f16` if possible.
+    ///
+    /// Returns `Some(f16)` for floating point values, and integers with up to 11 bits of
+    /// precision. `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use half::f16;
+    ///
+    /// // you can extract an f16 from a float variant
+    /// let v1 = Variant::from(std::f32::consts::PI);
+    /// assert_eq!(v1.as_f16(), Some(f16::from_f32(std::f32::consts::PI)));
+    ///
+    /// // and from a double variant (with loss of precision to nearest f16)
+    /// let v2 = Variant::from(std::f64::consts::PI);
+    /// assert_eq!(v2.as_f16(), Some(f16::from_f64(std::f64::consts::PI)));
+    ///
+    /// // and from integers with no more than 11 bits of precision
+    /// let v3 = Variant::from(2047);
+    /// assert_eq!(v3.as_f16(), Some(f16::from_f32(2047.0)));
+    ///
+    /// // but not from other variants
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_f16(), None);
+    pub fn as_f16(&self) -> Option<f16> {
+        match *self {
+            Variant::Float(i) => Some(f16::from_f32(i)),
+            Variant::Double(i) => Some(f16::from_f64(i)),
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) if fits_precision::<11>(i) => Some(f16::from_f32(i as _)),
+            Variant::Int32(i) if fits_precision::<11>(i) => Some(f16::from_f32(i as _)),
+            Variant::Int64(i) if fits_precision::<11>(i) => Some(f16::from_f32(i as _)),
+            _ => None,
+        }
+    }
+
     /// Converts this variant to an `f32` if possible.
     ///
-    /// Returns `Some(f32)` for float and double variants,
-    /// `None` for non-floating-point variants.
+    /// Returns `Some(f32)` for floating point values, and integer values with up to 24 bits of
+    /// precision.  `None` otherwise.
     ///
     /// # Examples
     ///
@@ -894,23 +1224,31 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v2.as_f32(), Some(std::f32::consts::PI));
     ///
+    /// // and from integers with no more than 24 bits of precision
+    /// let v3 = Variant::from(16777215i64);
+    /// assert_eq!(v3.as_f32(), Some(16777215.0));
+    ///
     /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_f32(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_f32(), None);
     /// ```
     #[allow(clippy::cast_possible_truncation)]
     pub fn as_f32(&self) -> Option<f32> {
         match *self {
             Variant::Float(i) => Some(i),
             Variant::Double(i) => Some(i as f32),
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) => Some(i.into()),
+            Variant::Int32(i) if fits_precision::<24>(i) => Some(i as _),
+            Variant::Int64(i) if fits_precision::<24>(i) => Some(i as _),
             _ => None,
         }
     }
 
     /// Converts this variant to an `f64` if possible.
     ///
-    /// Returns `Some(f64)` for float and double variants,
-    /// `None` for non-floating-point variants.
+    /// Returns `Some(f64)` for floating point values, and integer values with up to 53 bits of
+    /// precision.  `None` otherwise.
     ///
     /// # Examples
     ///
@@ -925,14 +1263,22 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v2.as_f64(), Some(std::f64::consts::PI));
     ///
+    /// // and from integers with no more than 53 bits of precision
+    /// let v3 = Variant::from(9007199254740991i64);
+    /// assert_eq!(v3.as_f64(), Some(9007199254740991.0));
+    ///
     /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_f64(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_f64(), None);
     /// ```
     pub fn as_f64(&self) -> Option<f64> {
         match *self {
             Variant::Float(i) => Some(i.into()),
             Variant::Double(i) => Some(i),
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) => Some(i.into()),
+            Variant::Int32(i) => Some(i.into()),
+            Variant::Int64(i) if fits_precision::<53>(i) => Some(i as _),
             _ => None,
         }
     }
@@ -1030,6 +1376,34 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to a `NaiveTime` if possible.
+    ///
+    /// Returns `Some(NaiveTime)` for `Variant::Time`,
+    /// `None` for non-Time variants.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::NaiveTime;
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract a `NaiveTime` from a `Variant::Time`
+    /// let time = NaiveTime::from_hms_micro_opt(1, 2, 3, 4).unwrap();
+    /// let v1 = Variant::from(time);
+    /// assert_eq!(Some(time), v1.as_time_utc());
+    ///
+    /// // but not from other variants.
+    /// let v2 = Variant::from("Hello");
+    /// assert_eq!(None, v2.as_time_utc());
+    /// ```
+    pub fn as_time_utc(&'m self) -> Option<NaiveTime> {
+        if let Variant::Time(time) = self {
+            Some(*time)
+        } else {
+            None
+        }
+    }
+
     /// If this is a list and the requested index is in bounds, retrieves the corresponding
     /// element. Otherwise, returns None.
     ///
@@ -1058,14 +1432,12 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Return the metadata associated with this variant, if any.
-    ///
-    /// Returns `Some(&VariantMetadata)` for object and list variants,
-    pub fn metadata(&self) -> Option<&'m VariantMetadata<'_>> {
+    /// Return the metadata dictionary associated with this variant value.
+    pub fn metadata(&self) -> &VariantMetadata<'m> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
-            | Variant::List(VariantList { metadata, .. }) => Some(metadata),
-            _ => None,
+            | Variant::List(VariantList { metadata, .. }) => metadata,
+            _ => &EMPTY_VARIANT_METADATA,
         }
     }
 
@@ -1082,14 +1454,14 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # list.append_value("bar");
     /// # list.append_value("baz");
     /// # list.finish();
-    /// # obj.finish().unwrap();
+    /// # obj.finish();
     /// # let (metadata, value) = builder.finish();
     /// // given a variant like `{"foo": ["bar", "baz"]}`
     /// let variant = Variant::new(&metadata, &value);
     /// // Accessing a non existent path returns None
-    /// assert_eq!(variant.get_path(&VariantPath::from("non_existent")), None);
+    /// assert_eq!(variant.get_path(&VariantPath::try_from("non_existent").unwrap()), None);
     /// // Access obj["foo"]
-    /// let path = VariantPath::from("foo");
+    /// let path = VariantPath::try_from("foo").unwrap();
     /// let foo = variant.get_path(&path).expect("field `foo` should exist");
     /// assert!(foo.as_list().is_some(), "field `foo` should be a list");
     /// // Access foo[0]
@@ -1098,7 +1470,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // bar is a string
     /// assert_eq!(bar.as_string(), Some("bar"));
     /// // You can also access nested paths
-    /// let path = VariantPath::from("foo").join(0);
+    /// let path = VariantPath::try_from("foo").unwrap().join(0);
     /// assert_eq!(variant.get_path(&path).unwrap(), bar);
     /// ```
     pub fn get_path(&self, path: &VariantPath) -> Option<Variant<'_, '_>> {
@@ -1211,6 +1583,12 @@ impl From<VariantDecimal16> for Variant<'_, '_> {
     }
 }
 
+impl From<half::f16> for Variant<'_, '_> {
+    fn from(value: half::f16) -> Self {
+        Variant::Float(value.into())
+    }
+}
+
 impl From<f32> for Variant<'_, '_> {
     fn from(value: f32) -> Self {
         Variant::Float(value)
@@ -1231,18 +1609,39 @@ impl From<NaiveDate> for Variant<'_, '_> {
 
 impl From<DateTime<Utc>> for Variant<'_, '_> {
     fn from(value: DateTime<Utc>) -> Self {
-        Variant::TimestampMicros(value)
+        if value.nanosecond() % 1000 > 0 {
+            Variant::TimestampNanos(value)
+        } else {
+            Variant::TimestampMicros(value)
+        }
     }
 }
+
 impl From<NaiveDateTime> for Variant<'_, '_> {
     fn from(value: NaiveDateTime) -> Self {
-        Variant::TimestampNtzMicros(value)
+        if value.nanosecond() % 1000 > 0 {
+            Variant::TimestampNtzNanos(value)
+        } else {
+            Variant::TimestampNtzMicros(value)
+        }
     }
 }
 
 impl<'v> From<&'v [u8]> for Variant<'_, 'v> {
     fn from(value: &'v [u8]) -> Self {
         Variant::Binary(value)
+    }
+}
+
+impl From<NaiveTime> for Variant<'_, '_> {
+    fn from(value: NaiveTime) -> Self {
+        Variant::Time(value)
+    }
+}
+
+impl From<Uuid> for Variant<'_, '_> {
+    fn from(value: Uuid) -> Self {
+        Variant::Uuid(value)
     }
 }
 
@@ -1286,6 +1685,81 @@ impl TryFrom<(i128, u8)> for Variant<'_, '_> {
     }
 }
 
+// helper to print <invalid> instead of "<invalid>" in debug mode when a VariantObject or VariantList contains invalid values.
+struct InvalidVariant;
+
+impl std::fmt::Debug for InvalidVariant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<invalid>")
+    }
+}
+
+// helper to print binary data in hex format in debug mode, as space-separated hex byte values.
+struct HexString<'a>(&'a [u8]);
+
+impl<'a> std::fmt::Debug for HexString<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some((first, rest)) = self.0.split_first() {
+            write!(f, "{:02x}", first)?;
+            for b in rest {
+                write!(f, " {:02x}", b)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for Variant<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Variant::Null => write!(f, "Null"),
+            Variant::BooleanTrue => write!(f, "BooleanTrue"),
+            Variant::BooleanFalse => write!(f, "BooleanFalse"),
+            Variant::Int8(v) => f.debug_tuple("Int8").field(v).finish(),
+            Variant::Int16(v) => f.debug_tuple("Int16").field(v).finish(),
+            Variant::Int32(v) => f.debug_tuple("Int32").field(v).finish(),
+            Variant::Int64(v) => f.debug_tuple("Int64").field(v).finish(),
+            Variant::Float(v) => f.debug_tuple("Float").field(v).finish(),
+            Variant::Double(v) => f.debug_tuple("Double").field(v).finish(),
+            Variant::Decimal4(d) => f.debug_tuple("Decimal4").field(d).finish(),
+            Variant::Decimal8(d) => f.debug_tuple("Decimal8").field(d).finish(),
+            Variant::Decimal16(d) => f.debug_tuple("Decimal16").field(d).finish(),
+            Variant::Date(d) => f.debug_tuple("Date").field(d).finish(),
+            Variant::TimestampMicros(ts) => f.debug_tuple("TimestampMicros").field(ts).finish(),
+            Variant::TimestampNtzMicros(ts) => {
+                f.debug_tuple("TimestampNtzMicros").field(ts).finish()
+            }
+            Variant::TimestampNanos(ts) => f.debug_tuple("TimestampNanos").field(ts).finish(),
+            Variant::TimestampNtzNanos(ts) => f.debug_tuple("TimestampNtzNanos").field(ts).finish(),
+            Variant::Binary(bytes) => write!(f, "Binary({:?})", HexString(bytes)),
+            Variant::String(s) => f.debug_tuple("String").field(s).finish(),
+            Variant::Time(s) => f.debug_tuple("Time").field(s).finish(),
+            Variant::ShortString(s) => f.debug_tuple("ShortString").field(s).finish(),
+            Variant::Uuid(uuid) => f.debug_tuple("Uuid").field(&uuid).finish(),
+            Variant::Object(obj) => {
+                let mut map = f.debug_map();
+                for res in obj.iter_try() {
+                    match res {
+                        Ok((k, v)) => map.entry(&k, &v),
+                        Err(_) => map.entry(&InvalidVariant, &InvalidVariant),
+                    };
+                }
+                map.finish()
+            }
+            Variant::List(arr) => {
+                let mut list = f.debug_list();
+                for res in arr.iter_try() {
+                    match res {
+                        Ok(v) => list.entry(&v),
+                        Err(_) => list.entry(&InvalidVariant),
+                    };
+                }
+                list.finish()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -1325,5 +1799,259 @@ mod tests {
         let decimal16 = VariantDecimal16::try_new(123456789012345678901234567890_i128, 2).unwrap();
         let variant = Variant::from(decimal16);
         assert_eq!(variant.as_decimal16(), Some(decimal16));
+    }
+
+    #[test]
+    fn test_variant_all_subtypes_debug() {
+        use crate::VariantBuilder;
+
+        let mut builder = VariantBuilder::new();
+
+        // Create a root object that contains one of every variant subtype
+        let mut root_obj = builder.new_object();
+
+        // Add primitive types
+        root_obj.insert("null", ());
+        root_obj.insert("boolean_true", true);
+        root_obj.insert("boolean_false", false);
+        root_obj.insert("int8", 42i8);
+        root_obj.insert("int16", 1234i16);
+        root_obj.insert("int32", 123456i32);
+        root_obj.insert("int64", 1234567890123456789i64);
+        root_obj.insert("float", 1.234f32);
+        root_obj.insert("double", 1.23456789f64);
+
+        // Add date and timestamp types
+        let date = chrono::NaiveDate::from_ymd_opt(2024, 12, 25).unwrap();
+        root_obj.insert("date", date);
+
+        let timestamp_utc = chrono::NaiveDate::from_ymd_opt(2024, 12, 25)
+            .unwrap()
+            .and_hms_milli_opt(15, 30, 45, 123)
+            .unwrap()
+            .and_utc();
+        root_obj.insert("timestamp_micros", Variant::TimestampMicros(timestamp_utc));
+
+        let timestamp_ntz = chrono::NaiveDate::from_ymd_opt(2024, 12, 25)
+            .unwrap()
+            .and_hms_milli_opt(15, 30, 45, 123)
+            .unwrap();
+        root_obj.insert(
+            "timestamp_ntz_micros",
+            Variant::TimestampNtzMicros(timestamp_ntz),
+        );
+
+        let timestamp_nanos_utc = chrono::NaiveDate::from_ymd_opt(2025, 8, 15)
+            .unwrap()
+            .and_hms_nano_opt(12, 3, 4, 123456789)
+            .unwrap()
+            .and_utc();
+        root_obj.insert(
+            "timestamp_nanos",
+            Variant::TimestampNanos(timestamp_nanos_utc),
+        );
+
+        let timestamp_ntz_nanos = chrono::NaiveDate::from_ymd_opt(2025, 8, 15)
+            .unwrap()
+            .and_hms_nano_opt(12, 3, 4, 123456789)
+            .unwrap();
+        root_obj.insert(
+            "timestamp_ntz_nanos",
+            Variant::TimestampNtzNanos(timestamp_ntz_nanos),
+        );
+
+        // Add decimal types
+        let decimal4 = VariantDecimal4::try_new(1234i32, 2).unwrap();
+        root_obj.insert("decimal4", decimal4);
+
+        let decimal8 = VariantDecimal8::try_new(123456789i64, 3).unwrap();
+        root_obj.insert("decimal8", decimal8);
+
+        let decimal16 = VariantDecimal16::try_new(123456789012345678901234567890i128, 4).unwrap();
+        root_obj.insert("decimal16", decimal16);
+
+        // Add binary and string types
+        let binary_data = b"\x01\x02\x03\x04\xde\xad\xbe\xef";
+        root_obj.insert("binary", binary_data.as_slice());
+
+        let long_string =
+            "This is a long string that exceeds the short string limit and contains emoji 🦀";
+        root_obj.insert("string", long_string);
+        root_obj.insert("short_string", "Short string with emoji 🎉");
+        let time = NaiveTime::from_hms_micro_opt(1, 2, 3, 4).unwrap();
+        root_obj.insert("time", time);
+
+        // Add uuid
+        let uuid = Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+        root_obj.insert("uuid", Variant::Uuid(uuid));
+
+        // Add nested object
+        let mut nested_obj = root_obj.new_object("nested_object");
+        nested_obj.insert("inner_key1", "inner_value1");
+        nested_obj.insert("inner_key2", 999i32);
+        nested_obj.finish();
+
+        // Add list with mixed types
+        let mut mixed_list = root_obj.new_list("mixed_list");
+        mixed_list.append_value(1i32);
+        mixed_list.append_value("two");
+        mixed_list.append_value(true);
+        mixed_list.append_value(4.0f32);
+        mixed_list.append_value(());
+
+        // Add nested list inside the mixed list
+        let mut nested_list = mixed_list.new_list();
+        nested_list.append_value("nested");
+        nested_list.append_value(10i8);
+        nested_list.finish();
+
+        mixed_list.finish();
+
+        root_obj.finish();
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+
+        // Test Debug formatter (?)
+        let debug_output = format!("{:?}", variant);
+
+        // Verify that the debug output contains all the expected types
+        assert!(debug_output.contains("\"null\": Null"));
+        assert!(debug_output.contains("\"boolean_true\": BooleanTrue"));
+        assert!(debug_output.contains("\"boolean_false\": BooleanFalse"));
+        assert!(debug_output.contains("\"int8\": Int8(42)"));
+        assert!(debug_output.contains("\"int16\": Int16(1234)"));
+        assert!(debug_output.contains("\"int32\": Int32(123456)"));
+        assert!(debug_output.contains("\"int64\": Int64(1234567890123456789)"));
+        assert!(debug_output.contains("\"float\": Float(1.234)"));
+        assert!(debug_output.contains("\"double\": Double(1.23456789"));
+        assert!(debug_output.contains("\"date\": Date(2024-12-25)"));
+        assert!(debug_output.contains("\"timestamp_micros\": TimestampMicros("));
+        assert!(debug_output.contains("\"timestamp_ntz_micros\": TimestampNtzMicros("));
+        assert!(debug_output.contains("\"timestamp_nanos\": TimestampNanos("));
+        assert!(debug_output.contains("\"timestamp_ntz_nanos\": TimestampNtzNanos("));
+        assert!(debug_output.contains("\"decimal4\": Decimal4("));
+        assert!(debug_output.contains("\"decimal8\": Decimal8("));
+        assert!(debug_output.contains("\"decimal16\": Decimal16("));
+        assert!(debug_output.contains("\"binary\": Binary(01 02 03 04 de ad be ef)"));
+        assert!(debug_output.contains("\"string\": String("));
+        assert!(debug_output.contains("\"short_string\": ShortString("));
+        assert!(debug_output.contains("\"uuid\": Uuid(67e55044-10b1-426f-9247-bb680e5fe0c8)"));
+        assert!(debug_output.contains("\"time\": Time(01:02:03.000004)"));
+        assert!(debug_output.contains("\"nested_object\":"));
+        assert!(debug_output.contains("\"mixed_list\":"));
+
+        let expected = r#"{"binary": Binary(01 02 03 04 de ad be ef), "boolean_false": BooleanFalse, "boolean_true": BooleanTrue, "date": Date(2024-12-25), "decimal16": Decimal16(VariantDecimal16 { integer: 123456789012345678901234567890, scale: 4 }), "decimal4": Decimal4(VariantDecimal4 { integer: 1234, scale: 2 }), "decimal8": Decimal8(VariantDecimal8 { integer: 123456789, scale: 3 }), "double": Double(1.23456789), "float": Float(1.234), "int16": Int16(1234), "int32": Int32(123456), "int64": Int64(1234567890123456789), "int8": Int8(42), "mixed_list": [Int32(1), ShortString(ShortString("two")), BooleanTrue, Float(4.0), Null, [ShortString(ShortString("nested")), Int8(10)]], "nested_object": {"inner_key1": ShortString(ShortString("inner_value1")), "inner_key2": Int32(999)}, "null": Null, "short_string": ShortString(ShortString("Short string with emoji 🎉")), "string": String("This is a long string that exceeds the short string limit and contains emoji 🦀"), "time": Time(01:02:03.000004), "timestamp_micros": TimestampMicros(2024-12-25T15:30:45.123Z), "timestamp_nanos": TimestampNanos(2025-08-15T12:03:04.123456789Z), "timestamp_ntz_micros": TimestampNtzMicros(2024-12-25T15:30:45.123), "timestamp_ntz_nanos": TimestampNtzNanos(2025-08-15T12:03:04.123456789), "uuid": Uuid(67e55044-10b1-426f-9247-bb680e5fe0c8)}"#;
+        assert_eq!(debug_output, expected);
+
+        // Test alternate Debug formatter (#?)
+        let alt_debug_output = format!("{:#?}", variant);
+        let expected = r#"{
+    "binary": Binary(01 02 03 04 de ad be ef),
+    "boolean_false": BooleanFalse,
+    "boolean_true": BooleanTrue,
+    "date": Date(
+        2024-12-25,
+    ),
+    "decimal16": Decimal16(
+        VariantDecimal16 {
+            integer: 123456789012345678901234567890,
+            scale: 4,
+        },
+    ),
+    "decimal4": Decimal4(
+        VariantDecimal4 {
+            integer: 1234,
+            scale: 2,
+        },
+    ),
+    "decimal8": Decimal8(
+        VariantDecimal8 {
+            integer: 123456789,
+            scale: 3,
+        },
+    ),
+    "double": Double(
+        1.23456789,
+    ),
+    "float": Float(
+        1.234,
+    ),
+    "int16": Int16(
+        1234,
+    ),
+    "int32": Int32(
+        123456,
+    ),
+    "int64": Int64(
+        1234567890123456789,
+    ),
+    "int8": Int8(
+        42,
+    ),
+    "mixed_list": [
+        Int32(
+            1,
+        ),
+        ShortString(
+            ShortString(
+                "two",
+            ),
+        ),
+        BooleanTrue,
+        Float(
+            4.0,
+        ),
+        Null,
+        [
+            ShortString(
+                ShortString(
+                    "nested",
+                ),
+            ),
+            Int8(
+                10,
+            ),
+        ],
+    ],
+    "nested_object": {
+        "inner_key1": ShortString(
+            ShortString(
+                "inner_value1",
+            ),
+        ),
+        "inner_key2": Int32(
+            999,
+        ),
+    },
+    "null": Null,
+    "short_string": ShortString(
+        ShortString(
+            "Short string with emoji 🎉",
+        ),
+    ),
+    "string": String(
+        "This is a long string that exceeds the short string limit and contains emoji 🦀",
+    ),
+    "time": Time(
+        01:02:03.000004,
+    ),
+    "timestamp_micros": TimestampMicros(
+        2024-12-25T15:30:45.123Z,
+    ),
+    "timestamp_nanos": TimestampNanos(
+        2025-08-15T12:03:04.123456789Z,
+    ),
+    "timestamp_ntz_micros": TimestampNtzMicros(
+        2024-12-25T15:30:45.123,
+    ),
+    "timestamp_ntz_nanos": TimestampNtzNanos(
+        2025-08-15T12:03:04.123456789,
+    ),
+    "uuid": Uuid(
+        67e55044-10b1-426f-9247-bb680e5fe0c8,
+    ),
+}"#;
+        assert_eq!(alt_debug_output, expected);
     }
 }

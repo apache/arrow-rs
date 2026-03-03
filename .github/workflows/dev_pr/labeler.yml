@@ -37,6 +37,11 @@ arrow:
       - 'arrow-string/**/*'
       - 'arrow/**/*'
 
+arrow-avro:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'arrow-avro/**/*'
+
 arrow-flight:
   - changed-files:
     - any-glob-to-any-file:
@@ -46,7 +51,13 @@ parquet:
   - changed-files:
     - any-glob-to-any-file:
       - 'parquet/**/*'
-      - 'parquet-variant/**/*'
+
+parquet-variant:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'parquet-variant/**/*'
+          - 'parquet-variant-compute/**/*'
+          - 'parquet-variant-json/**/*'
 
 parquet-derive:
   - changed-files:

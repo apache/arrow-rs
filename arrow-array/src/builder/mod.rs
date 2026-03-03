@@ -273,8 +273,8 @@ mod union_builder;
 
 pub use union_builder::*;
 
-use crate::types::{Int16Type, Int32Type, Int64Type, Int8Type};
 use crate::ArrayRef;
+use crate::types::{Int8Type, Int16Type, Int32Type, Int64Type};
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
 
@@ -567,7 +567,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                     .with_values_field(fields[1].clone()),
                 )
             }
-            t => panic!("The field of Map data type {t:?} should have a child Struct field"),
+            t => panic!("The field of Map data type {t} should have a child Struct field"),
         },
         DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
         t @ DataType::Dictionary(key_type, value_type) => {
@@ -594,7 +594,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                                 LargeBinaryDictionaryBuilder::with_capacity(capacity, 256, 1024);
                             Box::new(dict_builder)
                         }
-                        t => panic!("Dictionary value type {t:?} is not currently supported"),
+                        t => unimplemented!("Dictionary value type {t} is not currently supported"),
                     }
                 };
             }
@@ -604,10 +604,12 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                 DataType::Int32 => dict_builder!(Int32Type),
                 DataType::Int64 => dict_builder!(Int64Type),
                 _ => {
-                    panic!("Data type {t:?} with key type {key_type:?} is not currently supported")
+                    unimplemented!(
+                        "Data type {t} with key type {key_type} is not currently supported"
+                    )
                 }
             }
         }
-        t => panic!("Data type {t:?} is not currently supported"),
+        t => unimplemented!("Data type {t} is not currently supported"),
     }
 }

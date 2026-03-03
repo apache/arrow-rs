@@ -25,6 +25,9 @@ __blobstorage__
 *.bak2
 # OS-specific .gitignores
 
+# cargo insta temp files
+*.pending-snap
+
 # Mac .gitignore
 # General
 .DS_Store

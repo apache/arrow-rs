@@ -29,7 +29,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::writer::DictionaryTracker;
-use crate::{KeyValue, Message, CONTINUATION_MARKER};
+use crate::{CONTINUATION_MARKER, KeyValue, Message};
 use DataType::*;
 
 /// Low level Arrow [Schema] to IPC bytes converter
@@ -165,7 +165,7 @@ impl From<crate::Field<'_>> for Field {
         let arrow_field = if let Some(dictionary) = field.dictionary() {
             #[allow(deprecated)]
             Field::new_dict(
-                field.name().unwrap(),
+                field.name().unwrap_or_default(),
                 get_data_type(field, true),
                 field.nullable(),
                 dictionary.id(),
@@ -173,7 +173,7 @@ impl From<crate::Field<'_>> for Field {
             )
         } else {
             Field::new(
-                field.name().unwrap(),
+                field.name().unwrap_or_default(),
                 get_data_type(field, true),
                 field.nullable(),
             )
@@ -279,9 +279,9 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
 
     if buffer.len() < len as usize {
         let actual_len = buffer.len();
-        return Err(ArrowError::ParseError(
-            format!("The buffer length ({actual_len}) is less than the encapsulated message's reported length ({len})")
-        ));
+        return Err(ArrowError::ParseError(format!(
+            "The buffer length ({actual_len}) is less than the encapsulated message's reported length ({len})"
+        )));
     }
 
     let msg = crate::root_as_message(buffer)
@@ -425,6 +425,20 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             }
             DataType::LargeList(Arc::new(children.get(0).into()))
         }
+        crate::Type::ListView => {
+            let children = field.children().unwrap();
+            if children.len() != 1 {
+                panic!("expect a listview to have one child")
+            }
+            DataType::ListView(Arc::new(children.get(0).into()))
+        }
+        crate::Type::LargeListView => {
+            let children = field.children().unwrap();
+            if children.len() != 1 {
+                panic!("expect a large listview to have one child")
+            }
+            DataType::LargeListView(Arc::new(children.get(0).into()))
+        }
         crate::Type::FixedSizeList => {
             let children = field.children().unwrap();
             if children.len() != 1 {
@@ -490,8 +504,9 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             };
 
             let fields = match union.typeIds() {
-                None => UnionFields::new(0_i8..fields.len() as i8, fields),
-                Some(ids) => UnionFields::new(ids.iter().map(|i| i as i8), fields),
+                None => UnionFields::from_fields(fields),
+                Some(ids) => UnionFields::try_new(ids.iter().map(|i| i as i8), fields)
+                    .expect("invalid union field"),
             };
 
             DataType::Union(fields, union_mode)
@@ -760,7 +775,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
-        List(ref list_type) => {
+        List(list_type) => {
             let child = build_field(fbb, dictionary_tracker, list_type);
             FBFieldType {
                 type_type: crate::Type::List,
@@ -768,8 +783,25 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&[child])),
             }
         }
-        ListView(_) | LargeListView(_) => unimplemented!("ListView/LargeListView not implemented"),
-        LargeList(ref list_type) => {
+        ListView(list_type) => {
+            let child = build_field(fbb, dictionary_tracker, list_type);
+            FBFieldType {
+                type_type: crate::Type::ListView,
+                type_: crate::ListViewBuilder::new(fbb).finish().as_union_value(),
+                children: Some(fbb.create_vector(&[child])),
+            }
+        }
+        LargeListView(list_type) => {
+            let child = build_field(fbb, dictionary_tracker, list_type);
+            FBFieldType {
+                type_type: crate::Type::LargeListView,
+                type_: crate::LargeListViewBuilder::new(fbb)
+                    .finish()
+                    .as_union_value(),
+                children: Some(fbb.create_vector(&[child])),
+            }
+        }
+        LargeList(list_type) => {
             let child = build_field(fbb, dictionary_tracker, list_type);
             FBFieldType {
                 type_type: crate::Type::LargeList,
@@ -777,7 +809,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&[child])),
             }
         }
-        FixedSizeList(ref list_type, len) => {
+        FixedSizeList(list_type, len) => {
             let child = build_field(fbb, dictionary_tracker, list_type);
             let mut builder = crate::FixedSizeListBuilder::new(fbb);
             builder.add_listSize(*len);
@@ -1151,13 +1183,14 @@ mod tests {
                 Field::new(
                     "union<int32, utf8>",
                     DataType::Union(
-                        UnionFields::new(
+                        UnionFields::try_new(
                             vec![2, 3], // non-default type ids
                             vec![
                                 Field::new("int32", DataType::Int32, true),
                                 Field::new("utf8", DataType::Utf8, true),
                             ],
-                        ),
+                        )
+                        .unwrap(),
                         UnionMode::Dense,
                     ),
                     true,

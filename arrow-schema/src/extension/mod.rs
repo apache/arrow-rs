@@ -16,8 +16,6 @@
 // under the License.
 
 //! Extension types.
-//!
-//! <div class="warning">This module is experimental. There might be breaking changes between minor releases.</div>
 
 #[cfg(feature = "canonical_extension_types")]
 mod canonical;
@@ -25,6 +23,7 @@ mod canonical;
 pub use canonical::*;
 
 use crate::{ArrowError, DataType};
+use std::collections::HashMap;
 
 /// The metadata key for the string name identifying an [`ExtensionType`].
 pub const EXTENSION_TYPE_NAME_KEY: &str = "ARROW:extension:name";
@@ -257,4 +256,46 @@ pub trait ExtensionType: Sized {
     /// This should return an error if the given data type is not supported by
     /// this extension type.
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError>;
+
+    /// Construct this extension type from field metadata and data type.
+    ///
+    /// This is a provided method that extracts extension type information from
+    /// metadata (using [`EXTENSION_TYPE_NAME_KEY`] and
+    /// [`EXTENSION_TYPE_METADATA_KEY`]) and delegates to [`Self::try_new`].
+    ///
+    /// Returns an error if:
+    /// - The extension type name is missing or doesn't match [`Self::NAME`]
+    /// - Metadata deserialization fails
+    /// - The data type is not supported
+    ///
+    /// This method enables extension type checking without requiring a full
+    /// [`Field`] instance, useful when only metadata and data type are available.
+    ///
+    /// [`Field`]: crate::Field
+    fn try_new_from_field_metadata(
+        data_type: &DataType,
+        metadata: &HashMap<String, String>,
+    ) -> Result<Self, ArrowError> {
+        // Check the extension name in the metadata
+        match metadata.get(EXTENSION_TYPE_NAME_KEY).map(|s| s.as_str()) {
+            // It should match the name of the given extension type
+            Some(name) if name == Self::NAME => {
+                // Deserialize the metadata and try to construct the extension type
+                let ext_metadata = metadata
+                    .get(EXTENSION_TYPE_METADATA_KEY)
+                    .map(|s| s.as_str());
+                let parsed = Self::deserialize_metadata(ext_metadata)?;
+                Self::try_new(data_type, parsed)
+            }
+            // Name mismatch
+            Some(name) => Err(ArrowError::InvalidArgumentError(format!(
+                "Extension type name mismatch: expected {}, got {name}",
+                Self::NAME
+            ))),
+            // Name missing
+            None => Err(ArrowError::InvalidArgumentError(
+                "Extension type name missing".to_string(),
+            )),
+        }
+    }
 }

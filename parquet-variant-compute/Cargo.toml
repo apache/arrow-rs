@@ -17,9 +17,7 @@
 
 [package]
 name = "parquet-variant-compute"
-# This package is still in development and thus the version does
-# not follow the versions of the rest of the crates in this repo.
-version = "0.1.0"
+version = { workspace = true }
 license = { workspace = true }
 description = "Apache Parquet Variant Batch Processing"
 homepage = { workspace = true }
@@ -31,11 +29,15 @@ rust-version = { workspace = true }
 
 
 [dependencies]
-arrow = { workspace = true }
+arrow = { workspace = true , features = ["canonical_extension_types"]}
 arrow-schema = { workspace = true }
 half = { version = "2.1", default-features = false }
+indexmap = "2.10.0"
 parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
+chrono = { workspace = true }
+uuid = { version = "1.18.0", features = ["v4"]}
+serde_json = "1.0"
 
 [lib]
 name = "parquet_variant_compute"
@@ -43,7 +45,7 @@ bench = false
 
 [dev-dependencies]
 rand = "0.9.1"
-criterion = { version = "0.6", default-features = false }
+criterion = { workspace = true, default-features = false }
 arrow = { workspace = true, features = ["test_utils"] }
 
 

@@ -61,17 +61,19 @@ mod store;
 pub use store::*;
 
 use crate::{
-    arrow::arrow_writer::ArrowWriterOptions,
     arrow::ArrowWriter,
+    arrow::arrow_writer::ArrowWriterOptions,
     errors::{ParquetError, Result},
-    file::{metadata::RowGroupMetaData, properties::WriterProperties},
-    format::{FileMetaData, KeyValue},
+    file::{
+        metadata::{KeyValue, ParquetMetaData, RowGroupMetaData},
+        properties::WriterProperties,
+    },
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use std::mem;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -245,7 +247,7 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     /// Unlike [`Self::close`] this does not consume self
     ///
     /// Attempting to write after calling finish will result in an error
-    pub async fn finish(&mut self) -> Result<FileMetaData> {
+    pub async fn finish(&mut self) -> Result<ParquetMetaData> {
         let metadata = self.sync_writer.finish()?;
 
         // Force to flush the remaining data.
@@ -258,7 +260,7 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     /// Close and finalize the writer.
     ///
     /// All the data in the inner buffer will be force flushed.
-    pub async fn close(mut self) -> Result<FileMetaData> {
+    pub async fn close(mut self) -> Result<ParquetMetaData> {
         self.finish().await
     }
 
@@ -292,12 +294,11 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
 
 #[cfg(test)]
 mod tests {
+    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
     use std::sync::Arc;
-
-    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 
     use super::*;
 
@@ -339,7 +340,7 @@ mod tests {
         let reader = get_test_reader();
 
         let write_props = WriterProperties::builder()
-            .set_max_row_group_size(64)
+            .set_max_row_group_row_count(Some(64))
             .build();
 
         let mut async_buffer = Vec::new();

@@ -28,23 +28,31 @@ pub use offset::*;
 use crate::{ArrowNativeType, Buffer, MutableBuffer};
 use std::marker::PhantomData;
 
-/// Builder for creating a [Buffer] object.
+/// Builder for creating Arrow [`Buffer`] objects
 ///
-/// A [Buffer] is the underlying data structure of Arrow's Arrays.
+/// A [`Buffer`] is the underlying data structure of Arrow's Arrays.
 ///
 /// For all supported types, there are type definitions for the
 /// generic version of `BufferBuilder<T>`, e.g. `BufferBuilder`.
+///
+/// **Note it is typically faster to create buffers directly from `Vec`**.
+/// See example on [`Buffer`].
+///
+/// # See Also
+/// * [`BooleanBufferBuilder`]: for packing bits in [`BooleanBuffer`]s
+/// * [`NullBufferBuilder`]: for creating [`NullBuffer`]s of null values
+///
+/// [`BooleanBuffer`]: crate::BooleanBuffer
+/// [`NullBuffer`]: crate::NullBuffer
 ///
 /// # Example:
 ///
 /// ```
 /// # use arrow_buffer::builder::BufferBuilder;
-///
 /// let mut builder = BufferBuilder::<u8>::new(100);
 /// builder.append_slice(&[42, 43, 44]);
 /// builder.append(45);
 /// let buffer = builder.finish();
-///
 /// assert_eq!(unsafe { buffer.typed_data::<u8>() }, &[42, 43, 44, 45]);
 /// ```
 #[derive(Debug)]
@@ -70,7 +78,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     ///
     /// assert!(builder.capacity() >= 10);
@@ -87,7 +94,11 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     }
 
     /// Creates a new builder from a [`MutableBuffer`]
-    pub fn new_from_buffer(buffer: MutableBuffer) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// - `buffer` bytes must be aligned to type `T`
+    pub unsafe fn new_from_buffer(buffer: MutableBuffer) -> Self {
         let buffer_len = buffer.len();
         Self {
             buffer,
@@ -102,7 +113,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     /// builder.append(42);
     ///
@@ -118,7 +128,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     /// builder.append(42);
     ///
@@ -149,7 +158,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     /// builder.advance(2);
     ///
@@ -167,7 +175,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     /// builder.reserve(10);
     ///
@@ -185,7 +192,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     /// builder.append(42);
     ///
@@ -205,7 +211,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     /// builder.append_n(10, 42);
     ///
@@ -223,12 +228,12 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u32>::new(10);
     /// builder.append_n_zeroed(3);
     ///
     /// assert_eq!(builder.len(), 3);
     /// assert_eq!(builder.as_slice(), &[0, 0, 0])
+    /// ```
     #[inline]
     pub fn append_n_zeroed(&mut self, n: usize) {
         self.buffer.extend_zeros(n * std::mem::size_of::<T>());
@@ -241,7 +246,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     /// builder.append_slice(&[42, 44, 46]);
     ///
@@ -257,7 +261,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<f64>::new(10);
     /// builder.append(1.3);
     /// builder.append_n(2, 2.3);
@@ -280,7 +283,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<f32>::new(10);
     ///
     /// builder.append_slice(&[1., 2., 3.4]);
@@ -307,7 +309,6 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u16>::new(10);
     ///
     /// builder.append_slice(&[42, 44, 46]);
@@ -322,7 +323,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         self.buffer.truncate(len * std::mem::size_of::<T>());
-        self.len = len;
+        self.len = self.len.min(len);
     }
 
     /// # Safety
@@ -341,16 +342,15 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
 
     /// Resets this builder and returns an immutable [Buffer].
     ///
+    /// Use [`Self::build`] when you don't need to reuse this builder.
+    ///
     /// # Example:
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     /// builder.append_slice(&[42, 44, 46]);
-    ///
     /// let buffer = builder.finish();
-    ///
     /// assert_eq!(unsafe { buffer.typed_data::<u8>() }, &[42, 44, 46]);
     /// ```
     #[inline]
@@ -358,6 +358,24 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         let buf = std::mem::take(&mut self.buffer);
         self.len = 0;
         buf.into()
+    }
+
+    /// Builds an immutable [Buffer] without resetting the builder.
+    ///
+    /// This consumes the builder. Use [`Self::finish`] to reuse it.
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// # use arrow_buffer::builder::BufferBuilder;
+    /// let mut builder = BufferBuilder::<u8>::new(10);
+    /// builder.append_slice(&[42, 44, 46]);
+    /// let buffer = builder.build();
+    /// assert_eq!(unsafe { buffer.typed_data::<u8>() }, &[42, 44, 46]);
+    /// ```
+    #[inline]
+    pub fn build(self) -> Buffer {
+        self.buffer.into()
     }
 }
 
@@ -377,7 +395,10 @@ impl<T: ArrowNativeType> Extend<T> for BufferBuilder<T> {
 
 impl<T: ArrowNativeType> From<Vec<T>> for BufferBuilder<T> {
     fn from(value: Vec<T>) -> Self {
-        Self::new_from_buffer(MutableBuffer::from(value))
+        let buffer = MutableBuffer::from(value);
+        // SAFETY
+        // - buffer is aligned to T
+        unsafe { Self::new_from_buffer(buffer) }
     }
 }
 
@@ -417,5 +438,17 @@ mod tests {
         assert_eq!(builder.len(), 2);
         builder.extend([3, 4]);
         assert_eq!(builder.len(), 4);
+    }
+
+    #[test]
+    fn truncate_safety() {
+        let mut builder = BufferBuilder::from(vec![40, -63, 90]);
+        assert_eq!(builder.len(), 3);
+        builder.truncate(151);
+        assert_eq!(builder.len(), 3);
+        builder.advance(219);
+        assert_eq!(builder.len(), 222);
+        let slice = builder.as_slice_mut();
+        assert_eq!(slice.len(), 222);
     }
 }
