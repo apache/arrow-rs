@@ -354,6 +354,7 @@ impl BitWriter {
 /// Maximum byte length for a VLQ encoded integer
 /// MAX_VLQ_BYTE_LEN = 5 for i32, and MAX_VLQ_BYTE_LEN = 10 for i64
 pub const MAX_VLQ_BYTE_LEN: usize = 10;
+pub const MAX_VLQ_BITSHIFT: usize = (MAX_VLQ_BYTE_LEN - 1)*7;
 
 pub struct BitReader {
     /// The byte buffer to read from, passed in by client
@@ -657,16 +658,18 @@ impl BitReader {
     /// Reads a VLQ encoded (in little endian order) int from the stream.
     /// The encoded int must start at the beginning of a byte.
     ///
-    /// Returns `None` if there's not enough bytes in the stream. `Some` otherwise.
+    /// Returns `None` if there's not enough bytes in the stream.
     pub fn get_vlq_int(&mut self) -> Option<i64> {
         let mut shift = 0;
         let mut v: i64 = 0;
         while let Some(byte) = self.get_aligned::<u8>(1) {
+            assert!(shift != MAX_VLQ_BITSHIFT || ((byte & 0xFE) == 0),
+                    "parquet_data_error: VLQ encoded integer has more than 64 bits");
             v |= ((byte & 0x7F) as i64) << shift;
             shift += 7;
             assert!(
-                shift <= MAX_VLQ_BYTE_LEN * 7,
-                "Num of bytes exceed MAX_VLQ_BYTE_LEN ({MAX_VLQ_BYTE_LEN})"
+                shift <= MAX_VLQ_BITSHIFT * 7,
+                "parquet_data_error: VLQ encoded integer num of bytes exceed MAX_VLQ_BYTE_LEN ({MAX_VLQ_BYTE_LEN})"
             );
             if byte & 0x80 == 0 {
                 return Some(v);
@@ -811,10 +814,36 @@ mod tests {
     #[test]
     fn test_bit_reader_get_vlq_int() {
         // 10001001 00000001 11110010 10110101 00000110
-        let buffer: Vec<u8> = vec![0x89, 0x01, 0xF2, 0xB5, 0x06];
+        let buffer: Vec<u8> = vec![
+            0x89, 0x01, 0xF2, 0xB5, 0x06, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0x01,
+        ];
         let mut bit_reader = BitReader::from(buffer);
         assert_eq!(bit_reader.get_vlq_int(), Some(137));
         assert_eq!(bit_reader.get_vlq_int(), Some(105202));
+        assert_eq!(bit_reader.get_vlq_int(), Some(0xFFFFFFFFFFFFFFFFu64 as i64));
+    }
+
+    #[test]
+    #[should_panic(expected = "parquet_data_error:")]
+    fn test_bit_reader_get_vlq_int_too_many_bytes() {
+        let buffer: Vec<u8> =
+            vec![0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01];
+        let mut bit_reader = BitReader::from(buffer);
+        // should panic with "parquet_data_error:"
+        let ignored = bit_reader.get_vlq_int();
+    }
+
+    #[test]
+    #[should_panic(expected = "parquet_data_error:")]
+    fn test_bit_reader_get_vlq_int_no_bitshift_overflow() {
+        // The last byte can only have one bit set. If more are set a left shift
+        // overflow would be triggered. Check that we return None in this case,
+        // rather than executing the left shift overflow.
+        let buffer: Vec<u8> = vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x03];
+        let mut bit_reader = BitReader::from(buffer);
+        // should panic with "parquet_data_error:"
+        let ignored = bit_reader.get_vlq_int();
     }
 
     #[test]

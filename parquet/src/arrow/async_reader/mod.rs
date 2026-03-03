@@ -937,8 +937,8 @@ mod tests {
         assert_eq!(async_batches, sync_batches);
 
         let requests = requests.lock().unwrap();
-        let (offset_1, length_1) = metadata.row_group(0).column(1).byte_range();
-        let (offset_2, length_2) = metadata.row_group(0).column(2).byte_range();
+        let (offset_1, length_1) = metadata.row_group(0).column(1).byte_range().unwrap();
+        let (offset_2, length_2) = metadata.row_group(0).column(2).byte_range().unwrap();
 
         assert_eq!(
             &requests[..],

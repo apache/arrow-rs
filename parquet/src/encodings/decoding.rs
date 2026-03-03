@@ -1481,6 +1481,13 @@ mod tests {
     }
 
     #[test]
+    fn test_dict_decode_doesnt_panic_on_empty() {
+        let mut decoder = DictDecoder::<Int32Type>::new();
+        let result = decoder.set_data(Bytes::from(vec![]), 0);
+        assert!(!result.is_ok());
+    }
+
+    #[test]
     #[should_panic(expected = "RleValueEncoder only supports BoolType")]
     fn test_rle_value_encode_int32_not_supported() {
         let mut encoder = RleValueEncoder::<Int32Type>::new();

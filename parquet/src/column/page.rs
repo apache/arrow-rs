@@ -353,12 +353,15 @@ impl TryFrom<&crate::file::metadata::thrift::PageHeader> for PageMetadata {
     ) -> std::result::Result<Self, Self::Error> {
         match value.r#type {
             PageType::DATA_PAGE => {
-                let header = value.data_page_header.as_ref().unwrap();
-                Ok(PageMetadata {
-                    num_rows: None,
-                    num_levels: Some(header.num_values as _),
-                    is_dict: false,
-                })
+                let header = value.data_page_header.as_ref();
+                match header {
+                    None => Err(ParquetError::General("data page header is not set".to_string())),
+                    Some(header) => Ok(PageMetadata {
+                        num_rows: None,
+                        num_levels: Some(header.num_values as _),
+                        is_dict: false,
+                    }),
+                }
             }
             PageType::DICTIONARY_PAGE => Ok(PageMetadata {
                 num_rows: None,
@@ -366,12 +369,17 @@ impl TryFrom<&crate::file::metadata::thrift::PageHeader> for PageMetadata {
                 is_dict: true,
             }),
             PageType::DATA_PAGE_V2 => {
-                let header = value.data_page_header_v2.as_ref().unwrap();
-                Ok(PageMetadata {
-                    num_rows: Some(header.num_rows as _),
-                    num_levels: Some(header.num_values as _),
-                    is_dict: false,
-                })
+                let header = value.data_page_header_v2.as_ref();
+                match header {
+                    None => {
+                        Err(ParquetError::General("data page header v2 is not set".to_string()))
+                    }
+                    Some(header) => Ok(PageMetadata {
+                        num_rows: Some(header.num_rows as _),
+                        num_levels: Some(header.num_values as _),
+                        is_dict: false,
+                    }),
+                }
             }
             other => Err(ParquetError::General(format!(
                 "page type {other:?} cannot be converted to PageMetadata"

@@ -465,7 +465,11 @@ impl RleDecoder {
             if self.rle_left > 0 {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
-                let dict_value = dict[dict_idx].clone();
+
+                let dict_value = dict
+                    .get(dict_idx)
+                    .ok_or_else(|| ParquetError::General(format!("Index out of bounds: the len is {} but the index is {}", dict.len(), dict_idx)))?
+                    .clone();
 
                 buffer[values_read..values_read + num_values].fill(dict_value);
 
@@ -494,10 +498,24 @@ impl RleDecoder {
                         self.bit_packed_left = 0;
                         break;
                     }
+
                     buffer[values_read..values_read + num_values]
                         .iter_mut()
                         .zip(index_buf[..num_values].iter())
-                        .for_each(|(b, i)| b.clone_from(&dict[*i as usize]));
+                        .try_for_each(|(b, i)| -> Result<()> {
+                            let dict_idx = *i as usize;
+                            let dict_val = dict
+                                .get(dict_idx)
+                                .ok_or_else(|| {
+                                    ParquetError::General(
+                                        format!(
+                                            "Index out of bounds: the len is {} but the index is {}",
+                                             dict.len(), dict_idx))
+                                        })?;
+                            b.clone_from(dict_val);
+                            Ok(())
+                        })?;
+
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {
@@ -716,6 +734,22 @@ mod tests {
             decoder.get_batch_with_dict::<&str>(dict.as_slice(), buffer.as_mut_slice(), 12);
         assert!(result.is_ok());
         assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_rle_decode_with_dict_out_of_bounds() {
+        // Test RLE encoding: 2 0s (ok) followed by 3 3s (fail out of bounds)
+        let dict = vec![10, 20, 30];
+        let data = vec![0x04, 0x00, 0x06, 0x03];
+        let mut decoder: RleDecoder = RleDecoder::new(3);
+        decoder.set_data(data.into());
+        let mut buffer = vec![0; 3];
+        let result = decoder.get_batch_with_dict::<i32>(&dict, &mut buffer, 3);
+        assert!(result.is_err());
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "Parquet error: Index out of bounds: the len is 3 but the index is 3"
+        );
     }
 
     #[test]
