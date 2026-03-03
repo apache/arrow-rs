@@ -2854,7 +2854,7 @@ mod tests {
             })),
             mk_primitive(PrimitiveType::String),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Default::default());
         let dt = maker
             .make_data_type(&writer, Some(&reader), None)
             .expect("resolution should succeed");
@@ -2954,7 +2954,7 @@ mod tests {
             })),
             mk_primitive(PrimitiveType::String),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Default::default());
         let dt = maker
             .make_data_type(&writer, Some(&reader), None)
             .expect("resolution should succeed");
@@ -3694,7 +3694,7 @@ mod tests {
                 additional: Default::default(),
             },
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Default::default());
         let dt = maker.make_data_type(&schema, None, None).unwrap();
         assert!(matches!(dt.codec(), Codec::IntervalMonthDayNano));
         assert_eq!(
