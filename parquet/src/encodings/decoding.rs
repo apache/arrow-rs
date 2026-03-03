@@ -779,8 +779,8 @@ where
             // `value[i] = (i + 1) * min_delta + last_value`. In both cases we remove the
             // dependence on the preceding value.
             // Kudos to @pitrou for the idea https://github.com/apache/arrow/pull/49296
+            let min_delta = self.min_delta.as_i64()?;
             if bit_width == 0 {
-                let min_delta = self.min_delta.as_i64()?;
                 if min_delta == 0 {
                     buffer[read..read + batch_read].fill(self.last_value);
                 } else {
@@ -796,15 +796,21 @@ where
                     self.last_value = buffer[read + batch_read - 1];
                 }
             } else {
-                for v in &mut buffer[read..read + batch_read] {
-                    // It is OK for deltas to contain "overflowed" values after encoding,
-                    // e.g. i64::MAX - i64::MIN, so we use `wrapping_add` to "overflow" again and
-                    // restore original value.
-                    *v = v
-                        .wrapping_add(&self.min_delta)
-                        .wrapping_add(&self.last_value);
-
-                    self.last_value = *v;
+                // It is OK for deltas to contain "overflowed" values after encoding,
+                // e.g. i64::MAX - i64::MIN, so we use `wrapping_add` to "overflow" again and
+                // restore original value.
+                if min_delta == 0 {
+                    for v in &mut buffer[read..read + batch_read] {
+                        *v = v.wrapping_add(&self.last_value);
+                        self.last_value = *v;
+                    }
+                } else {
+                    for v in &mut buffer[read..read + batch_read] {
+                        *v = v
+                            .wrapping_add(&self.min_delta)
+                            .wrapping_add(&self.last_value);
+                        self.last_value = *v;
+                    }
                 }
             }
 
