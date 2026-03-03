@@ -782,9 +782,7 @@ where
             if bit_width == 0 {
                 let min_delta = self.min_delta.as_i64()?;
                 if min_delta == 0 {
-                    for v in &mut buffer[read..read + batch_read] {
-                        *v = self.last_value;
-                    }
+                    buffer[read..read + batch_read].fill(self.last_value);
                 } else {
                     // the c++ version multiplies min_delta by the iter index, but doing
                     // wrapping_mul through T::T was a bit slower. this is still
