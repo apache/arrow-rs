@@ -23,17 +23,17 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use bytes::Bytes;
 use futures::{FutureExt, TryFutureExt, future::BoxFuture};
+use object_store::ObjectStoreExt;
 use object_store::{GetOptions, GetRange};
 use object_store::{ObjectStore, path::Path};
 use tokio::runtime::Handle;
-
 /// Reads Parquet files in object storage using [`ObjectStore`].
 ///
 /// ```no_run
 /// # use std::io::stdout;
 /// # use std::sync::Arc;
 /// # use object_store::azure::MicrosoftAzureBuilder;
-/// # use object_store::ObjectStore;
+/// # use object_store::{ObjectStore, ObjectStoreExt};
 /// # use object_store::path::Path;
 /// # use parquet::arrow::async_reader::ParquetObjectReader;
 /// # use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -93,7 +93,7 @@ impl ParquetObjectReader {
     /// Providing this size up front is an important optimization to avoid extra calls when the
     /// underlying store does not support suffix range requests.
     ///
-    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`].
+    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStoreExt::head`].
     pub fn with_file_size(self, file_size: u64) -> Self {
         Self {
             file_size: Some(file_size),
@@ -186,7 +186,7 @@ impl MetadataSuffixFetch for &mut ParquetObjectReader {
 
 impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        self.spawn(|store, path| store.get_range(path, range))
+        self.spawn(|store, path| store.get_range(path, range).boxed())
     }
 
     fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
@@ -264,7 +264,7 @@ mod tests {
     use futures::FutureExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore};
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
     async fn get_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
         let res = parquet_test_data();

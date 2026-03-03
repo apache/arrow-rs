@@ -32,17 +32,18 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
                 .downcast_ref::<RunArray<K>>()
                 .ok_or_else(|| ArrowError::CastError("Expected RunArray".to_string()))?;
 
-            let values = run_array.values();
-
             match to_type {
                 // Stay as RunEndEncoded, cast only the values
                 DataType::RunEndEncoded(target_index_field, target_value_field) => {
-                    let cast_values =
-                        cast_with_options(values, target_value_field.data_type(), cast_options)?;
+                    let values = run_array.values_slice();
+                    let cast_values = cast_with_options(
+                        values.as_ref(),
+                        target_value_field.data_type(),
+                        cast_options,
+                    )?;
 
-                    let run_ends_array = PrimitiveArray::<K>::from_iter_values(
-                        run_array.run_ends().values().iter().copied(),
-                    );
+                    let run_ends_array =
+                        PrimitiveArray::<K>::from_iter_values(run_array.run_ends().sliced_values());
                     let cast_run_ends = cast_with_options(
                         &run_ends_array,
                         target_index_field.data_type(),
@@ -67,11 +68,12 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
                             ));
                         }
                     };
-                    Ok(Arc::new(new_run_array))
+                    Ok(new_run_array)
                 }
 
                 // Expand to logical form
                 _ => {
+                    let values = run_array.values();
                     let len = run_array.len();
                     let offset = run_array.offset();
                     let run_ends = run_array.run_ends().values();

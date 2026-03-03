@@ -109,7 +109,7 @@ impl_timestamp_from_variant!(
         if timestamp.nanosecond() != 0 {
             None
         } else {
-            Self::make_value(timestamp)
+            Self::from_naive_datetime(timestamp, None)
         }
     }
 );
@@ -122,7 +122,7 @@ impl_timestamp_from_variant!(
         if timestamp.nanosecond() != 0 {
             None
         } else {
-            Self::make_value(timestamp.naive_utc())
+            Self::from_naive_datetime(timestamp.naive_utc(), None)
         }
     }
 );
@@ -135,7 +135,7 @@ impl_timestamp_from_variant!(
         if timestamp.nanosecond() % 1_000_000 != 0 {
             None
         } else {
-            Self::make_value(timestamp)
+            Self::from_naive_datetime(timestamp, None)
         }
     }
 );
@@ -148,7 +148,7 @@ impl_timestamp_from_variant!(
         if timestamp.nanosecond() % 1_000_000 != 0 {
             None
         } else {
-            Self::make_value(timestamp.naive_utc())
+            Self::from_naive_datetime(timestamp.naive_utc(), None)
         }
     }
 );
@@ -156,25 +156,25 @@ impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
     as_timestamp_ntz_micros,
     ntz = true,
-    Self::make_value,
+    |timestamp| Self::from_naive_datetime(timestamp, None),
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
     as_timestamp_micros,
     ntz = false,
-    |timestamp| Self::make_value(timestamp.naive_utc())
+    |timestamp| Self::from_naive_datetime(timestamp.naive_utc(), None)
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampNanosecondType,
     as_timestamp_ntz_nanos,
     ntz = true,
-    Self::make_value
+    |timestamp| Self::from_naive_datetime(timestamp, None)
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampNanosecondType,
     as_timestamp_nanos,
     ntz = false,
-    |timestamp| Self::make_value(timestamp.naive_utc())
+    |timestamp| Self::from_naive_datetime(timestamp.naive_utc(), None)
 );
 
 /// Returns the unscaled integer representation for Arrow decimal type `O`

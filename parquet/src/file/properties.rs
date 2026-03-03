@@ -43,8 +43,8 @@ pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 /// Default value for [`WriterProperties::write_page_header_statistics`]
 pub const DEFAULT_WRITE_PAGE_HEADER_STATISTICS: bool = false;
-/// Default value for [`WriterProperties::max_row_group_size`]
-pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
+/// Default value for [`WriterProperties::max_row_group_row_count`]
+pub const DEFAULT_MAX_ROW_GROUP_ROW_COUNT: usize = 1024 * 1024;
 /// Default value for [`WriterProperties::bloom_filter_position`]
 pub const DEFAULT_BLOOM_FILTER_POSITION: BloomFilterPosition = BloomFilterPosition::AfterRowGroup;
 /// Default value for [`WriterProperties::created_by`]
@@ -153,10 +153,10 @@ pub type WriterPropertiesPtr = Arc<WriterProperties>;
 /// ```
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
-    data_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
-    max_row_group_size: usize,
+    max_row_group_row_count: Option<usize>,
+    max_row_group_bytes: Option<usize>,
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
@@ -204,7 +204,22 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_data_page_size_limit`]
     pub fn data_page_size_limit(&self) -> usize {
-        self.data_page_size_limit
+        self.default_column_properties
+            .data_page_size_limit()
+            .unwrap_or(DEFAULT_PAGE_SIZE)
+    }
+
+    /// Returns data page size limit for a specific column.
+    ///
+    /// Takes precedence over [`Self::data_page_size_limit`].
+    ///
+    /// Note: this is a best effort limit based on the write batch size.
+    pub fn column_data_page_size_limit(&self, col: &ColumnPath) -> usize {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.data_page_size_limit())
+            .or_else(|| self.default_column_properties.data_page_size_limit())
+            .unwrap_or(DEFAULT_PAGE_SIZE)
     }
 
     /// Returns dictionary page size limit.
@@ -247,11 +262,26 @@ impl WriterProperties {
         self.write_batch_size
     }
 
-    /// Returns maximum number of rows in a row group.
+    /// Returns maximum number of rows in a row group, or `usize::MAX` if unlimited.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_max_row_group_size`]
+    #[deprecated(since = "58.0.0", note = "Use `max_row_group_row_count` instead")]
     pub fn max_row_group_size(&self) -> usize {
-        self.max_row_group_size
+        self.max_row_group_row_count.unwrap_or(usize::MAX)
+    }
+
+    /// Returns maximum number of rows in a row group, or `None` if unlimited.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_row_count`]
+    pub fn max_row_group_row_count(&self) -> Option<usize> {
+        self.max_row_group_row_count
+    }
+
+    /// Returns maximum size of a row group in bytes, or `None` if unlimited.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_bytes`]
+    pub fn max_row_group_bytes(&self) -> Option<usize> {
+        self.max_row_group_bytes
     }
 
     /// Returns bloom filter position.
@@ -442,10 +472,10 @@ impl WriterProperties {
 /// See example on [`WriterProperties`]
 #[derive(Debug, Clone)]
 pub struct WriterPropertiesBuilder {
-    data_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
-    max_row_group_size: usize,
+    max_row_group_row_count: Option<usize>,
+    max_row_group_bytes: Option<usize>,
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
@@ -465,10 +495,10 @@ impl Default for WriterPropertiesBuilder {
     /// Returns default state of the builder.
     fn default() -> Self {
         Self {
-            data_page_size_limit: DEFAULT_PAGE_SIZE,
             data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
-            max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
+            max_row_group_row_count: Some(DEFAULT_MAX_ROW_GROUP_ROW_COUNT),
+            max_row_group_bytes: None,
             bloom_filter_position: DEFAULT_BLOOM_FILTER_POSITION,
             writer_version: DEFAULT_WRITER_VERSION,
             created_by: DEFAULT_CREATED_BY.to_string(),
@@ -490,10 +520,10 @@ impl WriterPropertiesBuilder {
     /// Finalizes the configuration and returns immutable writer properties struct.
     pub fn build(self) -> WriterProperties {
         WriterProperties {
-            data_page_size_limit: self.data_page_size_limit,
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
-            max_row_group_size: self.max_row_group_size,
+            max_row_group_row_count: self.max_row_group_row_count,
+            max_row_group_bytes: self.max_row_group_bytes,
             bloom_filter_position: self.bloom_filter_position,
             writer_version: self.writer_version,
             created_by: self.created_by,
@@ -521,21 +551,6 @@ impl WriterPropertiesBuilder {
     /// [`PARQUET_1_0`]: [WriterVersion::PARQUET_1_0]
     pub fn set_writer_version(mut self, value: WriterVersion) -> Self {
         self.writer_version = value;
-        self
-    }
-
-    /// Sets best effort maximum size of a data page in bytes (defaults to `1024 * 1024`
-    /// via [`DEFAULT_PAGE_SIZE`]).
-    ///
-    /// The parquet writer will attempt to limit the sizes of each
-    /// `DataPage` to this many bytes. Reducing this value will result
-    /// in larger parquet files, but may improve the effectiveness of
-    /// page index based predicate pushdown during reading.
-    ///
-    /// Note: this is a best effort limit based on value of
-    /// [`set_write_batch_size`](Self::set_write_batch_size).
-    pub fn set_data_page_size_limit(mut self, value: usize) -> Self {
-        self.data_page_size_limit = value;
         self
     }
 
@@ -569,13 +584,43 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets maximum number of rows in a row group (defaults to `1024 * 1024`
-    /// via [`DEFAULT_MAX_ROW_GROUP_SIZE`]).
+    /// via [`DEFAULT_MAX_ROW_GROUP_ROW_COUNT`]).
     ///
     /// # Panics
     /// If the value is set to 0.
+    #[deprecated(since = "58.0.0", note = "Use `set_max_row_group_row_count` instead")]
     pub fn set_max_row_group_size(mut self, value: usize) -> Self {
         assert!(value > 0, "Cannot have a 0 max row group size");
-        self.max_row_group_size = value;
+        self.max_row_group_row_count = Some(value);
+        self
+    }
+
+    /// Sets maximum number of rows in a row group, or `None` for unlimited.
+    ///
+    /// If both `max_row_group_row_count` and `max_row_group_bytes` are set,
+    /// the row group with the smaller limit will be produced.
+    ///
+    /// # Panics
+    /// If the value is `Some(0)`.
+    pub fn set_max_row_group_row_count(mut self, value: Option<usize>) -> Self {
+        assert_ne!(value, Some(0), "Cannot have a 0 max row group row count");
+        self.max_row_group_row_count = value;
+        self
+    }
+
+    /// Sets maximum size of a row group in bytes, or `None` for unlimited.
+    ///
+    /// Row groups are flushed when their estimated encoded size exceeds this threshold.
+    /// This is similar to the official Java implementation for `parquet.block.size`'s behavior.
+    ///
+    /// If both `max_row_group_row_count` and `max_row_group_bytes` are set,
+    /// the row group with the smaller limit will be produced.
+    ///
+    /// # Panics
+    /// If the value is `Some(0)`.
+    pub fn set_max_row_group_bytes(mut self, value: Option<usize>) -> Self {
+        assert_ne!(value, Some(0), "Cannot have a 0 max row group bytes");
+        self.max_row_group_bytes = value;
         self
     }
 
@@ -769,6 +814,22 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets best effort maximum size of a data page in bytes (defaults to `1024 * 1024`
+    /// via [`DEFAULT_PAGE_SIZE`]).
+    ///
+    /// The parquet writer will attempt to limit the sizes of each
+    /// `DataPage` to this many bytes. Reducing this value will result
+    /// in larger parquet files, but may improve the effectiveness of
+    /// page index based predicate pushdown during reading.
+    ///
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
+    pub fn set_data_page_size_limit(mut self, value: usize) -> Self {
+        self.default_column_properties
+            .set_data_page_size_limit(value);
+        self
+    }
+
     /// Sets default [`EnabledStatistics`] level for all columns (defaults to [`Page`] via
     /// [`DEFAULT_STATISTICS_ENABLED`]).
     ///
@@ -898,6 +959,14 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets data page size limit for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_data_page_size_limit`].
+    pub fn set_column_data_page_size_limit(mut self, col: ColumnPath, value: usize) -> Self {
+        self.get_mut_props(col).set_data_page_size_limit(value);
+        self
+    }
+
     /// Sets [`EnabledStatistics`] level for a specific column.
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
@@ -949,10 +1018,10 @@ impl WriterPropertiesBuilder {
 impl From<WriterProperties> for WriterPropertiesBuilder {
     fn from(props: WriterProperties) -> Self {
         WriterPropertiesBuilder {
-            data_page_size_limit: props.data_page_size_limit,
             data_page_row_count_limit: props.data_page_row_count_limit,
             write_batch_size: props.write_batch_size,
-            max_row_group_size: props.max_row_group_size,
+            max_row_group_row_count: props.max_row_group_row_count,
+            max_row_group_bytes: props.max_row_group_bytes,
             bloom_filter_position: props.bloom_filter_position,
             writer_version: props.writer_version,
             created_by: props.created_by,
@@ -1065,6 +1134,7 @@ impl Default for BloomFilterProperties {
 struct ColumnProperties {
     encoding: Option<Encoding>,
     codec: Option<Compression>,
+    data_page_size_limit: Option<usize>,
     dictionary_page_size_limit: Option<usize>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
@@ -1093,6 +1163,11 @@ impl ColumnProperties {
     /// Sets compression codec for this column.
     fn set_compression(&mut self, value: Compression) {
         self.codec = Some(value);
+    }
+
+    /// Sets data page size limit for this column.
+    fn set_data_page_size_limit(&mut self, value: usize) {
+        self.data_page_size_limit = Some(value);
     }
 
     /// Sets whether dictionary encoding is enabled for this column.
@@ -1171,6 +1246,11 @@ impl ColumnProperties {
     /// Returns optional dictionary page size limit for this column.
     fn dictionary_page_size_limit(&self) -> Option<usize> {
         self.dictionary_page_size_limit
+    }
+
+    /// Returns optional data page size limit for this column.
+    fn data_page_size_limit(&self) -> Option<usize> {
+        self.data_page_size_limit
     }
 
     /// Returns optional statistics level requested for this column. If result is `None`,
@@ -1333,7 +1413,11 @@ mod tests {
             DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT
         );
         assert_eq!(props.write_batch_size(), DEFAULT_WRITE_BATCH_SIZE);
-        assert_eq!(props.max_row_group_size(), DEFAULT_MAX_ROW_GROUP_SIZE);
+        assert_eq!(
+            props.max_row_group_row_count(),
+            Some(DEFAULT_MAX_ROW_GROUP_ROW_COUNT)
+        );
+        assert_eq!(props.max_row_group_bytes(), None);
         assert_eq!(props.bloom_filter_position(), DEFAULT_BLOOM_FILTER_POSITION);
         assert_eq!(props.writer_version(), DEFAULT_WRITER_VERSION);
         assert_eq!(props.created_by(), DEFAULT_CREATED_BY);
@@ -1418,7 +1502,7 @@ mod tests {
             .set_data_page_size_limit(10)
             .set_dictionary_page_size_limit(20)
             .set_write_batch_size(30)
-            .set_max_row_group_size(40)
+            .set_max_row_group_row_count(Some(40))
             .set_created_by("default".to_owned())
             .set_key_value_metadata(Some(vec![KeyValue::new(
                 "key".to_string(),
@@ -1444,7 +1528,7 @@ mod tests {
             assert_eq!(props.data_page_size_limit(), 10);
             assert_eq!(props.dictionary_page_size_limit(), 20);
             assert_eq!(props.write_batch_size(), 30);
-            assert_eq!(props.max_row_group_size(), 40);
+            assert_eq!(props.max_row_group_row_count(), Some(40));
             assert_eq!(props.created_by(), "default");
             assert_eq!(
                 props.key_value_metadata(),
@@ -1525,6 +1609,29 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
+    fn test_writer_properties_deprecated_max_row_group_size_still_works() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(42)
+            .build();
+
+        assert_eq!(props.max_row_group_row_count(), Some(42));
+        assert_eq!(props.max_row_group_size(), 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 max row group row count")]
+    fn test_writer_properties_panic_on_zero_row_group_row_count() {
+        let _ = WriterProperties::builder().set_max_row_group_row_count(Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 max row group bytes")]
+    fn test_writer_properties_panic_on_zero_row_group_bytes() {
+        let _ = WriterProperties::builder().set_max_row_group_bytes(Some(0));
+    }
+
+    #[test]
     fn test_writer_properties_bloom_filter_ndv_fpp_set() {
         assert_eq!(
             WriterProperties::builder()
@@ -1568,6 +1675,24 @@ mod tests {
         );
         assert_eq!(
             props.column_dictionary_page_size_limit(&ColumnPath::from("other")),
+            100
+        );
+    }
+
+    #[test]
+    fn test_writer_properties_column_data_page_size_limit() {
+        let props = WriterProperties::builder()
+            .set_data_page_size_limit(100)
+            .set_column_data_page_size_limit(ColumnPath::from("col"), 10)
+            .build();
+
+        assert_eq!(props.data_page_size_limit(), 100);
+        assert_eq!(
+            props.column_data_page_size_limit(&ColumnPath::from("col")),
+            10
+        );
+        assert_eq!(
+            props.column_data_page_size_limit(&ColumnPath::from("other")),
             100
         );
     }
