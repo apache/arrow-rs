@@ -1214,7 +1214,7 @@ fn bench_primitive<T>(
         0,
         false,
     );
-    group.bench_function("binary skip packed single value", |b| {
+    group.bench_function("binary packed skip single value", |b| {
         b.iter(|| {
             let array_reader =
                 create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
