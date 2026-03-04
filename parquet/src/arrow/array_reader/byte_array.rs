@@ -696,12 +696,7 @@ mod tests {
             page.extend_from_slice(s);
         }
 
-        let mut decoder = ByteArrayDecoderPlain::new(
-            bytes::Bytes::from(page),
-            3,
-            Some(3),
-            false,
-        );
+        let mut decoder = ByteArrayDecoderPlain::new(bytes::Bytes::from(page), 3, Some(3), false);
 
         let mut output = OffsetBuffer::<i32>::default();
 
