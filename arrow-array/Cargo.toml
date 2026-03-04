@@ -60,7 +60,7 @@ ffi = ["arrow-schema/ffi", "arrow-data/ffi"]
 force_validate = []
 
 [dev-dependencies]
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 criterion = { workspace = true, default-features = false }
 
 [[bench]]
