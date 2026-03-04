@@ -18,8 +18,9 @@
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext, StructMode};
 use arrow_array::builder::BooleanBufferBuilder;
+use arrow_array::{Array, ArrayRef, make_array};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, Fields};
 use std::collections::HashMap;
 
@@ -116,7 +117,7 @@ impl StructArrayDecoder {
 }
 
 impl ArrayDecoder for StructArrayDecoder {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let fields = struct_fields(&self.data_type);
         let row_count = pos.len();
         let field_count = fields.len();
@@ -223,12 +224,15 @@ impl ArrayDecoder for StructArrayDecoder {
             .zip(fields)
             .map(|((field_idx, d), f)| {
                 let pos = self.field_tape_positions.field_positions(field_idx);
-                d.decode(tape, pos).map_err(|e| match e {
-                    ArrowError::JsonError(s) => {
-                        ArrowError::JsonError(format!("whilst decoding field '{}': {s}", f.name()))
-                    }
-                    e => e,
-                })
+                d.decode(tape, pos)
+                    .map(|a| a.to_data())
+                    .map_err(|e| match e {
+                        ArrowError::JsonError(s) => ArrowError::JsonError(format!(
+                            "whilst decoding field '{}': {s}",
+                            f.name()
+                        )),
+                        e => e,
+                    })
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
@@ -256,7 +260,7 @@ impl ArrayDecoder for StructArrayDecoder {
 
         // Safety
         // Validated lengths above
-        Ok(unsafe { data.build_unchecked() })
+        Ok(make_array(unsafe { data.build_unchecked() }))
     }
 }
 
