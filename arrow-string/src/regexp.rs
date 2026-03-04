@@ -203,8 +203,7 @@ where
     let nulls = array
         .nulls()
         .map(|n| n.inner().sliced())
-        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
-        .filter(|n| n.null_count() > 0);
+        .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()));
     Ok(BooleanArray::new(values, nulls))
 }
 

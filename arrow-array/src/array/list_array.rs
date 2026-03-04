@@ -622,6 +622,19 @@ unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> 
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> super::ListLikeArray for GenericListArray<OffsetSize> {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn element_range(&self, index: usize) -> std::ops::Range<usize> {
+        let offsets = self.offsets();
+        let start = offsets[index].as_usize();
+        let end = offsets[index + 1].as_usize();
+        start..end
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListArray<OffsetSize> {
     type Item = ArrayRef;
 
