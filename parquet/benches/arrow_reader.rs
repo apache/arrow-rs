@@ -1159,54 +1159,6 @@ fn bench_primitive<T>(
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
 
-    // binary packed same value
-    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
-        mandatory_column_desc.clone(),
-        0.0,
-        0,
-        false,
-    );
-    group.bench_function("binary packed single value", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
-            count = bench_array_reader_skip(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
-
-    // binary packed monotonically increasing
-    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
-        mandatory_column_desc.clone(),
-        0.0,
-        1,
-        false,
-    );
-    group.bench_function("binary packed increasing value", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
-            count = bench_array_reader_skip(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
-
-    // binary packed increasing stepped
-    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
-        mandatory_column_desc.clone(),
-        0.0,
-        1,
-        true,
-    );
-    group.bench_function("binary packed stepped increasing value", |b| {
-        b.iter(|| {
-            let array_reader =
-                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
-            count = bench_array_reader_skip(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
-
     let data = build_encoded_primitive_page_iterator::<T>(
         optional_column_desc.clone(),
         0.0,
@@ -1235,6 +1187,99 @@ fn bench_primitive<T>(
         b.iter(|| {
             let array_reader =
                 create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader_skip(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary packed same value
+    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        0,
+        false,
+    );
+    group.bench_function("binary packed single value", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        0,
+        false,
+    );
+    group.bench_function("binary skip packed single value", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader_skip(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary packed monotonically increasing
+    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        1,
+        false,
+    );
+    group.bench_function("binary packed increasing value", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        1,
+        false,
+    );
+    group.bench_function("binary packed skip increasing value", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader_skip(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary packed increasing stepped
+    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        1,
+        true,
+    );
+    group.bench_function("binary packed stepped increasing value", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let data = build_delta_encoded_incr_primitive_page_iterator::<T>(
+        mandatory_column_desc.clone(),
+        0.0,
+        1,
+        true,
+    );
+    group.bench_function("binary packed skip stepped increasing value", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), mandatory_column_desc.clone());
             count = bench_array_reader_skip(array_reader);
         });
         assert_eq!(count, EXPECTED_VALUE_COUNT);
