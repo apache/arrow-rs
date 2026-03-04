@@ -24,17 +24,17 @@
 //!
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{ByteArrayType, ByteViewType};
+use arrow_array::types;
 use arrow_array::{
     AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum, FixedSizeBinaryArray,
     GenericByteArray, GenericByteViewArray, downcast_primitive_array,
 };
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 use arrow_select::take::take;
 use std::cmp::Ordering;
-use std::ops::Not;
+use std::ops::{Deref, Not};
 
 #[derive(Debug, Copy, Clone)]
 enum Op {
@@ -243,6 +243,29 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         )));
     }
 
+    if let RunEndEncoded(run_ends, _) = l_t {
+        return match run_ends.data_type() {
+            Int16 => compare_op_run_array(
+                op,
+                l.as_run_opt::<types::Int16Type>().unwrap(),
+                r.as_run_opt().unwrap(),
+            ),
+            Int32 => compare_op_run_array(
+                op,
+                l.as_run_opt::<types::Int32Type>().unwrap(),
+                r.as_run_opt().unwrap(),
+            ),
+            Int64 => compare_op_run_array(
+                op,
+                l.as_run_opt::<types::Int64Type>().unwrap(),
+                r.as_run_opt().unwrap(),
+            ),
+            other => Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid run-ends index type: {other}"
+            ))),
+        };
+    }
+
     // Defer computation as may not be necessary
     let values = || -> BooleanBuffer {
         let d = downcast_primitive_array! {
@@ -352,14 +375,7 @@ fn apply<T: ArrayOrd>(
 
         assert_eq!(l_v.len(), r_v.len()); // Sanity check
 
-        Some(match op {
-            Op::Equal | Op::NotDistinct => apply_op_vectored(l, &l_v, r, &r_v, false, T::is_eq),
-            Op::NotEqual | Op::Distinct => apply_op_vectored(l, &l_v, r, &r_v, true, T::is_eq),
-            Op::Less => apply_op_vectored(l, &l_v, r, &r_v, false, T::is_lt),
-            Op::LessEqual => apply_op_vectored(r, &r_v, l, &l_v, true, T::is_lt),
-            Op::Greater => apply_op_vectored(r, &r_v, l, &l_v, false, T::is_lt),
-            Op::GreaterEqual => apply_op_vectored(l, &l_v, r, &r_v, true, T::is_lt),
-        })
+        Some(apply_any_op_vectored(op, l, &l_v, r, &r_v))
     } else {
         let l_s = l_s.then(|| l_v.map(|x| x.normalized_keys()[0]).unwrap_or_default());
         let r_s = r_s.then(|| r_v.map(|x| x.normalized_keys()[0]).unwrap_or_default());
@@ -462,6 +478,24 @@ fn apply_op<T: ArrayOrd>(
     }
 }
 
+/// Applies `op` to arrays (l, r) at indices (l_v, r_v).
+fn apply_any_op_vectored<T: ArrayOrd>(
+    op: Op,
+    l: T,
+    l_v: &[usize],
+    r: T,
+    r_v: &[usize],
+) -> BooleanBuffer {
+    match op {
+        Op::Equal | Op::NotDistinct => apply_op_vectored(l, l_v, r, r_v, false, T::is_eq),
+        Op::NotEqual | Op::Distinct => apply_op_vectored(l, l_v, r, r_v, true, T::is_eq),
+        Op::Less => apply_op_vectored(l, l_v, r, r_v, false, T::is_lt),
+        Op::LessEqual => apply_op_vectored(r, r_v, l, l_v, true, T::is_lt),
+        Op::Greater => apply_op_vectored(r, r_v, l, l_v, false, T::is_lt),
+        Op::GreaterEqual => apply_op_vectored(l, l_v, r, r_v, true, T::is_lt),
+    }
+}
+
 /// Applies `op` to possibly scalar `ArrayOrd` with the given indices
 fn apply_op_vectored<T: ArrayOrd>(
     l: T,
@@ -477,6 +511,173 @@ fn apply_op_vectored<T: ArrayOrd>(
         let r_idx = *r_v.get_unchecked(idx);
         op(l.value_unchecked(l_idx), r.value_unchecked(r_idx))
     })
+}
+
+/// Compare 2 run-end-encoded arrays.
+/// This is done by merging the run-ends of the 2 arrays, yielding all "cut points" between which
+/// the comparison needs to be performed, alongside the physical indices of the values in the 2
+/// arrays, and applying `op` on those indices.
+fn compare_op_run_array<I: types::RunEndIndexType>(
+    op: Op,
+    l: &arrow_array::RunArray<I>,
+    r: &arrow_array::RunArray<I>,
+) -> Result<BooleanArray, ArrowError> {
+    let (merged_run_ends, l_idx, r_idx) = merge_run_ends(l, r);
+
+    let l_values = l.values_slice();
+    let r_values = r.values_slice();
+
+    let result_no_null: BooleanBuffer = {
+        let l = l_values.deref();
+        let r = r_values.deref();
+        use arrow_schema::DataType::*;
+        downcast_primitive_array! {
+            (l, r) => apply_any_op_vectored(op, l.values().as_ref(), &l_idx, r.values().as_ref(), &r_idx),
+            (Boolean, Boolean) => apply_any_op_vectored(op, l.as_boolean(), &l_idx, r.as_boolean(), &r_idx),
+            (Utf8, Utf8) => apply_any_op_vectored(op, l.as_string::<i32>(), &l_idx, r.as_string::<i32>(), &r_idx),
+            (Utf8View, Utf8View) => apply_any_op_vectored(op, l.as_string_view(), &l_idx, r.as_string_view(), &r_idx),
+            (LargeUtf8, LargeUtf8) => apply_any_op_vectored(op, l.as_string::<i64>(), &l_idx, r.as_string::<i64>(), &r_idx),
+            (Binary, Binary) => apply_any_op_vectored(op, l.as_binary::<i32>(), &l_idx, r.as_binary::<i32>(), &r_idx),
+            (BinaryView, BinaryView) => apply_any_op_vectored(op, l.as_binary_view(), &l_idx, r.as_binary_view(), &r_idx),
+            (LargeBinary, LargeBinary) => apply_any_op_vectored(op, l.as_binary::<i64>(), &l_idx, r.as_binary::<i64>(), &r_idx),
+            (FixedSizeBinary(_), FixedSizeBinary(_)) => apply_any_op_vectored(op, l.as_fixed_size_binary(), &l_idx, r.as_fixed_size_binary(), &r_idx),
+            (Null, Null) => BooleanBuffer::new_unset(merged_run_ends.len()),
+            _ => unreachable!(),
+        }
+    };
+
+    // Finally take nulls into account.
+    let result = match (
+        valids_at_indices(l_values.nulls(), l_idx),
+        valids_at_indices(r_values.nulls(), r_idx),
+    ) {
+        (None, None) => BooleanArray::new(result_no_null, None),
+        (Some(l_valid), Some(r_valid)) => match op {
+            Op::Distinct => result_no_null
+                .iter()
+                .zip(l_valid)
+                .zip(r_valid)
+                .map(|((b, l_v), r_v)| match (l_v, r_v) {
+                    (true, true) => b,
+                    (false, false) => false,
+                    _ => true,
+                })
+                .collect(),
+            Op::NotDistinct => result_no_null
+                .iter()
+                .zip(l_valid)
+                .zip(r_valid)
+                .map(|((b, l_v), r_v)| match (l_v, r_v) {
+                    (true, true) => b,
+                    (false, false) => true,
+                    _ => false,
+                })
+                .collect(),
+            _ => {
+                let valid = l_valid.zip(r_valid).map(|(l, r)| l && r).collect();
+                BooleanArray::new(result_no_null, Some(valid))
+            }
+        },
+        (None, Some(valid)) | (Some(valid), None) => match op {
+            Op::Distinct => result_no_null
+                .iter()
+                .zip(valid)
+                .map(|(r, v)| r || !v)
+                .collect(),
+            Op::NotDistinct => result_no_null
+                .iter()
+                .zip(valid)
+                .map(|(r, v)| r && v)
+                .collect(),
+            _ => BooleanArray::new(result_no_null, Some(valid.collect())),
+        },
+    };
+
+    let mut builder = arrow_array::builder::BooleanBuilder::with_capacity(
+        merged_run_ends
+            .last()
+            .map(|n| n.as_usize())
+            .unwrap_or_default(),
+    );
+    let mut prev_run_end = 0;
+    for (run_end, result) in merged_run_ends.iter().zip(result.iter()) {
+        let run_end = run_end.as_usize();
+        if let Some(bool) = result {
+            builder.append_n(run_end - prev_run_end, bool);
+        } else {
+            builder.append_nulls(run_end - prev_run_end);
+        }
+        prev_run_end = run_end;
+    }
+    Ok(builder.finish())
+}
+
+/// Returns the indices amongst `indices` at which the value is valid.
+/// All of `indices` must be within `nulls`'s length.
+/// Returns None if all values are valid.
+fn valids_at_indices(
+    nulls: Option<&NullBuffer>,
+    indices: Vec<usize>,
+) -> Option<impl Iterator<Item = bool>> {
+    match nulls {
+        Some(n) if n.null_count() > 0 => {
+            let b = n.inner();
+            Some(
+                indices
+                    .into_iter()
+                    .map(|idx| unsafe { b.value_unchecked(idx) }),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// Computes the "union" of 2 same-sized RunArray. Returns 3 vectors:
+/// * all run ends from either RunArray, in increasing order.
+/// * the indices where each value can be found in `left`, for the run-ends from the first vector.
+/// * the indices where each value can be found in `right`, for the run-ends from the first vector.
+fn merge_run_ends<I: types::RunEndIndexType>(
+    left: &arrow_array::RunArray<I>,
+    right: &arrow_array::RunArray<I>,
+) -> (Vec<I::Native>, Vec<usize>, Vec<usize>) {
+    let mut l = left.run_ends().sliced_values().enumerate().peekable();
+    let mut r = right.run_ends().sliced_values().enumerate().peekable();
+
+    let max_size = left.run_ends().len() + right.run_ends().len();
+    let mut all_run_ends = Vec::with_capacity(max_size);
+    let mut l_idx = Vec::with_capacity(max_size);
+    let mut r_idx = Vec::with_capacity(max_size);
+
+    loop {
+        let next_left = l.peek();
+        let next_right = r.peek();
+
+        match (next_left, next_right) {
+            (None, None) => break,
+            (Some((idx_left, left)), Some((idx_right, right))) => {
+                l_idx.push(*idx_left);
+                r_idx.push(*idx_right);
+                match left.compare(*right) {
+                    Ordering::Less => {
+                        all_run_ends.push(*left);
+                        l.next().unwrap();
+                    }
+                    Ordering::Equal => {
+                        all_run_ends.push(*left);
+                        l.next().unwrap();
+                        r.next().unwrap();
+                    }
+                    Ordering::Greater => {
+                        all_run_ends.push(*right);
+                        r.next().unwrap();
+                    }
+                }
+            }
+            _ => panic!("Input run-end index iterators do not have the same size"),
+        }
+    }
+
+    (all_run_ends, l_idx, r_idx)
 }
 
 trait ArrayOrd {
@@ -539,7 +740,7 @@ impl<T: ArrowNativeTypeOp> ArrayOrd for &[T] {
     }
 }
 
-impl<'a, T: ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
+impl<'a, T: types::ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
     type Item = &'a [u8];
 
     fn len(&self) -> usize {
@@ -559,7 +760,7 @@ impl<'a, T: ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
     }
 }
 
-impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
+impl<'a, T: types::ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     /// This is the item type for the GenericByteViewArray::compare
     /// Item.0 is the array, Item.1 is the index
     type Item = (&'a GenericByteViewArray<T>, usize);
@@ -684,7 +885,7 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 
 /// Compares two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
 #[inline(always)]
-pub fn compare_byte_view<T: ByteViewType>(
+pub fn compare_byte_view<T: types::ByteViewType>(
     left: &GenericByteViewArray<T>,
     left_idx: usize,
     right: &GenericByteViewArray<T>,
@@ -1042,7 +1243,7 @@ mod tests {
         assert_eq!(compare_byte_view(&a, 0, &b, 0), Ordering::Less);
     }
 
-    fn has_buffers<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
+    fn has_buffers<T: types::ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
         !array.data_buffers().is_empty()
     }
 
@@ -1065,5 +1266,183 @@ mod tests {
         assert_eq!(compare_byte_view(&a, 1, &b, 1), Ordering::Greater);
         assert_eq!(compare_byte_view(&a, 2, &b, 2), Ordering::Equal);
         assert_eq!(compare_byte_view(&a, 3, &b, 3), Ordering::Greater);
+    }
+
+    /// Helper for building a RunArray.
+    fn make_primitive_run_array<
+        'a,
+        I: types::RunEndIndexType,
+        V: arrow_array::ArrowPrimitiveType,
+        ItemType,
+    >(
+        values: impl IntoIterator<Item = &'a ItemType>,
+    ) -> RunArray<I>
+    where
+        ItemType: Clone + Into<Option<V::Native>> + 'static,
+    {
+        let mut builder = arrow_array::builder::PrimitiveRunBuilder::<I, V>::new();
+        for v in values.into_iter() {
+            builder.append_option((*v).clone().into());
+        }
+        builder.finish()
+    }
+
+    use arrow_array::types::{Int8Type, Int16Type};
+    use arrow_array::{BooleanArray, RunArray};
+
+    #[test]
+    fn test_runarray_empty() {
+        let left = RunArray::<Int16Type>::from_iter(Vec::<&str>::new());
+        assert_eq!(distinct(&left, &left).unwrap(), Vec::<bool>::new().into());
+    }
+
+    #[test]
+    fn test_runarray_size_mismatch() {
+        let left = RunArray::<Int16Type>::from_iter(["a", "a"]);
+        let right = RunArray::<Int16Type>::from_iter(["b"]);
+        assert!(distinct(&left, &right).is_err());
+    }
+
+    #[test]
+    fn test_runarray_no_nulls() {
+        let left =
+            make_primitive_run_array::<Int16Type, Int8Type, _>(&[1, 2, 2, 2, 10, 10, 0, 0, 0, 1]);
+        let righ =
+            make_primitive_run_array::<Int16Type, Int8Type, _>(&[1, 0, 2, 2, 2, 10, 10, 0, 0, 0]);
+
+        assert_eq!(
+            distinct(&left, &righ).unwrap(),
+            vec![
+                false, true, false, false, true, false, true, false, false, true
+            ]
+            .into()
+        );
+        assert_eq!(
+            not_distinct(&left, &righ).unwrap(),
+            vec![
+                true, false, true, true, false, true, false, true, true, false
+            ]
+            .into()
+        );
+        assert_eq!(
+            eq(&left, &righ).unwrap(),
+            vec![
+                true, false, true, true, false, true, false, true, true, false
+            ]
+            .into()
+        );
+        assert_eq!(
+            lt_eq(&left, &righ).unwrap(),
+            vec![
+                true, false, true, true, false, true, true, true, true, false
+            ]
+            .into()
+        );
+    }
+
+    #[test]
+    fn test_runarray_one_side_nulls() {
+        let left = make_primitive_run_array::<Int16Type, Int8Type, _>(&[
+            Some(1),
+            Some(2),
+            None,
+            None,
+            Some(10),
+            Some(10),
+            None,
+            Some(0),
+            Some(0),
+            Some(1),
+        ]);
+        let right =
+            make_primitive_run_array::<Int16Type, Int8Type, _>(&[1, 0, 2, 2, 2, 10, 10, 0, 0, 0]);
+        assert_eq!(
+            distinct(&left, &right).unwrap(),
+            vec![
+                false, true, true, true, true, false, true, false, false, true,
+            ]
+            .into()
+        );
+        assert_eq!(
+            not_distinct(&left, &right).unwrap(),
+            vec![
+                true, false, false, false, false, true, false, true, true, false,
+            ]
+            .into()
+        );
+        assert_eq!(
+            eq(&left, &right).unwrap(),
+            vec![
+                Some(true),
+                Some(false),
+                None,
+                None,
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+                Some(false)
+            ]
+            .into()
+        );
+    }
+
+    #[test]
+    fn test_runarray_both_side_nulls() {
+        let left = make_primitive_run_array::<Int16Type, Int8Type, _>(&[
+            Some(1),
+            Some(2),
+            None,
+            None,
+            Some(10),
+            Some(10),
+            None,
+            Some(0),
+            Some(0),
+            Some(1),
+        ]);
+        let right = make_primitive_run_array::<Int16Type, Int8Type, _>(&[
+            Some(1),
+            None,
+            None,
+            Some(20),
+            Some(10),
+            Some(10),
+            None,
+            None,
+            Some(0),
+            Some(0),
+        ]);
+        assert_eq!(
+            distinct(&left, &right).unwrap(),
+            vec![
+                false, true, false, true, false, false, false, true, false, true,
+            ]
+            .into()
+        );
+        assert_eq!(
+            not_distinct(&left, &right).unwrap(),
+            vec![
+                true, false, true, false, true, true, true, false, true, false,
+            ]
+            .into()
+        );
+        assert_eq!(
+            eq(&left, &right).unwrap(),
+            vec![
+                Some(true),
+                None,
+                None,
+                None,
+                Some(true),
+                Some(true),
+                None,
+                None,
+                Some(true),
+                Some(false),
+            ]
+            .into()
+        );
     }
 }
