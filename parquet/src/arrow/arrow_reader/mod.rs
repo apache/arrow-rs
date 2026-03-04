@@ -27,12 +27,13 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
+use crate::arrow::array_reader::dictionary_filter::make_dictionary_filter_reader;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
 use crate::arrow::schema::{
     ParquetField, parquet_to_arrow_schema_and_fields, virtual_type::is_virtual_column,
 };
 use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels_with_virtual};
-use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
+use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, Encoding};
 use crate::bloom_filter::{
     SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
 };
@@ -1205,19 +1206,34 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .with_selection(selection)
             .with_row_selection_policy(row_selection_policy);
 
-        // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
             for predicate in filter.predicates.iter_mut() {
-                // break early if we have ruled out all rows
                 if !plan_builder.selects_any() {
                     break;
                 }
 
-                let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
-                    .with_parquet_metadata(&reader.metadata)
-                    .build_array_reader(fields.as_deref(), predicate.projection())?;
+                let use_dict = predicate.use_dict_pushdown()
+                    && is_predicate_columns_dict_encoded(
+                        predicate.projection(),
+                        &reader.metadata,
+                        &reader.row_groups,
+                    );
 
-                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                if use_dict {
+                    let proj = predicate.projection().clone();
+                    let array_reader = make_dictionary_filter_reader(
+                        &reader,
+                        &proj,
+                        predicate.as_mut(),
+                        &reader.metadata,
+                    )?;
+                    plan_builder = plan_builder.with_boolean_filter(array_reader)?;
+                } else {
+                    let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                        .with_parquet_metadata(&reader.metadata)
+                        .build_array_reader(fields.as_deref(), predicate.projection())?;
+                    plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                }
             }
         }
 
@@ -1234,6 +1250,64 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
     }
+}
+
+/// Returns `true` if the projection contains exactly one leaf column that is
+/// a flat BYTE_ARRAY fully dictionary-encoded across all row groups.
+fn is_predicate_columns_dict_encoded(
+    projection: &ProjectionMask,
+    metadata: &ParquetMetaData,
+    row_groups: &[usize],
+) -> bool {
+    let schema_descr = metadata.file_metadata().schema_descr();
+    let num_columns = schema_descr.num_columns();
+    let mut projected_count = 0;
+
+    for col_idx in 0..num_columns {
+        if !projection.leaf_included(col_idx) {
+            continue;
+        }
+        projected_count += 1;
+        if projected_count > 1 {
+            return false;
+        }
+        let col_desc = schema_descr.column(col_idx);
+        if col_desc.physical_type() != crate::basic::Type::BYTE_ARRAY {
+            return false;
+        }
+        if col_desc.max_def_level() > 1 || col_desc.max_rep_level() > 0 {
+            return false;
+        }
+        for &rg_idx in row_groups {
+            let col_meta = metadata.row_group(rg_idx).column(col_idx);
+            if !is_column_chunk_dict_encoded(col_meta) {
+                return false;
+            }
+        }
+    }
+    projected_count == 1
+}
+
+/// Returns `true` if all data pages in this column chunk use dictionary encoding.
+fn is_column_chunk_dict_encoded(col_meta: &crate::file::metadata::ColumnChunkMetaData) -> bool {
+    if col_meta.dictionary_page_offset().is_none() {
+        return false;
+    }
+    if let Some(mask) = col_meta.page_encoding_stats_mask() {
+        return mask.is_only(Encoding::PLAIN_DICTIONARY) || mask.is_only(Encoding::RLE_DICTIONARY);
+    }
+    if let Some(stats) = col_meta.page_encoding_stats() {
+        return stats
+            .iter()
+            .filter(|s| {
+                s.page_type == crate::basic::PageType::DATA_PAGE
+                    || s.page_type == crate::basic::PageType::DATA_PAGE_V2
+            })
+            .all(|s| {
+                s.encoding == Encoding::PLAIN_DICTIONARY || s.encoding == Encoding::RLE_DICTIONARY
+            });
+    }
+    false
 }
 
 struct ReaderRowGroups<T: ChunkReader> {
@@ -5824,5 +5898,1142 @@ pub(crate) mod tests {
         let metadata = writer.close().expect("Could not close writer");
 
         (Bytes::from(buf), metadata)
+    }
+
+    #[test]
+    fn test_dictionary_filter_pushdown_end_to_end() {
+        use arrow::compute::kernels::cmp::eq;
+
+        // Write a parquet file with a string column (dictionary encoded by default)
+        let mut buf = Vec::with_capacity(1024);
+        let values = StringArray::from(vec![
+            Some("alice"),
+            Some("bob"),
+            Some("alice"),
+            Some("carol"),
+            Some("bob"),
+            Some("alice"),
+        ]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        // Read with dictionary filter: name == "alice"
+        // Dict values are presented as Utf8View, so use StringViewArray::new_scalar
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3, "Expected 3 'alice' rows");
+
+        // Verify all values are "alice"
+        // The final projection uses the original schema type
+        for batch in &batches {
+            let col = batch.column(0);
+            // The output type depends on the embedded arrow schema;
+            // use as_string::<i32>() since we wrote StringArray (Utf8)
+            let string_col = col.as_string::<i32>();
+            for i in 0..string_col.len() {
+                assert_eq!(string_col.value(i), "alice");
+            }
+        }
+    }
+
+    #[test]
+    fn test_dictionary_filter_default_false() {
+        use crate::arrow::arrow_reader::ArrowPredicate;
+        // Verify default use_dict_pushdown is false
+        let mask = ProjectionMask::all();
+        let predicate = ArrowPredicateFn::new(mask, |batch: RecordBatch| {
+            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+        });
+        assert!(!predicate.use_dict_pushdown());
+    }
+
+    #[test]
+    fn test_dictionary_filter_with_dict_pushdown_builder() {
+        use crate::arrow::arrow_reader::ArrowPredicate;
+        let mask = ProjectionMask::all();
+        let predicate = ArrowPredicateFn::new(mask, |batch: RecordBatch| {
+            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+        })
+        .with_dict_pushdown(true);
+        assert!(predicate.use_dict_pushdown());
+    }
+
+    /// Test that dictionary pushdown works when the underlying Parquet column
+    /// produces Binary dictionary values (ConvertedType::NONE), which get cast
+    /// to Utf8View for predicate evaluation with `like`/`nlike`.
+    #[test]
+    fn test_dict_pushdown_binary_to_utf8view() {
+        use arrow::compute::like;
+
+        // Write a parquet file with a BYTE_ARRAY column (no ConvertedType)
+        // This simulates ClickBench-style data where string columns are stored
+        // as BYTE_ARRAY with ConvertedType::NONE.
+        let message_type = "
+            message schema {
+                REQUIRED BYTE_ARRAY url;
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+
+        let mut buf = Vec::with_capacity(1024);
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = SerializedFileWriter::new(&mut buf, schema, Arc::new(props)).unwrap();
+
+        {
+            let mut rg = writer.next_row_group().unwrap();
+            if let Some(mut col) = rg.next_column().unwrap() {
+                let values: Vec<ByteArray> = vec![
+                    "https://google.com".into(),
+                    "https://example.com".into(),
+                    "https://google.com/search".into(),
+                    "https://other.com".into(),
+                    "https://google.com".into(),
+                ];
+                col.typed::<ByteArrayType>()
+                    .write_batch(&values, None, None)
+                    .unwrap();
+                col.close().unwrap();
+            }
+            rg.close().unwrap();
+        }
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        // Read back with Utf8View schema (like ClickBench benchmark does)
+        let orig_metadata = ArrowReaderMetadata::load(&bytes, Default::default()).unwrap();
+        let new_schema = Arc::new(Schema::new(vec![Field::new(
+            "url",
+            ArrowDataType::Utf8View,
+            false,
+        )]));
+        let options = ArrowReaderOptions::new().with_schema(new_schema);
+        let metadata =
+            ArrowReaderMetadata::try_new(Arc::clone(orig_metadata.metadata()), options).unwrap();
+
+        let schema_descr = metadata.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        // Use like predicate with Utf8View scalar (same as ClickBench)
+        let pattern = StringViewArray::new_scalar("%google%");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                like(col, &pattern)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::new_with_metadata(bytes.clone(), metadata)
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // "google" appears in rows 0, 2, 4
+        assert_eq!(total_rows, 3, "Expected 3 rows matching '%google%'");
+    }
+
+    /// Test that dictionary pushdown falls back gracefully when the column
+    /// is not dictionary-encoded (PLAIN encoding).
+    ///
+    /// When all pages use PLAIN encoding (no dictionary), the encoding
+    /// metadata check in `build()` detects this and uses the normal
+    /// (non-dictionary) decoder path, even if the predicate opted in to
+    /// `with_dict_pushdown(true)`. The predicate receives the raw
+    /// column type (Utf8), not Utf8View from dict pushdown.
+    #[test]
+    fn test_dict_pushdown_plain_fallback() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(1024);
+        let values = StringArray::from(vec![
+            Some("alice"),
+            Some("bob"),
+            Some("alice"),
+            Some("carol"),
+        ]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        // Disable dictionary encoding → PLAIN pages
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        // With dictionary_encoding(true) but PLAIN-only data, the encoding
+        // check correctly skips dict coercion → predicate gets Utf8 column
+        let scalar = StringArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2, "Expected 2 'alice' rows");
+    }
+
+    /// Test dictionary pushdown with null values in the data.
+    /// Null keys should produce false in the filter (via take → null → prep_null_mask_filter).
+    #[test]
+    fn test_dict_pushdown_with_nulls() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(1024);
+        let values = StringArray::from(vec![
+            Some("alice"),
+            None,
+            Some("alice"),
+            None,
+            Some("bob"),
+            None,
+        ]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // Only non-null "alice" rows: indices 0, 2
+        assert_eq!(
+            total_rows, 2,
+            "Expected 2 'alice' rows (nulls filtered out)"
+        );
+
+        for batch in &batches {
+            let col = batch.column(0);
+            let string_col = col.as_string::<i32>();
+            for i in 0..string_col.len() {
+                assert!(!string_col.is_null(i));
+                assert_eq!(string_col.value(i), "alice");
+            }
+        }
+    }
+
+    /// Test dictionary pushdown across multiple row groups.
+    /// Each row group may have a different dictionary, so the pointer check
+    /// must detect the change and re-evaluate the predicate.
+    #[test]
+    fn test_dict_pushdown_multiple_row_groups() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(4096);
+        let values = StringArray::from(vec![
+            Some("alice"),
+            Some("bob"),
+            Some("alice"),
+            Some("carol"),
+            Some("alice"),
+            Some("dave"),
+            Some("bob"),
+            Some("alice"),
+            Some("carol"),
+        ]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // "alice" at indices 0, 2, 4, 7 → 4 rows across 3 row groups
+        assert_eq!(total_rows, 4, "Expected 4 'alice' rows across row groups");
+
+        for batch in &batches {
+            let col = batch.column(0);
+            let string_col = col.as_string::<i32>();
+            for i in 0..string_col.len() {
+                assert_eq!(string_col.value(i), "alice");
+            }
+        }
+    }
+
+    /// Test dictionary pushdown when all values in the column are null.
+    /// The null expansion loop must handle values_read=0 correctly, producing
+    /// an all-false BooleanArray filter that eliminates every row.
+    #[test]
+    fn test_dict_pushdown_all_nulls() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(1024);
+        let values = StringArray::from(vec![Option::<&str>::None, None, None, None]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 0, "All-null column should match 0 rows");
+    }
+
+    /// Test dictionary pushdown when the predicate rejects every dictionary value.
+    /// All matching_keys entries are false, so every row should be filtered out
+    /// even though the data contains non-null values.
+    #[test]
+    fn test_dict_pushdown_no_match() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(1024);
+        let values = StringArray::from(vec!["alice", "bob", "carol", "alice", "bob"]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        // "nonexistent" does not appear in the dictionary
+        let scalar = StringViewArray::new_scalar("nonexistent");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 0, "No dictionary value matches → 0 rows");
+    }
+
+    /// Test dictionary pushdown when every dictionary value matches.
+    /// All matching_keys entries are true, so every non-null row should pass.
+    #[test]
+    fn test_dict_pushdown_all_match() {
+        use arrow::compute::kernels::cmp::neq;
+
+        let mut buf = Vec::with_capacity(1024);
+        // All values are non-empty strings
+        let values = StringArray::from(vec![
+            Some("alice"),
+            None,
+            Some("bob"),
+            Some("carol"),
+            None,
+            Some("alice"),
+        ]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        // neq("") matches all non-empty dictionary values ("alice", "bob", "carol")
+        let empty = StringViewArray::new_scalar("");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                neq(col, &empty)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // 4 non-null rows match (nulls at indices 1, 4 are filtered out)
+        assert_eq!(total_rows, 4, "All dict values match → 4 non-null rows");
+    }
+
+    /// Test dictionary pushdown with a single-value dictionary.
+    /// Boundary case: matching_keys has exactly 1 entry.
+    #[test]
+    fn test_dict_pushdown_single_value_dictionary() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(1024);
+        // All rows have the same value → dictionary has exactly 1 entry
+        let values = StringArray::from(vec!["alice", "alice", "alice", "alice"]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 4, "Single dict value matches → all 4 rows");
+    }
+
+    /// Test that dictionary pushdown falls back for integer dictionary-encoded
+    /// columns (non-BYTE_ARRAY physical type).
+    #[test]
+    fn test_dict_pushdown_int_column_fallback() {
+        use arrow::compute::kernels::cmp::neq;
+        use arrow_array::Int16Array;
+
+        let mut buf = Vec::with_capacity(1024);
+        // Int16 column with dictionary encoding (few unique values)
+        let values = Int16Array::from(vec![1, 0, 1, 0, 2, 0]);
+        let batch = RecordBatch::try_from_iter([("val", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        // Predicate opts in to dictionary encoding, but Int16 is not BYTE_ARRAY
+        // so it should fall back to the normal predicate path
+        let zero = Int16Array::new_scalar(0);
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                neq(col, &zero)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // Rows where val != 0: indices 0, 2, 4 → 3 rows
+        assert_eq!(
+            total_rows, 3,
+            "Int column fallback should still filter correctly"
+        );
+    }
+
+    /// Test dictionary pushdown with nulls across multiple small row groups.
+    /// Exercises the null bit offset calculation (Bug 1 fix) when the
+    /// DefinitionLevelBuffer accumulates bits across row group transitions.
+    #[test]
+    fn test_dict_pushdown_nulls_multiple_row_groups() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(4096);
+        // Interleave nulls and values across row groups of size 3:
+        //   RG0: [None, "alice", None]   → 1 match
+        //   RG1: ["bob", None, "alice"]  → 1 match
+        //   RG2: [None, None, "alice"]   → 1 match
+        let values = StringArray::from(vec![
+            None,
+            Some("alice"),
+            None,
+            Some("bob"),
+            None,
+            Some("alice"),
+            None,
+            None,
+            Some("alice"),
+        ]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows, 3,
+            "Expected 3 'alice' rows across 3 row groups with nulls"
+        );
+
+        for batch in &batches {
+            let col = batch.column(0);
+            let string_col = col.as_string::<i32>();
+            for i in 0..string_col.len() {
+                assert!(!string_col.is_null(i));
+                assert_eq!(string_col.value(i), "alice");
+            }
+        }
+    }
+
+    /// Test dictionary pushdown with a small batch size that forces multiple
+    /// iterations of the read_records loop within a single row group.
+    /// This exercises the null bit offset accumulation across iterations
+    /// (the cumulative `start` offset in the null expansion logic).
+    #[test]
+    fn test_dict_pushdown_small_batch_size_with_nulls() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(4096);
+        // 12 rows with interleaved nulls, single row group
+        let values = StringArray::from(vec![
+            Some("alice"), // 0 - match
+            None,          // 1
+            Some("bob"),   // 2
+            None,          // 3
+            Some("alice"), // 4 - match
+            Some("carol"), // 5
+            None,          // 6
+            Some("alice"), // 7 - match
+            None,          // 8
+            Some("bob"),   // 9
+            Some("alice"), // 10 - match
+            None,          // 11
+        ]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        // batch_size=4 forces multiple read_records iterations within one RG
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_batch_size(4)
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows, 4,
+            "Expected 4 'alice' rows with small batch size"
+        );
+
+        let all_values: Vec<String> = batches
+            .iter()
+            .flat_map(|b| {
+                let col = b.column(0).as_string::<i32>();
+                (0..col.len())
+                    .map(|i| col.value(i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(
+            all_values.iter().all(|v| v == "alice"),
+            "All returned values should be 'alice', got: {:?}",
+            all_values
+        );
+    }
+
+    /// Test that dictionary pushdown correctly handles two sequential predicates
+    /// where one uses dict pushdown and the other doesn't, ensuring the
+    /// RowSelection from the first predicate is correctly intersected.
+    #[test]
+    fn test_dict_pushdown_chained_with_non_dict_predicate() {
+        use super::ArrowPredicate;
+        use arrow::compute::kernels::cmp::{eq, neq};
+        use arrow_array::Int32Array;
+
+        let mut buf = Vec::with_capacity(4096);
+        let names = StringArray::from(vec!["alice", "bob", "alice", "carol", "alice"]);
+        let scores = Int32Array::from(vec![100, 200, 300, 400, 500]);
+        let batch = RecordBatch::try_from_iter([
+            ("name", Arc::new(names) as ArrayRef),
+            ("score", Arc::new(scores) as ArrayRef),
+        ])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let name_mask = ProjectionMask::leaves(&schema_descr, [0]);
+        let score_mask = ProjectionMask::leaves(&schema_descr, [1]);
+
+        // First predicate: name == "alice" (dict pushdown)
+        let scalar_alice = StringViewArray::new_scalar("alice");
+        let pred1 = Box::new(
+            ArrowPredicateFn::new(name_mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar_alice)
+            })
+            .with_dict_pushdown(true),
+        ) as Box<dyn ArrowPredicate>;
+
+        // Second predicate: score != 100 (no dict pushdown — Int32 column)
+        let scalar_100 = Int32Array::new_scalar(100);
+        let pred2 = Box::new(
+            ArrowPredicateFn::new(score_mask, move |batch| {
+                let col = batch.column(0);
+                neq(col, &scalar_100)
+            })
+            .with_dict_pushdown(false),
+        ) as Box<dyn ArrowPredicate>;
+
+        let filter = RowFilter::new(vec![pred1, pred2]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // alice at indices 0(score=100), 2(score=300), 4(score=500)
+        // After pred1: rows 0, 2, 4
+        // After pred2 (score != 100): rows 2, 4
+        assert_eq!(total_rows, 2, "alice AND score!=100 → rows 2 and 4");
+    }
+
+    /// Test dictionary pushdown combined with an explicit RowSelection.
+    /// The RowSelection pre-filters some rows before the dict predicate runs,
+    /// ensuring the intersection logic in `apply_filter` works correctly when
+    /// both `with_row_selection()` and dict pushdown are used together.
+    #[test]
+    fn test_dict_pushdown_with_row_selection() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(4096);
+        // 8 rows: indices 0-7
+        let values = StringArray::from(vec![
+            "alice", // 0 - match
+            "bob",   // 1
+            "alice", // 2 - match
+            "carol", // 3
+            "alice", // 4 - match
+            "bob",   // 5
+            "alice", // 6 - match
+            "carol", // 7
+        ]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        // RowSelection: select rows 0-3, skip rows 4-7
+        let selection = RowSelection::from(vec![RowSelector::select(4), RowSelector::skip(4)]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_selection(selection)
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // RowSelection passes rows 0,1,2,3
+        // Dict predicate selects "alice" at rows 0,2 within the selected set
+        assert_eq!(
+            total_rows, 2,
+            "RowSelection(0..4) AND name='alice' → rows 0,2"
+        );
+
+        for batch in &batches {
+            let col = batch.column(0).as_string::<i32>();
+            for i in 0..col.len() {
+                assert_eq!(col.value(i), "alice");
+            }
+        }
+    }
+
+    /// Test that dict pushdown works when applied to the second column (not first).
+    /// This ensures column index resolution in `make_dictionary_filter_reader`
+    /// correctly handles non-zero column indices.
+    #[test]
+    fn test_dict_pushdown_second_column() {
+        use arrow::compute::kernels::cmp::eq;
+        use arrow_array::Int32Array;
+
+        let mut buf = Vec::with_capacity(4096);
+        let ids = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let names = StringArray::from(vec!["alice", "bob", "alice", "carol", "alice"]);
+        let batch = RecordBatch::try_from_iter([
+            ("id", Arc::new(ids) as ArrayRef),
+            ("name", Arc::new(names) as ArrayRef),
+        ])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        // Project only column 1 (name), not column 0 (id)
+        let mask = ProjectionMask::leaves(&schema_descr, [1]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows, 3,
+            "Dict pushdown on second column should find 3 'alice' rows"
+        );
+
+        // Verify the id column values (rows 0, 2, 4 → ids 1, 3, 5)
+        let all_ids: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                let col = b.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+                (0..col.len()).map(|i| col.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(all_ids, vec![1, 3, 5]);
+    }
+
+    /// Test with non-dict predicate FIRST, then dict predicate SECOND.
+    /// This is the reverse order from `test_dict_pushdown_chained_with_non_dict_predicate`,
+    /// and exercises the case where the dict predicate runs on already-filtered data
+    /// (RowSelection from the first predicate restricts what the dict predicate sees).
+    #[test]
+    fn test_dict_pushdown_non_dict_first_then_dict() {
+        use super::ArrowPredicate;
+        use arrow::compute::kernels::cmp::{eq, gt};
+        use arrow_array::Int32Array;
+
+        let mut buf = Vec::with_capacity(4096);
+        let names = StringArray::from(vec!["alice", "bob", "alice", "carol", "alice"]);
+        let scores = Int32Array::from(vec![100, 200, 300, 400, 500]);
+        let batch = RecordBatch::try_from_iter([
+            ("name", Arc::new(names) as ArrayRef),
+            ("score", Arc::new(scores) as ArrayRef),
+        ])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let score_mask = ProjectionMask::leaves(&schema_descr, [1]);
+        let name_mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        // First predicate: score > 200 (non-dict, selects rows 2,3,4)
+        let scalar_200 = Int32Array::new_scalar(200);
+        let pred1 = Box::new(ArrowPredicateFn::new(score_mask, move |batch| {
+            let col = batch.column(0);
+            gt(col, &scalar_200)
+        })) as Box<dyn ArrowPredicate>;
+
+        // Second predicate: name == "alice" (dict pushdown, on already-filtered rows)
+        let scalar_alice = StringViewArray::new_scalar("alice");
+        let pred2 = Box::new(
+            ArrowPredicateFn::new(name_mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar_alice)
+            })
+            .with_dict_pushdown(true),
+        ) as Box<dyn ArrowPredicate>;
+
+        let filter = RowFilter::new(vec![pred1, pred2]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // score > 200: rows 2(alice,300), 3(carol,400), 4(alice,500)
+        // name == "alice": rows 2, 4
+        assert_eq!(total_rows, 2, "score>200 AND name='alice' → rows 2 and 4");
+
+        let all_scores: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                let col = b.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
+                (0..col.len()).map(|i| col.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(all_scores, vec![300, 500]);
+    }
+
+    /// Test with batch_size=1 and nullable column, which is the most extreme
+    /// case for the cumulative null bit offset logic. Each read_records call
+    /// reads exactly 1 record, so `start` increments by 1 each iteration.
+    #[test]
+    fn test_dict_pushdown_batch_size_1_with_nulls() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(4096);
+        let values = StringArray::from(vec![
+            Some("alice"), // 0 - match
+            None,          // 1 - null
+            Some("bob"),   // 2
+            Some("alice"), // 3 - match
+            None,          // 4 - null
+            Some("alice"), // 5 - match
+        ]);
+        let batch = RecordBatch::try_from_iter([("name", Arc::new(values) as ArrayRef)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        // batch_size=1 is the extreme case: each iteration reads 1 record
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_batch_size(1)
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3, "batch_size=1: should find 3 'alice' rows");
+
+        let all_values: Vec<String> = batches
+            .iter()
+            .flat_map(|b| {
+                let col = b.column(0).as_string::<i32>();
+                (0..col.len())
+                    .map(|i| col.value(i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(
+            all_values.iter().all(|v| v == "alice"),
+            "All returned values should be 'alice', got: {:?}",
+            all_values
+        );
+    }
+
+    /// Test with a large number of rows that will span multiple data pages within
+    /// a single row group, exercising the cumulative null bit offset logic across
+    /// page boundaries. Uses small page size to force page splits.
+    #[test]
+    fn test_dict_pushdown_many_rows_multiple_pages() {
+        use arrow::compute::kernels::cmp::eq;
+
+        let mut buf = Vec::with_capacity(64 * 1024);
+        let num_rows = 2000;
+        // Create alternating pattern: alice/null/bob/null repeated
+        let values: Vec<Option<&str>> = (0..num_rows)
+            .map(|i| match i % 4 {
+                0 => Some("alice"),
+                1 => None,
+                2 => Some("bob"),
+                3 => None,
+                _ => unreachable!(),
+            })
+            .collect();
+        let string_array = StringArray::from(values);
+        let batch =
+            RecordBatch::try_from_iter([("name", Arc::new(string_array) as ArrayRef)]).unwrap();
+
+        // Small data page size to force multiple pages per row group
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .set_data_page_size_limit(128) // very small to force many pages
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes.clone()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema_descr, [0]);
+
+        let scalar = StringViewArray::new_scalar("alice");
+        let filter = RowFilter::new(vec![Box::new(
+            ArrowPredicateFn::new(mask, move |batch| {
+                let col = batch.column(0);
+                eq(col, &scalar)
+            })
+            .with_dict_pushdown(true),
+        )]);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+            .unwrap()
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = reader.map(|r| r.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // alice appears at indices 0, 4, 8, ... → num_rows/4 = 500 times
+        assert_eq!(
+            total_rows,
+            num_rows / 4,
+            "Should find {} 'alice' rows in {} total rows",
+            num_rows / 4,
+            num_rows
+        );
+
+        for batch in &batches {
+            let col = batch.column(0).as_string::<i32>();
+            for i in 0..col.len() {
+                assert!(!col.is_null(i));
+                assert_eq!(col.value(i), "alice");
+            }
+        }
     }
 }
