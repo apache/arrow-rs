@@ -176,6 +176,47 @@ impl BooleanArray {
         self.len() - self.null_count() - self.true_count()
     }
 
+    /// Returns whether there is at least one non-null `true` value in this array.
+    ///
+    /// This is more efficient than `true_count() > 0` because it can short-circuit
+    /// as soon as a `true` value is found, without counting all set bits.
+    ///
+    /// Null values are not counted as `true`. Returns `false` for empty arrays.
+    pub fn has_true(&self) -> bool {
+        match self.nulls() {
+            Some(nulls) => {
+                let null_chunks = nulls.inner().bit_chunks().iter_padded();
+                let value_chunks = self.values().bit_chunks().iter_padded();
+                null_chunks.zip(value_chunks).any(|(n, v)| (n & v) != 0)
+            }
+            None => self.values().bit_chunks().iter_padded().any(|v| v != 0),
+        }
+    }
+
+    /// Returns whether there is at least one non-null `false` value in this array.
+    ///
+    /// This is more efficient than `false_count() > 0` because it can short-circuit
+    /// as soon as a `false` value is found, without counting all set bits.
+    ///
+    /// Null values are not counted as `false`. Returns `false` for empty arrays.
+    pub fn has_false(&self) -> bool {
+        match self.nulls() {
+            Some(nulls) => {
+                let null_chunks = nulls.inner().bit_chunks().iter_padded();
+                let value_chunks = self.values().bit_chunks().iter_padded();
+                null_chunks.zip(value_chunks).any(|(n, v)| (n & !v) != 0)
+            }
+            None => {
+                let chunks = self.values().bit_chunks();
+                if chunks.iter().any(|chunk| chunk != u64::MAX) {
+                    return true;
+                }
+                let remainder_len = chunks.remainder_len();
+                remainder_len > 0 && chunks.remainder_bits() != (1u64 << remainder_len) - 1
+            }
+        }
+    }
+
     /// Returns the boolean value at index `i`.
     ///
     /// Note: This method does not check for nulls and the value is arbitrary
@@ -853,5 +894,80 @@ mod tests {
         assert!(sliced.is_null(0));
         assert!(sliced.is_valid(1));
         assert!(!sliced.value(1));
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_true() {
+        let arr = BooleanArray::from(vec![true, true, true]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_false() {
+        let arr = BooleanArray::from(vec![false, false, false]);
+        assert!(!arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_mixed() {
+        let arr = BooleanArray::from(vec![true, false, true]);
+        assert!(arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_empty() {
+        let arr = BooleanArray::from(Vec::<bool>::new());
+        assert!(!arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_nulls_all_valid_true() {
+        let arr = BooleanArray::from(vec![Some(true), None, Some(true)]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_nulls_all_valid_false() {
+        let arr = BooleanArray::from(vec![Some(false), None, Some(false)]);
+        assert!(!arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_null() {
+        let arr = BooleanArray::new_null(5);
+        assert!(!arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_non_aligned_all_true() {
+        // 65 elements: exercises the remainder path in has_false
+        let arr = BooleanArray::from(vec![true; 65]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_non_aligned_last_false() {
+        // 64 trues + 1 false: remainder path should find the false
+        let mut values = vec![true; 64];
+        values.push(false);
+        let arr = BooleanArray::from(values);
+        assert!(arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_exact_64_all_true() {
+        // Exactly 64 elements, no remainder
+        let arr = BooleanArray::from(vec![true; 64]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
     }
 }
