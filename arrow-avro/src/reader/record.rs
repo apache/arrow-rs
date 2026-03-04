@@ -18,8 +18,8 @@
 //! Avro Decoder for Arrow types.
 
 use crate::codec::{
-    AvroDataType, AvroLiteral, Codec, EnumMapping, Promotion, ResolutionInfo, ResolvedRecord,
-    ResolvedUnion,
+    AvroDataType, AvroLiteral, Codec, EnumMapping, Promotion, ResolutionInfo, ResolvedField,
+    ResolvedRecord, ResolvedUnion,
 };
 use crate::errors::AvroError;
 use crate::reader::cursor::AvroCursor;
@@ -2416,9 +2416,14 @@ fn values_equal_at(arr: &dyn Array, i: usize, j: usize) -> bool {
 
 #[derive(Debug)]
 struct Projector {
-    writer_to_reader: Arc<[Option<usize>]>,
-    skip_decoders: Vec<Option<Skipper>>,
+    writer_projections: Vec<FieldProjection>,
     default_injections: Arc<[(usize, AvroLiteral)]>,
+}
+
+#[derive(Debug)]
+enum FieldProjection {
+    ToReader(usize),
+    Skip(Skipper),
 }
 
 #[derive(Debug)]
@@ -2448,18 +2453,20 @@ impl<'a> ProjectorBuilder<'a> {
                 .unwrap_or(AvroLiteral::Null);
             default_injections.push((idx, lit));
         }
-        let mut skip_decoders: Vec<Option<Skipper>> =
-            Vec::with_capacity(self.rec.skip_fields.len());
-        for datatype in self.rec.skip_fields.as_ref() {
-            let skipper = match datatype {
-                Some(datatype) => Some(Skipper::from_avro(datatype)?),
-                None => None,
-            };
-            skip_decoders.push(skipper);
-        }
+        let writer_projections = self
+            .rec
+            .writer_fields
+            .iter()
+            .map(|field| match field {
+                ResolvedField::ToReader(index) => Ok(FieldProjection::ToReader(*index)),
+                ResolvedField::Skip(datatype) => {
+                    let skipper = Skipper::from_avro(datatype)?;
+                    Ok(FieldProjection::Skip(skipper))
+                }
+            })
+            .collect::<Result<_, AvroError>>()?;
         Ok(Projector {
-            writer_to_reader: self.rec.writer_to_reader.clone(),
-            skip_decoders,
+            writer_projections,
             default_injections: default_injections.into(),
         })
     }
@@ -2472,25 +2479,10 @@ impl Projector {
         buf: &mut AvroCursor<'_>,
         encodings: &mut [Decoder],
     ) -> Result<(), AvroError> {
-        debug_assert_eq!(
-            self.writer_to_reader.len(),
-            self.skip_decoders.len(),
-            "internal invariant: mapping and skipper lists must have equal length"
-        );
-        for (i, (mapping, skipper_opt)) in self
-            .writer_to_reader
-            .iter()
-            .zip(self.skip_decoders.iter())
-            .enumerate()
-        {
-            match (mapping, skipper_opt.as_ref()) {
-                (Some(reader_index), _) => encodings[*reader_index].decode(buf)?,
-                (None, Some(skipper)) => skipper.skip(buf)?,
-                (None, None) => {
-                    return Err(AvroError::SchemaError(format!(
-                        "No skipper available for writer-only field at index {i}",
-                    )));
-                }
+        for field_proj in self.writer_projections.iter() {
+            match field_proj {
+                FieldProjection::ToReader(index) => encodings[*index].decode(buf)?,
+                FieldProjection::Skip(skipper) => skipper.skip(buf)?,
             }
         }
         for (reader_index, lit) in self.default_injections.as_ref() {
@@ -4128,8 +4120,7 @@ mod tests {
 
     fn make_record_resolved_decoder(
         reader_fields: &[(&str, DataType, bool)],
-        writer_to_reader: Vec<Option<usize>>,
-        skip_decoders: Vec<Option<Skipper>>,
+        writer_projections: Vec<FieldProjection>,
     ) -> Decoder {
         let mut field_refs: Vec<FieldRef> = Vec::with_capacity(reader_fields.len());
         let mut encodings: Vec<Decoder> = Vec::with_capacity(reader_fields.len());
@@ -4151,8 +4142,7 @@ mod tests {
             encodings,
             vec![None; reader_fields.len()],
             Some(Projector {
-                writer_to_reader: Arc::from(writer_to_reader),
-                skip_decoders,
+                writer_projections,
                 default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
             }),
         )
@@ -4162,8 +4152,10 @@ mod tests {
     fn test_skip_writer_trailing_field_int32() {
         let mut dec = make_record_resolved_decoder(
             &[("id", arrow_schema::DataType::Int32, false)],
-            vec![Some(0), None],
-            vec![None, Some(super::Skipper::Int32)],
+            vec![
+                FieldProjection::ToReader(0),
+                FieldProjection::Skip(super::Skipper::Int32),
+            ],
         );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(7));
@@ -4190,8 +4182,11 @@ mod tests {
                 ("id", DataType::Int32, false),
                 ("score", DataType::Int64, false),
             ],
-            vec![Some(0), None, Some(1)],
-            vec![None, Some(Skipper::String), None],
+            vec![
+                FieldProjection::ToReader(0),
+                FieldProjection::Skip(Skipper::String),
+                FieldProjection::ToReader(1),
+            ],
         );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(42));
@@ -4222,8 +4217,10 @@ mod tests {
     fn test_skip_writer_array_with_negative_block_count_fast() {
         let mut dec = make_record_resolved_decoder(
             &[("id", DataType::Int32, false)],
-            vec![None, Some(0)],
-            vec![Some(super::Skipper::List(Box::new(Skipper::Int32))), None],
+            vec![
+                FieldProjection::Skip(super::Skipper::List(Box::new(Skipper::Int32))),
+                FieldProjection::ToReader(0),
+            ],
         );
         let mut array_payload = Vec::new();
         array_payload.extend_from_slice(&encode_avro_int(1));
@@ -4254,8 +4251,10 @@ mod tests {
     fn test_skip_writer_map_with_negative_block_count_fast() {
         let mut dec = make_record_resolved_decoder(
             &[("id", DataType::Int32, false)],
-            vec![None, Some(0)],
-            vec![Some(Skipper::Map(Box::new(Skipper::Int32))), None],
+            vec![
+                FieldProjection::Skip(Skipper::Map(Box::new(Skipper::Int32))),
+                FieldProjection::ToReader(0),
+            ],
         );
         let mut entries = Vec::new();
         entries.extend_from_slice(&encode_avro_bytes(b"k1"));
@@ -4287,13 +4286,12 @@ mod tests {
     fn test_skip_writer_nullable_field_union_nullfirst() {
         let mut dec = make_record_resolved_decoder(
             &[("id", DataType::Int32, false)],
-            vec![None, Some(0)],
             vec![
-                Some(super::Skipper::Nullable(
+                FieldProjection::Skip(super::Skipper::Nullable(
                     Nullability::NullFirst,
                     Box::new(super::Skipper::Int32),
                 )),
-                None,
+                FieldProjection::ToReader(0),
             ],
         );
         let mut row1 = Vec::new();
@@ -4503,7 +4501,6 @@ mod tests {
         reader_fields: &[(&str, DataType, bool)],
         field_defaults: Vec<Option<AvroLiteral>>,
         default_injections: Vec<(usize, AvroLiteral)>,
-        writer_to_reader_len: usize,
     ) -> Decoder {
         assert_eq!(
             field_defaults.len(),
@@ -4526,11 +4523,8 @@ mod tests {
             encodings.push(enc);
         }
         let fields: Fields = field_refs.into();
-        let skip_decoders: Vec<Option<Skipper>> =
-            (0..writer_to_reader_len).map(|_| None::<Skipper>).collect();
         let projector = Projector {
-            writer_to_reader: Arc::from(vec![None; writer_to_reader_len]),
-            skip_decoders,
+            writer_projections: vec![],
             default_injections: Arc::from(default_injections),
         };
         Decoder::Record(fields, encodings, field_defaults, Some(projector))
@@ -4979,7 +4973,6 @@ mod tests {
             &[("a", DataType::Int32, false), ("b", DataType::Utf8, false)],
             field_defaults,
             vec![],
-            0,
         );
         let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
         map.insert("a".to_string(), AvroLiteral::Int(7));
@@ -5012,7 +5005,6 @@ mod tests {
             &[("a", DataType::Int32, false), ("b", DataType::Utf8, false)],
             field_defaults,
             vec![],
-            0,
         );
         rec.append_default(&AvroLiteral::Null).unwrap();
         let arr = rec.flush(None).unwrap();
@@ -5065,8 +5057,7 @@ mod tests {
         encoders.push(enc_b);
         let field_defaults = vec![None, None]; // no defaults -> append_null
         let projector = Projector {
-            writer_to_reader: Arc::from(vec![]),
-            skip_decoders: vec![],
+            writer_projections: vec![],
             default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
         };
         let mut rec = Decoder::Record(field_refs.into(), encoders, field_defaults, Some(projector));
@@ -5106,7 +5097,6 @@ mod tests {
             ],
             defaults,
             injections,
-            0,
         );
         rec.decode(&mut AvroCursor::new(&[])).unwrap();
         let arr = rec.flush(None).unwrap();
