@@ -270,5 +270,10 @@ name = "row_selection_cursor"
 harness = false
 required-features = ["arrow"]
 
+[[bench]]
+name = "rle"
+harness = false
+required-features = ["experimental"]
+
 [lib]
 bench = false
