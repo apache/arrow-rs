@@ -354,6 +354,20 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// This value will always be greater than returned by `get_buffer_memory_size()` and
     /// includes the overhead of the data structures that contain the pointers to the various buffers.
     fn get_array_memory_size(&self) -> usize;
+
+    /// Registers all [`Buffer`]s in this array with the provided [`MemoryPool`].
+    ///
+    /// This recursively claims all data buffers, null buffers, and child array buffers.
+    /// Shared buffers are counted once (last-writer-wins), matching the behavior of
+    /// [`Buffer::claim`].
+    ///
+    /// [`Buffer`]: arrow_buffer::Buffer
+    /// [`MemoryPool`]: arrow_buffer::MemoryPool
+    /// [`Buffer::claim`]: arrow_buffer::Buffer::claim
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.to_data().claim(pool);
+    }
 }
 
 /// A reference-counted reference to a generic `Array`
@@ -437,6 +451,11 @@ unsafe impl Array for ArrayRef {
     fn get_array_memory_size(&self) -> usize {
         self.as_ref().get_array_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.as_ref().claim(pool)
+    }
 }
 
 unsafe impl<T: Array> Array for &T {
@@ -506,6 +525,11 @@ unsafe impl<T: Array> Array for &T {
 
     fn get_array_memory_size(&self) -> usize {
         T::get_array_memory_size(self)
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        T::claim(self, pool)
     }
 }
 

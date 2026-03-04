@@ -375,6 +375,12 @@ unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
             + self.run_ends.inner().inner().capacity()
             + self.values.get_array_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.run_ends.inner().inner().claim(pool);
+        self.values.claim(pool);
+    }
 }
 
 impl<R: RunEndIndexType> std::fmt::Debug for RunArray<R> {
@@ -602,6 +608,11 @@ unsafe impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
 
     fn get_array_memory_size(&self) -> usize {
         self.run_array.get_array_memory_size()
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.run_array.claim(pool);
     }
 }
 

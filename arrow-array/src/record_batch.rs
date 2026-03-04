@@ -789,17 +789,16 @@ impl RecordBatch {
     /// Registers all [`Buffer`]s in this [`RecordBatch`] with the provided [`MemoryPool`].
     ///
     /// This claims the memory of all column arrays by recursively visiting their
-    /// underlying [`ArrayData`] buffers. Shared buffers are counted once (last-writer-wins),
+    /// underlying buffers. Shared buffers are counted once (last-writer-wins),
     /// matching the behavior of [`Buffer::claim`].
     ///
     /// [`Buffer`]: arrow_buffer::Buffer
     /// [`MemoryPool`]: arrow_buffer::MemoryPool
-    /// [`ArrayData`]: arrow_data::ArrayData
     /// [`Buffer::claim`]: arrow_buffer::Buffer::claim
     #[cfg(feature = "pool")]
     pub fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
         for column in &self.columns {
-            column.to_data().claim(pool);
+            column.claim(pool);
         }
     }
 }

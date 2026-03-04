@@ -620,6 +620,15 @@ unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> 
         }
         size
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_offsets.inner().inner().claim(pool);
+        if let Some(n) = &self.nulls {
+            n.buffer().claim(pool);
+        }
+        self.values.claim(pool);
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListArray<OffsetSize> {

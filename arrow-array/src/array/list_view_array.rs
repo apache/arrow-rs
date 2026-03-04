@@ -486,6 +486,16 @@ unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSi
         }
         size
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_offsets.inner().claim(pool);
+        self.value_sizes.inner().claim(pool);
+        if let Some(n) = &self.nulls {
+            n.buffer().claim(pool);
+        }
+        self.values.claim(pool);
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListViewArray<OffsetSize> {
