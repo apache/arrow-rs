@@ -17,10 +17,11 @@
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
-use arrow_array::OffsetSizeTrait;
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_buffer::{Buffer, buffer::NullBuffer};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
+use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::Buffer;
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
 
@@ -59,7 +60,7 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ListLikeArrayDecoder<O, IS_VIEW> {
 }
 
 impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDecoder<O, IS_VIEW> {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut child_pos = Vec::with_capacity(pos.len());
         let mut offsets = Vec::with_capacity(pos.len() + 1);
         offsets.push(O::from_usize(0).unwrap());
@@ -96,7 +97,7 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
             offsets.push(offset);
         }
 
-        let child_data = self.decoder.decode(tape, &child_pos)?;
+        let child_data = self.decoder.decode(tape, &child_pos)?.to_data();
         let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
         let mut data = ArrayDataBuilder::new(self.data_type.clone())
@@ -119,6 +120,6 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
 
         // Safety
         // Validated lengths above
-        Ok(unsafe { data.build_unchecked() })
+        Ok(make_array(unsafe { data.build_unchecked() }))
     }
 }

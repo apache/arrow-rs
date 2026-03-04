@@ -16,10 +16,10 @@
 // under the License.
 
 use arrow_array::builder::GenericStringBuilder;
-use arrow_array::{Array, GenericStringArray, OffsetSizeTrait};
-use arrow_data::ArrayData;
+use arrow_array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
@@ -45,7 +45,7 @@ impl<O: OffsetSizeTrait> StringArrayDecoder<O> {
 }
 
 impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let coerce_primitive = self.coerce_primitive;
 
         let mut data_capacity = 0;
@@ -130,6 +130,6 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
             }
         }
 
-        Ok(builder.finish().into_data())
+        Ok(Arc::new(builder.finish()))
     }
 }

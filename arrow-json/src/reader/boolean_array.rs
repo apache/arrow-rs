@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::Array;
+use arrow_array::ArrayRef;
 use arrow_array::builder::BooleanBuilder;
-use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
+use std::sync::Arc;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
@@ -27,7 +27,7 @@ use crate::reader::tape::{Tape, TapeElement};
 pub struct BooleanArrayDecoder {}
 
 impl ArrayDecoder for BooleanArrayDecoder {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut builder = BooleanBuilder::with_capacity(pos.len());
         for p in pos {
             match tape.get(*p) {
@@ -38,6 +38,6 @@ impl ArrayDecoder for BooleanArrayDecoder {
             }
         }
 
-        Ok(builder.finish().into_data())
+        Ok(Arc::new(builder.finish()))
     }
 }

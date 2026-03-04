@@ -144,10 +144,10 @@ use std::sync::Arc;
 use chrono::Utc;
 use serde_core::Serialize;
 
+use arrow_array::cast::AsArray;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
-use arrow_array::{RecordBatch, RecordBatchReader, StructArray, downcast_integer, make_array};
-use arrow_data::ArrayData;
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader, downcast_integer};
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
 pub use value_iter::ValueIter;
@@ -669,9 +669,9 @@ impl Decoder {
         self.tape_decoder.clear();
 
         let batch = match self.is_field {
-            true => RecordBatch::try_new(self.schema.clone(), vec![make_array(decoded)])?,
+            true => RecordBatch::try_new(self.schema.clone(), vec![decoded])?,
             false => {
-                RecordBatch::from(StructArray::from(decoded)).with_schema(self.schema.clone())?
+                RecordBatch::from(decoded.as_struct().clone()).with_schema(self.schema.clone())?
             }
         };
 
@@ -681,7 +681,7 @@ impl Decoder {
 
 trait ArrayDecoder: Send {
     /// Decode elements from `tape` starting at the indexes contained in `pos`
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError>;
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError>;
 }
 
 /// Context for decoder creation, containing configuration.
@@ -819,7 +819,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::{
         Array, BooleanArray, Float64Array, GenericListViewArray, ListArray, OffsetSizeTrait,
-        StringArray, StringViewArray,
+        StringArray, StringViewArray, StructArray, make_array,
     };
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};

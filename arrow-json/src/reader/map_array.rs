@@ -18,9 +18,10 @@
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use arrow_array::{Array, ArrayRef, make_array};
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::buffer::NullBuffer;
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 
 pub struct MapArrayDecoder {
@@ -66,7 +67,7 @@ impl MapArrayDecoder {
 }
 
 impl ArrayDecoder for MapArrayDecoder {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let s = match &self.data_type {
             DataType::Map(f, _) => match f.data_type() {
                 s @ DataType::Struct(_) => s,
@@ -117,8 +118,8 @@ impl ArrayDecoder for MapArrayDecoder {
 
         assert_eq!(key_pos.len(), value_pos.len());
 
-        let key_data = self.keys.decode(tape, &key_pos)?;
-        let value_data = self.values.decode(tape, &value_pos)?;
+        let key_data = self.keys.decode(tape, &key_pos)?.to_data();
+        let value_data = self.values.decode(tape, &value_pos)?.to_data();
 
         let struct_data = ArrayDataBuilder::new(s.clone())
             .len(key_pos.len())
@@ -138,6 +139,6 @@ impl ArrayDecoder for MapArrayDecoder {
 
         // Safety:
         // Valid by construction
-        Ok(unsafe { builder.build_unchecked() })
+        Ok(make_array(unsafe { builder.build_unchecked() }))
     }
 }

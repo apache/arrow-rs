@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::marker::PhantomData;
-
-use arrow_array::Array;
+use arrow_array::ArrayRef;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::DecimalType;
 use arrow_cast::parse::parse_decimal;
-use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
@@ -48,7 +47,7 @@ impl<D> ArrayDecoder for DecimalArrayDecoder<D>
 where
     D: DecimalType,
 {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut builder = PrimitiveBuilder::<D>::with_capacity(pos.len());
 
         for p in pos {
@@ -94,9 +93,10 @@ where
             }
         }
 
-        Ok(builder
-            .finish()
-            .with_precision_and_scale(self.precision, self.scale)?
-            .into_data())
+        Ok(Arc::new(
+            builder
+                .finish()
+                .with_precision_and_scale(self.precision, self.scale)?,
+        ))
     }
 }
