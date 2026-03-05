@@ -171,7 +171,9 @@ struct VisitorContext {
     ///
     /// when false, if data_type provided it will be treated as the hint without unwrapping
     ///
-    /// This is for supporting deprecated parquet list representation
+    /// This is for supporting [deprecated parquet list representation][1]
+    ///
+    /// [1]: https://github.com/apache/parquet-format/blob/38818fa0e7efd54b535001a4448030a40619c2a3/LogicalTypes.md?plain=1#L718-L806
     treat_repeated_as_list_arrow_hint: bool,
 }
 
