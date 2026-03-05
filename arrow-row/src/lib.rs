@@ -1414,9 +1414,12 @@ impl DoubleEndedIterator for RowsIter<'_> {
         if self.end == self.start {
             return None;
         }
-        // Safety: We have checked that `start` is less than `end`
-        let row = unsafe { self.rows.row_unchecked(self.end - 1) };
+
         self.end -= 1;
+
+        // Safety: By construction we create `end >= start`, so if `end` is not equal to `start` it cannot be less than `start`
+        //          therefore `end - 1` is within range
+        let row = unsafe { self.rows.row_unchecked(self.end) };
         Some(row)
     }
 }
