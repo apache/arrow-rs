@@ -19,6 +19,7 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -156,7 +157,8 @@ impl BooleanArray {
         &self.values
     }
 
-    /// Returns the number of non null, true values within this array
+    /// Returns the number of non null, true values within this array.
+    /// If you only need to check if there is at least one true value, consider using `has_true()` which can short-circuit and be more efficient.
     pub fn true_count(&self) -> usize {
         match self.nulls() {
             Some(nulls) => {
@@ -171,9 +173,87 @@ impl BooleanArray {
         }
     }
 
-    /// Returns the number of non null, false values within this array
+    /// Returns the number of non null, false values within this array.
+    /// If you only need to check if there is at least one false value, consider using `has_false()` which can short-circuit and be more efficient.
     pub fn false_count(&self) -> usize {
         self.len() - self.null_count() - self.true_count()
+    }
+
+    /// Returns whether there is at least one non-null `true` value in this array.
+    ///
+    /// This is more efficient than `true_count() > 0` because it can short-circuit
+    /// as soon as a `true` value is found, without counting all set bits.
+    ///
+    /// Null values are not counted as `true`. Returns `false` for empty arrays.
+    pub fn has_true(&self) -> bool {
+        match self.nulls() {
+            Some(nulls) => {
+                let null_chunks = nulls.inner().bit_chunks().iter_padded();
+                let value_chunks = self.values().bit_chunks().iter_padded();
+                null_chunks.zip(value_chunks).any(|(n, v)| (n & v) != 0)
+            }
+            None => {
+                let bit_chunks = UnalignedBitChunk::new(
+                    self.values().values(),
+                    self.values().offset(),
+                    self.len(),
+                );
+                bit_chunks.prefix().unwrap_or(0) != 0
+                    || bit_chunks
+                        .chunks()
+                        .chunks(64)
+                        .any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0)
+                    || bit_chunks.suffix().unwrap_or(0) != 0
+            }
+        }
+    }
+
+    /// Returns whether there is at least one non-null `false` value in this array.
+    ///
+    /// This is more efficient than `false_count() > 0` because it can short-circuit
+    /// as soon as a `false` value is found, without counting all set bits.
+    ///
+    /// Null values are not counted as `false`. Returns `false` for empty arrays.
+    pub fn has_false(&self) -> bool {
+        match self.nulls() {
+            Some(nulls) => {
+                let null_chunks = nulls.inner().bit_chunks().iter_padded();
+                let value_chunks = self.values().bit_chunks().iter_padded();
+                null_chunks.zip(value_chunks).any(|(n, v)| (n & !v) != 0)
+            }
+            None => {
+                let bit_chunks = UnalignedBitChunk::new(
+                    self.values().values(),
+                    self.values().offset(),
+                    self.len(),
+                );
+                // UnalignedBitChunk zeros padding bits; fill them with 1s so
+                // they don't appear as false values.
+                let lead_mask = !((1u64 << bit_chunks.lead_padding()) - 1);
+                let trail_mask = if bit_chunks.trailing_padding() == 0 {
+                    u64::MAX
+                } else {
+                    (1u64 << (64 - bit_chunks.trailing_padding())) - 1
+                };
+                // If both prefix and suffix exist, suffix gets trail_mask.
+                // If only prefix exists, it gets both masks.
+                let (prefix_fill, suffix_fill) = match (bit_chunks.prefix(), bit_chunks.suffix()) {
+                    (Some(_), Some(_)) => (!lead_mask, !trail_mask),
+                    (Some(_), None) => (!lead_mask | !trail_mask, 0),
+                    _ => (0, 0),
+                };
+                bit_chunks
+                    .prefix()
+                    .is_some_and(|v| (v | prefix_fill) != u64::MAX)
+                    || bit_chunks
+                        .chunks()
+                        .chunks(64)
+                        .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX)
+                    || bit_chunks
+                        .suffix()
+                        .is_some_and(|v| (v | suffix_fill) != u64::MAX)
+            }
+        }
     }
 
     /// Returns the boolean value at index `i`.
@@ -845,5 +925,80 @@ mod tests {
         assert!(sliced.is_null(0));
         assert!(sliced.is_valid(1));
         assert!(!sliced.value(1));
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_true() {
+        let arr = BooleanArray::from(vec![true, true, true]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_false() {
+        let arr = BooleanArray::from(vec![false, false, false]);
+        assert!(!arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_mixed() {
+        let arr = BooleanArray::from(vec![true, false, true]);
+        assert!(arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_empty() {
+        let arr = BooleanArray::from(Vec::<bool>::new());
+        assert!(!arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_nulls_all_valid_true() {
+        let arr = BooleanArray::from(vec![Some(true), None, Some(true)]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_nulls_all_valid_false() {
+        let arr = BooleanArray::from(vec![Some(false), None, Some(false)]);
+        assert!(!arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_null() {
+        let arr = BooleanArray::new_null(5);
+        assert!(!arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_non_aligned_all_true() {
+        // 65 elements: exercises the remainder path in has_false
+        let arr = BooleanArray::from(vec![true; 65]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_non_aligned_last_false() {
+        // 64 trues + 1 false: remainder path should find the false
+        let mut values = vec![true; 64];
+        values.push(false);
+        let arr = BooleanArray::from(values);
+        assert!(arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_exact_64_all_true() {
+        // Exactly 64 elements, no remainder
+        let arr = BooleanArray::from(vec![true; 64]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
     }
 }
