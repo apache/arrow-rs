@@ -82,6 +82,8 @@ include = [
     "NOTICE.txt",
 ]
 edition = "2024"
+# When this changes, please update rust-toolchain.toml to
+# ensure that CI uses the appropriate minimum version
 rust-version = "1.85"
 
 [workspace.dependencies]
