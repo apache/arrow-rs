@@ -170,6 +170,8 @@ struct VisitorContext {
     /// and the list field data type would be treated as the hint for the parquet type
     ///
     /// when false, if data_type provided it will be treated as the hint without unwrapping
+    ///
+    /// This is for supporting deprecated parquet list representation
     treat_repeated_as_list_arrow_hint: bool,
 }
 
