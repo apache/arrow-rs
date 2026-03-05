@@ -133,6 +133,48 @@ impl<R: RunEndIndexType> RunArray<R> {
         run_ends: RunEndBuffer<R::Native>,
         values: ArrayRef,
     ) -> Self {
+        if cfg!(feature = "force_validate") {
+            match &data_type {
+                DataType::RunEndEncoded(run_ends, values_field) => {
+                    assert!(!run_ends.is_nullable(), "run_ends should not be nullable");
+                    assert_eq!(
+                        run_ends.data_type(),
+                        &R::DATA_TYPE,
+                        "Incorrect run ends type"
+                    );
+                    assert_eq!(
+                        values_field.data_type(),
+                        values.data_type(),
+                        "Incorrect values type"
+                    );
+                }
+                _ => {
+                    panic!(
+                        "Invalid data type {data_type:?} for RunArray. Should be DataType::RunEndEncoded"
+                    );
+                }
+            }
+
+            let run_array = Self {
+                data_type,
+                run_ends,
+                values,
+            };
+
+            // Safety: `validate_data` checks below
+            //    1. The given array data has exactly two child arrays.
+            //    2. The first child array (run_ends) has valid data type.
+            //    3. run_ends array does not have null values
+            //    4. run_ends array has non-zero and strictly increasing values.
+            //    5. The length of run_ends array and values array are the same.
+            run_array
+                .to_data()
+                .validate_data()
+                .expect("RunArray data should be valid");
+
+            return run_array;
+        }
+
         Self {
             data_type,
             run_ends,
@@ -280,7 +322,12 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         let run_ends = unsafe { RunEndBuffer::new_unchecked(scalar, offset, len) };
 
         let values = make_array(values_child);
-        unsafe { Self::new_unchecked(data_type, run_ends, values) }
+
+        Self {
+            data_type,
+            run_ends,
+            values,
+        }
     }
 }
 
