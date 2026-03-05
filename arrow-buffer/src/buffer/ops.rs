@@ -150,15 +150,19 @@ pub fn buffer_bin_and(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    BooleanBuffer::from_bitwise_binary_op(
+    let result = BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
         len_in_bits,
         |a, b| a & b,
-    )
-    .into_inner()
+    );
+    if result.offset() == 0 {
+        result.into_inner()
+    } else {
+        result.sliced()
+    }
 }
 
 /// Apply a bitwise or to two inputs and return the result as a Buffer.
@@ -170,15 +174,19 @@ pub fn buffer_bin_or(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    BooleanBuffer::from_bitwise_binary_op(
+    let result = BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
         len_in_bits,
         |a, b| a | b,
-    )
-    .into_inner()
+    );
+    if result.offset() == 0 {
+        result.into_inner()
+    } else {
+        result.sliced()
+    }
 }
 
 /// Apply a bitwise xor to two inputs and return the result as a Buffer.
@@ -190,15 +198,19 @@ pub fn buffer_bin_xor(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    BooleanBuffer::from_bitwise_binary_op(
+    let result = BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
         len_in_bits,
         |a, b| a ^ b,
-    )
-    .into_inner()
+    );
+    if result.offset() == 0 {
+        result.into_inner()
+    } else {
+        result.sliced()
+    }
 }
 
 /// Apply a bitwise and_not to two inputs and return the result as a Buffer.
@@ -210,15 +222,19 @@ pub fn buffer_bin_and_not(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    BooleanBuffer::from_bitwise_binary_op(
+    let result = BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
         len_in_bits,
         |a, b| a & !b,
-    )
-    .into_inner()
+    );
+    if result.offset() == 0 {
+        result.into_inner()
+    } else {
+        result.sliced()
+    }
 }
 
 /// Apply a bitwise not to one input and return the result as a Buffer.

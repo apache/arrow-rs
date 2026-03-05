@@ -269,7 +269,8 @@ impl BooleanBuffer {
     ///   on the relevant bits; the input `u64` values may contain irrelevant bits
     ///   and may be processed differently on different endian architectures.
     /// * `op` may be called with input bits outside the requested range.
-    /// * The returned `BooleanBuffer` always has zero offset.
+    /// * Returned `BooleanBuffer` may have non zero offset
+    /// * Returned `BooleanBuffer` may have bits set outside the requested range
     ///
     /// # See Also
     /// - [`BooleanBuffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
@@ -284,19 +285,28 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///   &left, 0, &right, 0, 12, |a, b| a & b
     /// );
-    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8]);
+    /// assert_eq!(result.len(), 12);
+    /// for i in 0..12 {
+    ///     assert_eq!(result.value(i), left.as_slice()[i / 8] >> (i % 8) & 1 == 1
+    ///         && right.as_slice()[i / 8] >> (i % 8) & 1 == 1);
+    /// }
     /// ```
     ///
     /// # Example: Create new [`BooleanBuffer`] from bitwise `OR` of two byte slices
     /// ```
-    /// # use arrow_buffer::BooleanBuffer;
+    /// # use arrow_buffer::{BooleanBuffer, bit_util};
     /// let left = [0b11001100u8, 0b10111010u8];
     /// let right = [0b10101010u8, 0b11011100u8];
     /// // OR of bits 4..16 from left and bits 0..12 from right
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///  &left, 4, &right, 0, 12, |a, b| a | b
     /// );
-    /// assert_eq!(result.inner().as_slice(), &[0b10101110u8, 0b00001111u8]);
+    /// assert_eq!(result.len(), 12);
+    /// for i in 0..12 {
+    ///     let l = bit_util::get_bit(&left, 4 + i);
+    ///     let r = bit_util::get_bit(&right, i);
+    ///     assert_eq!(result.value(i), l | r);
+    /// }
     /// ```
     pub fn from_bitwise_binary_op<F>(
         left: impl AsRef<[u8]>,
@@ -311,39 +321,74 @@ impl BooleanBuffer {
     {
         let left = left.as_ref();
         let right = right.as_ref();
-        // try fast path for aligned input
-        // If the underlying buffers are aligned to u64 we can apply the operation directly on the u64 slices
-        // to improve performance.
-        if left_offset_in_bits & 0x7 == 0 && right_offset_in_bits & 0x7 == 0 {
-            // align to byte boundary
-            let left = &left[left_offset_in_bits / 8..];
-            let right = &right[right_offset_in_bits / 8..];
 
-            unsafe {
-                let (left_prefix, left_u64s, left_suffix) = left.align_to::<u64>();
-                let (right_prefix, right_u64s, right_suffix) = right.align_to::<u64>();
-                // if there is no prefix or suffix, both buffers are aligned and
-                // we can do the operation directly on u64s.
-                // TODO: consider `slice::as_chunks` and `u64::from_le_bytes` when MSRV reaches 1.88.
-                // https://github.com/apache/arrow-rs/pull/9022#discussion_r2639949361
-                if left_prefix.is_empty()
-                    && right_prefix.is_empty()
-                    && left_suffix.is_empty()
-                    && right_suffix.is_empty()
-                {
-                    let result_u64s = left_u64s
+        // When both offsets share the same sub-64-bit alignment, we can
+        // align both to 64-bit boundaries and zip u64s directly,
+        // avoiding BitChunks bit-shifting entirely.
+        if left_offset_in_bits % 64 == right_offset_in_bits % 64 {
+            let bit_offset = left_offset_in_bits % 64;
+            let left_end = left_offset_in_bits + len_in_bits;
+            let right_end = right_offset_in_bits + len_in_bits;
+
+            let left_aligned = left_offset_in_bits & !63;
+            let right_aligned = right_offset_in_bits & !63;
+
+            let left_end_bytes = (bit_util::ceil(left_end, 64) * 8).min(left.len());
+            let right_end_bytes = (bit_util::ceil(right_end, 64) * 8).min(right.len());
+
+            let left_slice = &left[left_aligned / 8..left_end_bytes];
+            let right_slice = &right[right_aligned / 8..right_end_bytes];
+
+            let (lp, left_u64s, ls) = unsafe { left_slice.align_to::<u64>() };
+            let (rp, right_u64s, rs) = unsafe { right_slice.align_to::<u64>() };
+
+            match (lp, ls, rp, rs) {
+                ([], [], [], []) => {
+                    let result_u64s: Vec<u64> = left_u64s
                         .iter()
                         .zip(right_u64s.iter())
                         .map(|(l, r)| op(*l, *r))
-                        .collect::<Vec<u64>>();
-                    return BooleanBuffer {
-                        buffer: Buffer::from(result_u64s),
-                        bit_offset: 0,
-                        bit_len: len_in_bits,
-                    };
+                        .collect();
+                    return BooleanBuffer::new(result_u64s.into(), bit_offset, len_in_bits);
                 }
+                ([], left_suf, [], right_suf) => {
+                    let left_iter = left_u64s
+                        .iter()
+                        .cloned()
+                        .chain((!left_suf.is_empty()).then(|| read_u64(left_suf)));
+                    let right_iter = right_u64s
+                        .iter()
+                        .cloned()
+                        .chain((!right_suf.is_empty()).then(|| read_u64(right_suf)));
+                    let result_u64s: Vec<u64> =
+                        left_iter.zip(right_iter).map(|(l, r)| op(l, r)).collect();
+                    return BooleanBuffer::new(result_u64s.into(), bit_offset, len_in_bits);
+                }
+                _ => {}
             }
+
+            // Memory not u64-aligned, use chunks_exact fallback
+            let left_chunks = left_slice.chunks_exact(8);
+            let left_rem = left_chunks.remainder();
+            let right_chunks = right_slice.chunks_exact(8);
+            let right_rem = right_chunks.remainder();
+
+            let left_iter = left_chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+            let right_iter = right_chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+
+            let result_u64s: Vec<u64> = if left_rem.is_empty() && right_rem.is_empty() {
+                left_iter.zip(right_iter).map(|(l, r)| op(l, r)).collect()
+            } else {
+                left_iter
+                    .chain(Some(read_u64(left_rem)))
+                    .zip(right_iter.chain(Some(read_u64(right_rem))))
+                    .map(|(l, r)| op(l, r))
+                    .collect()
+            };
+            return BooleanBuffer::new(result_u64s.into(), bit_offset, len_in_bits);
         }
+
+        // Different sub-64-bit alignments: bit-shifting unavoidable
         let left_chunks = BitChunks::new(left, left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right, right_offset_in_bits, len_in_bits);
 
