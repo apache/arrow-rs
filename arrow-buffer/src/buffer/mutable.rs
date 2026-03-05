@@ -1088,8 +1088,15 @@ impl std::iter::FromIterator<bool> for MutableBuffer {
 
 impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        let mut buffer = Self::default();
-        buffer.extend_from_iter(iter.into_iter());
+        let into_iter = iter.into_iter();
+
+        // if we know the size of the iterator, allocate that much capacity upfront
+        let mut buffer = match into_iter.size_hint().1 {
+            Some(size) => Self::new(size),
+            None => Self::default(),
+        };
+
+        buffer.extend_from_iter(into_iter);
         buffer
     }
 }
