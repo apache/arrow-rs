@@ -17,10 +17,10 @@
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
-use arrow_array::OffsetSizeTrait;
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
-use arrow_buffer::buffer::NullBuffer;
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_array::{Array, GenericListArray, OffsetSizeTrait, make_array};
+use arrow_buffer::{OffsetBuffer, ScalarBuffer, buffer::NullBuffer};
+use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
 
@@ -93,15 +93,14 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
 
         let child_data = self.decoder.decode(tape, &child_pos)?;
         let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
+        let values = make_array(child_data);
+        let field = match &self.data_type {
+            DataType::List(f) | DataType::LargeList(f) => f.clone(),
+            _ => unreachable!(),
+        };
+        let offsets = OffsetBuffer::<O>::new(ScalarBuffer::from(offsets.finish()));
 
-        let data = ArrayDataBuilder::new(self.data_type.clone())
-            .len(pos.len())
-            .nulls(nulls)
-            .add_buffer(offsets.finish())
-            .child_data(vec![child_data]);
-
-        // Safety
-        // Validated lengths above
-        Ok(unsafe { data.build_unchecked() })
+        let array = GenericListArray::<O>::try_new(field, offsets, values, nulls)?;
+        Ok(array.into_data())
     }
 }
