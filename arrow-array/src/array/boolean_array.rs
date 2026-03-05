@@ -19,6 +19,7 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -189,7 +190,19 @@ impl BooleanArray {
                 let value_chunks = self.values().bit_chunks().iter_padded();
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & v) != 0)
             }
-            None => self.values().bit_chunks().iter_padded().any(|v| v != 0),
+            None => {
+                let bit_chunks = UnalignedBitChunk::new(
+                    self.values().values(),
+                    self.values().offset(),
+                    self.len(),
+                );
+                bit_chunks.prefix().unwrap_or(0) != 0
+                    || bit_chunks
+                        .chunks()
+                        .chunks(64)
+                        .any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0)
+                    || bit_chunks.suffix().unwrap_or(0) != 0
+            }
         }
     }
 
@@ -207,12 +220,36 @@ impl BooleanArray {
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & !v) != 0)
             }
             None => {
-                let chunks = self.values().bit_chunks();
-                if chunks.iter().any(|chunk| chunk != u64::MAX) {
-                    return true;
-                }
-                let remainder_len = chunks.remainder_len();
-                remainder_len > 0 && chunks.remainder_bits() != (1u64 << remainder_len) - 1
+                let bit_chunks = UnalignedBitChunk::new(
+                    self.values().values(),
+                    self.values().offset(),
+                    self.len(),
+                );
+                // UnalignedBitChunk zeros padding bits; fill them with 1s so
+                // they don't appear as false values.
+                let lead_mask = !((1u64 << bit_chunks.lead_padding()) - 1);
+                let trail_mask = if bit_chunks.trailing_padding() == 0 {
+                    u64::MAX
+                } else {
+                    (1u64 << (64 - bit_chunks.trailing_padding())) - 1
+                };
+                // If both prefix and suffix exist, suffix gets trail_mask.
+                // If only prefix exists, it gets both masks.
+                let (prefix_fill, suffix_fill) = match (bit_chunks.prefix(), bit_chunks.suffix()) {
+                    (Some(_), Some(_)) => (!lead_mask, !trail_mask),
+                    (Some(_), None) => (!lead_mask | !trail_mask, 0),
+                    _ => (0, 0),
+                };
+                bit_chunks
+                    .prefix()
+                    .map_or(false, |v| (v | prefix_fill) != u64::MAX)
+                    || bit_chunks
+                        .chunks()
+                        .chunks(64)
+                        .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX)
+                    || bit_chunks
+                        .suffix()
+                        .map_or(false, |v| (v | suffix_fill) != u64::MAX)
             }
         }
     }
