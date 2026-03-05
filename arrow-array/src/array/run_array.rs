@@ -1362,7 +1362,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn allow_to_create_invalid_array_using_new_unchecked() {
+        let valid = RunArray::<Int32Type>::from_iter(["32"]);
+        let (_, buffer, values) = valid.into_parts();
+
+        let _ = unsafe {
+            // mismatch data type
+            RunArray::<Int32Type>::new_unchecked(DataType::Int64, buffer, values)
+        };
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Invalid data type Int64 for RunArray. Should be DataType::RunEndEncoded"
+    )]
+    #[cfg(feature = "force_validate")]
+    fn should_not_be_able_to_create_invalid_array_using_new_unchecked_when_force_validate_is_enabled()
+     {
         let valid = RunArray::<Int32Type>::from_iter(["32"]);
         let (_, buffer, values) = valid.into_parts();
 
