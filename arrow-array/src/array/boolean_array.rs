@@ -157,7 +157,8 @@ impl BooleanArray {
         &self.values
     }
 
-    /// Returns the number of non null, true values within this array
+    /// Returns the number of non null, true values within this array.
+    /// If you only need to check if there is at least one true value, consider using `has_true()` which can short-circuit and be more efficient.
     pub fn true_count(&self) -> usize {
         match self.nulls() {
             Some(nulls) => {
@@ -172,7 +173,8 @@ impl BooleanArray {
         }
     }
 
-    /// Returns the number of non null, false values within this array
+    /// Returns the number of non null, false values within this array.
+    /// If you only need to check if there is at least one false value, consider using `has_false()` which can short-circuit and be more efficient.
     pub fn false_count(&self) -> usize {
         self.len() - self.null_count() - self.true_count()
     }
