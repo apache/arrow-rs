@@ -334,8 +334,12 @@ impl Visitor {
                 def_level,
                 data_type,
 
-                // We set this to true to reset because children of a struct should
-                // independently use their arrow hints for repeated fields.
+                // Always true: each child is independently responsible for its own
+                // repeated-to-list conversion. The parent's flag may be false when
+                // this struct's own repetition is consumed by an outer visit_list
+                // backward-compat path, but that only applies to the struct itself,
+                // not its children. A repeated child's arrow hint will be List<...>
+                // and needs to be unwrapped accordingly.
                 treat_repeated_as_list_arrow_hint: true,
             };
 
