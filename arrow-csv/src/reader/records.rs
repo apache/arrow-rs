@@ -210,7 +210,7 @@ impl RecordDecoder {
             });
 
         // Need to truncate data t1o the actual amount of data read
-        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
+        let data = Self::validate_utf8(&self.data[..self.data_len]).map_err(|e| {
             let valid_up_to = e.valid_up_to();
 
             // We can't use binary search because of empty fields
@@ -242,6 +242,20 @@ impl RecordDecoder {
             offsets,
             data,
         })
+    }
+
+    #[inline(always)]
+    fn validate_utf8(val: &[u8]) -> Result<&str, std::str::Utf8Error> {
+        #[cfg(feature = "simdutf8")]
+        {
+            if simdutf8::basic::from_utf8(val).is_ok() {
+                // SAFETY: simdutf8 just validated the bytes are valid UTF-8
+                return Ok(unsafe { std::str::from_utf8_unchecked(val) });
+            }
+            Err(std::str::from_utf8(val).unwrap_err())
+        }
+        #[cfg(not(feature = "simdutf8"))]
+        std::str::from_utf8(val)
     }
 }
 
