@@ -42,7 +42,6 @@ arrow-cast = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 half = { version = "2.1", default-features = false }
-indexmap = { version = "2.0", default-features = false, features = ["std"] }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 serde_core = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
@@ -52,6 +51,7 @@ memchr = "2.7.4"
 simdutf8 = { workspace = true }
 ryu = "1.0"
 itoa = "1.0"
+bumpalo = "3.20.2"
 
 [dev-dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
@@ -61,6 +61,7 @@ tokio = { version = "1.27", default-features = false, features = ["io-util"] }
 bytes = "1.4"
 criterion = { workspace = true, default-features = false }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+arbitrary = { version = "1.4.2", features = ["derive"] }
 
 [[bench]]
 name = "serde"
