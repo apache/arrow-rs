@@ -1863,9 +1863,36 @@ mod tests {
     }
 
     #[test]
+    fn test_delta_bit_packed_int32_single_value_skip_large() {
+        let block_data = vec![3; 10240];
+        test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
+        test_skip::<Int32Type>(block_data, Encoding::DELTA_BINARY_PACKED, 5000);
+    }
+
+    #[test]
     fn test_delta_bit_packed_int32_increasing_value_large() {
         let block_data = (0i32..10240).collect();
         test_delta_bit_packed_decode::<Int32Type>(vec![block_data]);
+    }
+
+    #[test]
+    fn test_delta_bit_packed_int32_increasing_value_skip_large() {
+        let block_data = (0i32..10240).collect::<Vec<i32>>();
+        test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
+        test_skip::<Int32Type>(block_data, Encoding::DELTA_BINARY_PACKED, 5000);
+    }
+
+    #[test]
+    fn test_delta_bit_packed_int32_stepped_value_large() {
+        let block_data = (0i32..10240).map(|i| i / 2).collect();
+        test_delta_bit_packed_decode::<Int32Type>(vec![block_data]);
+    }
+
+    #[test]
+    fn test_delta_bit_packed_int32_stepped_value_skip_large() {
+        let block_data = (0i32..10240).map(|i| i / 2).collect::<Vec<i32>>();
+        test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
+        test_skip::<Int32Type>(block_data, Encoding::DELTA_BINARY_PACKED, 5000);
     }
 
     #[test]
