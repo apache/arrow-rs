@@ -873,12 +873,33 @@ where
                 ));
             }
 
-            for v in &mut skip_buffer[0..skip_count] {
-                *v = v
-                    .wrapping_add(&self.min_delta)
-                    .wrapping_add(&self.last_value);
+            // see commentary in self.get() above regarding optimizations
+            let min_delta = self.min_delta.as_i64()?;
+            if bit_width == 0 {
+                // if min_delta == 0, there's nothing to do. self.last_value is unchanged
+                if min_delta != 0 {
+                    let mut delta = self.min_delta;
+                    for v in &mut skip_buffer[0..skip_count] {
+                        *v = self.last_value.wrapping_add(&delta);
+                        delta = delta.wrapping_add(&self.min_delta);
+                    }
 
-                self.last_value = *v;
+                    self.last_value = skip_buffer[skip_count - 1];
+                }
+            } else if min_delta == 0 {
+                for v in &mut skip_buffer[0..skip_count] {
+                    *v = v.wrapping_add(&self.last_value);
+
+                    self.last_value = *v;
+                }
+            } else {
+                for v in &mut skip_buffer[0..skip_count] {
+                    *v = v
+                        .wrapping_add(&self.min_delta)
+                        .wrapping_add(&self.last_value);
+
+                    self.last_value = *v;
+                }
             }
 
             skip += mini_block_should_skip;
