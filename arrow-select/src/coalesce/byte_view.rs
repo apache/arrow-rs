@@ -99,7 +99,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// eagerly to avoid allocations that are not used.
     fn ensure_capacity(&mut self) {
         if self.views.capacity() == 0 {
-            self.views.reserve(self.batch_size);
+            self.views.reserve_exact(self.batch_size);
         }
         debug_assert_eq!(self.views.capacity(), self.batch_size);
     }
