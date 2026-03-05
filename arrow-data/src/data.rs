@@ -479,6 +479,27 @@ impl ArrayData {
         size
     }
 
+    /// Registers all [`Buffer`]s in this [`ArrayData`] with the provided [`MemoryPool`].
+    ///
+    /// This recursively claims all data buffers, the null buffer, and any child data buffers.
+    /// Shared buffers are counted once (last-writer-wins), matching the behavior of
+    /// [`Buffer::claim`].
+    ///
+    /// [`MemoryPool`]: arrow_buffer::MemoryPool
+    /// [`Buffer::claim`]: arrow_buffer::Buffer::claim
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        for buffer in &self.buffers {
+            buffer.claim(pool);
+        }
+        if let Some(nulls) = &self.nulls {
+            nulls.buffer().claim(pool);
+        }
+        for child in &self.child_data {
+            child.claim(pool);
+        }
+    }
+
     /// Returns the total number of the bytes of memory occupied by
     /// the buffers by this slice of [`ArrayData`] (See also diagram on [`ArrayData`]).
     ///

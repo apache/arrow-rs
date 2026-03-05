@@ -430,6 +430,15 @@ unsafe impl Array for MapArray {
         }
         size
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_offsets.inner().inner().claim(pool);
+        if let Some(n) = &self.nulls {
+            n.buffer().claim(pool);
+        }
+        self.entries.claim(pool);
+    }
 }
 
 impl ArrayAccessor for &MapArray {

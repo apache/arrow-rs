@@ -346,6 +346,14 @@ unsafe impl Array for BooleanArray {
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>() + self.get_buffer_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.values.inner().claim(pool);
+        if let Some(n) = &self.nulls {
+            n.buffer().claim(pool);
+        }
+    }
 }
 
 impl ArrayAccessor for &BooleanArray {

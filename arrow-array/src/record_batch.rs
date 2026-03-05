@@ -785,6 +785,22 @@ impl RecordBatch {
             .map(|array| array.get_array_memory_size())
             .sum()
     }
+
+    /// Registers all [`Buffer`]s in this [`RecordBatch`] with the provided [`MemoryPool`].
+    ///
+    /// This claims the memory of all column arrays by recursively visiting their
+    /// underlying buffers. Shared buffers are counted once (last-writer-wins),
+    /// matching the behavior of [`Buffer::claim`].
+    ///
+    /// [`Buffer`]: arrow_buffer::Buffer
+    /// [`MemoryPool`]: arrow_buffer::MemoryPool
+    /// [`Buffer::claim`]: arrow_buffer::Buffer::claim
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        for column in &self.columns {
+            column.claim(pool);
+        }
+    }
 }
 
 /// Options that control the behaviour used when creating a [`RecordBatch`].
@@ -935,7 +951,8 @@ where
 mod tests {
     use super::*;
     use crate::{
-        BooleanArray, Int8Array, Int32Array, Int64Array, ListArray, StringArray, StringViewArray,
+        BooleanArray, Float64Array, Int8Array, Int32Array, Int64Array, ListArray, StringArray,
+        StringViewArray,
     };
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -1705,5 +1722,63 @@ mod tests {
             batch.schema().metadata().get("foo").unwrap().as_str(),
             "bar"
         );
+    }
+
+    #[cfg(feature = "pool")]
+    mod pool_tests {
+        use super::*;
+        use arrow_buffer::{MemoryPool, TrackingMemoryPool};
+
+        #[test]
+        fn test_claim_multi_column() {
+            let pool = TrackingMemoryPool::default();
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Float64, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
+                ],
+            )
+            .unwrap();
+
+            assert_eq!(pool.used(), 0);
+            batch.claim(&pool);
+            assert!(pool.used() > 0);
+        }
+
+        #[test]
+        fn test_claim_empty_batch() {
+            let pool = TrackingMemoryPool::default();
+            let schema = Arc::new(Schema::empty());
+            let batch = RecordBatch::new_empty(schema);
+
+            // Should not panic
+            batch.claim(&pool);
+            assert_eq!(pool.used(), 0);
+        }
+
+        #[test]
+        fn test_claim_idempotent() {
+            let pool = TrackingMemoryPool::default();
+
+            let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                    .unwrap();
+
+            batch.claim(&pool);
+            let first = pool.used();
+
+            batch.claim(&pool);
+            let second = pool.used();
+
+            // Calling claim twice should not double-count (last-writer-wins)
+            assert_eq!(first, second);
+        }
     }
 }

@@ -528,6 +528,14 @@ unsafe impl Array for FixedSizeListArray {
         }
         size
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        if let Some(n) = &self.nulls {
+            n.buffer().claim(pool);
+        }
+        self.values.claim(pool);
+    }
 }
 
 impl super::ListLikeArray for FixedSizeListArray {

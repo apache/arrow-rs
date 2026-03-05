@@ -662,6 +662,14 @@ unsafe impl Array for FixedSizeBinaryArray {
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>() + self.get_buffer_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_data.claim(pool);
+        if let Some(n) = &self.nulls {
+            n.buffer().claim(pool);
+        }
+    }
 }
 
 impl<'a> ArrayAccessor for &'a FixedSizeBinaryArray {
