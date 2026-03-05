@@ -242,14 +242,14 @@ impl BooleanArray {
                 };
                 bit_chunks
                     .prefix()
-                    .map_or(false, |v| (v | prefix_fill) != u64::MAX)
+                    .is_some_and(|v| (v | prefix_fill) != u64::MAX)
                     || bit_chunks
                         .chunks()
                         .chunks(64)
                         .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX)
                     || bit_chunks
                         .suffix()
-                        .map_or(false, |v| (v | suffix_fill) != u64::MAX)
+                        .is_some_and(|v| (v | suffix_fill) != u64::MAX)
             }
         }
     }
