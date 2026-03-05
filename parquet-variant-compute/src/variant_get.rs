@@ -334,7 +334,9 @@ mod test {
 
     use super::{GetOptions, variant_get};
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
-    use crate::{VariantArray, VariantArrayBuilder, json_to_variant};
+    use crate::{
+        VariantArray, VariantArrayBuilder, cast_to_variant, json_to_variant, shred_variant,
+    };
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
@@ -466,44 +468,20 @@ mod test {
     macro_rules! partially_shredded_variant_array_gen {
         ($func_name:ident,  $typed_value_array_gen: expr) => {
             fn $func_name() -> ArrayRef {
-                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
-                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
-                let (metadata, string_value) = {
-                    let mut builder = parquet_variant::VariantBuilder::new();
-                    builder.append_value("n/a");
-                    builder.finish()
-                };
+                // Build the mixed input [typed, null, "n/a", typed] and let shred_variant
+                // generate the shredded fixture for the requested type.
+                let typed_value: ArrayRef = Arc::new($typed_value_array_gen());
+                let typed_as_variant = cast_to_variant(typed_value.as_ref())
+                    .expect("should cast typed array to variant");
+                let mut input_builder = VariantArrayBuilder::new(typed_as_variant.len());
+                input_builder.append_variant(typed_as_variant.value(0));
+                input_builder.append_null();
+                input_builder.append_variant(Variant::from("n/a"));
+                input_builder.append_variant(typed_as_variant.value(3));
 
-                let nulls = NullBuffer::from(vec![
-                    true,  // row 0 non null
-                    false, // row 1 is null
-                    true,  // row 2 non null
-                    true,  // row 3 non null
-                ]);
-
-                // metadata is the same for all rows
-                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
-
-                // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
-                // about why row1 is an empty but non null, value.
-                let values = BinaryViewArray::from(vec![
-                    None,                // row 0 is shredded, so no value
-                    Some(b"" as &[u8]),  // row 1 is null, so empty value (why?)
-                    Some(&string_value), // copy the string value "N/A"
-                    None,                // row 3 is shredded, so no value
-                ]);
-
-                let typed_value = $typed_value_array_gen();
-
-                let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata), false)
-                    .with_field("typed_value", Arc::new(typed_value), true)
-                    .with_field("value", Arc::new(values), true)
-                    .with_nulls(nulls)
-                    .build();
-                ArrayRef::from(
-                    VariantArray::try_new(&struct_array).expect("should create variant array"),
-                )
+                let variant_array = shred_variant(&input_builder.build(), typed_value.data_type())
+                    .expect("should shred variant array");
+                ArrayRef::from(variant_array)
             }
         };
     }
@@ -836,22 +814,20 @@ mod test {
     macro_rules! perfectly_shredded_variant_array_fn {
         ($func:ident, $typed_value_gen:expr) => {
             fn $func() -> ArrayRef {
-                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
-                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
+                // Prefer producing fixtures with shred_variant from unshredded input.
+                // Fall back for non-shreddable test-only Arrow types (e.g. LargeUtf8/LargeBinary/Null).
+                let typed_value: ArrayRef = Arc::new($typed_value_gen());
+                if let Ok(unshredded) = cast_to_variant(typed_value.as_ref()) {
+                    if let Ok(shredded) = shred_variant(&unshredded, typed_value.data_type()) {
+                        return shredded.into();
+                    }
+                }
+
                 let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
                     EMPTY_VARIANT_METADATA_BYTES,
-                    3,
+                    typed_value.len(),
                 ));
-                let typed_value = $typed_value_gen();
-
-                let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata), false)
-                    .with_field("typed_value", Arc::new(typed_value), true)
-                    .build();
-
-                VariantArray::try_new(&struct_array)
-                    .expect("should create variant array")
-                    .into()
+                VariantArray::from_parts(metadata, None, Some(typed_value), None).into()
             }
         };
     }
@@ -1761,12 +1737,7 @@ mod test {
         let metadata =
             BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
 
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), false)
-            .with_nulls(nulls)
-            .build();
-
-        Arc::new(struct_array)
+        ArrayRef::from(VariantArray::from_parts(metadata, None, None, Some(nulls)))
     }
     /// This test manually constructs a shredded variant array representing objects
     /// like {"x": 1, "y": "foo"} and {"x": 42} and tests extracting the "x" field
@@ -1873,13 +1844,12 @@ mod test {
         .unwrap();
 
         // Create the main VariantArray
-        let main_struct = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array), false)
-            .with_field("value", Arc::new(value_array), true)
-            .with_field("typed_value", Arc::new(typed_value_struct), true)
-            .build();
-
-        Arc::new(main_struct)
+        ArrayRef::from(VariantArray::from_parts(
+            metadata_array,
+            Some(value_array),
+            Some(Arc::new(typed_value_struct)),
+            None,
+        ))
     }
 
     /// Simple test to check if nested paths are supported by current implementation
@@ -2252,13 +2222,12 @@ mod test {
         .unwrap();
 
         // Build final VariantArray
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array), false)
-            .with_field("value", Arc::new(value_array), true)
-            .with_field("typed_value", Arc::new(typed_value_struct), true)
-            .build();
-
-        Arc::new(struct_array)
+        ArrayRef::from(VariantArray::from_parts(
+            metadata_array,
+            Some(value_array),
+            Some(Arc::new(typed_value_struct)),
+            None,
+        ))
     }
 
     /// Create working depth 1 shredded test data based on the existing working pattern
@@ -2372,13 +2341,12 @@ mod test {
         .unwrap();
 
         // Build final VariantArray
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array), false)
-            .with_field("value", Arc::new(value_array), true)
-            .with_field("typed_value", Arc::new(typed_value_struct), true)
-            .build();
-
-        Arc::new(struct_array)
+        ArrayRef::from(VariantArray::from_parts(
+            metadata_array,
+            Some(value_array),
+            Some(Arc::new(typed_value_struct)),
+            None,
+        ))
     }
 
     /// Create working depth 2 shredded test data for "a.b.x" paths
@@ -2520,13 +2488,12 @@ mod test {
         .unwrap();
 
         // Build final VariantArray
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array), false)
-            .with_field("value", Arc::new(value_array), true)
-            .with_field("typed_value", Arc::new(typed_value_struct), true)
-            .build();
-
-        Arc::new(struct_array)
+        ArrayRef::from(VariantArray::from_parts(
+            metadata_array,
+            Some(value_array),
+            Some(Arc::new(typed_value_struct)),
+            None,
+        ))
     }
 
     #[test]
@@ -3252,13 +3219,12 @@ mod test {
         .unwrap();
 
         // Build final VariantArray with top-level nulls
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array), false)
-            .with_field("typed_value", Arc::new(typed_value_struct), true)
-            .with_nulls(nulls)
-            .build();
-
-        Arc::new(struct_array)
+        ArrayRef::from(VariantArray::from_parts(
+            metadata_array,
+            None,
+            Some(Arc::new(typed_value_struct)),
+            Some(nulls),
+        ))
     }
 
     /// Create comprehensive nested shredded variant with diverse null patterns
@@ -3310,13 +3276,12 @@ mod test {
             true,  // row 2: outer field NULL
             false, // row 3: top-level NULL
         ]);
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array), false)
-            .with_field("typed_value", Arc::new(typed_value), true)
-            .with_nulls(nulls)
-            .build();
-
-        Arc::new(struct_array)
+        ArrayRef::from(VariantArray::from_parts(
+            metadata_array,
+            None,
+            Some(Arc::new(typed_value)),
+            Some(nulls),
+        ))
     }
 
     /// Create variant with mixed shredding (spec-compliant) including null scenarios
@@ -3380,14 +3345,12 @@ mod test {
         // Build VariantArray with both value and typed_value (PartiallyShredded)
         // Top-level null is encoded in the main StructArray's null mask
         let variant_nulls = NullBuffer::from(vec![true, true, true, false]); // Row 3 is top-level null
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array), false)
-            .with_field("value", Arc::new(value_array), true)
-            .with_field("typed_value", Arc::new(typed_value_struct), true)
-            .with_nulls(variant_nulls)
-            .build();
-
-        Arc::new(struct_array)
+        ArrayRef::from(VariantArray::from_parts(
+            metadata_array,
+            Some(value_array),
+            Some(Arc::new(typed_value_struct)),
+            Some(variant_nulls),
+        ))
     }
 
     #[test]
@@ -4061,11 +4024,9 @@ mod test {
             EMPTY_VARIANT_METADATA_BYTES,
             all_nulls_values.len(),
         ));
-        let variant_struct = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), false)
-            .with_field("typed_value", Arc::new(typed_value_struct), true)
-            .build();
-        let variant_array: ArrayRef = VariantArray::try_new(&variant_struct).unwrap().into();
+        let variant_array: ArrayRef =
+            VariantArray::from_parts(metadata, None, Some(Arc::new(typed_value_struct)), None)
+                .into();
 
         // Case 1: all-null primitive column should reuse the typed_value Arc directly
         let all_nulls_field_ref = FieldRef::from(Field::new("result", DataType::Int32, true));
