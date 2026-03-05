@@ -141,7 +141,7 @@ impl Display for Promotion {
 pub(crate) struct ResolvedUnion {
     /// For each writer branch index, the reader branch index and how to read it.
     /// `None` means the writer branch doesn't resolve against the reader.
-    pub(crate) writer_to_reader: Arc<[Option<(usize, Promotion)>]>,
+    pub(crate) writer_to_reader: Arc<[Option<(usize, ResolutionInfo)>]>,
     /// Whether the writer schema at this site is a union
     pub(crate) writer_is_union: bool,
     /// Whether the reader schema at this site is a union
@@ -356,6 +356,86 @@ impl AvroDataType {
             | Codec::DurationMicros
             | Codec::DurationMillis
             | Codec::DurationSeconds => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Int8 => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < i8::MIN as i64 || i > i8::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default int8 {i} out of i8 range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Int16 => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < i16::MIN as i64 || i > i16::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default int16 {i} out of i16 range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt8 => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < 0 || i > u8::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default uint8 {i} out of u8 range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt16 => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < 0 || i > u16::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default uint16 {i} out of u16 range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt32 => {
+                let i = parse_json_i64(default_json, "long")?;
+                if i < 0 || i > u32::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default uint32 {i} out of u32 range"
+                    )));
+                }
+                AvroLiteral::Long(i)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Date64 | Codec::TimeNanos | Codec::TimestampSecs(_) => {
+                AvroLiteral::Long(parse_json_i64(default_json, "long")?)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt64 => AvroLiteral::Bytes(parse_bytes_default(default_json, Some(8))?),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Float16 => AvroLiteral::Bytes(parse_bytes_default(default_json, Some(2))?),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Time32Secs => {
+                let i = parse_json_i64(default_json, "int")?;
+                if i < i32::MIN as i64 || i > i32::MAX as i64 {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Default time32-secs {i} out of i32 range"
+                    )));
+                }
+                AvroLiteral::Int(i as i32)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalYearMonth => {
+                AvroLiteral::Bytes(parse_bytes_default(default_json, Some(4))?)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalMonthDayNano => {
+                AvroLiteral::Bytes(parse_bytes_default(default_json, Some(16))?)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalDayTime => {
+                AvroLiteral::Bytes(parse_bytes_default(default_json, Some(8))?)
+            }
             Codec::Float32 => {
                 let f = parse_json_f64(default_json, "float")?;
                 if !f.is_finite() || f < f32::MIN as f64 || f > f32::MAX as f64 {
@@ -698,6 +778,49 @@ pub(crate) enum Codec {
     DurationSeconds,
     #[cfg(feature = "avro_custom_types")]
     RunEndEncoded(Arc<AvroDataType>, u8),
+    /// Arrow Int8 custom logical type (arrow.int8)
+    #[cfg(feature = "avro_custom_types")]
+    Int8,
+    /// Arrow Int16 custom logical type (arrow.int16)
+    #[cfg(feature = "avro_custom_types")]
+    Int16,
+    /// Arrow UInt8 custom logical type (arrow.uint8)
+    #[cfg(feature = "avro_custom_types")]
+    UInt8,
+    /// Arrow UInt16 custom logical type (arrow.uint16)
+    #[cfg(feature = "avro_custom_types")]
+    UInt16,
+    /// Arrow UInt32 custom logical type (arrow.uint32)
+    #[cfg(feature = "avro_custom_types")]
+    UInt32,
+    /// Arrow UInt64 custom logical type (arrow.uint64) - stored as fixed(8)
+    #[cfg(feature = "avro_custom_types")]
+    UInt64,
+    /// Arrow Float16 custom logical type (arrow.float16) - stored as fixed(2)
+    #[cfg(feature = "avro_custom_types")]
+    Float16,
+    /// Arrow Date64 custom logical type (arrow.date64)
+    #[cfg(feature = "avro_custom_types")]
+    Date64,
+    /// Arrow Time64(Nanosecond) custom logical type (arrow.time64-nanosecond)
+    #[cfg(feature = "avro_custom_types")]
+    TimeNanos,
+    /// Arrow Time32(Second) custom logical type (arrow.time32-second)
+    #[cfg(feature = "avro_custom_types")]
+    Time32Secs,
+    /// Arrow Timestamp(Second) custom logical type (arrow.timestamp-second)
+    /// The bool indicates UTC (true) or local (false)
+    #[cfg(feature = "avro_custom_types")]
+    TimestampSecs(bool),
+    /// Arrow Interval(YearMonth) custom logical type (arrow.interval-year-month)
+    #[cfg(feature = "avro_custom_types")]
+    IntervalYearMonth,
+    /// Arrow Interval(MonthDayNano) custom logical type (arrow.interval-month-day-nano)
+    #[cfg(feature = "avro_custom_types")]
+    IntervalMonthDayNano,
+    /// Arrow Interval(DayTime) custom logical type (arrow.interval-day-time)
+    #[cfg(feature = "avro_custom_types")]
+    IntervalDayTime,
 }
 
 impl Codec {
@@ -794,6 +917,36 @@ impl Codec {
                     Arc::new(Field::new("values", values.codec().data_type(), true)),
                 )
             }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8 => DataType::Int8,
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16 => DataType::Int16,
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8 => DataType::UInt8,
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16 => DataType::UInt16,
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32 => DataType::UInt32,
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64 => DataType::UInt64,
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16 => DataType::Float16,
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64 => DataType::Date64,
+            #[cfg(feature = "avro_custom_types")]
+            Self::TimeNanos => DataType::Time64(TimeUnit::Nanosecond),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs => DataType::Time32(TimeUnit::Second),
+            #[cfg(feature = "avro_custom_types")]
+            Self::TimestampSecs(is_utc) => {
+                DataType::Timestamp(TimeUnit::Second, is_utc.then(|| "+00:00".into()))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalYearMonth => DataType::Interval(IntervalUnit::YearMonth),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano => DataType::Interval(IntervalUnit::MonthDayNano),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime => DataType::Interval(IntervalUnit::DayTime),
         }
     }
 
@@ -975,6 +1128,20 @@ impl From<&Codec> for UnionFieldKind {
             | Codec::DurationMicros
             | Codec::DurationMillis
             | Codec::DurationSeconds => Self::Duration,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Int8 | Codec::Int16 | Codec::UInt8 | Codec::UInt16 => Self::Int,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt32 | Codec::Date64 | Codec::TimeNanos | Codec::TimestampSecs(_) => {
+                Self::Long
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Time32Secs => Self::TimeMillis, // Closest standard type
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt64
+            | Codec::Float16
+            | Codec::IntervalYearMonth
+            | Codec::IntervalMonthDayNano
+            | Codec::IntervalDayTime => Self::Fixed,
         }
     }
 }
@@ -1344,6 +1511,41 @@ impl<'a> Maker<'a> {
                                 resolution: None,
                             }
                         }
+                        #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.uint64") if size == 8 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::UInt64,
+                            resolution: None,
+                        },
+                        #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.float16") if size == 2 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::Float16,
+                            resolution: None,
+                        },
+                        #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.interval-year-month") if size == 4 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::IntervalYearMonth,
+                            resolution: None,
+                        },
+                        #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.interval-month-day-nano") if size == 16 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::IntervalMonthDayNano,
+                            resolution: None,
+                        },
+                        #[cfg(feature = "avro_custom_types")]
+                        Some("arrow.interval-day-time") if size == 8 => AvroDataType {
+                            nullability: None,
+                            metadata,
+                            codec: Codec::IntervalDayTime,
+                            resolution: None,
+                        },
                         _ => AvroDataType {
                             nullability: None,
                             metadata,
@@ -1454,6 +1656,51 @@ impl<'a> Maker<'a> {
                         let values_site = field.clone();
                         field.codec = Codec::RunEndEncoded(Arc::new(values_site), bits_u8);
                     }
+                    // Arrow-specific integer width types
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.int8"), c @ Codec::Int32) => *c = Codec::Int8,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.int16"), c @ Codec::Int32) => *c = Codec::Int16,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.uint8"), c @ Codec::Int32) => *c = Codec::UInt8,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.uint16"), c @ Codec::Int32) => *c = Codec::UInt16,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.uint32"), c @ Codec::Int64) => *c = Codec::UInt32,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.uint64"), c @ Codec::Fixed(8)) => *c = Codec::UInt64,
+                    // Arrow Float16 stored as fixed(2)
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.float16"), c @ Codec::Fixed(2)) => *c = Codec::Float16,
+                    // Arrow Date64 custom type
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.date64"), c @ Codec::Int64) => *c = Codec::Date64,
+                    // Arrow time/timestamp types with second precision
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.time64-nanosecond"), c @ Codec::Int64) => *c = Codec::TimeNanos,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.time32-second"), c @ Codec::Int32) => *c = Codec::Time32Secs,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.timestamp-second"), c @ Codec::Int64) => {
+                        *c = Codec::TimestampSecs(true)
+                    }
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.local-timestamp-second"), c @ Codec::Int64) => {
+                        *c = Codec::TimestampSecs(false)
+                    }
+                    // Arrow interval types
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.interval-year-month"), c @ Codec::Fixed(4)) => {
+                        *c = Codec::IntervalYearMonth
+                    }
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.interval-month-day-nano"), c @ Codec::Fixed(16)) => {
+                        *c = Codec::IntervalMonthDayNano
+                    }
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.interval-day-time"), c @ Codec::Fixed(8)) => {
+                        *c = Codec::IntervalDayTime
+                    }
                     (Some(logical), _) => {
                         // Insert unrecognized logical type into metadata map
                         field.metadata.insert("logicalType".into(), logical.into());
@@ -1501,9 +1748,21 @@ impl<'a> Maker<'a> {
                     nullable_union_variants(writer_variants),
                     nullable_union_variants(reader_variants),
                 ) {
-                    (Some((w_nb, w_nonnull)), Some((_r_nb, r_nonnull))) => {
-                        let mut dt = self.make_data_type(w_nonnull, Some(r_nonnull), namespace)?;
+                    (Some((w_nb, w_nonnull)), Some((r_nb, r_nonnull))) => {
+                        let mut dt = self.resolve_type(w_nonnull, r_nonnull, namespace)?;
+                        let mut writer_to_reader = vec![None, None];
+                        writer_to_reader[w_nb.non_null_index()] = Some((
+                            r_nb.non_null_index(),
+                            dt.resolution
+                                .take()
+                                .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct)),
+                        ));
                         dt.nullability = Some(w_nb);
+                        dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
+                            writer_to_reader: Arc::from(writer_to_reader),
+                            writer_is_union: true,
+                            reader_is_union: true,
+                        }));
                         #[cfg(feature = "avro_custom_types")]
                         Self::propagate_nullability_into_ree(&mut dt, w_nb);
                         Ok(dt)
@@ -1512,12 +1771,17 @@ impl<'a> Maker<'a> {
                 }
             }
             (Schema::Union(writer_variants), reader_non_union) => {
-                let writer_to_reader: Vec<Option<(usize, Promotion)>> = writer_variants
+                let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
                     .iter()
                     .map(|writer| {
                         self.resolve_type(writer, reader_non_union, namespace)
                             .ok()
-                            .map(|tmp| (0usize, Self::coercion_from(&tmp)))
+                            .map(|tmp| {
+                                let resolution = tmp
+                                    .resolution
+                                    .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
+                                (0usize, resolution)
+                            })
                     })
                     .collect();
                 let mut dt = self.parse_type(reader_non_union, namespace)?;
@@ -1533,54 +1797,44 @@ impl<'a> Maker<'a> {
                     nullable_union_variants(reader_variants)
                 {
                     let mut dt = self.resolve_type(writer_non_union, non_null_branch, namespace)?;
-                    let non_null_idx = match nullability {
-                        Nullability::NullFirst => 1,
-                        Nullability::NullSecond => 0,
-                    };
                     #[cfg(feature = "avro_custom_types")]
                     Self::propagate_nullability_into_ree(&mut dt, nullability);
                     dt.nullability = Some(nullability);
-                    let promotion = Self::coercion_from(&dt);
-                    dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
-                        writer_to_reader: Arc::from(vec![Some((non_null_idx, promotion))]),
-                        writer_is_union: false,
-                        reader_is_union: true,
-                    }));
+                    // Ensure resolution is set to a non-Union variant to suppress
+                    // reading the union tag which is the default behavior.
+                    if dt.resolution.is_none() {
+                        dt.resolution = Some(ResolutionInfo::Promotion(Promotion::Direct));
+                    }
                     Ok(dt)
                 } else {
-                    let mut best_match: Option<(usize, AvroDataType, Promotion)> = None;
-                    for (i, variant) in reader_variants.iter().enumerate() {
-                        if let Ok(resolved_dt) =
-                            self.resolve_type(writer_non_union, variant, namespace)
-                        {
-                            let promotion = Self::coercion_from(&resolved_dt);
-                            if promotion == Promotion::Direct {
-                                best_match = Some((i, resolved_dt, promotion));
-                                break;
-                            } else if best_match.is_none() {
-                                best_match = Some((i, resolved_dt, promotion));
-                            }
-                        }
-                    }
-                    let Some((match_idx, match_dt, promotion)) = best_match else {
+                    let Some((match_idx, mut match_dt)) =
+                        self.find_best_union_match(writer_non_union, reader_variants, namespace)
+                    else {
                         return Err(ArrowError::SchemaError(
                             "Writer schema does not match any reader union branch".to_string(),
                         ));
                     };
-                    let mut children = Vec::with_capacity(reader_variants.len());
+                    // Steal the resolution info from the matching reader branch
+                    // for the Union resolution, but preserve possible resolution
+                    // information on its inner types.
+                    // For other branches, resolution is irrelevant,
+                    // so just parse them.
+                    let resolution = match_dt
+                        .resolution
+                        .take()
+                        .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
                     let mut match_dt = Some(match_dt);
-                    for (i, variant) in reader_variants.iter().enumerate() {
-                        if i == match_idx {
-                            if let Some(mut dt) = match_dt.take() {
-                                if matches!(dt.resolution, Some(ResolutionInfo::Promotion(_))) {
-                                    dt.resolution = None;
-                                }
-                                children.push(dt);
+                    let children = reader_variants
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, variant)| {
+                            if idx == match_idx {
+                                Ok(match_dt.take().unwrap())
+                            } else {
+                                self.parse_type(variant, namespace)
                             }
-                        } else {
-                            children.push(self.parse_type(variant, namespace)?);
-                        }
-                    }
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let union_fields = build_union_fields(&children)?;
                     let mut dt = AvroDataType::new(
                         Codec::Union(children.into(), union_fields, UnionMode::Dense),
@@ -1588,7 +1842,7 @@ impl<'a> Maker<'a> {
                         None,
                     );
                     dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
-                        writer_to_reader: Arc::from(vec![Some((match_idx, promotion))]),
+                        writer_to_reader: Arc::from(vec![Some((match_idx, resolution))]),
                         writer_is_union: false,
                         reader_is_union: true,
                     }));
@@ -1623,34 +1877,30 @@ impl<'a> Maker<'a> {
         }
     }
 
-    #[inline]
-    fn coercion_from(dt: &AvroDataType) -> Promotion {
-        match dt.resolution.as_ref() {
-            Some(ResolutionInfo::Promotion(promotion)) => *promotion,
-            _ => Promotion::Direct,
-        }
-    }
-
-    fn find_best_promotion(
+    fn find_best_union_match(
         &mut self,
         writer: &Schema<'a>,
         reader_variants: &[Schema<'a>],
         namespace: Option<&'a str>,
-    ) -> Option<(usize, Promotion)> {
-        let mut first_promotion: Option<(usize, Promotion)> = None;
+    ) -> Option<(usize, AvroDataType)> {
+        let mut first_resolution = None;
         for (reader_index, reader) in reader_variants.iter().enumerate() {
-            if let Ok(tmp) = self.resolve_type(writer, reader, namespace) {
-                let promotion = Self::coercion_from(&tmp);
-                if promotion == Promotion::Direct {
-                    // An exact match is best, return immediately.
-                    return Some((reader_index, promotion));
-                } else if first_promotion.is_none() {
-                    // Store the first valid promotion but keep searching for a direct match.
-                    first_promotion = Some((reader_index, promotion));
-                }
+            if let Ok(dt) = self.resolve_type(writer, reader, namespace) {
+                match &dt.resolution {
+                    None | Some(ResolutionInfo::Promotion(Promotion::Direct)) => {
+                        // An exact match is best, return immediately.
+                        return Some((reader_index, dt));
+                    }
+                    Some(_) => {
+                        if first_resolution.is_none() {
+                            // Store the first valid promotion but keep searching for a direct match.
+                            first_resolution = Some((reader_index, dt));
+                        }
+                    }
+                };
             }
         }
-        first_promotion
+        first_resolution
     }
 
     fn resolve_unions<'s>(
@@ -1659,15 +1909,34 @@ impl<'a> Maker<'a> {
         reader_variants: &'s [Schema<'a>],
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
+        let mut resolved_reader_encodings = HashMap::new();
+        let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
+            .iter()
+            .map(|writer| {
+                self.find_best_union_match(writer, reader_variants, namespace)
+                    .map(|(match_idx, mut match_dt)| {
+                        let resolution = match_dt
+                            .resolution
+                            .take()
+                            .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
+                        // TODO: check for overlapping reader variants?
+                        // They should not be possible in a valid schema.
+                        resolved_reader_encodings.insert(match_idx, match_dt);
+                        (match_idx, resolution)
+                    })
+            })
+            .collect();
         let reader_encodings: Vec<AvroDataType> = reader_variants
             .iter()
-            .map(|reader_schema| self.parse_type(reader_schema, namespace))
+            .enumerate()
+            .map(|(reader_idx, reader_schema)| {
+                if let Some(resolved) = resolved_reader_encodings.remove(&reader_idx) {
+                    Ok(resolved)
+                } else {
+                    self.parse_type(reader_schema, namespace)
+                }
+            })
             .collect::<Result<_, _>>()?;
-        let mut writer_to_reader: Vec<Option<(usize, Promotion)>> =
-            Vec::with_capacity(writer_variants.len());
-        for writer in writer_variants {
-            writer_to_reader.push(self.find_best_promotion(writer, reader_variants, namespace));
-        }
         let union_fields = build_union_fields(&reader_encodings)?;
         let mut dt = AvroDataType::new(
             Codec::Union(reader_encodings.into(), union_fields, UnionMode::Dense),
@@ -1932,7 +2201,14 @@ impl<'a> Maker<'a> {
         )?;
         let writer_ns = writer_record.namespace.or(namespace);
         let reader_ns = reader_record.namespace.or(namespace);
-        let reader_md = reader_record.attributes.field_metadata();
+        let mut reader_md = reader_record.attributes.field_metadata();
+        reader_md.insert(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            reader_record.name.to_string(),
+        );
+        if let Some(ns) = reader_ns {
+            reader_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), ns.to_string());
+        }
         // Build writer lookup and ambiguous alias set.
         let (writer_lookup, ambiguous_writer_aliases) = Self::build_writer_lookup(writer_record);
         let mut writer_to_reader: Vec<Option<usize>> = vec![None; writer_record.fields.len()];
@@ -2373,7 +2649,15 @@ mod tests {
         assert!(matches!(result.codec, Codec::Float64));
         assert_eq!(
             result.resolution,
-            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::IntToDouble)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true,
+            }))
         );
         assert_eq!(result.nullability, Some(Nullability::NullFirst));
     }
@@ -2395,7 +2679,10 @@ mod tests {
         assert!(resolved.writer_is_union && !resolved.reader_is_union);
         assert_eq!(
             resolved.writer_to_reader.as_ref(),
-            &[Some((0, Promotion::StringToBytes)), None]
+            &[
+                Some((0, ResolutionInfo::Promotion(Promotion::StringToBytes))),
+                None
+            ]
         );
     }
 
@@ -2415,7 +2702,7 @@ mod tests {
         assert!(!resolved.writer_is_union && resolved.reader_is_union);
         assert_eq!(
             resolved.writer_to_reader.as_ref(),
-            &[Some((0, Promotion::Direct))]
+            &[Some((0, ResolutionInfo::Promotion(Promotion::Direct)))]
         );
     }
 
@@ -2435,7 +2722,200 @@ mod tests {
         };
         assert_eq!(
             resolved.writer_to_reader.as_ref(),
-            &[Some((1, Promotion::IntToLong))]
+            &[Some((1, ResolutionInfo::Promotion(Promotion::IntToLong)))]
+        );
+    }
+
+    #[test]
+    fn test_resolve_writer_non_union_to_reader_union_preserves_inner_record_defaults() {
+        // Writer: record Inner{a: int}
+        // Reader: union [Inner{a: int, b: int default 42}, string]
+        // The matching child (Inner) should preserve DefaultValue(Int(42)) on field b.
+        let writer = Schema::Complex(ComplexType::Record(Record {
+            name: "Inner",
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![AvroFieldSchema {
+                name: "a",
+                doc: None,
+                r#type: mk_primitive(PrimitiveType::Int),
+                default: None,
+                aliases: vec![],
+            }],
+            attributes: Attributes::default(),
+        }));
+        let reader = mk_union(vec![
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![
+                    AvroFieldSchema {
+                        name: "a",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: None,
+                        aliases: vec![],
+                    },
+                    AvroFieldSchema {
+                        name: "b",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: Some(Value::Number(serde_json::Number::from(42))),
+                        aliases: vec![],
+                    },
+                ],
+                attributes: Attributes::default(),
+            })),
+            mk_primitive(PrimitiveType::String),
+        ]);
+        let mut maker = Maker::new(false, false);
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None)
+            .expect("resolution should succeed");
+        // Verify the union resolution structure
+        let resolved = match dt.resolution.as_ref() {
+            Some(ResolutionInfo::Union(u)) => u,
+            other => panic!("expected union resolution info, got {other:?}"),
+        };
+        assert!(!resolved.writer_is_union && resolved.reader_is_union);
+        assert_eq!(
+            resolved.writer_to_reader.len(),
+            1,
+            "expected the non-union record to resolve to a union variant"
+        );
+        let resolution = match resolved.writer_to_reader.first().unwrap() {
+            Some((0, resolution)) => resolution,
+            other => panic!("unexpected writer-to-reader table value {other:?}"),
+        };
+        match resolution {
+            ResolutionInfo::Record(ResolvedRecord {
+                writer_to_reader,
+                default_fields,
+                skip_fields,
+            }) => {
+                assert_eq!(writer_to_reader.len(), 1);
+                assert_eq!(writer_to_reader[0], Some(0));
+                assert_eq!(default_fields.len(), 1);
+                assert_eq!(default_fields[0], 1);
+                assert_eq!(skip_fields.len(), 1);
+                assert_eq!(skip_fields[0], None);
+            }
+            other => panic!("unexpected resolution {other:?}"),
+        }
+        // The matching child (Inner at index 0) should have field b with DefaultValue
+        let children = match dt.codec() {
+            Codec::Union(children, _, _) => children,
+            other => panic!("expected union codec, got {other:?}"),
+        };
+        let inner_fields = match children[0].codec() {
+            Codec::Struct(f) => f,
+            other => panic!("expected struct codec for Inner, got {other:?}"),
+        };
+        assert_eq!(inner_fields.len(), 2);
+        assert_eq!(inner_fields[1].name(), "b");
+        assert_eq!(
+            inner_fields[1].data_type().resolution,
+            Some(ResolutionInfo::DefaultValue(AvroLiteral::Int(42))),
+            "field b should have DefaultValue(Int(42)) from schema resolution"
+        );
+    }
+
+    #[test]
+    fn test_resolve_writer_union_to_reader_union_preserves_inner_record_defaults() {
+        // Writer: record [string, Inner{a: int}]
+        // Reader: union [Inner{a: int, b: int default 42}, string]
+        // The matching child (Inner) should preserve DefaultValue(Int(42)) on field b.
+        let writer = mk_union(vec![
+            mk_primitive(PrimitiveType::String),
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![AvroFieldSchema {
+                    name: "a",
+                    doc: None,
+                    r#type: mk_primitive(PrimitiveType::Int),
+                    default: None,
+                    aliases: vec![],
+                }],
+                attributes: Attributes::default(),
+            })),
+        ]);
+        let reader = mk_union(vec![
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![
+                    AvroFieldSchema {
+                        name: "a",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: None,
+                        aliases: vec![],
+                    },
+                    AvroFieldSchema {
+                        name: "b",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: Some(Value::Number(serde_json::Number::from(42))),
+                        aliases: vec![],
+                    },
+                ],
+                attributes: Attributes::default(),
+            })),
+            mk_primitive(PrimitiveType::String),
+        ]);
+        let mut maker = Maker::new(false, false);
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None)
+            .expect("resolution should succeed");
+        // Verify the union resolution structure
+        let resolved = match dt.resolution.as_ref() {
+            Some(ResolutionInfo::Union(u)) => u,
+            other => panic!("expected union resolution info, got {other:?}"),
+        };
+        assert!(resolved.writer_is_union && resolved.reader_is_union);
+        assert_eq!(resolved.writer_to_reader.len(), 2);
+        let resolution = match resolved.writer_to_reader[1].as_ref() {
+            Some((0, resolution)) => resolution,
+            other => panic!("unexpected writer-to-reader table value {other:?}"),
+        };
+        match resolution {
+            ResolutionInfo::Record(ResolvedRecord {
+                writer_to_reader,
+                default_fields,
+                skip_fields,
+            }) => {
+                assert_eq!(writer_to_reader.len(), 1);
+                assert_eq!(writer_to_reader[0], Some(0));
+                assert_eq!(default_fields.len(), 1);
+                assert_eq!(default_fields[0], 1);
+                assert_eq!(skip_fields.len(), 1);
+                assert_eq!(skip_fields[0], None);
+            }
+            other => panic!("unexpected resolution {other:?}"),
+        }
+        // The matching child (Inner at index 0) should have field b with DefaultValue
+        let children = match dt.codec() {
+            Codec::Union(children, _, _) => children,
+            other => panic!("expected union codec, got {other:?}"),
+        };
+        let inner_fields = match children[0].codec() {
+            Codec::Struct(f) => f,
+            other => panic!("expected struct codec for Inner, got {other:?}"),
+        };
+        assert_eq!(inner_fields.len(), 2);
+        assert_eq!(inner_fields[1].name(), "b");
+        assert_eq!(
+            inner_fields[1].data_type().resolution,
+            Some(ResolutionInfo::DefaultValue(AvroLiteral::Int(42))),
+            "field b should have DefaultValue(Int(42)) from schema resolution"
         );
     }
 
@@ -2453,7 +2933,18 @@ mod tests {
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(dt.codec(), Codec::Utf8));
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
-        assert!(dt.resolution.is_none());
+        assert_eq!(
+            dt.resolution,
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::Direct)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true
+            }))
+        );
     }
 
     #[test]
@@ -2472,7 +2963,15 @@ mod tests {
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
         assert_eq!(
             dt.resolution,
-            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::IntToDouble)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true
+            }))
         );
     }
 
@@ -2800,6 +3299,80 @@ mod tests {
         assert_eq!(l2, AvroLiteral::Long(456));
     }
 
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_validate_and_store_default_custom_integer_ranges() {
+        let mut dt_i8 = AvroDataType::new(Codec::Int8, HashMap::new(), None);
+        let lit_i8 = dt_i8
+            .parse_and_store_default(&serde_json::json!(i8::MAX))
+            .unwrap();
+        assert_eq!(lit_i8, AvroLiteral::Int(i8::MAX as i32));
+        let err_i8_high = dt_i8
+            .parse_and_store_default(&serde_json::json!(i8::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_i8_high.to_string().contains("out of i8 range"));
+        let err_i8_low = dt_i8
+            .parse_and_store_default(&serde_json::json!(i8::MIN as i64 - 1))
+            .unwrap_err();
+        assert!(err_i8_low.to_string().contains("out of i8 range"));
+
+        let mut dt_i16 = AvroDataType::new(Codec::Int16, HashMap::new(), None);
+        let lit_i16 = dt_i16
+            .parse_and_store_default(&serde_json::json!(i16::MIN))
+            .unwrap();
+        assert_eq!(lit_i16, AvroLiteral::Int(i16::MIN as i32));
+        let err_i16_high = dt_i16
+            .parse_and_store_default(&serde_json::json!(i16::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_i16_high.to_string().contains("out of i16 range"));
+        let err_i16_low = dt_i16
+            .parse_and_store_default(&serde_json::json!(i16::MIN as i64 - 1))
+            .unwrap_err();
+        assert!(err_i16_low.to_string().contains("out of i16 range"));
+
+        let mut dt_u8 = AvroDataType::new(Codec::UInt8, HashMap::new(), None);
+        let lit_u8 = dt_u8
+            .parse_and_store_default(&serde_json::json!(u8::MAX))
+            .unwrap();
+        assert_eq!(lit_u8, AvroLiteral::Int(u8::MAX as i32));
+        let err_u8_neg = dt_u8
+            .parse_and_store_default(&serde_json::json!(-1))
+            .unwrap_err();
+        assert!(err_u8_neg.to_string().contains("out of u8 range"));
+        let err_u8_high = dt_u8
+            .parse_and_store_default(&serde_json::json!(u8::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_u8_high.to_string().contains("out of u8 range"));
+
+        let mut dt_u16 = AvroDataType::new(Codec::UInt16, HashMap::new(), None);
+        let lit_u16 = dt_u16
+            .parse_and_store_default(&serde_json::json!(u16::MAX))
+            .unwrap();
+        assert_eq!(lit_u16, AvroLiteral::Int(u16::MAX as i32));
+        let err_u16_neg = dt_u16
+            .parse_and_store_default(&serde_json::json!(-1))
+            .unwrap_err();
+        assert!(err_u16_neg.to_string().contains("out of u16 range"));
+        let err_u16_high = dt_u16
+            .parse_and_store_default(&serde_json::json!(u16::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_u16_high.to_string().contains("out of u16 range"));
+
+        let mut dt_u32 = AvroDataType::new(Codec::UInt32, HashMap::new(), None);
+        let lit_u32 = dt_u32
+            .parse_and_store_default(&serde_json::json!(u32::MAX as i64))
+            .unwrap();
+        assert_eq!(lit_u32, AvroLiteral::Long(u32::MAX as i64));
+        let err_u32_neg = dt_u32
+            .parse_and_store_default(&serde_json::json!(-1))
+            .unwrap_err();
+        assert!(err_u32_neg.to_string().contains("out of u32 range"));
+        let err_u32_high = dt_u32
+            .parse_and_store_default(&serde_json::json!(u32::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_u32_high.to_string().contains("out of u32 range"));
+    }
+
     #[test]
     fn test_validate_and_store_default_fixed_decimal_interval() {
         let mut dt_fixed = AvroDataType::new(Codec::Fixed(4), HashMap::new(), None);
@@ -2995,14 +3568,7 @@ mod tests {
             assert_eq!(inner.nullability(), Some(Nullability::NullFirst));
             assert!(matches!(inner.codec(), Codec::Int32));
             match inner.resolution.as_ref() {
-                Some(ResolutionInfo::Union(info)) => {
-                    assert!(!info.writer_is_union, "writer should be non-union");
-                    assert!(info.reader_is_union, "reader should be union");
-                    assert_eq!(
-                        info.writer_to_reader.as_ref(),
-                        &[Some((1, Promotion::Direct))]
-                    );
-                }
+                Some(ResolutionInfo::Promotion(Promotion::Direct)) => {}
                 other => panic!("expected Union resolution, got {other:?}"),
             }
         } else {
@@ -3031,6 +3597,28 @@ mod tests {
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
         assert!(matches!(dt.codec(), Codec::Fixed(16)));
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_interval_month_day_nano_custom_logical_type_fixed16() {
+        let schema = Schema::Complex(ComplexType::Fixed(Fixed {
+            name: "ArrowIntervalMDN",
+            namespace: None,
+            aliases: vec![],
+            size: 16,
+            attributes: Attributes {
+                logical_type: Some("arrow.interval-month-day-nano"),
+                additional: Default::default(),
+            },
+        }));
+        let mut maker = Maker::new(false, false);
+        let dt = maker.make_data_type(&schema, None, None).unwrap();
+        assert!(matches!(dt.codec(), Codec::IntervalMonthDayNano));
+        assert_eq!(
+            dt.codec.data_type(),
+            DataType::Interval(IntervalUnit::MonthDayNano)
+        );
     }
 
     #[test]

@@ -256,7 +256,9 @@ fn can_sort_to_indices(data_type: &DataType) -> bool {
         )
         || match data_type {
             DataType::List(f) if can_rank(f.data_type()) => true,
+            DataType::ListView(f) if can_rank(f.data_type()) => true,
             DataType::LargeList(f) if can_rank(f.data_type()) => true,
+            DataType::LargeListView(f) if can_rank(f.data_type()) => true,
             DataType::FixedSizeList(f, _) if can_rank(f.data_type()) => true,
             DataType::Dictionary(_, values) if can_rank(values.as_ref()) => true,
             DataType::RunEndEncoded(_, f) if can_sort_to_indices(f.data_type()) => true,
@@ -286,7 +288,9 @@ pub fn sort_to_indices(
         DataType::BinaryView => sort_byte_view(array.as_binary_view(), v, n, options, limit),
         DataType::FixedSizeBinary(_) => sort_fixed_size_binary(array.as_fixed_size_binary(), v, n, options, limit),
         DataType::List(_) => sort_list(array.as_list::<i32>(), v, n, options, limit)?,
+        DataType::ListView(_) => sort_list_view(array.as_list_view::<i32>(), v, n, options, limit)?,
         DataType::LargeList(_) => sort_list(array.as_list::<i64>(), v, n, options, limit)?,
+        DataType::LargeListView(_) => sort_list_view(array.as_list_view::<i64>(), v, n, options, limit)?,
         DataType::FixedSizeList(_, _) => sort_fixed_size_list(array.as_fixed_size_list(), v, n, options, limit)?,
         DataType::Dictionary(_, _) => downcast_dictionary_array!{
             array => sort_dictionary(array, v, n, options, limit)?,
@@ -575,6 +579,28 @@ fn sort_list<O: OffsetSizeTrait>(
         .map(|index| {
             let end = offsets[index as usize + 1].as_usize();
             let start = offsets[index as usize].as_usize();
+            (index, &rank[start..end])
+        })
+        .collect::<Vec<(u32, &[u32])>>();
+    Ok(sort_impl(options, &mut valids, &null_indices, limit, Ord::cmp).into())
+}
+
+fn sort_list_view<O: OffsetSizeTrait>(
+    array: &GenericListViewArray<O>,
+    value_indices: Vec<u32>,
+    null_indices: Vec<u32>,
+    options: SortOptions,
+    limit: Option<usize>,
+) -> Result<UInt32Array, ArrowError> {
+    let rank = child_rank(array.values().as_ref(), options)?;
+    let offsets = array.offsets();
+    let sizes = array.sizes();
+    let mut valids = value_indices
+        .into_iter()
+        .map(|index| {
+            let start = offsets[index as usize].as_usize();
+            let size = sizes[index as usize].as_usize();
+            let end = start + size;
             (index, &rank[start..end])
         })
         .collect::<Vec<(u32, &[u32])>>();
@@ -1373,16 +1399,37 @@ mod tests {
 
         assert_eq!(&sorted, &expected);
 
+        // for ListView
+        let input = Arc::new(ListViewArray::from_iter_primitive::<T, _, _>(data.clone()));
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = Arc::new(ListViewArray::from_iter_primitive::<T, _, _>(
+            expected_data.clone(),
+        )) as ArrayRef;
+        assert_eq!(&sorted, &expected);
+
         // for LargeList
-        let input = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(data));
+        let input = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(data.clone()));
         let sorted = match limit {
             Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
             _ => sort(&(input as ArrayRef), options).unwrap(),
         };
         let expected = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(
+            expected_data.clone(),
+        )) as ArrayRef;
+        assert_eq!(&sorted, &expected);
+
+        // for LargeListView
+        let input = Arc::new(LargeListViewArray::from_iter_primitive::<T, _, _>(data));
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = Arc::new(LargeListViewArray::from_iter_primitive::<T, _, _>(
             expected_data,
         )) as ArrayRef;
-
         assert_eq!(&sorted, &expected);
     }
 

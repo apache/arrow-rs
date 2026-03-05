@@ -755,7 +755,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         self.page_metrics.num_buffered_rows as usize >= self.props.data_page_row_count_limit()
-            || self.encoder.estimated_data_page_size() >= self.props.data_page_size_limit()
+            || self.encoder.estimated_data_page_size()
+                >= self.props.column_data_page_size_limit(self.descr.path())
     }
 
     /// Performs dictionary fallback.
@@ -2503,6 +2504,27 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_column_data_page_size_limit() {
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_1_0)
+                .set_dictionary_enabled(false)
+                .set_data_page_size_limit(1000)
+                .set_column_data_page_size_limit(ColumnPath::from("col"), 10)
+                .set_write_batch_size(3)
+                .build(),
+        );
+        let data = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let col_values =
+            write_and_collect_page_values(ColumnPath::from("col"), Arc::clone(&props), data);
+        let other_values = write_and_collect_page_values(ColumnPath::from("other"), props, data);
+
+        assert_eq!(col_values, vec![3, 3, 3, 1]);
+        assert_eq!(other_values, vec![10]);
+    }
+
+    #[test]
     fn test_bool_statistics() {
         let stats = statistics_roundtrip::<BoolType>(&[true, false, false, true]);
         // Booleans have an unsigned sort order and so are not compatible
@@ -4119,6 +4141,22 @@ mod tests {
         get_typed_column_writer::<T>(column_writer)
     }
 
+    fn get_test_column_writer_with_path<'a, T: DataType>(
+        page_writer: Box<dyn PageWriter + 'a>,
+        max_def_level: i16,
+        max_rep_level: i16,
+        props: WriterPropertiesPtr,
+        path: ColumnPath,
+    ) -> ColumnWriterImpl<'a, T> {
+        let descr = Arc::new(get_test_column_descr_with_path::<T>(
+            max_def_level,
+            max_rep_level,
+            path,
+        ));
+        let column_writer = get_column_writer(descr, props, page_writer);
+        get_typed_column_writer::<T>(column_writer)
+    }
+
     /// Returns column reader.
     fn get_test_column_reader<T: DataType>(
         page_reader: Box<dyn PageReader>,
@@ -4143,6 +4181,59 @@ mod tests {
             .build()
             .unwrap();
         ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+    }
+
+    fn get_test_column_descr_with_path<T: DataType>(
+        max_def_level: i16,
+        max_rep_level: i16,
+        path: ColumnPath,
+    ) -> ColumnDescriptor {
+        let name = path.string();
+        let tpe = SchemaType::primitive_type_builder(&name, T::get_physical_type())
+            // length is set for "encoding support" tests for FIXED_LEN_BYTE_ARRAY type,
+            // it should be no-op for other types
+            .with_length(1)
+            .build()
+            .unwrap();
+        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+    }
+
+    fn write_and_collect_page_values(
+        path: ColumnPath,
+        props: WriterPropertiesPtr,
+        data: &[i32],
+    ) -> Vec<u32> {
+        let mut file = tempfile::tempfile().unwrap();
+        let mut write = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut write));
+        let mut writer =
+            get_test_column_writer_with_path::<Int32Type>(page_writer, 0, 0, props, path);
+        writer.write_batch(data, None, None).unwrap();
+        let r = writer.close().unwrap();
+
+        drop(write);
+
+        let props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
+            .build();
+        let mut page_reader = Box::new(
+            SerializedPageReader::new_with_properties(
+                Arc::new(file),
+                &r.metadata,
+                r.rows_written as usize,
+                None,
+                Arc::new(props),
+            )
+            .unwrap(),
+        );
+
+        let mut values_per_page = Vec::new();
+        while let Some(page) = page_reader.get_next_page().unwrap() {
+            assert_eq!(page.page_type(), PageType::DATA_PAGE);
+            values_per_page.push(page.num_values());
+        }
+
+        values_per_page
     }
 
     /// Returns page writer that collects pages without serializing them.
