@@ -67,5 +67,5 @@ name = "serde"
 harness = false
 
 [[bench]]
-name = "json-reader"
+name = "json_reader"
 harness = false
