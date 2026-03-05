@@ -53,6 +53,19 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         self.len() == 0
     }
 
+    /// Returns `true` if appending `data_len` bytes would overflow the offset type `I`.
+    ///
+    /// Used by decoders to stop filling a batch early rather than returning an error,
+    /// allowing the remaining values to be emitted in a subsequent batch.
+    #[inline]
+    pub fn would_overflow(&self, data_len: usize) -> bool {
+        // Use checked_add to handle the case where the sum itself overflows usize.
+        match self.values.len().checked_add(data_len) {
+            Some(total) => I::from_usize(total).is_none(),
+            None => true, // usize addition overflowed → definitely can't fit
+        }
+    }
+
     /// If `validate_utf8` this verifies that the first character of `data` is
     /// the start of a UTF-8 codepoint
     ///
@@ -316,6 +329,30 @@ mod tests {
 
         // Fails if run from middle of codepoint
         buffer.check_valid_utf8(12).unwrap_err();
+    }
+
+    #[test]
+    fn test_would_overflow() {
+        // Buffer with 5 bytes already written.
+        let mut buf = OffsetBuffer::<i32>::default();
+        buf.try_push(b"hello", false).unwrap(); // values.len() == 5
+
+        // Within i32::MAX – should not report overflow.
+        assert!(!buf.would_overflow(0));
+        assert!(!buf.would_overflow(1));
+        // 5 + (i32::MAX - 5) == i32::MAX, still representable.
+        assert!(!buf.would_overflow(i32::MAX as usize - 5));
+        // 5 + (i32::MAX - 4) == i32::MAX + 1, overflows i32.
+        assert!(buf.would_overflow(i32::MAX as usize - 4));
+        assert!(buf.would_overflow(i32::MAX as usize));
+        // usize::MAX must be caught without panicking.
+        assert!(buf.would_overflow(usize::MAX));
+
+        // i64 offset type: the i32 boundary is fine.
+        let mut buf64 = OffsetBuffer::<i64>::default();
+        buf64.try_push(b"hello", false).unwrap();
+        assert!(!buf64.would_overflow(i32::MAX as usize - 4));
+        assert!(!buf64.would_overflow(i32::MAX as usize));
     }
 
     #[test]
