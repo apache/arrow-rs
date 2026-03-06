@@ -346,6 +346,9 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     def_levels_sink: Vec<i16>,
     rep_levels_sink: Vec<i16>,
     data_pages: VecDeque<CompressedPage>,
+    // Reusable buffers for page assembly (avoids per-page allocation)
+    page_buf: Vec<u8>,
+    compressed_buf: Vec<u8>,
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
     offset_index_builder: Option<OffsetIndexBuilder>,
@@ -412,6 +415,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             def_levels_sink: vec![],
             rep_levels_sink: vec![],
             data_pages: VecDeque::new(),
+            page_buf: Vec::new(),
+            compressed_buf: Vec::new(),
             page_metrics,
             column_metrics,
             column_index_builder,
@@ -557,7 +562,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// of the current memory usage and not the final anticipated encoded size.
     #[cfg(feature = "arrow")]
     pub(crate) fn memory_size(&self) -> usize {
-        self.column_metrics.total_bytes_written as usize + self.encoder.estimated_memory_size()
+        self.column_metrics.total_bytes_written as usize
+            + self.encoder.estimated_memory_size()
+            + self.page_buf.capacity()
+            + self.compressed_buf.capacity()
     }
 
     /// Returns total number of bytes written by this column writer so far.
@@ -1048,40 +1056,48 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let compressed_page = match self.props.writer_version() {
             WriterVersion::PARQUET_1_0 => {
-                let mut buffer = vec![];
+                // Encode levels into locals first to avoid borrow conflict
+                // (encode_levels_v1 borrows &self, page_buf needs &mut self)
+                let rep_levels_encoded = if max_rep_level > 0 {
+                    Some(self.encode_levels_v1(
+                        Encoding::RLE,
+                        &self.rep_levels_sink[..],
+                        max_rep_level,
+                    ))
+                } else {
+                    None
+                };
+                let def_levels_encoded = if max_def_level > 0 {
+                    Some(self.encode_levels_v1(
+                        Encoding::RLE,
+                        &self.def_levels_sink[..],
+                        max_def_level,
+                    ))
+                } else {
+                    None
+                };
 
-                if max_rep_level > 0 {
-                    buffer.extend_from_slice(
-                        &self.encode_levels_v1(
-                            Encoding::RLE,
-                            &self.rep_levels_sink[..],
-                            max_rep_level,
-                        )[..],
-                    );
+                // Assemble page data into reusable buffer
+                self.page_buf.clear();
+                if let Some(ref levels) = rep_levels_encoded {
+                    self.page_buf.extend_from_slice(levels);
                 }
-
-                if max_def_level > 0 {
-                    buffer.extend_from_slice(
-                        &self.encode_levels_v1(
-                            Encoding::RLE,
-                            &self.def_levels_sink[..],
-                            max_def_level,
-                        )[..],
-                    );
+                if let Some(ref levels) = def_levels_encoded {
+                    self.page_buf.extend_from_slice(levels);
                 }
+                self.page_buf.extend_from_slice(&values_data.buf);
+                let uncompressed_size = self.page_buf.len();
 
-                buffer.extend_from_slice(&values_data.buf);
-                let uncompressed_size = buffer.len();
-
-                if let Some(ref mut cmpr) = self.compressor {
-                    let mut compressed_buf = Vec::with_capacity(uncompressed_size);
-                    cmpr.compress(&buffer[..], &mut compressed_buf)?;
-                    compressed_buf.shrink_to_fit();
-                    buffer = compressed_buf;
-                }
+                let page_bytes = if let Some(ref mut cmpr) = self.compressor {
+                    self.compressed_buf.clear();
+                    cmpr.compress(&self.page_buf[..], &mut self.compressed_buf)?;
+                    Bytes::copy_from_slice(&self.compressed_buf)
+                } else {
+                    Bytes::copy_from_slice(&self.page_buf)
+                };
 
                 let data_page = Page::DataPage {
-                    buf: buffer.into(),
+                    buf: page_bytes,
                     num_values: self.page_metrics.num_buffered_values,
                     encoding: values_data.encoding,
                     def_level_encoding: Encoding::RLE,
@@ -1094,18 +1110,28 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             WriterVersion::PARQUET_2_0 => {
                 let mut rep_levels_byte_len = 0;
                 let mut def_levels_byte_len = 0;
-                let mut buffer = vec![];
 
-                if max_rep_level > 0 {
-                    let levels = self.encode_levels_v2(&self.rep_levels_sink[..], max_rep_level);
+                // Encode levels into locals first (same borrow-checker rationale as V1)
+                let rep_levels_encoded = if max_rep_level > 0 {
+                    Some(self.encode_levels_v2(&self.rep_levels_sink[..], max_rep_level))
+                } else {
+                    None
+                };
+                let def_levels_encoded = if max_def_level > 0 {
+                    Some(self.encode_levels_v2(&self.def_levels_sink[..], max_def_level))
+                } else {
+                    None
+                };
+
+                // Assemble page data into reusable buffer
+                self.page_buf.clear();
+                if let Some(ref levels) = rep_levels_encoded {
                     rep_levels_byte_len = levels.len();
-                    buffer.extend_from_slice(&levels[..]);
+                    self.page_buf.extend_from_slice(levels);
                 }
-
-                if max_def_level > 0 {
-                    let levels = self.encode_levels_v2(&self.def_levels_sink[..], max_def_level);
+                if let Some(ref levels) = def_levels_encoded {
                     def_levels_byte_len = levels.len();
-                    buffer.extend_from_slice(&levels[..]);
+                    self.page_buf.extend_from_slice(levels);
                 }
 
                 let uncompressed_size =
@@ -1114,24 +1140,24 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 // Data Page v2 compresses values only.
                 let is_compressed = match self.compressor {
                     Some(ref mut cmpr) => {
-                        let buffer_len = buffer.len();
-                        cmpr.compress(&values_data.buf, &mut buffer)?;
-                        if uncompressed_size <= buffer.len() - buffer_len {
-                            buffer.truncate(buffer_len);
-                            buffer.extend_from_slice(&values_data.buf);
+                        let buffer_len = self.page_buf.len();
+                        cmpr.compress(&values_data.buf, &mut self.page_buf)?;
+                        if uncompressed_size <= self.page_buf.len() - buffer_len {
+                            self.page_buf.truncate(buffer_len);
+                            self.page_buf.extend_from_slice(&values_data.buf);
                             false
                         } else {
                             true
                         }
                     }
                     None => {
-                        buffer.extend_from_slice(&values_data.buf);
+                        self.page_buf.extend_from_slice(&values_data.buf);
                         false
                     }
                 };
 
                 let data_page = Page::DataPageV2 {
-                    buf: buffer.into(),
+                    buf: Bytes::copy_from_slice(&self.page_buf),
                     num_values: self.page_metrics.num_buffered_values,
                     encoding: values_data.encoding,
                     num_nulls: self.page_metrics.num_page_nulls as u32,
@@ -4418,5 +4444,55 @@ mod tests {
             result.metadata.uncompressed_size(),
             result.metadata.compressed_size()
         );
+    }
+
+    /// Validates that reused page buffers are properly cleared between pages.
+    /// Writes enough data to produce multiple data pages with compression enabled,
+    /// then reads back and verifies all data is correct (no stale data leakage).
+    #[test]
+    fn test_multi_page_roundtrip_with_compression() {
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1000)
+            .set_compression(Compression::SNAPPY)
+            .set_dictionary_enabled(false)
+            .build();
+
+        // Write 5000 values -- should produce 5 data pages
+        let values: Vec<i32> = (0..5000).collect();
+        column_roundtrip::<Int32Type>(props, &values, None, None);
+    }
+
+    /// Same as above but for the V2 data page path with compression.
+    #[test]
+    fn test_multi_page_roundtrip_with_compression_v2() {
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_data_page_row_count_limit(1000)
+            .set_compression(Compression::SNAPPY)
+            .set_dictionary_enabled(false)
+            .build();
+
+        let values: Vec<i32> = (0..5000).collect();
+        column_roundtrip::<Int32Type>(props, &values, None, None);
+    }
+
+    /// Multi-page roundtrip with nullable values and compression to test
+    /// that definition levels are correctly handled across reused buffers.
+    #[test]
+    fn test_multi_page_roundtrip_nullable_with_compression() {
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1000)
+            .set_compression(Compression::SNAPPY)
+            .set_dictionary_enabled(false)
+            .build();
+
+        // 5000 values with every 3rd value being null
+        let num_levels = 5000;
+        let def_levels: Vec<i16> =
+            (0..num_levels).map(|i| if i % 3 == 0 { 0 } else { 1 }).collect();
+        let num_values = def_levels.iter().filter(|&&d| d == 1).count();
+        let values: Vec<i32> = (0..num_values as i32).collect();
+
+        column_roundtrip::<Int32Type>(props, &values, Some(&def_levels), None);
     }
 }
