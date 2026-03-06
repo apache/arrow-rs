@@ -73,6 +73,7 @@ tokio = { version = "1.0", optional = true, default-features = false, features =
 hashbrown = { version = "0.16", default-features = false }
 twox-hash = { version = "2.0", default-features = false, features = ["xxhash64"] }
 paste = { version = "1.0" }
+flatbuffers = { version = "25.2.10", default-features = false, optional = true }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
 simdutf8 = { workspace = true , optional = true }
@@ -134,6 +135,8 @@ flate2-zlib-rs = ["flate2/zlib-rs"]
 variant_experimental = ["arrow", "parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
+# Enable FlatBuffers metadata support (experimental)
+flatbuffers_metadata = ["dep:flatbuffers", "dep:crc32fast"]
 
 
 [[example]]
@@ -269,6 +272,11 @@ harness = false
 name = "row_selection_cursor"
 harness = false
 required-features = ["arrow"]
+
+[[bench]]
+name = "metadata_flatbuf"
+harness = false
+required-features = ["arrow", "flatbuffers_metadata"]
 
 [lib]
 bench = false
