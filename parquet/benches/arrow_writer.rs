@@ -32,6 +32,7 @@ use std::sync::Arc;
 use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
+use arrow_array::builder::StringDictionaryBuilder;
 use arrow_array::RecordBatchOptions;
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::errors::Result;
@@ -137,6 +138,28 @@ fn create_string_dictionary_bench_batch(
         null_density,
         true_density,
     )?)
+}
+
+/// Creates a DictionaryArray with low cardinality (~15 unique values across
+/// `size` rows). This simulates realistic categorical columns like status
+/// codes, country codes, or ship modes where dictionary encoding excels.
+fn create_string_dictionary_low_cardinality_bench_batch(size: usize) -> Result<RecordBatch> {
+    let categories = [
+        "DELIVERED", "SHIPPED", "PENDING", "CANCELLED", "RETURNED",
+        "PROCESSING", "ON_HOLD", "REFUNDED", "BACKORDERED", "IN_TRANSIT",
+        "CONFIRMED", "DISPATCHED", "FAILED", "COMPLETED", "UNKNOWN",
+    ];
+    let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+    for i in 0..size {
+        builder.append_value(categories[i % categories.len()]);
+    }
+    let dict = builder.finish();
+    let schema = Schema::new(vec![Field::new(
+        "_1",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        false,
+    )]);
+    Ok(RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)])?)
 }
 
 fn create_string_bench_batch_non_null(
@@ -398,6 +421,9 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
 
     let batch = create_string_dictionary_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_dictionary", batch));
+
+    let batch = create_string_dictionary_low_cardinality_bench_batch(BATCH_SIZE).unwrap();
+    batches.push(("string_dictionary_low_cardinality", batch));
 
     let batch = create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_non_null", batch));

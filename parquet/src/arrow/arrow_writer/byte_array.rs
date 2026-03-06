@@ -32,6 +32,7 @@ use arrow_array::{
     Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
     LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
 };
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType;
 
 macro_rules! downcast_dict_impl {
@@ -93,6 +94,63 @@ macro_rules! downcast_op {
                 d => unreachable!("cannot downcast {} dictionary value to byte array", d),
             },
             d => unreachable!("cannot downcast {} to byte array", d),
+        }
+    };
+}
+
+/// Dispatches to `encode_with_remap` for Dictionary types, providing the
+/// `row_to_key` closure that maps row indices to dictionary key indices.
+macro_rules! downcast_dict_remap {
+    ($key_type:expr, $val:ident, $array:ident, $op:expr, $indices:expr, $encoder:expr) => {{
+        macro_rules! inner {
+            ($kt:ident) => {{
+                let dict_array = $array
+                    .as_any()
+                    .downcast_ref::<DictionaryArray<arrow_array::types::$kt>>()
+                    .unwrap();
+                let typed = dict_array.downcast_dict::<$val>().unwrap();
+                let keys = dict_array.keys();
+                let dict_len = dict_array.values().len();
+                let row_to_key = |idx: usize| -> usize {
+                    keys.value(idx).as_usize()
+                };
+                $op(typed, $indices, $encoder, dict_len, &row_to_key)
+            }};
+        }
+        match $key_type.as_ref() {
+            DataType::UInt8 => inner!(UInt8Type),
+            DataType::UInt16 => inner!(UInt16Type),
+            DataType::UInt32 => inner!(UInt32Type),
+            DataType::UInt64 => inner!(UInt64Type),
+            DataType::Int8 => inner!(Int8Type),
+            DataType::Int16 => inner!(Int16Type),
+            DataType::Int32 => inner!(Int32Type),
+            DataType::Int64 => inner!(Int64Type),
+            _ => unreachable!(),
+        }
+    }};
+}
+
+/// Macro that dispatches to `encode_with_remap` for Dictionary data types.
+/// For non-Dictionary types, this macro should never be called.
+macro_rules! downcast_op_remap {
+    ($data_type:expr, $array:ident, $op:expr, $indices:expr, $encoder:expr) => {
+        match $data_type {
+            DataType::Dictionary(key, value) => match value.as_ref() {
+                DataType::Utf8 => downcast_dict_remap!(key, StringArray, $array, $op, $indices, $encoder),
+                DataType::LargeUtf8 => {
+                    downcast_dict_remap!(key, LargeStringArray, $array, $op, $indices, $encoder)
+                }
+                DataType::Binary => downcast_dict_remap!(key, BinaryArray, $array, $op, $indices, $encoder),
+                DataType::LargeBinary => {
+                    downcast_dict_remap!(key, LargeBinaryArray, $array, $op, $indices, $encoder)
+                }
+                DataType::FixedSizeBinary(_) => {
+                    downcast_dict_remap!(key, FixedSizeBinaryArray, $array, $op, $indices, $encoder)
+                }
+                d => unreachable!("cannot downcast {} dictionary value to byte array", d),
+            },
+            d => unreachable!("downcast_op_remap called with non-dictionary type {}", d),
         }
     };
 }
@@ -356,6 +414,51 @@ impl DictEncoder {
         }
     }
 
+    /// Fast path for DictionaryArray input with a lazy remap table.
+    ///
+    /// Instead of interning each row's value individually (O(N) hash operations),
+    /// this method builds a lazy remap table of size O(D) where D is the number
+    /// of unique dictionary values actually referenced, then maps each row's key
+    /// through the remap table using a simple array index lookup.
+    ///
+    /// The `row_to_key` closure extracts the dictionary key (as usize) for a given
+    /// row index. This avoids allocating a separate `Vec<usize>` for the keys.
+    ///
+    /// The remap table uses `Vec<Option<u64>>` with lazy population: values are
+    /// interned on first encounter and cached for subsequent rows. This ensures
+    /// only referenced dictionary values are interned, producing byte-identical
+    /// output to the per-row path.
+    fn encode_with_remap<T, F>(
+        &mut self,
+        values: T,
+        indices: &[usize],
+        dict_len: usize,
+        row_to_key: F,
+    ) where
+        T: ArrayAccessor + Copy,
+        T::Item: AsRef<[u8]>,
+        F: Fn(usize) -> usize,
+    {
+        let mut remap: Vec<Option<u64>> = vec![None; dict_len];
+
+        self.indices.reserve(indices.len());
+        for &idx in indices {
+            let key = row_to_key(idx);
+            let interned = match remap[key] {
+                Some(cached) => cached,
+                None => {
+                    let value = values.value(idx);
+                    let fresh = self.interner.intern(value.as_ref());
+                    remap[key] = Some(fresh);
+                    fresh
+                }
+            };
+            self.indices.push(interned);
+            let value = values.value(idx);
+            self.variable_length_bytes += value.as_ref().len() as i64;
+        }
+    }
+
     fn bit_width(&self) -> u8 {
         let length = self.interner.storage().values.len();
         num_required_bits(length.saturating_sub(1) as u64)
@@ -468,6 +571,28 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+        // Fast path: when input is a DictionaryArray and dictionary encoding is
+        // enabled, use a remap-based approach that replaces O(N) hash operations
+        // with O(D) hash operations (D = unique dictionary values) plus O(N)
+        // simple array index lookups. Only used when D < N/2 (low cardinality),
+        // as the remap table overhead is not worthwhile for high-cardinality
+        // dictionaries.
+        if let DataType::Dictionary(key_type, _value_type) = values.data_type() {
+            if self.dict_encoder.is_some() && self.geo_stats_accumulator.is_none() {
+                let dict_len = get_dict_len(values, key_type);
+                if dict_len <= indices.len() / 2 {
+                    downcast_op_remap!(
+                        values.data_type(),
+                        values,
+                        encode_with_remap,
+                        indices,
+                        self
+                    );
+                    return Ok(());
+                }
+            }
+        }
+
         downcast_op!(values.data_type(), values, encode, indices, self);
         Ok(())
     }
@@ -584,6 +709,84 @@ where
     }
 }
 
+/// Get the dictionary length from a DictionaryArray, dispatching on key type.
+fn get_dict_len(values: &dyn Array, key_type: &Box<DataType>) -> usize {
+    macro_rules! get_len {
+        ($kt:ident) => {
+            values
+                .as_any()
+                .downcast_ref::<DictionaryArray<arrow_array::types::$kt>>()
+                .unwrap()
+                .values()
+                .len()
+        };
+    }
+    match key_type.as_ref() {
+        DataType::Int8 => get_len!(Int8Type),
+        DataType::Int16 => get_len!(Int16Type),
+        DataType::Int32 => get_len!(Int32Type),
+        DataType::Int64 => get_len!(Int64Type),
+        DataType::UInt8 => get_len!(UInt8Type),
+        DataType::UInt16 => get_len!(UInt16Type),
+        DataType::UInt32 => get_len!(UInt32Type),
+        DataType::UInt64 => get_len!(UInt64Type),
+        _ => unreachable!(),
+    }
+}
+
+/// Encodes dictionary array values using a remap-based fast path.
+///
+/// This is equivalent to [`encode`] but optimizes the dictionary encoding step:
+/// instead of O(N) hash operations, it uses O(D) hash operations where D is
+/// the number of unique dictionary values, plus O(N) simple array lookups.
+///
+/// Called via `downcast_op!` which dispatches to the appropriate
+/// `TypedDictionaryArray` for Dictionary types. The `TypedDictionaryArray`
+/// implements `ArrayAccessor`, which transparently resolves dictionary keys
+/// to values.
+///
+/// The `row_to_key` closure extracts the dictionary key (as usize) for a given
+/// row index. This is provided by the `downcast_dict_remap_op!` macro.
+fn encode_with_remap<T>(
+    values: T,
+    indices: &[usize],
+    encoder: &mut ByteArrayEncoder,
+    dict_len: usize,
+    row_to_key: &dyn Fn(usize) -> usize,
+) where
+    T: ArrayAccessor + Copy,
+    T::Item: Copy + Ord + AsRef<[u8]>,
+{
+    // Statistics: use existing per-row computation for correctness
+    if encoder.statistics_enabled != EnabledStatistics::None {
+        // geo_stats_accumulator is guaranteed None (checked in write_gather)
+        if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
+            if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
+                encoder.min_value = Some(min);
+            }
+            if encoder.max_value.as_ref().is_none_or(|m| m < &max) {
+                encoder.max_value = Some(max);
+            }
+        }
+    }
+
+    // Bloom filter: O(D) insertion using seen-tracking per dictionary key
+    if let Some(bloom_filter) = &mut encoder.bloom_filter {
+        let mut seen = vec![false; dict_len];
+        for &idx in indices {
+            let key = row_to_key(idx);
+            if !seen[key] {
+                seen[key] = true;
+                bloom_filter.insert(values.value(idx).as_ref());
+            }
+        }
+    }
+
+    // Dictionary encoding: remap-based fast path
+    let dict_encoder = encoder.dict_encoder.as_mut().unwrap();
+    dict_encoder.encode_with_remap(values, indices, dict_len, row_to_key);
+}
+
 /// Computes the min and max for the provided array and indices
 ///
 /// This is a free function so it can be used with `downcast_op!`
@@ -622,5 +825,377 @@ fn update_geo_stats_accumulator<T>(
             let val = array.value(idx);
             bounder.update_wkb(val.as_ref());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::builder::StringDictionaryBuilder;
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
+    use arrow_array::{Array, ArrayAccessor, DictionaryArray, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
+    use bytes::Bytes;
+
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use crate::arrow::ArrowWriter;
+    use crate::file::properties::WriterProperties;
+
+    /// Write a single RecordBatch to Parquet bytes using the given properties.
+    fn write_batch_to_bytes(batch: &RecordBatch, props: Option<WriterProperties>) -> Bytes {
+        let mut buf = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, batch.schema(), props).unwrap();
+        writer.write(batch).unwrap();
+        writer.close().unwrap();
+        buf.into()
+    }
+
+    /// Read all rows from Parquet bytes as RecordBatches.
+    fn read_batches_from_bytes(data: &Bytes) -> Vec<RecordBatch> {
+        let reader = ParquetRecordBatchReaderBuilder::try_new(data.clone())
+            .unwrap()
+            .build()
+            .unwrap();
+        reader.collect::<Result<Vec<_>, _>>().unwrap()
+    }
+
+    /// Extract string values from a column, handling both StringArray and
+    /// DictionaryArray<Int32, Utf8> transparently.
+    fn column_to_strings(col: &dyn Array) -> Vec<Option<String>> {
+        match col.data_type() {
+            DataType::Utf8 => {
+                let sa = col.as_string::<i32>();
+                (0..sa.len())
+                    .map(|i| {
+                        if sa.is_null(i) {
+                            None
+                        } else {
+                            Some(sa.value(i).to_string())
+                        }
+                    })
+                    .collect()
+            }
+            DataType::Dictionary(_, _) => {
+                let da = col
+                    .as_any()
+                    .downcast_ref::<DictionaryArray<Int32Type>>()
+                    .unwrap();
+                let typed = da.downcast_dict::<StringArray>().unwrap();
+                (0..col.len())
+                    .map(|i| {
+                        if col.is_null(i) {
+                            None
+                        } else {
+                            Some(typed.value(i).to_string())
+                        }
+                    })
+                    .collect()
+            }
+            other => panic!("Unexpected data type: {other}"),
+        }
+    }
+
+    // T1: Data equivalence (DictionaryArray vs StringArray)
+    //
+    // The Parquet files differ in Arrow schema metadata (Utf8 vs Dictionary),
+    // but the data pages, dictionary pages, and column statistics must match.
+    #[test]
+    fn test_dict_passthrough_data_equivalence() {
+        use crate::file::reader::FileReader;
+        use crate::file::serialized_reader::SerializedFileReader;
+
+        let strings = vec!["alpha", "beta", "alpha", "gamma", "beta"];
+
+        // Plain StringArray
+        let plain = StringArray::from(strings.clone());
+        let plain_schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+        let plain_batch =
+            RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
+
+        // DictionaryArray with the same data
+        let dict: DictionaryArray<Int32Type> = strings.into_iter().collect();
+        let dict_schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let dict_batch =
+            RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
+
+        let plain_bytes = write_batch_to_bytes(&plain_batch, None);
+        let dict_bytes = write_batch_to_bytes(&dict_batch, None);
+
+        // Compare column chunk metadata
+        let plain_reader = SerializedFileReader::new(plain_bytes.clone()).unwrap();
+        let dict_reader = SerializedFileReader::new(dict_bytes.clone()).unwrap();
+
+        let plain_meta = plain_reader.metadata().row_group(0).column(0);
+        let dict_meta = dict_reader.metadata().row_group(0).column(0);
+
+        assert_eq!(plain_meta.statistics(), dict_meta.statistics());
+        assert_eq!(plain_meta.num_values(), dict_meta.num_values());
+        assert_eq!(plain_meta.compressed_size(), dict_meta.compressed_size());
+        assert_eq!(plain_meta.uncompressed_size(), dict_meta.uncompressed_size());
+
+        // Verify both read back the same logical values
+        let pb = read_batches_from_bytes(&plain_bytes);
+        let db = read_batches_from_bytes(&dict_bytes);
+        let plain_vals = column_to_strings(pb[0].column(0).as_ref());
+        let dict_vals = column_to_strings(db[0].column(0).as_ref());
+        assert_eq!(plain_vals, dict_vals);
+    }
+
+    // T2: Roundtrip DictionaryArray -> read back -> verify values
+    #[test]
+    fn test_dict_passthrough_roundtrip() {
+        let strings = vec!["hello", "world", "hello", "foo", "world", "bar"];
+        let dict: DictionaryArray<Int32Type> = strings.iter().copied().collect();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(dict)]).unwrap();
+
+        let bytes = write_batch_to_bytes(&batch, None);
+        let batches = read_batches_from_bytes(&bytes);
+
+        assert_eq!(batches.len(), 1);
+        let vals = column_to_strings(batches[0].column(0).as_ref());
+        let expected: Vec<Option<String>> = strings
+            .iter()
+            .map(|s| Some(s.to_string()))
+            .collect();
+        assert_eq!(vals, expected);
+    }
+
+    // T3: Roundtrip DictionaryArray -> verify values match
+    #[test]
+    fn test_dict_passthrough_roundtrip_to_plain() {
+        let strings = vec!["cat", "dog", "cat", "bird"];
+        let dict: DictionaryArray<Int32Type> = strings.iter().copied().collect();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(dict)]).unwrap();
+
+        let bytes = write_batch_to_bytes(&batch, None);
+        let batches = read_batches_from_bytes(&bytes);
+
+        let vals = column_to_strings(batches[0].column(0).as_ref());
+        assert_eq!(
+            vals,
+            vec![
+                Some("cat".into()),
+                Some("dog".into()),
+                Some("cat".into()),
+                Some("bird".into()),
+            ]
+        );
+    }
+
+    // T4: DictionaryArray with null keys
+    #[test]
+    fn test_dict_passthrough_null_keys() {
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        builder.append_value("alpha");
+        builder.append_null();
+        builder.append_value("beta");
+        builder.append_null();
+        builder.append_value("alpha");
+        let dict = builder.finish();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(dict)]).unwrap();
+
+        let bytes = write_batch_to_bytes(&batch, None);
+        let batches = read_batches_from_bytes(&bytes);
+
+        let vals = column_to_strings(batches[0].column(0).as_ref());
+        assert_eq!(
+            vals,
+            vec![
+                Some("alpha".into()),
+                None,
+                Some("beta".into()),
+                None,
+                Some("alpha".into()),
+            ]
+        );
+    }
+
+    // T5: Mixed batches (DictionaryArray then StringArray for same column writer)
+    #[test]
+    fn test_dict_passthrough_mixed_batches() {
+        // First batch: DictionaryArray
+        let dict: DictionaryArray<Int32Type> = vec!["aaa", "bbb", "aaa"].into_iter().collect();
+        let dict_schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let dict_batch =
+            RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
+
+        // Second batch: plain StringArray (same logical column)
+        let plain = StringArray::from(vec!["ccc", "bbb"]);
+        let plain_schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+        let plain_batch =
+            RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
+
+        // Write both batches to same writer using the dict schema
+        let mut buf = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, dict_batch.schema(), None).unwrap();
+        writer.write(&dict_batch).unwrap();
+        writer.write(&plain_batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes: Bytes = buf.into();
+        let batches = read_batches_from_bytes(&bytes);
+
+        let mut all_values = Vec::new();
+        for b in &batches {
+            all_values.extend(column_to_strings(b.column(0).as_ref()));
+        }
+        assert_eq!(
+            all_values,
+            vec![
+                Some("aaa".into()),
+                Some("bbb".into()),
+                Some("aaa".into()),
+                Some("ccc".into()),
+                Some("bbb".into()),
+            ]
+        );
+    }
+
+    // T6: Multiple row groups with DictionaryArray input
+    #[test]
+    fn test_dict_passthrough_multiple_row_groups() {
+        let strings1: DictionaryArray<Int32Type> =
+            vec!["x", "y", "z", "x"].into_iter().collect();
+        let strings2: DictionaryArray<Int32Type> =
+            vec!["a", "b", "a", "c"].into_iter().collect();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(strings1)]).unwrap();
+        let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(strings2)]).unwrap();
+
+        // Force each batch into its own row group
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(4))
+            .build();
+
+        let mut buf = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+        writer.write(&batch1).unwrap();
+        writer.write(&batch2).unwrap();
+        writer.close().unwrap();
+
+        let bytes: Bytes = buf.into();
+        let batches = read_batches_from_bytes(&bytes);
+
+        let mut all_values: Vec<Option<String>> = Vec::new();
+        for b in &batches {
+            all_values.extend(column_to_strings(b.column(0).as_ref()));
+        }
+        let expected: Vec<Option<String>> = vec!["x", "y", "z", "x", "a", "b", "a", "c"]
+            .into_iter()
+            .map(|s| Some(s.to_string()))
+            .collect();
+        assert_eq!(all_values, expected);
+    }
+
+    // T7: Statistics correctness — same data as Dict and Plain should produce same stats
+    #[test]
+    fn test_dict_passthrough_statistics_correctness() {
+        use crate::file::reader::FileReader;
+        use crate::file::serialized_reader::SerializedFileReader;
+
+        let strings = vec!["cherry", "apple", "banana", "apple", "cherry"];
+
+        // Plain
+        let plain = StringArray::from(strings.clone());
+        let plain_schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+        let plain_batch =
+            RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
+
+        // Dict
+        let dict: DictionaryArray<Int32Type> = strings.into_iter().collect();
+        let dict_schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let dict_batch =
+            RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
+
+        let plain_bytes = write_batch_to_bytes(&plain_batch, None);
+        let dict_bytes = write_batch_to_bytes(&dict_batch, None);
+
+        // Compare metadata statistics
+        let plain_reader =
+            SerializedFileReader::new(plain_bytes).unwrap();
+        let dict_reader =
+            SerializedFileReader::new(dict_bytes).unwrap();
+
+        let plain_meta = plain_reader.metadata().row_group(0).column(0);
+        let dict_meta = dict_reader.metadata().row_group(0).column(0);
+
+        assert_eq!(
+            plain_meta.statistics(),
+            dict_meta.statistics(),
+            "Statistics must match between plain and dictionary paths"
+        );
+    }
+
+    // T8: High cardinality dictionary that may trigger fallback
+    #[test]
+    fn test_dict_passthrough_high_cardinality() {
+        // Create a dictionary with many unique values
+        let values: Vec<String> = (0..5000).map(|i| format!("value_{i:06}")).collect();
+        let dict: DictionaryArray<Int32Type> =
+            values.iter().map(|s| s.as_str()).collect();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(dict)]).unwrap();
+
+        // Use small dictionary page size to potentially trigger fallback
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(1024)
+            .build();
+        let bytes = write_batch_to_bytes(&batch, Some(props));
+
+        // Verify roundtrip correctness regardless of fallback or row group splitting
+        let batches = read_batches_from_bytes(&bytes);
+        let mut all_values: Vec<Option<String>> = Vec::new();
+        for b in &batches {
+            all_values.extend(column_to_strings(b.column(0).as_ref()));
+        }
+        let expected: Vec<Option<String>> = values
+            .iter()
+            .map(|s| Some(s.clone()))
+            .collect();
+        assert_eq!(all_values, expected);
     }
 }
