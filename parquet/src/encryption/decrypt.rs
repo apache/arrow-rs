@@ -596,12 +596,13 @@ impl FileDecryptor {
     ) -> Result<Self> {
         let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
         let footer_key = decryption_properties.footer_key(footer_key_metadata)?;
-        let footer_decryptor = RingGcmBlockDecryptor::new(&footer_key).map_err(|e| {
-            general_err!(
-                "Invalid footer key. {}",
-                e.to_string().replace("Parquet error: ", "")
-            )
-        })?;
+        let footer_decryptor = RingGcmBlockDecryptor::new(&footer_key)
+            .map_err(|e| {
+                general_err!(
+                    "Invalid footer key. {}",
+                    e.to_string().replace("Parquet error: ", "")
+                )
+            })?;
 
         Ok(Self {
             footer_decryptor: Arc::new(footer_decryptor),
@@ -641,7 +642,9 @@ impl FileDecryptor {
         let column_key = self
             .decryption_properties
             .column_key(column_name, key_metadata)?;
-        Ok(Arc::new(RingGcmBlockDecryptor::new(&column_key)?))
+        Ok(Arc::new(RingGcmBlockDecryptor::new(
+            &column_key,
+        )?))
     }
 
     pub(crate) fn get_column_metadata_decryptor(
