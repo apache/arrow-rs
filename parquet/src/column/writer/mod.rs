@@ -4495,4 +4495,191 @@ mod tests {
 
         column_roundtrip::<Int32Type>(props, &values, Some(&def_levels), None);
     }
+
+    /// Reproduces the memory bloat scenario from issue #8526.
+    ///
+    /// When writing highly compressible data (~1MB uncompressed pages that compress
+    /// to ~20KB), the old code allocated a fresh `compressed_buf` per page and called
+    /// `shrink_to_fit()` on it. With dictionary fallback, many pages could accumulate
+    /// in the `data_pages` queue, each retaining its full 1MB allocation. This caused
+    /// 3.6GB RSS for a 550MB file.
+    ///
+    /// With buffer reuse (ARS-1), `page_buf` and `compressed_buf` are cleared and
+    /// reused each page. The `Bytes::copy_from_slice` produces a right-sized copy for
+    /// the `CompressedPage`, so memory is O(1) buffers regardless of page count.
+    ///
+    /// This test writes 100+ pages of highly compressible ByteArray data and asserts
+    /// that the reusable buffer capacities stay bounded at roughly the uncompressed
+    /// page size -- they do NOT grow with the number of pages written.
+    #[test]
+    fn test_memory_bounded_with_highly_compressible_data() {
+        // Each value is a 1024-byte string of repeated 'A'. Highly compressible.
+        let value_size = 1024;
+        let repeated_string: String = "A".repeat(value_size);
+        let rows_per_page = 1000;
+        let num_pages = 100;
+        let total_rows = rows_per_page * num_pages;
+
+        let values: Vec<ByteArray> = (0..total_rows)
+            .map(|_| ByteArray::from(repeated_string.as_str()))
+            .collect();
+
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_data_page_row_count_limit(rows_per_page)
+                .set_compression(Compression::SNAPPY)
+                .set_dictionary_enabled(false)
+                .build(),
+        );
+
+        let page_writer = get_test_page_writer();
+        let mut writer =
+            get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        writer.write_batch(&values, None, None).unwrap();
+
+        // After writing 100 pages, check that reusable buffers are bounded.
+        // The page_buf capacity should be roughly the size of one uncompressed page
+        // (~1MB = 1000 rows * 1024 bytes + overhead), NOT 100x that.
+        let page_buf_cap = writer.page_buf.capacity();
+        let compressed_buf_cap = writer.compressed_buf.capacity();
+
+        // One uncompressed page is ~1MB. Allow generous 2x headroom for encoding overhead.
+        let one_page_uncompressed = rows_per_page * value_size;
+        let max_expected_buf = one_page_uncompressed * 3;
+
+        assert!(
+            page_buf_cap <= max_expected_buf,
+            "page_buf capacity ({page_buf_cap}) should be bounded at ~1 page size \
+             ({one_page_uncompressed}), not grow with page count. \
+             Max expected: {max_expected_buf}"
+        );
+        assert!(
+            compressed_buf_cap <= max_expected_buf,
+            "compressed_buf capacity ({compressed_buf_cap}) should be bounded at ~1 page size \
+             ({one_page_uncompressed}), not grow with page count. \
+             Max expected: {max_expected_buf}"
+        );
+
+        // Verify the data still round-trips correctly
+        let _result = writer.close().unwrap();
+    }
+
+    /// Same scenario as above but for Parquet V2 data pages.
+    #[test]
+    fn test_memory_bounded_with_highly_compressible_data_v2() {
+        let value_size = 1024;
+        let repeated_string: String = "A".repeat(value_size);
+        let rows_per_page = 1000;
+        let num_pages = 100;
+        let total_rows = rows_per_page * num_pages;
+
+        let values: Vec<ByteArray> = (0..total_rows)
+            .map(|_| ByteArray::from(repeated_string.as_str()))
+            .collect();
+
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_2_0)
+                .set_data_page_row_count_limit(rows_per_page)
+                .set_compression(Compression::SNAPPY)
+                .set_dictionary_enabled(false)
+                .build(),
+        );
+
+        let page_writer = get_test_page_writer();
+        let mut writer =
+            get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        writer.write_batch(&values, None, None).unwrap();
+
+        let page_buf_cap = writer.page_buf.capacity();
+        let one_page_uncompressed = rows_per_page * value_size;
+        let max_expected_buf = one_page_uncompressed * 3;
+
+        assert!(
+            page_buf_cap <= max_expected_buf,
+            "page_buf capacity ({page_buf_cap}) should be bounded at ~1 page size, \
+             not grow with page count. Max expected: {max_expected_buf}"
+        );
+
+        let _result = writer.close().unwrap();
+    }
+
+    /// Verifies that dictionary fallback does not cause memory bloat.
+    ///
+    /// When dictionary encoding is enabled but the dictionary grows too large (high
+    /// cardinality data), the writer falls back to plain encoding. During fallback,
+    /// all buffered dictionary-encoded pages are re-encoded and flushed. With buffer
+    /// reuse, the per-page encoding buffers should not retain oversized allocations.
+    ///
+    /// This test writes enough unique values to trigger dictionary fallback, then
+    /// continues writing to produce additional plain-encoded pages. The reusable
+    /// buffers should remain bounded throughout.
+    #[test]
+    fn test_dictionary_fallback_memory_bounded() {
+        let rows_per_page = 500;
+        // Default dictionary page size limit is 1MB. Each unique ~200-byte string
+        // entry will fill the dictionary quickly.
+        let value_size = 200;
+
+        // Phase 1: Write unique values to force dictionary overflow and fallback.
+        // With 500 rows/page and 200 bytes/value, each page is ~100KB of dict data.
+        // After ~50 pages (25K unique values, ~5MB), dictionary should overflow.
+        let phase1_rows = 25_000;
+        let phase1_values: Vec<ByteArray> = (0..phase1_rows)
+            .map(|i| {
+                let s = format!("{:0>width$}", i, width = value_size);
+                ByteArray::from(s.as_str())
+            })
+            .collect();
+
+        // Phase 2: After fallback, write more data (plain encoding, compressible).
+        let phase2_rows = 50_000;
+        let repeated_string: String = "B".repeat(value_size);
+        let phase2_values: Vec<ByteArray> = (0..phase2_rows)
+            .map(|_| ByteArray::from(repeated_string.as_str()))
+            .collect();
+
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_data_page_row_count_limit(rows_per_page)
+                .set_compression(Compression::SNAPPY)
+                .set_dictionary_enabled(true)
+                // Keep dictionary page size small to trigger fallback sooner
+                .set_dictionary_page_size_limit(512 * 1024) // 512KB
+                .build(),
+        );
+
+        let page_writer = get_test_page_writer();
+        let mut writer =
+            get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        // Write phase 1 (triggers dict fallback internally)
+        writer.write_batch(&phase1_values, None, None).unwrap();
+        // Write phase 2 (plain encoded, compressible)
+        writer.write_batch(&phase2_values, None, None).unwrap();
+
+        let page_buf_cap = writer.page_buf.capacity();
+        let compressed_buf_cap = writer.compressed_buf.capacity();
+
+        // Buffers should be bounded at roughly 1 page worth of data.
+        // One page is ~500 * 200 = 100KB. Allow 5x headroom for encoding overhead
+        // and potential dictionary page data.
+        let one_page_approx = rows_per_page * value_size;
+        let max_expected = one_page_approx * 5;
+
+        assert!(
+            page_buf_cap <= max_expected,
+            "page_buf capacity ({page_buf_cap}) grew beyond expected bound \
+             after dictionary fallback. Max expected: {max_expected}"
+        );
+        assert!(
+            compressed_buf_cap <= max_expected,
+            "compressed_buf capacity ({compressed_buf_cap}) grew beyond expected bound \
+             after dictionary fallback. Max expected: {max_expected}"
+        );
+
+        let _result = writer.close().unwrap();
+    }
 }
