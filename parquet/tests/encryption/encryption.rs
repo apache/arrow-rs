@@ -386,16 +386,22 @@ fn test_uniform_encryption() {
 #[test]
 fn test_decrypting_without_decryption_properties_fails() {
     let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
-    let file = File::open(path).unwrap();
+    let paths = [
+        format!("{test_data}/uniform_encryption.parquet.encrypted"),
+        format!("{test_data}/aes256/uniform_encryption.parquet.encrypted"),
+    ];
 
-    let options = ArrowReaderOptions::default();
-    let result = ArrowReaderMetadata::load(&file, options.clone());
-    assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
-    );
+    for path in &paths {
+        let file = File::open(path).unwrap();
+
+        let options = ArrowReaderOptions::default();
+        let result = ArrowReaderMetadata::load(&file, options.clone());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
+        );
+    }
 }
 
 #[test]
@@ -614,6 +620,9 @@ fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
     );
 
     // AES-256
+    // The asymmetric column names is because we check column paths in the validate_encrypted_column_names function of [encryption::encrypt]
+    // The column path of the repeated field (int64_field) is int64_field.list.int64_field
+    // Switching from `c.path().string()` to `c.name().to_string()` can fix the asymmetricity
     uniform_encryption_plaintext_footer_with_key_retriever(
         b"01234567890123456789012345678901",
         "kf",
@@ -1089,7 +1098,6 @@ fn test_write_non_uniform_encryption() {
     );
 }
 
-// TODO
 #[test]
 fn test_write_uniform_encryption_plaintext_footer() {
     let testdata = arrow::util::test_util::parquet_test_data();
@@ -1407,7 +1415,7 @@ fn write_and_read_stats(
 
 #[test]
 fn test_write_uniform_encryption() {
-    fn write_non_uniform_encryption(footer_key: &[u8]) {
+    fn write_uniform_encryption(footer_key: &[u8]) {
         let path = encryption_util::encrypted_data_path(
             footer_key,
             "uniform_encryption.parquet.encrypted",
@@ -1429,8 +1437,8 @@ fn test_write_uniform_encryption() {
         );
     }
 
-    write_non_uniform_encryption(b"0123456789012345");
-    write_non_uniform_encryption(b"01234567890123456789012345678901");
+    write_uniform_encryption(b"0123456789012345");
+    write_uniform_encryption(b"01234567890123456789012345678901");
 }
 
 #[test]

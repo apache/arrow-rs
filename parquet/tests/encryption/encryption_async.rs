@@ -33,7 +33,6 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::{
     ArrowSchemaConverter, ArrowWriter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
 };
-use parquet::data_type::AsBytes;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
@@ -130,7 +129,7 @@ async fn test_misspecified_encryption_keys() {
         );
         let mut file = File::open(&path).await.unwrap();
 
-        let mut builder = FileDecryptionProperties::builder(footer_key.as_bytes().to_vec());
+        let mut builder = FileDecryptionProperties::builder(footer_key.to_vec());
 
         if !column_1_key.is_empty() {
             builder = builder.with_column_key("double_field", column_1_key.to_vec());
@@ -545,6 +544,10 @@ async fn test_write_non_uniform_encryption() {
     )
     .await;
 
+    // AES-256
+    // The asymmetric column names is because we check column paths in the validate_encrypted_column_names function of [encryption::encrypt]
+    // The column path of the repeated field (int64_field) is int64_field.list.int64_field
+    // Switching from `c.path().string()` to `c.name().to_string()` can fix the asymmetricity
     write_non_uniform_encryption(
         b"01234567890123456789012345678901",
         vec![
