@@ -17,11 +17,11 @@
 
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
-use crate::arrow_to_variant::ListLikeArray;
 use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
-    GenericListArray, GenericListViewArray, PrimitiveArray, StringArray, StructArray,
+    GenericListArray, GenericListViewArray, ListLikeArray, PrimitiveArray, StringArray,
+    StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
