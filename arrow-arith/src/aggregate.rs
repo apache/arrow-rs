@@ -571,7 +571,7 @@ where
             DataType::Int16 => ree::sum_wrapping::<types::Int16Type, T>(&array),
             DataType::Int32 => ree::sum_wrapping::<types::Int32Type, T>(&array),
             DataType::Int64 => ree::sum_wrapping::<types::Int64Type, T>(&array),
-            _ => None,
+            _ => unreachable!(),
         },
         _ => sum::<T>(as_primitive_array(&array)),
     }
@@ -615,7 +615,7 @@ where
             DataType::Int16 => ree::sum_checked::<types::Int16Type, T>(&array),
             DataType::Int32 => ree::sum_checked::<types::Int32Type, T>(&array),
             DataType::Int64 => ree::sum_checked::<types::Int64Type, T>(&array),
-            _ => Ok(None),
+            _ => unreachable!(),
         },
         _ => sum_checked::<T>(as_primitive_array(&array)),
     }
@@ -646,7 +646,6 @@ mod ree {
     ) -> Option<V::Native> {
         let ree = downcast::<I, V>(array)?;
         let Ok(sum) = fold(ree, |acc, val, len| -> Result<V::Native, Infallible> {
-            println!("Adding {:?}x{} to {:?}", val, len, acc);
             Ok(acc.add_wrapping(val.mul_wrapping(V::Native::usize_as(len))))
         });
         sum
@@ -658,7 +657,7 @@ mod ree {
     ) -> Result<Option<V::Native>, ArrowError> {
         let Some(ree) = downcast::<I, V>(array) else {
             return Err(ArrowError::InvalidArgumentError(
-                "Input array is not a TypedRunArray<'_, _, PrimitiveArray<T>".to_string(),
+                "Input run array values are not a PrimitiveArray".to_string(),
             ));
         };
         fold(ree, |acc, val, len| -> Result<V::Native, ArrowError> {
