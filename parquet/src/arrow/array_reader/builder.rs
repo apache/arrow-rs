@@ -153,13 +153,17 @@ impl<'a> ArrayReaderBuilder<'a> {
                     return Ok(Some(reader));
                 };
 
-                if cache_options.projection_mask.leaf_included(col_idx) {
+                // Skip caching for nested fields (inside List/Map) where rep_level > 0
+                // because the cache tracks by row count, but nested fields have
+                // values that don't correspond 1:1 with rows due to repetition
+                if cache_options.projection_mask.leaf_included(col_idx) && field.rep_level == 0 {
                     Ok(Some(Box::new(CachedArrayReader::new(
                         reader,
                         Arc::clone(cache_options.cache),
                         col_idx,
                         cache_options.role,
                         self.metrics.clone(), // cheap clone
+                        field.def_level > 0,  // needs_def_levels: true if has nullable ancestors
                     ))))
                 } else {
                     Ok(Some(reader))
