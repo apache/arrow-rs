@@ -443,8 +443,7 @@ impl DictEncoder {
     {
         let mut remap: Vec<Option<u64>> = vec![None; dict_len];
 
-        self.indices.reserve(indices.len());
-        for &idx in indices {
+        self.indices.extend(indices.iter().map(|&idx| {
             let key = row_to_key(idx);
             let interned = match remap[key] {
                 Some(cached) => cached,
@@ -455,10 +454,10 @@ impl DictEncoder {
                     fresh
                 }
             };
-            self.indices.push(interned);
             let value = values.value(idx);
             self.variable_length_bytes += value.as_ref().len() as i64;
-        }
+            interned
+        }));
     }
 
     fn bit_width(&self) -> u8 {
@@ -712,7 +711,7 @@ where
 }
 
 /// Get the dictionary length from a DictionaryArray, dispatching on key type.
-fn get_dict_len(values: &dyn Array, key_type: &Box<DataType>) -> usize {
+fn get_dict_len(values: &dyn Array, key_type: &DataType) -> usize {
     macro_rules! get_len {
         ($kt:ident) => {
             values
@@ -723,7 +722,7 @@ fn get_dict_len(values: &dyn Array, key_type: &Box<DataType>) -> usize {
                 .len()
         };
     }
-    match key_type.as_ref() {
+    match key_type {
         DataType::Int8 => get_len!(Int8Type),
         DataType::Int16 => get_len!(Int16Type),
         DataType::Int32 => get_len!(Int32Type),
@@ -953,7 +952,7 @@ mod tests {
     // T2: Roundtrip DictionaryArray -> read back -> verify values
     #[test]
     fn test_dict_passthrough_roundtrip() {
-        let strings = vec!["hello", "world", "hello", "foo", "world", "bar"];
+        let strings = ["hello", "world", "hello", "foo", "world", "bar"];
         let dict: DictionaryArray<Int32Type> = strings.iter().copied().collect();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col",
@@ -974,7 +973,7 @@ mod tests {
     // T3: Roundtrip DictionaryArray -> verify values match
     #[test]
     fn test_dict_passthrough_roundtrip_to_plain() {
-        let strings = vec!["cat", "dog", "cat", "bird"];
+        let strings = ["cat", "dog", "cat", "bird"];
         let dict: DictionaryArray<Int32Type> = strings.iter().copied().collect();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col",

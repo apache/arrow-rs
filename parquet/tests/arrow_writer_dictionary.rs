@@ -19,6 +19,8 @@
 //! and reading them back via `ParquetRecordBatchReader`. These tests exercise
 //! the full public API write-read roundtrip.
 
+#![cfg(feature = "arrow")]
+
 use arrow_array::builder::StringDictionaryBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
