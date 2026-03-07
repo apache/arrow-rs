@@ -179,7 +179,7 @@ macro_rules! create_array {
 /// Due to limitation of [`create_array!`] macro, support for limited data types is available.
 #[macro_export]
 macro_rules! record_batch {
-    ($(($name: expr, $type: ident, [$($values: expr),*])),*) => {
+    ($(($name: expr, $type: ident, $($values: tt)+)),*) => {
         {
             let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
                 $(
@@ -187,34 +187,14 @@ macro_rules! record_batch {
                 )*
             ]));
 
-            let batch = $crate::RecordBatch::try_new(
+            $crate::RecordBatch::try_new(
                 schema,
                 vec![$(
-                    $crate::create_array!($type, [$($values),*]),
+                    $crate::create_array!($type, $($values)+),
                 )*]
-            );
-
-            batch
+            )
         }
     };
-    ($(($name: expr, $type: ident, $values: expr)),*) => {
-        {
-            let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
-                $(
-                    arrow_schema::Field::new($name, arrow_schema::DataType::$type, true),
-                )*
-            ]));
-
-            let batch = $crate::RecordBatch::try_new(
-                schema,
-                vec![$(
-                    $crate::create_array!($type, $values),
-                )*]
-            );
-
-            batch
-        }
-    }
 }
 
 /// A two-dimensional batch of column-oriented data with a defined
