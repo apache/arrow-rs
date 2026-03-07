@@ -35,7 +35,7 @@ use arrow::{record_batch::RecordBatch, util::data_gen::*};
 use arrow_array::RecordBatchOptions;
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::errors::Result;
-use parquet::file::properties::{WriterProperties, WriterVersion};
+use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 use parquet::file::writer::SerializedFileWriter;
 
 fn create_primitive_bench_batch(
@@ -439,6 +439,11 @@ fn create_writer_props() -> Vec<(&'static str, WriterProperties)> {
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .build();
     props.push(("zstd_parquet_2", prop));
+
+    let prop = WriterProperties::builder()
+        .set_content_defined_chunking(Some(CdcOptions::default()))
+        .build();
+    props.push(("cdc", prop));
 
     props
 }
