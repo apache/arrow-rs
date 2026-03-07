@@ -4488,8 +4488,9 @@ mod tests {
 
         // 5000 values with every 3rd value being null
         let num_levels = 5000;
-        let def_levels: Vec<i16> =
-            (0..num_levels).map(|i| if i % 3 == 0 { 0 } else { 1 }).collect();
+        let def_levels: Vec<i16> = (0..num_levels)
+            .map(|i| if i % 3 == 0 { 0 } else { 1 })
+            .collect();
         let num_values = def_levels.iter().filter(|&&d| d == 1).count();
         let values: Vec<i32> = (0..num_values as i32).collect();
 
@@ -4533,8 +4534,7 @@ mod tests {
         );
 
         let page_writer = get_test_page_writer();
-        let mut writer =
-            get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+        let mut writer = get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
 
         writer.write_batch(&values, None, None).unwrap();
 
@@ -4588,8 +4588,7 @@ mod tests {
         );
 
         let page_writer = get_test_page_writer();
-        let mut writer =
-            get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+        let mut writer = get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
 
         writer.write_batch(&values, None, None).unwrap();
 
@@ -4652,8 +4651,7 @@ mod tests {
         );
 
         let page_writer = get_test_page_writer();
-        let mut writer =
-            get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+        let mut writer = get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
 
         // Write phase 1 (triggers dict fallback internally)
         writer.write_batch(&phase1_values, None, None).unwrap();
