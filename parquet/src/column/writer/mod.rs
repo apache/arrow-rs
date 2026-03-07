@@ -1093,7 +1093,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     cmpr.compress(&self.page_buf[..], &mut self.compressed_buf)?;
                     Bytes::copy_from_slice(&self.compressed_buf)
                 } else {
-                    Bytes::copy_from_slice(&self.page_buf)
+                    // Zero-cost ownership transfer instead of memcpy.
+                    // page_buf will regrow on next page (one alloc, same as pre-reuse code).
+                    Bytes::from(std::mem::take(&mut self.page_buf))
                 };
 
                 let data_page = Page::DataPage {
@@ -1156,8 +1158,16 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     }
                 };
 
+                let page_bytes = if is_compressed {
+                    // Compressed: copy smaller data, reuse buffer for next page
+                    Bytes::copy_from_slice(&self.page_buf)
+                } else {
+                    // Uncompressed: zero-cost ownership transfer
+                    Bytes::from(std::mem::take(&mut self.page_buf))
+                };
+
                 let data_page = Page::DataPageV2 {
-                    buf: Bytes::copy_from_slice(&self.page_buf),
+                    buf: page_bytes,
                     num_values: self.page_metrics.num_buffered_values,
                     encoding: values_data.encoding,
                     num_nulls: self.page_metrics.num_page_nulls as u32,
