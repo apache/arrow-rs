@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::bit_chunk_iterator::BitChunks;
+use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::bit_util::read_u64;
 use crate::{
@@ -74,7 +74,7 @@ use std::ops::{BitAnd, BitOr, BitXor, Not};
 /// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug, Clone, Eq)]
 pub struct BooleanBuffer {
-    /// Underlying buffer (byte aligned)
+    /// Underlying buffer
     buffer: Buffer,
     /// Offset in bits (not bytes)
     bit_offset: usize,
@@ -162,7 +162,10 @@ impl BooleanBuffer {
     /// // However, underlying buffer has (ignored) bits set outside the requested range
     /// assert_eq!(result.values(), &[0b11001100u8, 0b10111010, 0, 0, 0, 0, 0, 0]);
     pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
-        Self::from_bitwise_unary_op(src, offset_in_bits, len_in_bits, |a| a)
+        let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
+        let iter = chunks.iter_padded();
+        let buffer = unsafe { MutableBuffer::from_trusted_len_iter(iter) };
+        BooleanBuffer::new(buffer.into(), 0, len_in_bits)
     }
 
     /// Create a new [`BooleanBuffer`] by applying the bitwise operation to `op`
@@ -284,7 +287,8 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///   &left, 0, &right, 0, 12, |a, b| a & b
     /// );
-    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8]);
+    /// // Note: the output is padded to the next u64 boundary
+    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8, 0, 0, 0, 0, 0, 0]);
     /// ```
     ///
     /// # Example: Create new [`BooleanBuffer`] from bitwise `OR` of two byte slices
@@ -296,7 +300,8 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///  &left, 4, &right, 0, 12, |a, b| a | b
     /// );
-    /// assert_eq!(result.inner().as_slice(), &[0b10101110u8, 0b00001111u8]);
+    /// // Note: the output is padded to the next u64 boundary
+    /// assert_eq!(result.inner().as_slice(), &[0b10101110u8, 0b00001111u8, 0, 0, 0, 0, 0, 0]);
     /// ```
     pub fn from_bitwise_binary_op<F>(
         left: impl AsRef<[u8]>,
@@ -311,6 +316,15 @@ impl BooleanBuffer {
     {
         let left = left.as_ref();
         let right = right.as_ref();
+
+        if left.len() < len_in_bits / 8 {
+            panic!("The left buffer is too small for the specified length");
+        }
+
+        if right.len() < len_in_bits / 8 {
+            panic!("The right buffer is too small for the specified length");
+        }
+
         // try fast path for aligned input
         // If the underlying buffers are aligned to u64 we can apply the operation directly on the u64 slices
         // to improve performance.
@@ -344,28 +358,60 @@ impl BooleanBuffer {
                 }
             }
         }
+
+        if left_offset_in_bits == right_offset_in_bits {
+            // is aligned to byte boundary
+            if left_offset_in_bits & 0x7 == 0 {
+                let left = &left[left_offset_in_bits / 8..];
+                let right = &right[right_offset_in_bits / 8..];
+
+                let left_chunks = BitChunks::new(left, 0, len_in_bits);
+                let right_chunks = BitChunks::new(right, 0, len_in_bits);
+                let mut result = Vec::with_capacity(bit_util::ceil(len_in_bits, 64));
+
+                let l_iter = left
+                    .chunks_exact(8)
+                    .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+                let r_iter = right
+                    .chunks_exact(8)
+                    .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+
+                result.extend(l_iter.zip(r_iter).map(|(l, r)| op(l, r)));
+
+                if left_chunks.remainder_len() > 0 {
+                    result.push(op(
+                        left_chunks.remainder_bits(),
+                        right_chunks.remainder_bits(),
+                    ));
+                }
+                return BooleanBuffer::new(Buffer::from(result), 0, len_in_bits);
+            }
+
+            // both buffers have the same offset, we can use UnalignedBitChunk for both
+            let left_chunks = UnalignedBitChunk::new(left, left_offset_in_bits, len_in_bits);
+            let right_chunks = UnalignedBitChunk::new(right, right_offset_in_bits, len_in_bits);
+
+            let chunks = left_chunks
+                .zip(&right_chunks)
+                .map(|(left, right)| op(left, right));
+            // Soundness: `UnalignedBitChunk` is a `BitChunks` trusted length iterator which
+            // correctly reports its upper bound
+            let buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+
+            return BooleanBuffer::new(buffer.into(), left_chunks.lead_padding(), len_in_bits);
+        }
+
         let left_chunks = BitChunks::new(left, left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right, right_offset_in_bits, len_in_bits);
 
         let chunks = left_chunks
-            .iter()
-            .zip(right_chunks.iter())
+            .zip_padded(&right_chunks)
             .map(|(left, right)| op(left, right));
         // Soundness: `BitChunks` is a `BitChunks` trusted length iterator which
         // correctly reports its upper bound
-        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+        let buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
 
-        let remainder_bytes = bit_util::ceil(left_chunks.remainder_len(), 8);
-        let rem = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
-        // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-        let rem = &rem.to_le_bytes()[0..remainder_bytes];
-        buffer.extend_from_slice(rem);
-
-        BooleanBuffer {
-            buffer: Buffer::from(buffer),
-            bit_offset: 0,
-            bit_len: len_in_bits,
-        }
+        BooleanBuffer::new(buffer.into(), 0, len_in_bits)
     }
 
     /// Returns the number of set bits in this buffer
@@ -523,17 +569,14 @@ impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
 
     fn bitand(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.bit_len, rhs.bit_len);
-        BooleanBuffer {
-            buffer: buffer_bin_and(
-                &self.buffer,
-                self.bit_offset,
-                &rhs.buffer,
-                rhs.bit_offset,
-                self.bit_len,
-            ),
-            bit_offset: 0,
-            bit_len: self.bit_len,
-        }
+        BooleanBuffer::from_bitwise_binary_op(
+            &self.buffer,
+            self.bit_offset,
+            &rhs.buffer,
+            rhs.bit_offset,
+            self.bit_len,
+            |a, b| a & b,
+        )
     }
 }
 
@@ -542,17 +585,14 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
 
     fn bitor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.bit_len, rhs.bit_len);
-        BooleanBuffer {
-            buffer: buffer_bin_or(
-                &self.buffer,
-                self.bit_offset,
-                &rhs.buffer,
-                rhs.bit_offset,
-                self.bit_len,
-            ),
-            bit_offset: 0,
-            bit_len: self.bit_len,
-        }
+        BooleanBuffer::from_bitwise_binary_op(
+            &self.buffer,
+            self.bit_offset,
+            &rhs.buffer,
+            rhs.bit_offset,
+            self.bit_len,
+            |a, b| a | b,
+        )
     }
 }
 
@@ -561,17 +601,14 @@ impl BitXor<&BooleanBuffer> for &BooleanBuffer {
 
     fn bitxor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.bit_len, rhs.bit_len);
-        BooleanBuffer {
-            buffer: buffer_bin_xor(
-                &self.buffer,
-                self.bit_offset,
-                &rhs.buffer,
-                rhs.bit_offset,
-                self.bit_len,
-            ),
-            bit_offset: 0,
-            bit_len: self.bit_len,
-        }
+        BooleanBuffer::from_bitwise_binary_op(
+            &self.buffer,
+            self.bit_offset,
+            &rhs.buffer,
+            rhs.bit_offset,
+            self.bit_len,
+            |a, b| a ^ b,
+        )
     }
 }
 
