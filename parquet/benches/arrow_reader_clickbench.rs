@@ -705,15 +705,15 @@ impl ReadTest {
         };
 
         // setup the reader
-        let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
+        let builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
             parquet_file,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
         .with_row_filter(self.row_filter())
-        .build()
-        .unwrap();
+        .with_selectivity_threshold(Some(0.5));
+        let mut stream = builder.build().unwrap();
 
         // run the stream to its end
         let mut row_count = 0;
@@ -736,15 +736,15 @@ impl ReadTest {
         let reader = ParquetObjectReader::new(store, location);
 
         // setup the reader
-        let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
+        let builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
             reader,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
         .with_row_filter(self.row_filter())
-        .build()
-        .unwrap();
+        .with_selectivity_threshold(Some(0.5));
+        let mut stream = builder.build().unwrap();
 
         // run the stream to its end
         let mut row_count = 0;
@@ -763,15 +763,15 @@ impl ReadTest {
         };
 
         // setup the reader
-        let reader = ParquetRecordBatchReaderBuilder::new_with_metadata(
+        let builder = ParquetRecordBatchReaderBuilder::new_with_metadata(
             parquet_file,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
         .with_row_filter(self.row_filter())
-        .build()
-        .unwrap();
+        .with_selectivity_threshold(Some(0.5));
+        let reader = builder.build().unwrap();
 
         // run the stream to its end
         let mut row_count = 0;

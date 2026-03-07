@@ -160,6 +160,9 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Strategy for materialising row selections
     row_selection_policy: RowSelectionPolicy,
 
+    /// Selectivity threshold for filter deferral
+    selectivity_threshold: Option<f64>,
+
     /// Current state of the decoder.
     ///
     /// It is taken when processing, and must be put back before returning
@@ -185,6 +188,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        selectivity_threshold: Option<f64>,
     ) -> Self {
         Self {
             batch_size,
@@ -197,6 +201,7 @@ impl RowGroupReaderBuilder {
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
+            selectivity_threshold,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -242,7 +247,8 @@ impl RowGroupReaderBuilder {
         }
         let plan_builder = ReadPlanBuilder::new(self.batch_size)
             .with_selection(selection)
-            .with_row_selection_policy(self.row_selection_policy);
+            .with_row_selection_policy(self.row_selection_policy)
+            .with_selectivity_threshold(self.selectivity_threshold);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
@@ -722,6 +728,6 @@ mod tests {
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 240);
     }
 }
