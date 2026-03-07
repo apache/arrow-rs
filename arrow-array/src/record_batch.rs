@@ -135,6 +135,18 @@ macro_rules! create_array {
     ($ty: tt, [$($values: expr),*]) => {
         std::sync::Arc::new(<$crate::create_array!(@from $ty)>::from(vec![$($values),*]))
     };
+
+    (Binary, $values: expr) => {
+        std::sync::Arc::new($crate::BinaryArray::from_vec($values))
+    };
+
+    (LargeBinary, $values: expr) => {
+        std::sync::Arc::new($crate::LargeBinaryArray::from_vec($values))
+    };
+
+    ($ty: tt, $values: expr) => {
+        std::sync::Arc::new(<$crate::create_array!(@from $ty)>::from($values))
+    };
 }
 
 /// Creates a record batch from literal slice of values, suitable for rapid
@@ -152,10 +164,22 @@ macro_rules! create_array {
 ///     ("c", Utf8, ["alpha", "beta", "gamma"])
 /// );
 /// ```
+///
+/// Variables and expressions are also supported:
+///
+/// ```rust
+/// use arrow_array::record_batch;
+///
+/// let values = vec![1, 2, 3];
+/// let batch = record_batch!(
+///     ("a", Int32, values),
+///     ("b", Float64, vec![Some(4.0), None, Some(5.0)])
+/// );
+/// ```
 /// Due to limitation of [`create_array!`] macro, support for limited data types is available.
 #[macro_export]
 macro_rules! record_batch {
-    ($(($name: expr, $type: ident, [$($values: expr),*])),*) => {
+    ($(($name: expr, $type: ident, $($values: tt)+)),*) => {
         {
             let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
                 $(
@@ -163,16 +187,14 @@ macro_rules! record_batch {
                 )*
             ]));
 
-            let batch = $crate::RecordBatch::try_new(
+            $crate::RecordBatch::try_new(
                 schema,
                 vec![$(
-                    $crate::create_array!($type, [$($values),*]),
+                    $crate::create_array!($type, $($values)+),
                 )*]
-            );
-
-            batch
+            )
         }
-    }
+    };
 }
 
 /// A two-dimensional batch of column-oriented data with a defined
