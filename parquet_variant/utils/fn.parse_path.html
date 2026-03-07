@@ -1,0 +1,38 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Parse a path string into a vector of `VariantPathElement`."><title>parse_path in parquet_variant::utils - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-b7b9f40b.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="parquet_variant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (80282b130 2026-03-06)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">parse_path</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../parquet_variant/index.html">parquet_<wbr>variant</a><span class="version">58.0.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">parse_<wbr>path</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#syntax" title="Syntax">Syntax</a></li><li><a href="#escape-rules" title="Escape Rules">Escape Rules</a></li><li><a href="#examples" title="Examples">Examples</a></li><li><a href="#errors" title="Errors">Errors</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In parquet_<wbr>variant::<wbr>utils</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">parquet_variant</a>::<wbr><a href="index.html">utils</a></div><h1>Function <span class="fn">parse_<wbr>path</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/parquet_variant/utils.rs.html#186-233">Source</a> </span></div><pre class="rust item-decl"><code>pub(crate) fn parse_path(
+    s: &amp;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="enum" href="../enum.VariantPathElement.html" title="enum parquet_variant::VariantPathElement">VariantPathElement</a>&lt;'_&gt;&gt;, ArrowError&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Parse a path string into a vector of <a href="../enum.VariantPathElement.html" title="enum parquet_variant::VariantPathElement"><code>VariantPathElement</code></a>.</p>
+<h2 id="syntax"><a class="doc-anchor" href="#syntax">§</a>Syntax</h2>
+<ul>
+<li><code>.field</code> or <code>field</code> - access object field (do not support special char)</li>
+<li><code>[index]</code> - access array element by index</li>
+<li><code>[field]</code> - access object field (support special char with escape <code>\</code>)</li>
+</ul>
+<h2 id="escape-rules"><a class="doc-anchor" href="#escape-rules">§</a>Escape Rules</h2>
+<p>Inside brackets <code>[...]</code>:</p>
+<ul>
+<li><code>\\</code> -&gt; literal <code>\</code></li>
+<li><code>\]</code> -&gt; literal <code>]</code></li>
+<li>Any other <code>\x</code> -&gt; literal <code>x</code></li>
+</ul>
+<p>Outside brackets, no escaping is supported.</p>
+<h2 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h2>
+<ul>
+<li><code>""</code> -&gt; empty path</li>
+<li><code>"foo"</code> -&gt; single field <code>foo</code></li>
+<li><code>"foo.bar"</code> -&gt; nested fields <code>foo</code>, <code>bar</code></li>
+<li><code>"[1]"</code> -&gt; array index 1</li>
+<li><code>"['1']"</code> or <code>"["1"]"</code>-&gt; field <code>1</code></li>
+<li><code>"foo[1].bar"</code> -&gt; field <code>foo</code>, index 1, field <code>bar</code></li>
+<li><code>"['a.b']"</code> -&gt; field <code>a.b</code> (dot is literal inside bracket)</li>
+<li><code>"['a\]b']"</code> -&gt; field <code>a]b</code> (escaped <code>]</code></li>
+<li>etc.</li>
+</ul>
+<h2 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h2>
+<ul>
+<li>Leading <code>.</code> (e.g., <code>".foo"</code>)</li>
+<li>Trailing <code>.</code> (e.g., <code>"foo."</code>)</li>
+<li>Unclosed ‘[’ (e.g., <code>"foo[1"</code>)</li>
+<li>Unexpected ‘]’ (e.g., <code>"foo]"</code>)</li>
+<li>Trailing ‘`’ inside bracket (treated as unclosed bracket)</li>
+</ul>
+</div></details></section></div></main></body></html>

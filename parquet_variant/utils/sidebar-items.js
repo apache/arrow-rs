@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["array_from_slice","expect_size_of","first_byte_from_slice","fits_precision","overflow_error","parse_in_bracket","parse_path","slice_from_slice","slice_from_slice_at_offset","string_from_slice","try_binary_search_range_by"]};
