@@ -25,8 +25,8 @@ use arrow_array::types::Int32Type;
 use arrow_array::{Array, ArrayAccessor, DictionaryArray, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 
@@ -84,9 +84,21 @@ fn extract_strings(col: &dyn Array) -> Vec<Option<String>> {
 fn dictionary_roundtrip_low_cardinality() {
     // 15 unique values across 4096 rows — triggers the remap optimization path
     let categories = [
-        "DELIVERED", "SHIPPED", "PENDING", "CANCELLED", "RETURNED",
-        "PROCESSING", "ON_HOLD", "REFUNDED", "BACKORDERED", "IN_TRANSIT",
-        "CONFIRMED", "DISPATCHED", "FAILED", "COMPLETED", "UNKNOWN",
+        "DELIVERED",
+        "SHIPPED",
+        "PENDING",
+        "CANCELLED",
+        "RETURNED",
+        "PROCESSING",
+        "ON_HOLD",
+        "REFUNDED",
+        "BACKORDERED",
+        "IN_TRANSIT",
+        "CONFIRMED",
+        "DISPATCHED",
+        "FAILED",
+        "COMPLETED",
+        "UNKNOWN",
     ];
     let mut builder = StringDictionaryBuilder::<Int32Type>::new();
     let mut expected = Vec::with_capacity(4096);
@@ -120,9 +132,7 @@ fn dictionary_roundtrip_low_cardinality() {
 #[test]
 fn dictionary_and_plain_columns_roundtrip() {
     // Column 1: DictionaryArray (low cardinality)
-    let dict: DictionaryArray<Int32Type> = vec!["US", "CA", "MX", "US", "CA"]
-        .into_iter()
-        .collect();
+    let dict: DictionaryArray<Int32Type> = vec!["US", "CA", "MX", "US", "CA"].into_iter().collect();
 
     // Column 2: plain StringArray
     let plain = StringArray::from(vec!["Alice", "Bob", "Carol", "Dave", "Eve"]);
@@ -135,8 +145,7 @@ fn dictionary_and_plain_columns_roundtrip() {
         ),
         Field::new("name", DataType::Utf8, false),
     ]));
-    let batch =
-        RecordBatch::try_new(schema, vec![Arc::new(dict), Arc::new(plain)]).unwrap();
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(dict), Arc::new(plain)]).unwrap();
 
     let data = write_to_parquet(&batch, None);
     let batches = read_from_parquet(data);
@@ -182,10 +191,8 @@ fn dictionary_statistics_match_plain() {
 
     // Write as plain StringArray
     let plain = StringArray::from(values.clone());
-    let plain_schema =
-        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-    let plain_batch =
-        RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
+    let plain_schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let plain_batch = RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
     let plain_data = write_to_parquet(&plain_batch, None);
 
     // Write as DictionaryArray
@@ -195,8 +202,7 @@ fn dictionary_statistics_match_plain() {
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         false,
     )]));
-    let dict_batch =
-        RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
+    let dict_batch = RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
     let dict_data = write_to_parquet(&dict_batch, None);
 
     // Compare statistics from both files
@@ -230,12 +236,12 @@ fn dictionary_statistics_match_plain() {
 // ---------------------------------------------------------------------------
 #[test]
 fn dictionary_multi_row_group_roundtrip() {
-    let batch1_values: DictionaryArray<Int32Type> =
-        vec!["alpha", "beta", "gamma", "alpha"].into_iter().collect();
-    let batch2_values: DictionaryArray<Int32Type> =
-        vec!["delta", "epsilon", "delta", "gamma"]
-            .into_iter()
-            .collect();
+    let batch1_values: DictionaryArray<Int32Type> = vec!["alpha", "beta", "gamma", "alpha"]
+        .into_iter()
+        .collect();
+    let batch2_values: DictionaryArray<Int32Type> = vec!["delta", "epsilon", "delta", "gamma"]
+        .into_iter()
+        .collect();
 
     let schema = Arc::new(Schema::new(vec![Field::new(
         "col",
@@ -243,10 +249,8 @@ fn dictionary_multi_row_group_roundtrip() {
         false,
     )]));
 
-    let batch1 =
-        RecordBatch::try_new(schema.clone(), vec![Arc::new(batch1_values)]).unwrap();
-    let batch2 =
-        RecordBatch::try_new(schema.clone(), vec![Arc::new(batch2_values)]).unwrap();
+    let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(batch1_values)]).unwrap();
+    let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(batch2_values)]).unwrap();
 
     // Force each batch into its own row group
     let props = WriterProperties::builder()
@@ -254,8 +258,7 @@ fn dictionary_multi_row_group_roundtrip() {
         .build();
 
     let mut buf = Vec::new();
-    let mut writer =
-        ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+    let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
     writer.write(&batch1).unwrap();
     writer.write(&batch2).unwrap();
     writer.close().unwrap();
@@ -276,11 +279,12 @@ fn dictionary_multi_row_group_roundtrip() {
     for b in &batches {
         all_values.extend(extract_strings(b.column(0)));
     }
-    let expected: Vec<Option<String>> =
-        vec!["alpha", "beta", "gamma", "alpha", "delta", "epsilon", "delta", "gamma"]
-            .into_iter()
-            .map(|s| Some(s.to_string()))
-            .collect();
+    let expected: Vec<Option<String>> = vec![
+        "alpha", "beta", "gamma", "alpha", "delta", "epsilon", "delta", "gamma",
+    ]
+    .into_iter()
+    .map(|s| Some(s.to_string()))
+    .collect();
     assert_eq!(all_values, expected);
 }
 

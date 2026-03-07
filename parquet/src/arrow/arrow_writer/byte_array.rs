@@ -111,9 +111,7 @@ macro_rules! downcast_dict_remap {
                 let typed = dict_array.downcast_dict::<$val>().unwrap();
                 let keys = dict_array.keys();
                 let dict_len = dict_array.values().len();
-                let row_to_key = |idx: usize| -> usize {
-                    keys.value(idx).as_usize()
-                };
+                let row_to_key = |idx: usize| -> usize { keys.value(idx).as_usize() };
                 $op(typed, $indices, $encoder, dict_len, &row_to_key)
             }};
         }
@@ -137,11 +135,15 @@ macro_rules! downcast_op_remap {
     ($data_type:expr, $array:ident, $op:expr, $indices:expr, $encoder:expr) => {
         match $data_type {
             DataType::Dictionary(key, value) => match value.as_ref() {
-                DataType::Utf8 => downcast_dict_remap!(key, StringArray, $array, $op, $indices, $encoder),
+                DataType::Utf8 => {
+                    downcast_dict_remap!(key, StringArray, $array, $op, $indices, $encoder)
+                }
                 DataType::LargeUtf8 => {
                     downcast_dict_remap!(key, LargeStringArray, $array, $op, $indices, $encoder)
                 }
-                DataType::Binary => downcast_dict_remap!(key, BinaryArray, $array, $op, $indices, $encoder),
+                DataType::Binary => {
+                    downcast_dict_remap!(key, BinaryArray, $array, $op, $indices, $encoder)
+                }
                 DataType::LargeBinary => {
                     downcast_dict_remap!(key, LargeBinaryArray, $array, $op, $indices, $encoder)
                 }
@@ -839,15 +841,14 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use bytes::Bytes;
 
-    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::file::properties::WriterProperties;
 
     /// Write a single RecordBatch to Parquet bytes using the given properties.
     fn write_batch_to_bytes(batch: &RecordBatch, props: Option<WriterProperties>) -> Bytes {
         let mut buf = Vec::new();
-        let mut writer =
-            ArrowWriter::try_new(&mut buf, batch.schema(), props).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), props).unwrap();
         writer.write(batch).unwrap();
         writer.close().unwrap();
         buf.into()
@@ -912,8 +913,7 @@ mod tests {
         // Plain StringArray
         let plain = StringArray::from(strings.clone());
         let plain_schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-        let plain_batch =
-            RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
+        let plain_batch = RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
 
         // DictionaryArray with the same data
         let dict: DictionaryArray<Int32Type> = strings.into_iter().collect();
@@ -922,8 +922,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         )]));
-        let dict_batch =
-            RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
+        let dict_batch = RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
 
         let plain_bytes = write_batch_to_bytes(&plain_batch, None);
         let dict_bytes = write_batch_to_bytes(&dict_batch, None);
@@ -938,7 +937,10 @@ mod tests {
         assert_eq!(plain_meta.statistics(), dict_meta.statistics());
         assert_eq!(plain_meta.num_values(), dict_meta.num_values());
         assert_eq!(plain_meta.compressed_size(), dict_meta.compressed_size());
-        assert_eq!(plain_meta.uncompressed_size(), dict_meta.uncompressed_size());
+        assert_eq!(
+            plain_meta.uncompressed_size(),
+            dict_meta.uncompressed_size()
+        );
 
         // Verify both read back the same logical values
         let pb = read_batches_from_bytes(&plain_bytes);
@@ -965,10 +967,7 @@ mod tests {
 
         assert_eq!(batches.len(), 1);
         let vals = column_to_strings(batches[0].column(0).as_ref());
-        let expected: Vec<Option<String>> = strings
-            .iter()
-            .map(|s| Some(s.to_string()))
-            .collect();
+        let expected: Vec<Option<String>> = strings.iter().map(|s| Some(s.to_string())).collect();
         assert_eq!(vals, expected);
     }
 
@@ -1043,19 +1042,16 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         )]));
-        let dict_batch =
-            RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
+        let dict_batch = RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
 
         // Second batch: plain StringArray (same logical column)
         let plain = StringArray::from(vec!["ccc", "bbb"]);
         let plain_schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-        let plain_batch =
-            RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
+        let plain_batch = RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
 
         // Write both batches to same writer using the dict schema
         let mut buf = Vec::new();
-        let mut writer =
-            ArrowWriter::try_new(&mut buf, dict_batch.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, dict_batch.schema(), None).unwrap();
         writer.write(&dict_batch).unwrap();
         writer.write(&plain_batch).unwrap();
         writer.close().unwrap();
@@ -1082,10 +1078,8 @@ mod tests {
     // T6: Multiple row groups with DictionaryArray input
     #[test]
     fn test_dict_passthrough_multiple_row_groups() {
-        let strings1: DictionaryArray<Int32Type> =
-            vec!["x", "y", "z", "x"].into_iter().collect();
-        let strings2: DictionaryArray<Int32Type> =
-            vec!["a", "b", "a", "c"].into_iter().collect();
+        let strings1: DictionaryArray<Int32Type> = vec!["x", "y", "z", "x"].into_iter().collect();
+        let strings2: DictionaryArray<Int32Type> = vec!["a", "b", "a", "c"].into_iter().collect();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col",
@@ -1102,8 +1096,7 @@ mod tests {
             .build();
 
         let mut buf = Vec::new();
-        let mut writer =
-            ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
         writer.write(&batch1).unwrap();
         writer.write(&batch2).unwrap();
         writer.close().unwrap();
@@ -1133,8 +1126,7 @@ mod tests {
         // Plain
         let plain = StringArray::from(strings.clone());
         let plain_schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-        let plain_batch =
-            RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
+        let plain_batch = RecordBatch::try_new(plain_schema, vec![Arc::new(plain)]).unwrap();
 
         // Dict
         let dict: DictionaryArray<Int32Type> = strings.into_iter().collect();
@@ -1143,17 +1135,14 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         )]));
-        let dict_batch =
-            RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
+        let dict_batch = RecordBatch::try_new(dict_schema, vec![Arc::new(dict)]).unwrap();
 
         let plain_bytes = write_batch_to_bytes(&plain_batch, None);
         let dict_bytes = write_batch_to_bytes(&dict_batch, None);
 
         // Compare metadata statistics
-        let plain_reader =
-            SerializedFileReader::new(plain_bytes).unwrap();
-        let dict_reader =
-            SerializedFileReader::new(dict_bytes).unwrap();
+        let plain_reader = SerializedFileReader::new(plain_bytes).unwrap();
+        let dict_reader = SerializedFileReader::new(dict_bytes).unwrap();
 
         let plain_meta = plain_reader.metadata().row_group(0).column(0);
         let dict_meta = dict_reader.metadata().row_group(0).column(0);
@@ -1170,8 +1159,7 @@ mod tests {
     fn test_dict_passthrough_high_cardinality() {
         // Create a dictionary with many unique values
         let values: Vec<String> = (0..5000).map(|i| format!("value_{i:06}")).collect();
-        let dict: DictionaryArray<Int32Type> =
-            values.iter().map(|s| s.as_str()).collect();
+        let dict: DictionaryArray<Int32Type> = values.iter().map(|s| s.as_str()).collect();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col",
@@ -1192,10 +1180,7 @@ mod tests {
         for b in &batches {
             all_values.extend(column_to_strings(b.column(0).as_ref()));
         }
-        let expected: Vec<Option<String>> = values
-            .iter()
-            .map(|s| Some(s.clone()))
-            .collect();
+        let expected: Vec<Option<String>> = values.iter().map(|s| Some(s.clone())).collect();
         assert_eq!(all_values, expected);
     }
 }

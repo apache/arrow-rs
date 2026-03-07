@@ -32,8 +32,8 @@ use std::sync::Arc;
 use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
-use arrow_array::builder::StringDictionaryBuilder;
 use arrow_array::RecordBatchOptions;
+use arrow_array::builder::StringDictionaryBuilder;
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::errors::Result;
 use parquet::file::properties::{WriterProperties, WriterVersion};
@@ -145,9 +145,21 @@ fn create_string_dictionary_bench_batch(
 /// codes, country codes, or ship modes where dictionary encoding excels.
 fn create_string_dictionary_low_cardinality_bench_batch(size: usize) -> Result<RecordBatch> {
     let categories = [
-        "DELIVERED", "SHIPPED", "PENDING", "CANCELLED", "RETURNED",
-        "PROCESSING", "ON_HOLD", "REFUNDED", "BACKORDERED", "IN_TRANSIT",
-        "CONFIRMED", "DISPATCHED", "FAILED", "COMPLETED", "UNKNOWN",
+        "DELIVERED",
+        "SHIPPED",
+        "PENDING",
+        "CANCELLED",
+        "RETURNED",
+        "PROCESSING",
+        "ON_HOLD",
+        "REFUNDED",
+        "BACKORDERED",
+        "IN_TRANSIT",
+        "CONFIRMED",
+        "DISPATCHED",
+        "FAILED",
+        "COMPLETED",
+        "UNKNOWN",
     ];
     let mut builder = StringDictionaryBuilder::<Int32Type>::new();
     for i in 0..size {
@@ -159,7 +171,10 @@ fn create_string_dictionary_low_cardinality_bench_batch(size: usize) -> Result<R
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
         false,
     )]);
-    Ok(RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)])?)
+    Ok(RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(dict)],
+    )?)
 }
 
 fn create_string_bench_batch_non_null(
