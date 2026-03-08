@@ -4160,6 +4160,49 @@ mod tests {
     }
 
     #[test]
+    fn two_maps_with_different_keys_order_should_still_match() {
+        // { "hello": 1, "world": 2 }
+        let map_1 = {
+            let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+
+            builder.keys().append_value("hello");
+            builder.values().append_value(1);
+
+            builder.keys().append_value("world");
+            builder.values().append_value(2);
+
+            builder.append(true).unwrap();
+
+            Arc::new(builder.finish()) as ArrayRef
+        };
+
+        // { "world": 2, "hello": 1 }
+        let map_2 = {
+            let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+
+            builder.keys().append_value("world");
+            builder.values().append_value(2);
+
+            builder.keys().append_value("hello");
+            builder.values().append_value(1);
+
+            builder.append(true).unwrap();
+
+            Arc::new(builder.finish()) as ArrayRef
+        };
+
+        let converter = RowConverter::new(vec![SortField::new(map_1.data_type().clone())]).unwrap();
+
+        let map_1_rows = converter.convert_columns(&[Arc::clone(&map_1)]).unwrap();
+        let map_2_rows = converter.convert_columns(&[Arc::clone(&map_2)]).unwrap();
+
+        assert_eq!(map_1_rows.row(0), map_2_rows.row(0));
+
+        // TODO - what would the expected returned array be?
+        // if they are the same rows they will produce the same output, TODO - this should be noted if we decide to go that path
+    }
+
+    #[test]
     fn test_nested_map() {
         // Map<Utf8, Map<Utf8, Int32>>
         let mut builder = MapBuilder::new(
