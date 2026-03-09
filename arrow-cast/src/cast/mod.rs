@@ -2507,7 +2507,7 @@ fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
     let adjust = |o| {
         let local = as_datetime::<T>(o)?;
         let offset = to_tz.offset_from_local_datetime(&local).single()?;
-        T::make_value(local - offset.fix())
+        T::from_naive_datetime(local - offset.fix(), None)
     };
     let adjusted = if cast_options.safe {
         array.unary_opt::<_, Int64Type>(adjust)

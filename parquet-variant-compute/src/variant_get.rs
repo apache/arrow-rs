@@ -466,6 +466,8 @@ mod test {
     macro_rules! partially_shredded_variant_array_gen {
         ($func_name:ident,  $typed_value_array_gen: expr) => {
             fn $func_name() -> ArrayRef {
+                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
+                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
                 let (metadata, string_value) = {
                     let mut builder = parquet_variant::VariantBuilder::new();
                     builder.append_value("n/a");
@@ -1671,52 +1673,6 @@ mod test {
                 None, // row 2 is a string, so no typed value
                 Some(<$primitive_type>::try_from(100u8).unwrap()), // row 3 is shredded, so it has a value
             ]));
-        };
-    }
-
-    macro_rules! partially_shredded_variant_array_gen {
-        ($func:ident, $typed_array_gen: expr) => {
-            fn $func() -> ArrayRef {
-                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
-                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
-                let (metadata, string_value) = {
-                    let mut builder = parquet_variant::VariantBuilder::new();
-                    builder.append_value("n/a");
-                    builder.finish()
-                };
-
-                let nulls = NullBuffer::from(vec![
-                    true,  // row 0 non null
-                    false, // row 1 is null
-                    true,  // row 2 non null
-                    true,  // row 3 non null
-                ]);
-
-                // metadata is the same for all rows
-                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
-
-                // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
-                // about why row1 is an empty but non null, value.
-                let values = BinaryViewArray::from(vec![
-                    None,                // row 0 is shredded, so no value
-                    Some(b"" as &[u8]),  // row 1 is null, so empty value (why?)
-                    Some(&string_value), // copy the string value "N/A"
-                    None,                // row 3 is shredded, so no value
-                ]);
-
-                let typed_value = $typed_array_gen();
-
-                let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata), false)
-                    .with_field("typed_value", Arc::new(typed_value), true)
-                    .with_field("value", Arc::new(values), true)
-                    .with_nulls(nulls)
-                    .build();
-
-                ArrayRef::from(
-                    VariantArray::try_new(&struct_array).expect("should create variant array"),
-                )
-            }
         };
     }
 
