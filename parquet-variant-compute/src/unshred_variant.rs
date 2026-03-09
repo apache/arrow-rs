@@ -21,7 +21,7 @@ use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
     GenericListArray, GenericListViewArray, LargeStringArray, ListLikeArray, PrimitiveArray,
-    StringArray, StructArray,
+    StringArray, StringViewArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
@@ -105,6 +105,7 @@ enum UnshredVariantRowBuilder<'a> {
     TimestampNanosecond(TimestampUnshredRowBuilder<'a, TimestampNanosecondType>),
     PrimitiveBoolean(UnshredPrimitiveRowBuilder<'a, BooleanArray>),
     PrimitiveString(UnshredPrimitiveRowBuilder<'a, StringArray>),
+    PrimitiveStringView(UnshredPrimitiveRowBuilder<'a, StringViewArray>),
     PrimitiveLargeString(UnshredPrimitiveRowBuilder<'a, LargeStringArray>),
     PrimitiveBinaryView(UnshredPrimitiveRowBuilder<'a, BinaryViewArray>),
     PrimitiveUuid(UnshredPrimitiveRowBuilder<'a, FixedSizeBinaryArray>),
@@ -147,6 +148,7 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::TimestampNanosecond(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveBoolean(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveString(b) => b.append_row(builder, metadata, index),
+            Self::PrimitiveStringView(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveLargeString(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveBinaryView(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveUuid(b) => b.append_row(builder, metadata, index),
@@ -228,6 +230,7 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             }
             DataType::Boolean => primitive_builder!(PrimitiveBoolean, as_boolean),
             DataType::Utf8 => primitive_builder!(PrimitiveString, as_string),
+            DataType::Utf8View => primitive_builder!(PrimitiveStringView, as_string_view),
             DataType::LargeUtf8 => primitive_builder!(PrimitiveLargeString, as_string),
             DataType::BinaryView => primitive_builder!(PrimitiveBinaryView, as_binary_view),
             DataType::FixedSizeBinary(16) => {
@@ -408,6 +411,7 @@ macro_rules! impl_append_to_variant_builder {
 
 impl_append_to_variant_builder!(BooleanArray);
 impl_append_to_variant_builder!(StringArray);
+impl_append_to_variant_builder!(StringViewArray);
 impl_append_to_variant_builder!(LargeStringArray);
 impl_append_to_variant_builder!(BinaryViewArray);
 impl_append_to_variant_builder!(PrimitiveArray<Int8Type>);
@@ -668,35 +672,46 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
     }
 }
 
-// TODO: This code is covered by tests in `parquet/tests/variant_integration.rs`. Does that suffice?
-// Or do we also need targeted stand-alone unit tests for full coverage?
-
 #[cfg(test)]
 mod tests {
     use crate::VariantArray;
-    use arrow::array::{BinaryViewArray, LargeStringArray};
+    use arrow::array::{BinaryViewArray, LargeStringArray, StringViewArray};
     use parquet_variant::Variant;
+
+    #[test]
+    fn test_unshred_utf8view_typed_value() {
+        let metadata_bytes: &[u8] = &[0x01, 0x00, 0x00];
+        let metadata = BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]);
+
+        let typed_value: arrow::array::ArrayRef = std::sync::Arc::new(StringViewArray::from(vec![
+            Some("hello"),
+            Some("middle"),
+            Some("world"),
+        ]));
+
+        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
+
+        let result = crate::unshred_variant(&variant_array).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.value(0), Variant::from("hello"));
+        assert_eq!(result.value(1), Variant::from("middle"));
+        assert_eq!(result.value(2), Variant::from("world"));
+    }
 
     #[test]
     fn test_unshred_largeutf8_typed_value() {
         let metadata_bytes: &[u8] = &[0x01, 0x00, 0x00];
-        let metadata =
-            BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]);
+        let metadata = BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]);
 
-        let typed_value: arrow::array::ArrayRef = std::sync::Arc::new(
-            LargeStringArray::from(vec![
+        let typed_value: arrow::array::ArrayRef =
+            std::sync::Arc::new(LargeStringArray::from(vec![
                 Some("hello"),
                 Some("middle"),
                 Some("world"),
-            ]),
-        );
+            ]));
 
-        let variant_array = VariantArray::from_parts(
-            metadata,
-            None,
-            Some(typed_value),
-            None,
-        );
+        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
 
         let result = crate::unshred_variant(&variant_array).unwrap();
 
