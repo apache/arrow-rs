@@ -152,7 +152,7 @@ pub fn validate_binary_view(views: &[u128], buffers: &[Buffer]) -> Result<(), Ar
 /// Validates the combination of `views` and `buffers` is a valid StringView
 pub fn validate_string_view(views: &[u128], buffers: &[Buffer]) -> Result<(), ArrowError> {
     validate_view_impl(views, buffers, |idx, b| {
-        std::str::from_utf8(b).map_err(|e| {
+        crate::utf8::check_utf8(b).map_err(|e| {
             ArrowError::InvalidArgumentError(format!(
                 "Encountered non-UTF-8 data at index {idx}: {e}"
             ))

@@ -35,6 +35,9 @@ bench = false
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+simdutf8 = ["arrow-data/simdutf8"]
+
 [dependencies]
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
