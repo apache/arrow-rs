@@ -488,6 +488,18 @@ unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSi
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> super::ListLikeArray for GenericListViewArray<OffsetSize> {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn element_range(&self, index: usize) -> std::ops::Range<usize> {
+        let offset = self.value_offsets()[index].as_usize();
+        let size = self.value_sizes()[index].as_usize();
+        offset..(offset + size)
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListViewArray<OffsetSize> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let prefix = OffsetSize::PREFIX;

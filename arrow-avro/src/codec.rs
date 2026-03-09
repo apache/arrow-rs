@@ -84,14 +84,20 @@ pub(crate) enum AvroLiteral {
 /// Contains the necessary information to resolve a writer's record against a reader's record schema.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResolvedRecord {
-    /// Maps a writer's field index to the corresponding reader's field index.
-    /// `None` if the writer's field is not present in the reader's schema.
-    pub(crate) writer_to_reader: Arc<[Option<usize>]>,
+    /// Maps a writer's field index to the field's resolution against the reader's schema.
+    pub(crate) writer_fields: Arc<[ResolvedField]>,
     /// A list of indices in the reader's schema for fields that have a default value.
     pub(crate) default_fields: Arc<[usize]>,
+}
+
+/// Resolution information for record fields in the writer schema.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ResolvedField {
+    /// Resolves to a field indexed in the reader schema.
+    ToReader(usize),
     /// For fields present in the writer's schema but not the reader's, this stores their data type.
     /// This is needed to correctly skip over these fields during deserialization.
-    pub(crate) skip_fields: Arc<[Option<AvroDataType>]>,
+    Skip(AvroDataType),
 }
 
 /// Defines the type of promotion to be applied during schema resolution.
@@ -2281,24 +2287,27 @@ impl<'a> Maker<'a> {
                 data_type: dt,
             });
         }
-        // Build skip_fields in writer order; pre-size and push.
-        let mut skip_fields: Vec<Option<AvroDataType>> =
-            Vec::with_capacity(writer_record.fields.len());
-        for (writer_index, writer_field) in writer_record.fields.iter().enumerate() {
-            if writer_to_reader[writer_index].is_some() {
-                skip_fields.push(None);
-            } else {
-                skip_fields.push(Some(self.parse_type(&writer_field.r#type, writer_ns)?));
-            }
-        }
+        // Build writer field map.
+        let writer_fields = writer_record
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(writer_index, writer_field)| {
+                if let Some(reader_index) = writer_to_reader[writer_index] {
+                    Ok(ResolvedField::ToReader(reader_index))
+                } else {
+                    let dt = self.parse_type(&writer_field.r#type, writer_ns)?;
+                    Ok(ResolvedField::Skip(dt))
+                }
+            })
+            .collect::<Result<_, ArrowError>>()?;
         let resolved = AvroDataType::new_with_resolution(
             Codec::Struct(Arc::from(reader_fields)),
             reader_md,
             None,
             Some(ResolutionInfo::Record(ResolvedRecord {
-                writer_to_reader: Arc::from(writer_to_reader),
+                writer_fields,
                 default_fields: Arc::from(default_fields),
-                skip_fields: Arc::from(skip_fields),
             })),
         );
         // Register a resolved record by reader name+namespace for potential named type refs.
@@ -2792,16 +2801,13 @@ mod tests {
         };
         match resolution {
             ResolutionInfo::Record(ResolvedRecord {
-                writer_to_reader,
+                writer_fields,
                 default_fields,
-                skip_fields,
             }) => {
-                assert_eq!(writer_to_reader.len(), 1);
-                assert_eq!(writer_to_reader[0], Some(0));
+                assert_eq!(writer_fields.len(), 1);
+                assert_eq!(writer_fields[0], ResolvedField::ToReader(0));
                 assert_eq!(default_fields.len(), 1);
                 assert_eq!(default_fields[0], 1);
-                assert_eq!(skip_fields.len(), 1);
-                assert_eq!(skip_fields[0], None);
             }
             other => panic!("unexpected resolution {other:?}"),
         }
@@ -2888,16 +2894,13 @@ mod tests {
         };
         match resolution {
             ResolutionInfo::Record(ResolvedRecord {
-                writer_to_reader,
+                writer_fields,
                 default_fields,
-                skip_fields,
             }) => {
-                assert_eq!(writer_to_reader.len(), 1);
-                assert_eq!(writer_to_reader[0], Some(0));
+                assert_eq!(writer_fields.len(), 1);
+                assert_eq!(writer_fields[0], ResolvedField::ToReader(0));
                 assert_eq!(default_fields.len(), 1);
                 assert_eq!(default_fields[0], 1);
-                assert_eq!(skip_fields.len(), 1);
-                assert_eq!(skip_fields[0], None);
             }
             other => panic!("unexpected resolution {other:?}"),
         }
@@ -3714,11 +3717,18 @@ mod tests {
             Some(ResolutionInfo::Record(ref r)) => r.clone(),
             other => panic!("expected record resolution, got {other:?}"),
         };
-        assert_eq!(rec.writer_to_reader.as_ref(), &[Some(1), None, Some(0)]);
+        assert!(matches!(
+            &rec.writer_fields[..],
+            &[
+                ResolvedField::ToReader(1),
+                ResolvedField::Skip(_),
+                ResolvedField::ToReader(0),
+            ]
+        ));
         assert_eq!(rec.default_fields.as_ref(), &[2usize, 3usize]);
-        assert!(rec.skip_fields[0].is_none());
-        assert!(rec.skip_fields[2].is_none());
-        let skip1 = rec.skip_fields[1].as_ref().expect("skip field present");
+        let ResolvedField::Skip(skip1) = &rec.writer_fields[1] else {
+            panic!("should skip field 1")
+        };
         assert!(matches!(skip1.codec(), Codec::Utf8));
         let name_md = &fields[2].data_type().metadata;
         assert_eq!(
