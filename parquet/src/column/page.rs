@@ -406,7 +406,14 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// [(#4327)]: https://github.com/apache/arrow-rs/pull/4327
     /// [(#4943)]: https://github.com/apache/arrow-rs/pull/4943
     fn at_record_boundary(&mut self) -> Result<bool> {
-        Ok(self.peek_next_page()?.is_none())
+        match self.peek_next_page()? {
+            // Last page in the column chunk - always a record boundary
+            None => Ok(true),
+            // A V2 data page is required by the parquet spec to start at a
+            // record boundary, so the current page ends at one.  V2 pages
+            // are identified by having `num_rows` set in their header.
+            Some(metadata) => Ok(metadata.num_rows.is_some()),
+        }
     }
 }
 
