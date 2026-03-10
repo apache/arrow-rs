@@ -196,7 +196,8 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
     }
 }
 
-#[cfg(any(feature = "snap", test))]
+/// Snappy codec using C++ snappy library (non-wasm targets)
+#[cfg(all(any(feature = "snap", test), not(target_arch = "wasm32")))]
 mod snappy_codec {
     use std::os::raw::c_char;
 
@@ -208,11 +209,9 @@ mod snappy_codec {
     use crate::compression::Codec;
     use crate::errors::{ParquetError, Result};
 
-    /// Codec for Snappy compression format using C++ snappy library.
     pub struct SnappyCodec;
 
     impl SnappyCodec {
-        /// Creates new Snappy compression codec.
         pub(crate) fn new() -> Self {
             Self
         }
@@ -256,7 +255,6 @@ mod snappy_codec {
                 )
             };
             if status != snappy_status_SNAPPY_OK {
-                // Reset length on failure
                 output_buf.truncate(offset);
                 return Err(general_err!("snappy: decompress error"));
             }
@@ -288,6 +286,74 @@ mod snappy_codec {
         }
     }
 }
+
+/// Snappy codec using pure-Rust snap crate (wasm32 fallback)
+#[cfg(all(any(feature = "snap", test), target_arch = "wasm32"))]
+mod snappy_codec {
+    use snap::raw::{Decoder, Encoder};
+
+    use crate::compression::Codec;
+    use crate::errors::Result;
+
+    pub struct SnappyCodec {
+        decoder: Decoder,
+        encoder: Encoder,
+    }
+
+    impl SnappyCodec {
+        pub(crate) fn new() -> Self {
+            Self {
+                decoder: Decoder::new(),
+                encoder: Encoder::new(),
+            }
+        }
+    }
+
+    impl Codec for SnappyCodec {
+        fn decompress(
+            &mut self,
+            input_buf: &[u8],
+            output_buf: &mut Vec<u8>,
+            uncompress_size: Option<usize>,
+        ) -> Result<usize> {
+            let len = uncompress_size.unwrap_or_else(|| {
+                snap::raw::decompress_len(input_buf).unwrap_or(0)
+            });
+            let offset = output_buf.len();
+            output_buf.resize(offset + len, 0);
+            match self.decoder.decompress(input_buf, &mut output_buf[offset..]) {
+                Ok(n) => {
+                    output_buf.truncate(offset + n);
+                    Ok(n)
+                }
+                Err(e) => {
+                    output_buf.truncate(offset);
+                    Err(general_err!("snappy decompress error: {}", e))
+                }
+            }
+        }
+
+        fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
+            let output_buf_len = output_buf.len();
+            let required_len = snap::raw::max_compress_len(input_buf.len());
+            output_buf.resize(output_buf_len + required_len, 0);
+            match self
+                .encoder
+                .compress(input_buf, &mut output_buf[output_buf_len..])
+            {
+                Ok(n) => {
+                    output_buf.truncate(output_buf_len + n);
+                    Ok(())
+                }
+                Err(e) => {
+                    output_buf.truncate(output_buf_len);
+                    Err(general_err!("snappy compress error: {}", e))
+                }
+            }
+        }
+    }
+}
+
 #[cfg(any(feature = "snap", test))]
 pub use snappy_codec::*;
 
