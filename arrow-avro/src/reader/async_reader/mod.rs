@@ -541,7 +541,9 @@ impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
 #[cfg(all(test, feature = "object_store"))]
 mod tests {
     use super::*;
-    use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
+    use crate::schema::{
+        AVRO_NAME_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AvroSchema, SCHEMA_METADATA_KEY,
+    };
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::*;
@@ -765,39 +767,63 @@ mod tests {
                                 vec![Field::new("f1_3_1", DataType::Float64, false)].into(),
                             ),
                             false,
-                        ),
+                        )
+                        .with_metadata(HashMap::from([
+                            (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns3".to_owned()),
+                            (AVRO_NAME_METADATA_KEY.to_owned(), "record3".to_owned()),
+                        ])),
                     ]
                     .into(),
                 ),
                 false,
-            ),
+            )
+            .with_metadata(HashMap::from([
+                (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns2".to_owned()),
+                (AVRO_NAME_METADATA_KEY.to_owned(), "record2".to_owned()),
+            ])),
             Field::new(
                 "f2",
-                DataType::List(Arc::new(Field::new(
-                    "item",
-                    DataType::Struct(
-                        vec![
-                            Field::new("f2_1", DataType::Boolean, false),
-                            Field::new("f2_2", DataType::Float32, false),
-                        ]
-                        .into(),
-                    ),
-                    false,
-                ))),
+                DataType::List(Arc::new(
+                    Field::new(
+                        "item",
+                        DataType::Struct(
+                            vec![
+                                Field::new("f2_1", DataType::Boolean, false),
+                                Field::new("f2_2", DataType::Float32, false),
+                            ]
+                            .into(),
+                        ),
+                        false,
+                    )
+                    .with_metadata(HashMap::from([
+                        (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns4".to_owned()),
+                        (AVRO_NAME_METADATA_KEY.to_owned(), "record4".to_owned()),
+                    ])),
+                )),
                 false,
             ),
             Field::new(
                 "f3",
                 DataType::Struct(vec![Field::new("f3_1", DataType::Utf8, false)].into()),
                 true,
-            ),
+            )
+            .with_metadata(HashMap::from([
+                (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns5".to_owned()),
+                (AVRO_NAME_METADATA_KEY.to_owned(), "record5".to_owned()),
+            ])),
             Field::new(
                 "f4",
-                DataType::List(Arc::new(Field::new(
-                    "item",
-                    DataType::Struct(vec![Field::new("f4_1", DataType::Int64, false)].into()),
-                    true,
-                ))),
+                DataType::List(Arc::new(
+                    Field::new(
+                        "item",
+                        DataType::Struct(vec![Field::new("f4_1", DataType::Int64, false)].into()),
+                        true,
+                    )
+                    .with_metadata(HashMap::from([
+                        (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns6".to_owned()),
+                        (AVRO_NAME_METADATA_KEY.to_owned(), "record6".to_owned()),
+                    ])),
+                )),
                 false,
             ),
         ])
@@ -1599,6 +1625,32 @@ mod tests {
         assert_eq!(batch.schema().as_ref(), &expected_schema);
     }
 
+    #[tokio::test]
+    async fn test_arrow_schema_from_reader_nested_records() {
+        // Use a very small header size hint to force multiple fetches
+        let file = arrow_test_data("avro/nested_records.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let expected_schema = get_nested_records_schema()
+            .as_ref()
+            .clone()
+            .with_metadata(Default::default());
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .try_build()
+            .await
+            .unwrap();
+
+        assert_eq!(reader.schema().as_ref(), &expected_schema);
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+    }
 
     #[tokio::test]
     async fn test_with_header_size_hint_small() {
