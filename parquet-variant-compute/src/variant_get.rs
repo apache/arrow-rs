@@ -17,7 +17,7 @@
 use arrow::{
     array::{
         self, Array, ArrayRef, BinaryViewArray, GenericListArray, GenericListViewArray,
-        StructArray, UInt64Array,
+        ListLikeArray, StructArray, UInt64Array,
     },
     compute::{CastOptions, take},
     datatypes::Field,
@@ -27,7 +27,6 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, VariantPath, VariantPathElement};
 
 use crate::VariantArray;
-use crate::arrow_to_variant::ListLikeArray;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 use crate::{ShreddingState, variant_array::StructArrayBuilder};
 
