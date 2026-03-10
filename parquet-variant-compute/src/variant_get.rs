@@ -1024,10 +1024,11 @@ mod test {
                 // Prefer producing fixtures with shred_variant from unshredded input.
                 // Fall back for non-shreddable test-only Arrow types (e.g. LargeUtf8/LargeBinary/Null).
                 let typed_value: ArrayRef = Arc::new($typed_value_gen());
-                if let Ok(unshredded) = cast_to_variant(typed_value.as_ref()) {
-                    if let Ok(shredded) = shred_variant(&unshredded, typed_value.data_type()) {
-                        return shredded.into();
-                    }
+                if let Some(shredded) = cast_to_variant(typed_value.as_ref())
+                    .ok()
+                    .and_then(|unshredded| shred_variant(&unshredded, typed_value.data_type()).ok())
+                {
+                    return shredded.into();
                 }
 
                 let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
