@@ -1979,141 +1979,75 @@ mod test {
         assert_eq!(&result, &expected);
     }
 
-    /// This test uses a pre-shredded list array and validates index-path access.
-    #[test]
-    fn test_shredded_list_index_access() {
-        let array = shredded_list_variant_array();
-        // Test: Extract the 0 index field as VariantArray first
-        let options = GetOptions::new_with_path(VariantPath::from(0));
-        let result = variant_get(&array, options).unwrap();
-        let result_variant = VariantArray::try_new(&result).unwrap();
-        assert_eq!(result_variant.len(), 2);
+    type ShreddedListLikeArrayGen = fn() -> ArrayRef;
+    type ShreddedListLikeCase = (&'static str, ShreddedListLikeArrayGen);
 
-        // Row 0: expect 0 index = "comedy"
-        assert_eq!(result_variant.value(0), Variant::from("comedy"));
-        // Row 1: expect 0 index = "horror"
-        assert_eq!(result_variant.value(1), Variant::from("horror"));
+    fn shredded_list_like_cases() -> [ShreddedListLikeCase; 4] {
+        [
+            ("list", shredded_list_variant_array),
+            ("large_list", shredded_large_list_variant_array),
+            ("list_view", shredded_list_view_variant_array),
+            ("large_list_view", shredded_large_list_view_variant_array),
+        ]
     }
 
-    /// Test extracting shredded list field with type conversion.
     #[test]
-    fn test_shredded_list_as_string() {
-        let array = shredded_list_variant_array();
-        // Test: Extract the 0 index values as StringArray (type conversion)
+    fn test_shredded_list_like_index_access_from_value_field() {
+        let options = GetOptions::new_with_path(VariantPath::from(1));
+
+        for (case, array_gen) in shredded_list_like_cases() {
+            let array = array_gen();
+            let result = variant_get(&array, options.clone()).unwrap();
+            let result_variant = VariantArray::try_new(&result).unwrap();
+
+            assert_eq!(result_variant.value(0), Variant::from("drama"), "{case}");
+            assert_eq!(result_variant.value(1).as_int64(), Some(123), "{case}");
+        }
+    }
+
+    #[test]
+    fn test_shredded_list_like_index_out_of_bounds_unsafe_cast_errors() {
+        let options =
+            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+
+        for (case, array_gen) in shredded_list_like_cases() {
+            let err = variant_get(&array_gen(), options.clone()).unwrap_err();
+            assert!(
+                err.to_string().contains("Cannot access index '10'"),
+                "{case}"
+            );
+        }
+    }
+
+    /// Test extracting shredded list-like field with type conversion.
+    #[test]
+    fn test_shredded_list_like_as_string() {
         let field = Field::new("typed_value", DataType::Utf8, false);
         let options = GetOptions::new_with_path(VariantPath::from(0))
             .with_as_type(Some(FieldRef::from(field)));
-        let result = variant_get(&array, options).unwrap();
-        // Should get StringArray
         let expected: ArrayRef = Arc::new(StringArray::from(vec![Some("comedy"), Some("horror")]));
-        assert_eq!(&result, &expected);
+
+        for (case, array_gen) in shredded_list_like_cases() {
+            let result = variant_get(&array_gen(), options.clone()).unwrap();
+            assert_eq!(&result, &expected, "{case}");
+        }
     }
 
     #[test]
-    fn test_shredded_list_index_access_from_value_field() {
-        let array = shredded_list_variant_array();
-        // Index 1 maps to "drama" for row 0, and to fallback value 123 for row 1.
-        let options = GetOptions::new_with_path(VariantPath::from(1));
-        let result = variant_get(&array, options).unwrap();
-        let result_variant = VariantArray::try_new(&result).unwrap();
-
-        assert_eq!(result_variant.value(0), Variant::from("drama"));
-        assert_eq!(result_variant.value(1).as_int64(), Some(123));
-    }
-
-    #[test]
-    fn test_shredded_list_index_access_from_value_field_as_int64() {
-        let array = shredded_list_variant_array();
+    fn test_shredded_list_like_index_access_from_value_field_as_int64() {
         let field = Field::new("typed_value", DataType::Int64, true);
         let options = GetOptions::new_with_path(VariantPath::from(1))
             .with_as_type(Some(FieldRef::from(field)));
-        let result = variant_get(&array, options).unwrap();
-
-        // "drama" -> NULL, 123 -> 123.
         let expected: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(123)]));
-        assert_eq!(&result, &expected);
-    }
 
-    #[test]
-    fn test_shredded_list_index_out_of_bounds_unsafe_cast_errors() {
-        let options =
-            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
-                safe: false,
-                ..Default::default()
-            });
-
-        let err = variant_get(&shredded_list_variant_array(), options.clone()).unwrap_err();
-        assert!(err.to_string().contains("Cannot access index '10'"));
-    }
-
-    #[test]
-    fn test_shredded_large_list_index_access_from_value_field() {
-        let array = shredded_large_list_variant_array();
-        // Index 1 maps to "drama" for row 0, and to fallback value 123 for row 1.
-        let options = GetOptions::new_with_path(VariantPath::from(1));
-        let result = variant_get(&array, options).unwrap();
-        let result_variant = VariantArray::try_new(&result).unwrap();
-
-        assert_eq!(result_variant.value(0), Variant::from("drama"));
-        assert_eq!(result_variant.value(1).as_int64(), Some(123));
-    }
-
-    #[test]
-    fn test_shredded_large_list_index_out_of_bounds_unsafe_cast_errors() {
-        let options =
-            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
-                safe: false,
-                ..Default::default()
-            });
-
-        let err = variant_get(&shredded_large_list_variant_array(), options).unwrap_err();
-        assert!(err.to_string().contains("Cannot access index '10'"));
-    }
-
-    #[test]
-    fn test_shredded_list_view_index_access_from_value_field() {
-        let array = shredded_list_view_variant_array();
-        let options = GetOptions::new_with_path(VariantPath::from(1));
-        let result = variant_get(&array, options).unwrap();
-        let result_variant = VariantArray::try_new(&result).unwrap();
-
-        assert_eq!(result_variant.value(0), Variant::from("drama"));
-        assert_eq!(result_variant.value(1).as_int64(), Some(123));
-    }
-
-    #[test]
-    fn test_shredded_list_view_index_out_of_bounds_unsafe_cast_errors() {
-        let options =
-            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
-                safe: false,
-                ..Default::default()
-            });
-
-        let err = variant_get(&shredded_list_view_variant_array(), options).unwrap_err();
-        assert!(err.to_string().contains("Cannot access index '10'"));
-    }
-
-    #[test]
-    fn test_shredded_large_list_view_index_access_from_value_field() {
-        let array = shredded_large_list_view_variant_array();
-        let options = GetOptions::new_with_path(VariantPath::from(1));
-        let result = variant_get(&array, options).unwrap();
-        let result_variant = VariantArray::try_new(&result).unwrap();
-
-        assert_eq!(result_variant.value(0), Variant::from("drama"));
-        assert_eq!(result_variant.value(1).as_int64(), Some(123));
-    }
-
-    #[test]
-    fn test_shredded_large_list_view_index_out_of_bounds_unsafe_cast_errors() {
-        let options =
-            GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
-                safe: false,
-                ..Default::default()
-            });
-
-        let err = variant_get(&shredded_large_list_view_variant_array(), options).unwrap_err();
-        assert!(err.to_string().contains("Cannot access index '10'"));
+        for (case, array_gen) in shredded_list_like_cases() {
+            let result = variant_get(&array_gen(), options.clone()).unwrap();
+            // "drama" -> NULL, 123 -> 123.
+            assert_eq!(&result, &expected, "{case}");
+        }
     }
 
     #[test]
@@ -2159,21 +2093,65 @@ mod test {
         assert_eq!(&casted, &expected);
     }
 
-    /// Helper to create a shredded list variant array used by list index tests.
+    /// Helper to create a shredded list-like variant array used by list index tests.
     ///
     /// Rows:
     /// 1. `["comedy", "drama"]` (fully shred-able as `Utf8`)
     /// 2. `["horror", 123]` (partially shredded, with fallback for the numeric element)
-    fn shredded_list_variant_array() -> ArrayRef {
+    fn shredded_list_like_variant_array(list_schema: DataType) -> ArrayRef {
         let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
             Some(r#"["comedy", "drama"]"#),
             Some(r#"["horror", 123]"#),
         ]));
         let input = json_to_variant(&json_rows).unwrap();
 
-        let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
         let shredded = shred_variant(&input, &list_schema).unwrap();
         ArrayRef::from(shredded)
+    }
+
+    fn shredded_list_of_lists_variant_array() -> ArrayRef {
+        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"[["a", "b"], ["c", "d"]]"#),
+            Some(r#"[["x", 123], ["y", "z"]]"#),
+        ]));
+        let input = json_to_variant(&json_rows).unwrap();
+
+        let inner_list = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let outer_list = DataType::List(Arc::new(Field::new("item", inner_list, true)));
+        let shredded = shred_variant(&input, &outer_list).unwrap();
+        ArrayRef::from(shredded)
+    }
+
+    fn shredded_list_variant_array() -> ArrayRef {
+        shredded_list_like_variant_array(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
+    }
+
+    fn shredded_large_list_variant_array() -> ArrayRef {
+        shredded_list_like_variant_array(DataType::LargeList(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
+    }
+
+    fn shredded_list_view_variant_array() -> ArrayRef {
+        shredded_list_like_variant_array(DataType::ListView(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
+    }
+
+    fn shredded_large_list_view_variant_array() -> ArrayRef {
+        shredded_list_like_variant_array(DataType::LargeListView(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
     }
 
     fn shredded_struct_with_list_variant_array() -> ArrayRef {
@@ -2206,55 +2184,6 @@ mod test {
         ArrayRef::from(shredded)
     }
 
-    fn shredded_list_of_lists_variant_array() -> ArrayRef {
-        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
-            Some(r#"[["a", "b"], ["c", "d"]]"#),
-            Some(r#"[["x", 123], ["y", "z"]]"#),
-        ]));
-        let input = json_to_variant(&json_rows).unwrap();
-
-        let inner_list = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
-        let outer_list = DataType::List(Arc::new(Field::new("item", inner_list, true)));
-        let shredded = shred_variant(&input, &outer_list).unwrap();
-        ArrayRef::from(shredded)
-    }
-
-    fn shredded_large_list_variant_array() -> ArrayRef {
-        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
-            Some(r#"["comedy", "drama"]"#),
-            Some(r#"["horror", 123]"#),
-        ]));
-        let input = json_to_variant(&json_rows).unwrap();
-
-        let list_schema = DataType::LargeList(Arc::new(Field::new("item", DataType::Utf8, true)));
-        let shredded = shred_variant(&input, &list_schema).unwrap();
-        ArrayRef::from(shredded)
-    }
-
-    fn shredded_list_view_variant_array() -> ArrayRef {
-        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
-            Some(r#"["comedy", "drama"]"#),
-            Some(r#"["horror", 123]"#),
-        ]));
-        let input = json_to_variant(&json_rows).unwrap();
-
-        let list_schema = DataType::ListView(Arc::new(Field::new("item", DataType::Utf8, true)));
-        let shredded = shred_variant(&input, &list_schema).unwrap();
-        ArrayRef::from(shredded)
-    }
-
-    fn shredded_large_list_view_variant_array() -> ArrayRef {
-        let json_rows: ArrayRef = Arc::new(StringArray::from(vec![
-            Some(r#"["comedy", "drama"]"#),
-            Some(r#"["horror", 123]"#),
-        ]));
-        let input = json_to_variant(&json_rows).unwrap();
-
-        let list_schema =
-            DataType::LargeListView(Arc::new(Field::new("item", DataType::Utf8, true)));
-        let shredded = shred_variant(&input, &list_schema).unwrap();
-        ArrayRef::from(shredded)
-    }
     /// Helper function to create a shredded variant array representing objects
     ///
     /// This creates an array that represents:
