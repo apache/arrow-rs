@@ -486,6 +486,66 @@ mod test {
         };
     }
 
+    // Fixture definitions grouped with the partially-shredded tests.
+    macro_rules! numeric_partially_shredded_variant_array_fn {
+        ($func:ident, $array_type:ident, $primitive_type:ty) => {
+            partially_shredded_variant_array_gen!($func, || $array_type::from(vec![
+                Some(<$primitive_type>::try_from(34u8).unwrap()),
+                None,
+                None,
+                Some(<$primitive_type>::try_from(100u8).unwrap()),
+            ]));
+        };
+    }
+
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_int8_variant_array,
+        Int8Array,
+        i8
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_int16_variant_array,
+        Int16Array,
+        i16
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_int32_variant_array,
+        Int32Array,
+        i32
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_int64_variant_array,
+        Int64Array,
+        i64
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_float32_variant_array,
+        Float32Array,
+        f32
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_float64_variant_array,
+        Float64Array,
+        f64
+    );
+
+    partially_shredded_variant_array_gen!(partially_shredded_bool_variant_array, || {
+        arrow::array::BooleanArray::from(vec![Some(true), None, None, Some(false)])
+    });
+
+    partially_shredded_variant_array_gen!(partially_shredded_utf8_variant_array, || {
+        StringArray::from(vec![Some("hello"), None, None, Some("world")])
+    });
+
+    partially_shredded_variant_array_gen!(partially_shredded_date32_variant_array, || {
+        Date32Array::from(vec![
+            Some(20348), // 2025-09-17
+            None,
+            None,
+            Some(20340), // 2025-09-09
+        ])
+    });
+
     #[test]
     fn get_variant_partially_shredded_int8_as_variant() {
         numeric_partially_shredded_test!(i8, partially_shredded_int8_variant_array);
@@ -594,6 +654,153 @@ mod test {
         assert!(!result.is_valid(1));
         assert_eq!(result.value(2), Variant::from("n/a"));
         assert_eq!(result.value(3), Variant::from(&[4u8, 5u8, 6u8][..]));
+    }
+
+    // Timestamp partially-shredded tests grouped with the other partially-shredded cases.
+    macro_rules! assert_variant_get_as_variant_array_with_default_option {
+        ($variant_array: expr, $array_expected: expr) => {{
+            let options = GetOptions::new();
+            let array = $variant_array;
+            let result = variant_get(&array, options).unwrap();
+            let result = VariantArray::try_new(&result).unwrap();
+
+            assert_eq!(result.len(), $array_expected.len());
+
+            for (idx, item) in $array_expected.into_iter().enumerate() {
+                match item {
+                    Some(item) => assert_eq!(result.value(idx), item),
+                    None => assert!(result.is_null(idx)),
+                }
+            }
+        }};
+    }
+
+    partially_shredded_variant_array_gen!(
+        partially_shredded_timestamp_micro_ntz_variant_array,
+        || {
+            arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(-456000),
+                None,
+                None,
+                Some(1758602096000000),
+            ])
+        }
+    );
+
+    #[test]
+    fn get_variant_partial_shredded_timestamp_micro_ntz_as_variant() {
+        let array = partially_shredded_timestamp_micro_ntz_variant_array();
+        assert_variant_get_as_variant_array_with_default_option!(
+            array,
+            vec![
+                Some(Variant::from(
+                    DateTime::from_timestamp_micros(-456000i64)
+                        .unwrap()
+                        .naive_utc(),
+                )),
+                None,
+                Some(Variant::from("n/a")),
+                Some(Variant::from(
+                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
+                        .unwrap()
+                        .naive_utc(),
+                )),
+            ]
+        )
+    }
+
+    partially_shredded_variant_array_gen!(partially_shredded_timestamp_micro_variant_array, || {
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            None,
+            None,
+            Some(1758602096000000),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    #[test]
+    fn get_variant_partial_shredded_timestamp_micro_as_variant() {
+        let array = partially_shredded_timestamp_micro_variant_array();
+        assert_variant_get_as_variant_array_with_default_option!(
+            array,
+            vec![
+                Some(Variant::from(
+                    DateTime::from_timestamp_micros(-456000i64)
+                        .unwrap()
+                        .to_utc(),
+                )),
+                None,
+                Some(Variant::from("n/a")),
+                Some(Variant::from(
+                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
+                        .unwrap()
+                        .to_utc(),
+                )),
+            ]
+        )
+    }
+
+    partially_shredded_variant_array_gen!(
+        partially_shredded_timestamp_nano_ntz_variant_array,
+        || {
+            arrow::array::TimestampNanosecondArray::from(vec![
+                Some(-4999999561),
+                None,
+                None,
+                Some(1758602096000000000),
+            ])
+        }
+    );
+
+    #[test]
+    fn get_variant_partial_shredded_timestamp_nano_ntz_as_variant() {
+        let array = partially_shredded_timestamp_nano_ntz_variant_array();
+        assert_variant_get_as_variant_array_with_default_option!(
+            array,
+            vec![
+                Some(Variant::from(
+                    DateTime::from_timestamp(-5, 439).unwrap().naive_utc()
+                )),
+                None,
+                Some(Variant::from("n/a")),
+                Some(Variant::from(
+                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
+                        .unwrap()
+                        .naive_utc()
+                )),
+            ]
+        )
+    }
+
+    partially_shredded_variant_array_gen!(partially_shredded_timestamp_nano_variant_array, || {
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            None,
+            None,
+            Some(1758602096000000000),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    #[test]
+    fn get_variant_partial_shredded_timestamp_nano_as_variant() {
+        let array = partially_shredded_timestamp_nano_variant_array();
+        assert_variant_get_as_variant_array_with_default_option!(
+            array,
+            vec![
+                Some(Variant::from(
+                    DateTime::from_timestamp(-5, 439).unwrap().to_utc()
+                )),
+                None,
+                Some(Variant::from("n/a")),
+                Some(Variant::from(
+                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
+                        .unwrap()
+                        .to_utc()
+                )),
+            ]
+        )
     }
 
     /// Shredding: extract a value as an Int32Array
@@ -1411,156 +1618,6 @@ mod test {
         .unwrap()
     );
 
-    macro_rules! assert_variant_get_as_variant_array_with_default_option {
-        ($variant_array: expr, $array_expected: expr) => {{
-            let options = GetOptions::new();
-            let array = $variant_array;
-            let result = variant_get(&array, options).unwrap();
-
-            // expect the result is a VariantArray
-            let result = VariantArray::try_new(&result).unwrap();
-
-            assert_eq!(result.len(), $array_expected.len());
-
-            for (idx, item) in $array_expected.into_iter().enumerate() {
-                match item {
-                    Some(item) => assert_eq!(result.value(idx), item),
-                    None => assert!(result.is_null(idx)),
-                }
-            }
-        }};
-    }
-
-    partially_shredded_variant_array_gen!(
-        partially_shredded_timestamp_micro_ntz_variant_array,
-        || {
-            arrow::array::TimestampMicrosecondArray::from(vec![
-                Some(-456000),
-                None,
-                None,
-                Some(1758602096000000),
-            ])
-        }
-    );
-
-    #[test]
-    fn get_variant_partial_shredded_timestamp_micro_ntz_as_variant() {
-        let array = partially_shredded_timestamp_micro_ntz_variant_array();
-        assert_variant_get_as_variant_array_with_default_option!(
-            array,
-            vec![
-                Some(Variant::from(
-                    DateTime::from_timestamp_micros(-456000i64)
-                        .unwrap()
-                        .naive_utc(),
-                )),
-                None,
-                Some(Variant::from("n/a")),
-                Some(Variant::from(
-                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
-                        .unwrap()
-                        .naive_utc(),
-                )),
-            ]
-        )
-    }
-
-    partially_shredded_variant_array_gen!(partially_shredded_timestamp_micro_variant_array, || {
-        arrow::array::TimestampMicrosecondArray::from(vec![
-            Some(-456000),
-            None,
-            None,
-            Some(1758602096000000),
-        ])
-        .with_timezone("+00:00")
-    });
-
-    #[test]
-    fn get_variant_partial_shredded_timestamp_micro_as_variant() {
-        let array = partially_shredded_timestamp_micro_variant_array();
-        assert_variant_get_as_variant_array_with_default_option!(
-            array,
-            vec![
-                Some(Variant::from(
-                    DateTime::from_timestamp_micros(-456000i64)
-                        .unwrap()
-                        .to_utc(),
-                )),
-                None,
-                Some(Variant::from("n/a")),
-                Some(Variant::from(
-                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
-                        .unwrap()
-                        .to_utc(),
-                )),
-            ]
-        )
-    }
-
-    partially_shredded_variant_array_gen!(
-        partially_shredded_timestamp_nano_ntz_variant_array,
-        || {
-            arrow::array::TimestampNanosecondArray::from(vec![
-                Some(-4999999561),
-                None,
-                None,
-                Some(1758602096000000000),
-            ])
-        }
-    );
-
-    #[test]
-    fn get_variant_partial_shredded_timestamp_nano_ntz_as_variant() {
-        let array = partially_shredded_timestamp_nano_ntz_variant_array();
-
-        assert_variant_get_as_variant_array_with_default_option!(
-            array,
-            vec![
-                Some(Variant::from(
-                    DateTime::from_timestamp(-5, 439).unwrap().naive_utc()
-                )),
-                None,
-                Some(Variant::from("n/a")),
-                Some(Variant::from(
-                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
-                        .unwrap()
-                        .naive_utc()
-                )),
-            ]
-        )
-    }
-
-    partially_shredded_variant_array_gen!(partially_shredded_timestamp_nano_variant_array, || {
-        arrow::array::TimestampNanosecondArray::from(vec![
-            Some(-4999999561),
-            None,
-            None,
-            Some(1758602096000000000),
-        ])
-        .with_timezone("+00:00")
-    });
-
-    #[test]
-    fn get_variant_partial_shredded_timestamp_nano_as_variant() {
-        let array = partially_shredded_timestamp_nano_variant_array();
-
-        assert_variant_get_as_variant_array_with_default_option!(
-            array,
-            vec![
-                Some(Variant::from(
-                    DateTime::from_timestamp(-5, 439).unwrap().to_utc()
-                )),
-                None,
-                Some(Variant::from("n/a")),
-                Some(Variant::from(
-                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
-                        .unwrap()
-                        .to_utc()
-                )),
-            ]
-        )
-    }
-
     perfectly_shredded_variant_array_fn!(perfectly_shredded_binary_variant_array, || {
         BinaryArray::from(vec![
             Some(b"Apache" as &[u8]),
@@ -1617,98 +1674,6 @@ mod test {
             Some(b"Parquet-variant" as &[u8]),
         ])
     );
-
-    /// Return a VariantArray that represents a normal "shredded" variant
-    /// for the following example
-    ///
-    /// Based on the example from [the doc]
-    ///
-    /// [the doc]: https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?tab=t.0
-    ///
-    /// ```text
-    /// 34
-    /// null (an Arrow NULL, not a Variant::Null)
-    /// "n/a" (a string)
-    /// 100
-    /// ```
-    ///
-    /// The schema of the corresponding `StructArray` would look like this:
-    ///
-    /// ```text
-    /// StructArray {
-    ///   metadata: BinaryViewArray,
-    ///   value: BinaryViewArray,
-    ///   typed_value: Int32Array,
-    /// }
-    /// ```
-    macro_rules! numeric_partially_shredded_variant_array_fn {
-        ($func:ident, $array_type:ident, $primitive_type:ty) => {
-            partially_shredded_variant_array_gen!($func, || $array_type::from(vec![
-                Some(<$primitive_type>::try_from(34u8).unwrap()), // row 0 is shredded, so it has a value
-                None,                                             // row 1 is null, so no value
-                None, // row 2 is a string, so no typed value
-                Some(<$primitive_type>::try_from(100u8).unwrap()), // row 3 is shredded, so it has a value
-            ]));
-        };
-    }
-
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_int8_variant_array,
-        Int8Array,
-        i8
-    );
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_int16_variant_array,
-        Int16Array,
-        i16
-    );
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_int32_variant_array,
-        Int32Array,
-        i32
-    );
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_int64_variant_array,
-        Int64Array,
-        i64
-    );
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_float32_variant_array,
-        Float32Array,
-        f32
-    );
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_float64_variant_array,
-        Float64Array,
-        f64
-    );
-
-    partially_shredded_variant_array_gen!(partially_shredded_bool_variant_array, || {
-        arrow::array::BooleanArray::from(vec![
-            Some(true),  // row 0 is shredded, so it has a value
-            None,        // row 1 is null, so no value
-            None,        // row 2 is a string, so no typed value
-            Some(false), // row 3 is shredded, so it has a value
-        ])
-    });
-
-    partially_shredded_variant_array_gen!(partially_shredded_utf8_variant_array, || {
-        StringArray::from(vec![
-            Some("hello"), // row 0 is shredded
-            None,          // row 1 is null
-            None,          // row 2 is a string
-            Some("world"), // row 3 is shredded
-        ])
-    });
-
-    partially_shredded_variant_array_gen!(partially_shredded_date32_variant_array, || {
-        Date32Array::from(vec![
-            Some(20348), // row 0 is shredded, 2025-09-17
-            None,        // row 1 is null
-            None,        // row 2 is a string, not a date
-            Some(20340), // row 3 is shredded, 2025-09-09
-        ])
-    });
 
     /// Return a VariantArray that represents an "all null" variant
     /// for the following example (3 null values):
