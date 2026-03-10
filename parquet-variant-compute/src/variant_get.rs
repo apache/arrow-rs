@@ -465,11 +465,11 @@ mod test {
         };
     }
 
+    /// Build the mixed input [typed, null, "n/a", typed] and let shred_variant
+    /// generate the shredded fixture for the requested type.
     macro_rules! partially_shredded_variant_array_gen {
         ($func_name:ident,  $typed_value_array_gen: expr) => {
             fn $func_name() -> ArrayRef {
-                // Build the mixed input [typed, null, "n/a", typed] and let shred_variant
-                // generate the shredded fixture for the requested type.
                 let typed_value: ArrayRef = Arc::new($typed_value_array_gen());
                 let typed_as_variant = cast_to_variant(typed_value.as_ref())
                     .expect("should cast typed array to variant");
