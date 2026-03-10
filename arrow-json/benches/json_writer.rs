@@ -53,23 +53,23 @@ fn bench_write_list(c: &mut Criterion) {
     // Short lists: tests per-list overhead (few elements per row)
     group.throughput(Throughput::Elements(ROWS as u64));
     group.bench_function("short", |b| {
+        let mut buf = Vec::with_capacity(ROWS * LIST_SHORT_ELEMENTS * 8);
         b.iter(|| {
-            let mut buf = Vec::with_capacity(ROWS * LIST_SHORT_ELEMENTS * 8);
+            buf.clear();
             let mut writer = LineDelimitedWriter::new(&mut buf);
             writer.write(&short_batch).unwrap();
             writer.finish().unwrap();
-            buf
         })
     });
 
     // Long lists: tests child element encode throughput (many elements per row)
     group.bench_function("long", |b| {
+        let mut buf = Vec::with_capacity(ROWS * LIST_LONG_ELEMENTS * 8);
         b.iter(|| {
-            let mut buf = Vec::with_capacity(ROWS * LIST_LONG_ELEMENTS * 8);
+            buf.clear();
             let mut writer = LineDelimitedWriter::new(&mut buf);
             writer.write(&long_batch).unwrap();
             writer.finish().unwrap();
-            buf
         })
     });
 
@@ -103,22 +103,22 @@ fn bench_write_fixed_size_list(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ROWS as u64));
 
     group.bench_function("short", |b| {
+        let mut buf = Vec::with_capacity(ROWS * LIST_SHORT_ELEMENTS * 8);
         b.iter(|| {
-            let mut buf = Vec::with_capacity(ROWS * LIST_SHORT_ELEMENTS * 8);
+            buf.clear();
             let mut writer = LineDelimitedWriter::new(&mut buf);
             writer.write(&short_batch).unwrap();
             writer.finish().unwrap();
-            buf
         })
     });
 
     group.bench_function("long", |b| {
+        let mut buf = Vec::with_capacity(ROWS * LIST_LONG_ELEMENTS * 8);
         b.iter(|| {
-            let mut buf = Vec::with_capacity(ROWS * LIST_LONG_ELEMENTS * 8);
+            buf.clear();
             let mut writer = LineDelimitedWriter::new(&mut buf);
             writer.write(&long_batch).unwrap();
             writer.finish().unwrap();
-            buf
         })
     });
 
