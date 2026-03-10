@@ -530,6 +530,18 @@ unsafe impl Array for FixedSizeListArray {
     }
 }
 
+impl super::ListLikeArray for FixedSizeListArray {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn element_range(&self, index: usize) -> std::ops::Range<usize> {
+        let value_length = self.value_length().as_usize();
+        let offset = index * value_length;
+        offset..(offset + value_length)
+    }
+}
+
 impl ArrayAccessor for FixedSizeListArray {
     type Item = ArrayRef;
 

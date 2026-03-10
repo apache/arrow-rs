@@ -318,20 +318,16 @@ mod tests {
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
-        let expected = vec![
-            "+---+-----+",
-            "| a | b   |",
-            "+---+-----+",
-            "| a | 1   |",
-            "| b |     |",
-            "|   | 10  |",
-            "| d | 100 |",
-            "+---+-----+",
-        ];
-
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +---+-----+
+        | a | b   |
+        +---+-----+
+        | a | 1   |
+        | b |     |
+        |   | 10  |
+        | d | 100 |
+        +---+-----+
+        ");
     }
 
     #[test]
@@ -348,14 +344,19 @@ mod tests {
 
         let table = pretty_format_columns("a", &columns).unwrap().to_string();
 
-        let expected = vec![
-            "+---+", "| a |", "+---+", "| a |", "| b |", "|   |", "| d |", "| e |", "|   |",
-            "| g |", "+---+",
-        ];
-
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +---+
+        | a |
+        +---+
+        | a |
+        | b |
+        |   |
+        | d |
+        | e |
+        |   |
+        | g |
+        +---+
+        ");
     }
 
     #[test]
@@ -378,20 +379,16 @@ mod tests {
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
-        let expected = vec![
-            "+---+---+---+",
-            "| a | b | c |",
-            "+---+---+---+",
-            "|   |   |   |",
-            "|   |   |   |",
-            "|   |   |   |",
-            "|   |   |   |",
-            "+---+---+---+",
-        ];
-
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n{table:#?}");
+        insta::assert_snapshot!(table, @"
+        +---+---+---+
+        | a | b | c |
+        +---+---+---+
+        |   |   |   |
+        |   |   |   |
+        |   |   |   |
+        |   |   |   |
+        +---+---+---+
+        ");
     }
 
     #[test]
@@ -411,19 +408,15 @@ mod tests {
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
-        let expected = vec![
-            "+-------+",
-            "| d1    |",
-            "+-------+",
-            "| one   |",
-            "|       |",
-            "| three |",
-            "+-------+",
-        ];
-
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +-------+
+        | d1    |
+        +-------+
+        | one   |
+        |       |
+        | three |
+        +-------+
+        ");
     }
 
     #[test]
@@ -447,19 +440,16 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
-        let expected = vec![
-            "+-----------+",
-            "| d1        |",
-            "+-----------+",
-            "| [1, 2, 3] |",
-            "|           |",
-            "| [7, 8, 9] |",
-            "+-----------+",
-        ];
 
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +-----------+
+        | d1        |
+        +-----------+
+        | [1, 2, 3] |
+        |           |
+        | [7, 8, 9] |
+        +-----------+
+        ");
     }
 
     #[test]
@@ -482,22 +472,19 @@ mod tests {
         let array: ArrayRef = Arc::new(builder.finish());
         let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
-        let expected = vec![
-            "+-----------------------+",
-            "| d1                    |",
-            "+-----------------------+",
-            "| hello                 |",
-            "|                       |",
-            "| longer than 12 bytes  |",
-            "| another than 12 bytes |",
-            "|                       |",
-            "| small                 |",
-            "+-----------------------+",
-        ];
 
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n{table:#?}");
+        insta::assert_snapshot!(table, @"
+        +-----------------------+
+        | d1                    |
+        +-----------------------+
+        | hello                 |
+        |                       |
+        | longer than 12 bytes  |
+        | another than 12 bytes |
+        |                       |
+        | small                 |
+        +-----------------------+
+        ");
     }
 
     #[test]
@@ -520,22 +507,19 @@ mod tests {
         let array: ArrayRef = Arc::new(builder.finish());
         let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
-        let expected = vec![
-            "+--------------------------------------------+",
-            "| d1                                         |",
-            "+--------------------------------------------+",
-            "| 68656c6c6f                                 |",
-            "|                                            |",
-            "| 6c6f6e676572207468616e203132206279746573   |",
-            "| 616e6f74686572207468616e203132206279746573 |",
-            "|                                            |",
-            "| 736d616c6c                                 |",
-            "+--------------------------------------------+",
-        ];
 
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n\n{table:#?}");
+        insta::assert_snapshot!(table, @"
+        +--------------------------------------------+
+        | d1                                         |
+        +--------------------------------------------+
+        | 68656c6c6f                                 |
+        |                                            |
+        | 6c6f6e676572207468616e203132206279746573   |
+        | 616e6f74686572207468616e203132206279746573 |
+        |                                            |
+        | 736d616c6c                                 |
+        +--------------------------------------------+
+        ");
     }
 
     #[test]
@@ -554,47 +538,34 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
-        let expected = vec![
-            "+--------+",
-            "| d1     |",
-            "+--------+",
-            "| 010203 |",
-            "|        |",
-            "| 070809 |",
-            "+--------+",
-        ];
 
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +--------+
+        | d1     |
+        +--------+
+        | 010203 |
+        |        |
+        | 070809 |
+        +--------+
+        ");
     }
 
-    /// Generate an array with type $ARRAYTYPE with a numeric value of
-    /// $VALUE, and compare $EXPECTED_RESULT to the output of
-    /// formatting that array with `pretty_format_batches`
-    macro_rules! check_datetime {
-        ($ARRAYTYPE:ident, $VALUE:expr, $EXPECTED_RESULT:expr) => {
-            let mut builder = $ARRAYTYPE::builder(10);
-            builder.append_value($VALUE);
-            builder.append_null();
-            let array = builder.finish();
-
-            let schema = Arc::new(Schema::new(vec![Field::new(
-                "f",
-                array.data_type().clone(),
-                true,
-            )]));
-            let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
-
-            let table = pretty_format_batches(&[batch])
-                .expect("formatting batches")
-                .to_string();
-
-            let expected = $EXPECTED_RESULT;
-            let actual: Vec<&str> = table.lines().collect();
-
-            assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
-        };
+    /// Generate an array of [`ArrowPrimitiveType`] with a numeric `value`,
+    /// then format it with `pretty_format_batches`.
+    fn format_primitive_batch<T: ArrowPrimitiveType>(value: T::Native) -> String {
+        let mut builder = PrimitiveBuilder::<T>::with_capacity(10);
+        builder.append_value(value);
+        builder.append_null();
+        let array = builder.finish();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f",
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+        pretty_format_batches(&[batch])
+            .expect("formatting batches")
+            .to_string()
     }
 
     fn timestamp_batch<T: ArrowTimestampType>(timezone: &str, value: T::Native) -> RecordBatch {
@@ -617,158 +588,151 @@ mod tests {
         let batch = timestamp_batch::<TimestampSecondType>("+08:00", 11111111);
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
-        let expected = vec![
-            "+---------------------------+",
-            "| f                         |",
-            "+---------------------------+",
-            "| 1970-05-09T22:25:11+08:00 |",
-            "|                           |",
-            "+---------------------------+",
-        ];
-        let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n\n{actual:#?}\n\n");
+        insta::assert_snapshot!(table, @"
+        +---------------------------+
+        | f                         |
+        +---------------------------+
+        | 1970-05-09T22:25:11+08:00 |
+        |                           |
+        +---------------------------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_timestamp_second() {
-        let expected = vec![
-            "+---------------------+",
-            "| f                   |",
-            "+---------------------+",
-            "| 1970-05-09T14:25:11 |",
-            "|                     |",
-            "+---------------------+",
-        ];
-        check_datetime!(TimestampSecondArray, 11111111, expected);
+        let table = format_primitive_batch::<TimestampSecondType>(11111111);
+        insta::assert_snapshot!(table, @"
+        +---------------------+
+        | f                   |
+        +---------------------+
+        | 1970-05-09T14:25:11 |
+        |                     |
+        +---------------------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_timestamp_millisecond() {
-        let expected = vec![
-            "+-------------------------+",
-            "| f                       |",
-            "+-------------------------+",
-            "| 1970-01-01T03:05:11.111 |",
-            "|                         |",
-            "+-------------------------+",
-        ];
-        check_datetime!(TimestampMillisecondArray, 11111111, expected);
+        let table = format_primitive_batch::<TimestampMillisecondType>(11111111);
+        insta::assert_snapshot!(table, @"
+        +-------------------------+
+        | f                       |
+        +-------------------------+
+        | 1970-01-01T03:05:11.111 |
+        |                         |
+        +-------------------------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_timestamp_microsecond() {
-        let expected = vec![
-            "+----------------------------+",
-            "| f                          |",
-            "+----------------------------+",
-            "| 1970-01-01T00:00:11.111111 |",
-            "|                            |",
-            "+----------------------------+",
-        ];
-        check_datetime!(TimestampMicrosecondArray, 11111111, expected);
+        let table = format_primitive_batch::<TimestampMicrosecondType>(11111111);
+        insta::assert_snapshot!(table, @"
+        +----------------------------+
+        | f                          |
+        +----------------------------+
+        | 1970-01-01T00:00:11.111111 |
+        |                            |
+        +----------------------------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_timestamp_nanosecond() {
-        let expected = vec![
-            "+-------------------------------+",
-            "| f                             |",
-            "+-------------------------------+",
-            "| 1970-01-01T00:00:00.011111111 |",
-            "|                               |",
-            "+-------------------------------+",
-        ];
-        check_datetime!(TimestampNanosecondArray, 11111111, expected);
+        let table = format_primitive_batch::<TimestampNanosecondType>(11111111);
+        insta::assert_snapshot!(table, @"
+        +-------------------------------+
+        | f                             |
+        +-------------------------------+
+        | 1970-01-01T00:00:00.011111111 |
+        |                               |
+        +-------------------------------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_date_32() {
-        let expected = vec![
-            "+------------+",
-            "| f          |",
-            "+------------+",
-            "| 1973-05-19 |",
-            "|            |",
-            "+------------+",
-        ];
-        check_datetime!(Date32Array, 1234, expected);
+        let table = format_primitive_batch::<Date32Type>(1234);
+        insta::assert_snapshot!(table, @"
+        +------------+
+        | f          |
+        +------------+
+        | 1973-05-19 |
+        |            |
+        +------------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_date_64() {
-        let expected = vec![
-            "+---------------------+",
-            "| f                   |",
-            "+---------------------+",
-            "| 2005-03-18T01:58:20 |",
-            "|                     |",
-            "+---------------------+",
-        ];
-        check_datetime!(Date64Array, 1111111100000, expected);
+        let table = format_primitive_batch::<Date64Type>(1111111100000);
+        insta::assert_snapshot!(table, @"
+        +---------------------+
+        | f                   |
+        +---------------------+
+        | 2005-03-18T01:58:20 |
+        |                     |
+        +---------------------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_time_32_second() {
-        let expected = vec![
-            "+----------+",
-            "| f        |",
-            "+----------+",
-            "| 00:18:31 |",
-            "|          |",
-            "+----------+",
-        ];
-        check_datetime!(Time32SecondArray, 1111, expected);
+        let table = format_primitive_batch::<Time32SecondType>(1111);
+        insta::assert_snapshot!(table, @"
+        +----------+
+        | f        |
+        +----------+
+        | 00:18:31 |
+        |          |
+        +----------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_time_32_millisecond() {
-        let expected = vec![
-            "+--------------+",
-            "| f            |",
-            "+--------------+",
-            "| 03:05:11.111 |",
-            "|              |",
-            "+--------------+",
-        ];
-        check_datetime!(Time32MillisecondArray, 11111111, expected);
+        let table = format_primitive_batch::<Time32MillisecondType>(11111111);
+        insta::assert_snapshot!(table, @"
+        +--------------+
+        | f            |
+        +--------------+
+        | 03:05:11.111 |
+        |              |
+        +--------------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_time_64_microsecond() {
-        let expected = vec![
-            "+-----------------+",
-            "| f               |",
-            "+-----------------+",
-            "| 00:00:11.111111 |",
-            "|                 |",
-            "+-----------------+",
-        ];
-        check_datetime!(Time64MicrosecondArray, 11111111, expected);
+        let table = format_primitive_batch::<Time64MicrosecondType>(11111111);
+        insta::assert_snapshot!(table, @"
+        +-----------------+
+        | f               |
+        +-----------------+
+        | 00:00:11.111111 |
+        |                 |
+        +-----------------+
+        ");
     }
 
     #[test]
     fn test_pretty_format_time_64_nanosecond() {
-        let expected = vec![
-            "+--------------------+",
-            "| f                  |",
-            "+--------------------+",
-            "| 00:00:00.011111111 |",
-            "|                    |",
-            "+--------------------+",
-        ];
-        check_datetime!(Time64NanosecondArray, 11111111, expected);
+        let table = format_primitive_batch::<Time64NanosecondType>(11111111);
+        insta::assert_snapshot!(table, @"
+        +--------------------+
+        | f                  |
+        +--------------------+
+        | 00:00:00.011111111 |
+        |                    |
+        +--------------------+
+        ");
     }
 
     #[test]
     fn test_int_display() {
         let array = Arc::new(Int32Array::from(vec![6, 3])) as ArrayRef;
-        let actual_one = array_value_to_string(&array, 0).unwrap();
-        let expected_one = "6";
-
-        let actual_two = array_value_to_string(&array, 1).unwrap();
-        let expected_two = "3";
-        assert_eq!(actual_one, expected_one);
-        assert_eq!(actual_two, expected_two);
+        insta::assert_snapshot!(array_value_to_string(&array, 0).unwrap(), @"6");
+        insta::assert_snapshot!(array_value_to_string(&array, 1).unwrap(), @"3");
     }
 
     #[test]
@@ -794,19 +758,16 @@ mod tests {
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
-        let expected = vec![
-            "+-------+",
-            "| f     |",
-            "+-------+",
-            "| 1.01  |",
-            "|       |",
-            "| 2.00  |",
-            "| 30.40 |",
-            "+-------+",
-        ];
-
-        let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +-------+
+        | f     |
+        +-------+
+        | 1.01  |
+        |       |
+        | 2.00  |
+        | 30.40 |
+        +-------+
+        ");
     }
 
     #[test]
@@ -831,13 +792,17 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![dm]).unwrap();
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
-        let expected = vec![
-            "+------+", "| f    |", "+------+", "| 101  |", "|      |", "| 200  |", "| 3040 |",
-            "+------+",
-        ];
 
-        let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +------+
+        | f    |
+        +------+
+        | 101  |
+        |      |
+        | 200  |
+        | 3040 |
+        +------+
+        ");
     }
 
     #[test]
@@ -881,18 +846,16 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
-        let expected = vec![
-            "+--------------------------+----+",
-            "| c1                       | c2 |",
-            "+--------------------------+----+",
-            "| {c11: 1, c12: {c121: e}} | a  |",
-            "| {c11: , c12: {c121: f}}  | b  |",
-            "| {c11: 5, c12: {c121: g}} | c  |",
-            "+--------------------------+----+",
-        ];
 
-        let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +--------------------------+----+
+        | c1                       | c2 |
+        +--------------------------+----+
+        | {c11: 1, c12: {c121: e}} | a  |
+        | {c11: , c12: {c121: f}}  | b  |
+        | {c11: 5, c12: {c121: g}} | c  |
+        +--------------------------+----+
+        ");
     }
 
     #[test]
@@ -916,19 +879,17 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
-        let actual: Vec<&str> = table.lines().collect();
-        let expected = vec![
-            "+------------+",
-            "| Teamsters  |",
-            "+------------+",
-            "| {a=1}      |",
-            "| {b=3.2234} |",
-            "| {b=}       |",
-            "| {a=}       |",
-            "+------------+",
-        ];
 
-        assert_eq!(expected, actual);
+        insta::assert_snapshot!(table, @"
+        +------------+
+        | Teamsters  |
+        +------------+
+        | {a=1}      |
+        | {b=3.2234} |
+        | {b=}       |
+        | {a=}       |
+        +------------+
+        ");
     }
 
     #[test]
@@ -952,19 +913,17 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
-        let actual: Vec<&str> = table.lines().collect();
-        let expected = vec![
-            "+------------+",
-            "| Teamsters  |",
-            "+------------+",
-            "| {a=1}      |",
-            "| {b=3.2234} |",
-            "| {b=}       |",
-            "| {a=}       |",
-            "+------------+",
-        ];
 
-        assert_eq!(expected, actual);
+        insta::assert_snapshot!(table, @"
+        +------------+
+        | Teamsters  |
+        +------------+
+        | {a=1}      |
+        | {b=3.2234} |
+        | {b=}       |
+        | {a=}       |
+        +------------+
+        ");
     }
 
     #[test]
@@ -1012,19 +971,18 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(outer)]).unwrap();
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
-        let actual: Vec<&str> = table.lines().collect();
-        let expected = vec![
-            "+-----------------------------+",
-            "| Teamsters                   |",
-            "+-----------------------------+",
-            "| {European Union={b=1}}      |",
-            "| {European Union={c=3.2234}} |",
-            "| {a=}                        |",
-            "| {a=1234}                    |",
-            "| {European Union={c=}}       |",
-            "+-----------------------------+",
-        ];
-        assert_eq!(expected, actual);
+
+        insta::assert_snapshot!(table, @"
+        +-----------------------------+
+        | Teamsters                   |
+        +-----------------------------+
+        | {European Union={b=1}}      |
+        | {European Union={c=3.2234}} |
+        | {a=}                        |
+        | {a=1234}                    |
+        | {European Union={c=}}       |
+        +-----------------------------+
+        ");
     }
 
     #[test]
@@ -1055,21 +1013,18 @@ mod tests {
         )
         .unwrap();
 
-        let mut buf = String::new();
-        write!(&mut buf, "{}", pretty_format_batches(&[batch]).unwrap()).unwrap();
+        let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
-        let s = [
-            "+---+-----+",
-            "| a | b   |",
-            "+---+-----+",
-            "| a | 1   |",
-            "| b |     |",
-            "|   | 10  |",
-            "| d | 100 |",
-            "+---+-----+",
-        ];
-        let expected = s.join("\n");
-        assert_eq!(expected, buf);
+        insta::assert_snapshot!(table, @"
+        +---+-----+
+        | a | b   |
+        +---+-----+
+        | a | 1   |
+        | b |     |
+        |   | 10  |
+        | d | 100 |
+        +---+-----+
+        ");
     }
 
     #[test]
@@ -1091,12 +1046,15 @@ mod tests {
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
-        let expected = vec![
-            "+------+", "| f16  |", "+------+", "| NaN  |", "| 4    |", "| -inf |", "+------+",
-        ];
-
-        let actual: Vec<&str> = table.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +------+
+        | f16  |
+        +------+
+        | NaN  |
+        | 4    |
+        | -inf |
+        +------+
+        ");
     }
 
     #[test]
@@ -1121,23 +1079,19 @@ mod tests {
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
-        let expected = vec![
-            "+------------------+",
-            "| IntervalDayTime  |",
-            "+------------------+",
-            "| -1 days -10 mins |",
-            "| -1.001 secs      |",
-            "| -0.001 secs      |",
-            "| 0.001 secs       |",
-            "| 0.010 secs       |",
-            "| 0.100 secs       |",
-            "| 0 secs           |",
-            "+------------------+",
-        ];
-
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +------------------+
+        | IntervalDayTime  |
+        +------------------+
+        | -1 days -10 mins |
+        | -1.001 secs      |
+        | -0.001 secs      |
+        | 0.001 secs       |
+        | 0.010 secs       |
+        | 0.100 secs       |
+        | 0 secs           |
+        +------------------+
+        ");
     }
 
     #[test]
@@ -1169,30 +1123,26 @@ mod tests {
 
         let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
-        let expected = vec![
-            "+--------------------------+",
-            "| IntervalMonthDayNano     |",
-            "+--------------------------+",
-            "| -1 mons -1 days -10 mins |",
-            "| -1.000000001 secs        |",
-            "| -0.000000001 secs        |",
-            "| 0.000000001 secs         |",
-            "| 0.000000010 secs         |",
-            "| 0.000000100 secs         |",
-            "| 0.000001000 secs         |",
-            "| 0.000010000 secs         |",
-            "| 0.000100000 secs         |",
-            "| 0.001000000 secs         |",
-            "| 0.010000000 secs         |",
-            "| 0.100000000 secs         |",
-            "| 1.000000000 secs         |",
-            "| 0 secs                   |",
-            "+--------------------------+",
-        ];
-
-        let actual: Vec<&str> = table.lines().collect();
-
-        assert_eq!(expected, actual, "Actual result:\n{table}");
+        insta::assert_snapshot!(table, @"
+        +--------------------------+
+        | IntervalMonthDayNano     |
+        +--------------------------+
+        | -1 mons -1 days -10 mins |
+        | -1.000000001 secs        |
+        | -0.000000001 secs        |
+        | 0.000000001 secs         |
+        | 0.000000010 secs         |
+        | 0.000000100 secs         |
+        | 0.000001000 secs         |
+        | 0.000010000 secs         |
+        | 0.000100000 secs         |
+        | 0.001000000 secs         |
+        | 0.010000000 secs         |
+        | 0.100000000 secs         |
+        | 1.000000000 secs         |
+        | 0 secs                   |
+        +--------------------------+
+        ");
     }
 
     #[test]
@@ -1218,40 +1168,34 @@ mod tests {
         .unwrap()
         .to_string();
 
-        let expected_column = vec![
-            "+----------------+",
-            "| my_column_name |",
-            "+----------------+",
-            "| 1              |",
-            "| 2              |",
-            "| null           |",
-            "| 3              |",
-            "| 4              |",
-            "+----------------+",
-        ];
+        insta::assert_snapshot!(column, @"
+        +----------------+
+        | my_column_name |
+        +----------------+
+        | 1              |
+        | 2              |
+        | null           |
+        | 3              |
+        | 4              |
+        +----------------+
+        ");
 
-        let actual: Vec<&str> = column.lines().collect();
-        assert_eq!(expected_column, actual, "Actual result:\n{column}");
-
-        let batch = pretty_format_batches_with_options(&[batch], &options)
+        let table = pretty_format_batches_with_options(&[batch], &options)
             .unwrap()
             .to_string();
 
-        let expected_table = vec![
-            "+---------------+----------------+",
-            "| my_int32_name | my_string_name |",
-            "| Int32         | Utf8           |",
-            "+---------------+----------------+",
-            "| 1             | foo            |",
-            "| 2             | bar            |",
-            "| null          | null           |",
-            "| 3             | baz            |",
-            "| 4             | null           |",
-            "+---------------+----------------+",
-        ];
-
-        let actual: Vec<&str> = batch.lines().collect();
-        assert_eq!(expected_table, actual, "Actual result:\n{batch}");
+        insta::assert_snapshot!(table, @"
+        +---------------+----------------+
+        | my_int32_name | my_string_name |
+        | Int32         | Utf8           |
+        +---------------+----------------+
+        | 1             | foo            |
+        | 2             | bar            |
+        | null          | null           |
+        | 3             | baz            |
+        | 4             | null           |
+        +---------------+----------------+
+        ");
     }
 
     #[test]
@@ -1268,20 +1212,16 @@ mod tests {
                 .unwrap()
                 .to_string();
 
-        // Expected output
-        let expected_pretty = vec![
-            "+------------------------------+",
-            "| pretty                       |",
-            "+------------------------------+",
-            "| <invalid>                    |",
-            "| <invalid>                    |",
-            "| 0 days 1 hours 1 mins 1 secs |",
-            "| null                         |",
-            "+------------------------------+",
-        ];
-
-        let actual: Vec<&str> = pretty.lines().collect();
-        assert_eq!(expected_pretty, actual, "Actual result:\n{pretty}");
+        insta::assert_snapshot!(pretty, @"
+        +------------------------------+
+        | pretty                       |
+        +------------------------------+
+        | <invalid>                    |
+        | <invalid>                    |
+        | 0 days 1 hours 1 mins 1 secs |
+        | null                         |
+        +------------------------------+
+        ");
 
         // ISO8601 formatting
         let opts_iso = FormatOptions::default()
@@ -1291,20 +1231,16 @@ mod tests {
             .unwrap()
             .to_string();
 
-        // Expected output
-        let expected_iso = vec![
-            "+-----------+",
-            "| iso       |",
-            "+-----------+",
-            "| <invalid> |",
-            "| <invalid> |",
-            "| PT3661S   |",
-            "| null      |",
-            "+-----------+",
-        ];
-
-        let actual: Vec<&str> = iso.lines().collect();
-        assert_eq!(expected_iso, actual, "Actual result:\n{iso}");
+        insta::assert_snapshot!(iso, @"
+        +-----------+
+        | iso       |
+        +-----------+
+        | <invalid> |
+        | <invalid> |
+        | PT3661S   |
+        | null      |
+        +-----------+
+        ");
     }
 
     //
@@ -1408,26 +1344,20 @@ mod tests {
         )
         .unwrap();
 
-        let mut buf = String::new();
-        write!(
-            &mut buf,
-            "{}",
-            pretty_format_batches_with_options(&[batch], &options).unwrap()
-        )
-        .unwrap();
+        let table = pretty_format_batches_with_options(&[batch], &options)
+            .unwrap()
+            .to_string();
 
-        let s = [
-            "+--------+",
-            "| income |",
-            "+--------+",
-            "| 1 €    |",
-            "| <NULL> |",
-            "| 10 €   |",
-            "| 100 €  |",
-            "+--------+",
-        ];
-        let expected = s.join("\n");
-        assert_eq!(expected, buf);
+        insta::assert_snapshot!(table, @"
+        +--------+
+        | income |
+        +--------+
+        | 1 €    |
+        | <NULL> |
+        | 10 €   |
+        | 100 €  |
+        +--------+
+        ");
     }
 
     #[test]
@@ -1466,24 +1396,18 @@ mod tests {
         // define data.
         let batch = RecordBatch::try_new(schema, vec![Arc::new(outer_list)]).unwrap();
 
-        let mut buf = String::new();
-        write!(
-            &mut buf,
-            "{}",
-            pretty_format_batches_with_options(&[batch], &options).unwrap()
-        )
-        .unwrap();
+        let table = pretty_format_batches_with_options(&[batch], &options)
+            .unwrap()
+            .to_string();
 
-        let s = [
-            "+----------------------------------+",
-            "| income                           |",
-            "+----------------------------------+",
-            "| [[1 €], <NULL>]                  |",
-            "| [[2 €, 8 €], [50 €, 25 €, 25 €]] |",
-            "+----------------------------------+",
-        ];
-        let expected = s.join("\n");
-        assert_eq!(expected, buf);
+        insta::assert_snapshot!(table, @"
+        +----------------------------------+
+        | income                           |
+        +----------------------------------+
+        | [[1 €], <NULL>]                  |
+        | [[2 €, 8 €], [50 €, 25 €, 25 €]] |
+        +----------------------------------+
+        ");
     }
 
     #[test]
@@ -1530,25 +1454,19 @@ mod tests {
         // define data.
         let batch = RecordBatch::try_new(schema, vec![Arc::new(nested_data.finish())]).unwrap();
 
-        let mut buf = String::new();
-        write!(
-            &mut buf,
-            "{}",
-            pretty_format_batches_with_options(&[batch], &options).unwrap()
-        )
-        .unwrap();
+        let table = pretty_format_batches_with_options(&[batch], &options)
+            .unwrap()
+            .to_string();
 
-        let s = [
-            "+---------------------------------+",
-            "| income                          |",
-            "+---------------------------------+",
-            "| {name: Gimli, income: 10 €}     |",
-            "| {name: Legolas, income: <NULL>} |",
-            "| {name: Aragorn, income: 30 €}   |",
-            "+---------------------------------+",
-        ];
-        let expected = s.join("\n");
-        assert_eq!(expected, buf);
+        insta::assert_snapshot!(table, @"
+        +---------------------------------+
+        | income                          |
+        +---------------------------------+
+        | {name: Gimli, income: 10 €}     |
+        | {name: Legolas, income: <NULL>} |
+        | {name: Aragorn, income: 30 €}   |
+        +---------------------------------+
+        ");
     }
 
     #[test]
@@ -1585,23 +1503,17 @@ mod tests {
         )]));
         let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
 
-        let mut buf = String::new();
-        write!(
-            &mut buf,
-            "{}",
-            pretty_format_batches_with_options(&[batch], &options).unwrap()
-        )
-        .unwrap();
+        let table = pretty_format_batches_with_options(&[batch], &options)
+            .unwrap()
+            .to_string();
 
-        let s = [
-            "+-----------------------------------------------+",
-            "| income                                        |",
-            "+-----------------------------------------------+",
-            "| {Gimli: 10 €, Legolas: <NULL>, Aragorn: 30 €} |",
-            "+-----------------------------------------------+",
-        ];
-        let expected = s.join("\n");
-        assert_eq!(expected, buf);
+        insta::assert_snapshot!(table, @"
+        +-----------------------------------------------+
+        | income                                        |
+        +-----------------------------------------------+
+        | {Gimli: 10 €, Legolas: <NULL>, Aragorn: 30 €} |
+        +-----------------------------------------------+
+        ");
     }
 
     #[test]
@@ -1635,23 +1547,17 @@ mod tests {
         // define data.
         let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
 
-        let mut buf = String::new();
-        write!(
-            &mut buf,
-            "{}",
-            pretty_format_batches_with_options(&[batch], &options).unwrap()
-        )
-        .unwrap();
+        let table = pretty_format_batches_with_options(&[batch], &options)
+            .unwrap()
+            .to_string();
 
-        let s = [
-            "+--------------+",
-            "| income       |",
-            "+--------------+",
-            "| {income=1 €} |",
-            "+--------------+",
-        ];
-        let expected = s.join("\n");
-        assert_eq!(expected, buf);
+        insta::assert_snapshot!(table, @"
+        +--------------+
+        | income       |
+        +--------------+
+        | {income=1 €} |
+        +--------------+
+        ");
     }
 
     #[test]
@@ -1678,37 +1584,30 @@ mod tests {
         )
         .unwrap();
 
-        let mut buf = String::new();
-        write!(
-            &mut buf,
-            "{}",
-            create_table(
-                // No metadata compared to test_format_batches_with_custom_formatters
-                Some(Arc::new(Schema::new(vec![Field::new(
-                    "income",
-                    DataType::Int32,
-                    true
-                ),]))),
-                &[batch],
-                &options,
-            )
-            .unwrap()
+        let table = create_table(
+            // No metadata compared to test_format_batches_with_custom_formatters
+            Some(Arc::new(Schema::new(vec![Field::new(
+                "income",
+                DataType::Int32,
+                true,
+            )]))),
+            &[batch],
+            &options,
         )
-        .unwrap();
+        .unwrap()
+        .to_string();
 
         // No € formatting as in test_format_batches_with_custom_formatters
-        let s = [
-            "+--------------+",
-            "| income       |",
-            "+--------------+",
-            "| 1 (32-Bit)   |",
-            "|              |",
-            "| 10 (32-Bit)  |",
-            "| 100 (32-Bit) |",
-            "+--------------+",
-        ];
-        let expected = s.join("\n");
-        assert_eq!(expected, buf);
+        insta::assert_snapshot!(table, @"
+        +--------------+
+        | income       |
+        +--------------+
+        | 1 (32-Bit)   |
+        |              |
+        | 10 (32-Bit)  |
+        | 100 (32-Bit) |
+        +--------------+
+        ");
     }
 
     #[test]
@@ -1721,31 +1620,24 @@ mod tests {
             Some(100),
         ]));
 
-        let mut buf = String::new();
-        write!(
-            &mut buf,
-            "{}",
-            pretty_format_columns_with_options(
-                "income",
-                &[array],
-                &FormatOptions::default().with_formatter_factory(Some(&TestFormatters {}))
-            )
-            .unwrap()
+        let table = pretty_format_columns_with_options(
+            "income",
+            &[array],
+            &FormatOptions::default().with_formatter_factory(Some(&TestFormatters {})),
         )
-        .unwrap();
+        .unwrap()
+        .to_string();
 
-        let s = [
-            "+--------------+",
-            "| income       |",
-            "+--------------+",
-            "| 1 (32-Bit)   |",
-            "|              |",
-            "| 10 (32-Bit)  |",
-            "| 100 (32-Bit) |",
-            "+--------------+",
-        ];
-        let expected = s.join("\n");
-        assert_eq!(expected, buf);
+        insta::assert_snapshot!(table, @"
+        +--------------+
+        | income       |
+        +--------------+
+        | 1 (32-Bit)   |
+        |              |
+        | 10 (32-Bit)  |
+        | 100 (32-Bit) |
+        +--------------+
+        ");
     }
 
     #[test]
@@ -1771,9 +1663,6 @@ mod tests {
         let error = pretty_format_batches_with_schema(schema_a, &[batch])
             .err()
             .unwrap();
-        assert_eq!(
-            &error.to_string(),
-            "Invalid argument error: Expected the same number of columns in a record batch (1) as the number of fields (2) in the schema"
-        );
+        insta::assert_snapshot!(error, @"Invalid argument error: Expected the same number of columns in a record batch (1) as the number of fields (2) in the schema");
     }
 }
