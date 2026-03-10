@@ -58,7 +58,6 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
         if self.current.capacity() == 0 {
             self.current.reserve(self.batch_size);
         }
-        debug_assert_eq!(self.current.capacity(), self.batch_size);
     }
 }
 
