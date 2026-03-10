@@ -18,7 +18,7 @@
 use arrow_array::builder::{FixedSizeListBuilder, Int64Builder, ListBuilder};
 use arrow_array::{Array, RecordBatch};
 use arrow_json::LineDelimitedWriter;
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{Field, Schema};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::sync::Arc;
 
@@ -38,7 +38,7 @@ fn build_list_batch(rows: usize, elements: usize) -> RecordBatch {
 
     let schema = Arc::new(Schema::new(vec![Field::new(
         "list",
-        DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
+        list_array.data_type().clone(),
         false,
     )]));
 
@@ -84,15 +84,15 @@ fn build_fixed_size_list_batch(rows: usize, elements: usize) -> RecordBatch {
         }
         builder.append(true);
     }
-    let fsl_array = builder.finish();
+    let list_array = builder.finish();
 
     let schema = Arc::new(Schema::new(vec![Field::new(
         "fixed_size_list",
-        fsl_array.data_type().clone(),
+        list_array.data_type().clone(),
         false,
     )]));
 
-    RecordBatch::try_new(schema, vec![Arc::new(fsl_array)]).unwrap()
+    RecordBatch::try_new(schema, vec![Arc::new(list_array)]).unwrap()
 }
 
 fn bench_write_fixed_size_list(c: &mut Criterion) {
