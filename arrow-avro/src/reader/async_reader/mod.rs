@@ -1546,6 +1546,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_arrow_schema_from_reader_no_reader_schema() {
+        // Use a very small header size hint to force multiple fetches
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let expected_schema = get_alltypes_schema()
+            .as_ref()
+            .clone()
+            .with_metadata(Default::default());
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .try_build()
+            .await
+            .unwrap();
+
+        assert_eq!(reader.schema().as_ref(), &expected_schema);
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+    }
+
+    #[tokio::test]
+    async fn test_arrow_schema_from_reader_with_reader_schema() {
+        // Use a very small header size hint to force multiple fetches
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let schema = get_alltypes_schema();
+        let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
+        let expected_schema = schema.as_ref().clone().with_metadata(Default::default());
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_reader_schema(reader_schema)
+            .try_build()
+            .await
+            .unwrap();
+
+        assert_eq!(reader.schema().as_ref(), &expected_schema);
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+    }
+
+
+    #[tokio::test]
     async fn test_with_header_size_hint_small() {
         // Use a very small header size hint to force multiple fetches
         let file = arrow_test_data("avro/alltypes_plain.avro");
