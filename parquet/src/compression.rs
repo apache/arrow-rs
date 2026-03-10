@@ -198,24 +198,23 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
 
 #[cfg(any(feature = "snap", test))]
 mod snappy_codec {
-    use snap::raw::{Decoder, Encoder, decompress_len, max_compress_len};
+    use std::os::raw::c_char;
+
+    use snappy_src::{
+        snappy_compress, snappy_max_compressed_length, snappy_status_SNAPPY_OK,
+        snappy_uncompress, snappy_uncompressed_length,
+    };
 
     use crate::compression::Codec;
-    use crate::errors::Result;
+    use crate::errors::{ParquetError, Result};
 
-    /// Codec for Snappy compression format.
-    pub struct SnappyCodec {
-        decoder: Decoder,
-        encoder: Encoder,
-    }
+    /// Codec for Snappy compression format using C++ snappy library.
+    pub struct SnappyCodec;
 
     impl SnappyCodec {
         /// Creates new Snappy compression codec.
         pub(crate) fn new() -> Self {
-            Self {
-                decoder: Decoder::new(),
-                encoder: Encoder::new(),
-            }
+            Self
         }
     }
 
@@ -228,23 +227,63 @@ mod snappy_codec {
         ) -> Result<usize> {
             let len = match uncompress_size {
                 Some(size) => size,
-                None => decompress_len(input_buf)?,
+                None => {
+                    let mut result: usize = 0;
+                    let status = unsafe {
+                        snappy_uncompressed_length(
+                            input_buf.as_ptr() as *const c_char,
+                            input_buf.len(),
+                            &mut result,
+                        )
+                    };
+                    if status != snappy_status_SNAPPY_OK {
+                        return Err(general_err!("snappy: unable to get uncompressed length"));
+                    }
+                    result
+                }
             };
             let offset = output_buf.len();
-            output_buf.resize(offset + len, 0);
-            self.decoder
-                .decompress(input_buf, &mut output_buf[offset..])
-                .map_err(|e| e.into())
+            output_buf.reserve(len);
+            // SAFETY: we just reserved `len` bytes and snappy will write exactly `len` bytes
+            unsafe { output_buf.set_len(offset + len) };
+            let mut out_len = len;
+            let status = unsafe {
+                snappy_uncompress(
+                    input_buf.as_ptr() as *const c_char,
+                    input_buf.len(),
+                    output_buf[offset..].as_mut_ptr() as *mut c_char,
+                    &mut out_len,
+                )
+            };
+            if status != snappy_status_SNAPPY_OK {
+                // Reset length on failure
+                output_buf.truncate(offset);
+                return Err(general_err!("snappy: decompress error"));
+            }
+            Ok(out_len)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let output_buf_len = output_buf.len();
-            let required_len = max_compress_len(input_buf.len());
-            output_buf.resize(output_buf_len + required_len, 0);
-            let n = self
-                .encoder
-                .compress(input_buf, &mut output_buf[output_buf_len..])?;
-            output_buf.truncate(output_buf_len + n);
+            let required_len =
+                unsafe { snappy_max_compressed_length(input_buf.len()) };
+            output_buf.reserve(required_len);
+            // SAFETY: we just reserved `required_len` bytes
+            unsafe { output_buf.set_len(output_buf_len + required_len) };
+            let mut out_len = required_len;
+            let status = unsafe {
+                snappy_compress(
+                    input_buf.as_ptr() as *const c_char,
+                    input_buf.len(),
+                    output_buf[output_buf_len..].as_mut_ptr() as *mut c_char,
+                    &mut out_len,
+                )
+            };
+            if status != snappy_status_SNAPPY_OK {
+                output_buf.truncate(output_buf_len);
+                return Err(general_err!("snappy: compress error"));
+            }
+            output_buf.truncate(output_buf_len + out_len);
             Ok(())
         }
     }

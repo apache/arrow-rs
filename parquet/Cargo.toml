@@ -54,6 +54,7 @@ object_store = { version = "0.13.1", default-features = false, optional = true }
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
+snappy_src = { version = "0.2", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
 # To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
 flate2 = { version = "1.1", default-features = false, optional = true }
@@ -81,7 +82,6 @@ ring = { version = "0.17", default-features = false, features = ["std"], optiona
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
-snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = "1.43.1"
 brotli = { version = "8.0", default-features = false, features = ["std"] }
@@ -101,6 +101,8 @@ all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
+# Enable snappy compression (uses C++ snappy library via snappy_src, plus snap crate for CLI framed format)
+snap = ["snappy_src", "dep:snap"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
