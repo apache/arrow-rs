@@ -19,7 +19,7 @@ use crate::compression::CompressionCodec;
 use crate::reader::Decoder;
 use crate::reader::block::{BlockDecoder, BlockDecoderState};
 use arrow_array::RecordBatch;
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, SchemaRef};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, Stream};
@@ -171,6 +171,13 @@ impl<R> AsyncAvroFileReader<R> {
             reader_state,
             finishing_partial_block: false,
         }
+    }
+
+    /// Returns the Arrow schema for batches produced by this reader.
+    ///
+    /// The schema is determined by the writer schema in the file and the reader schema provided to the builder.
+    pub fn schema(&self) -> SchemaRef {
+        self.decoder.schema()
     }
 
     /// Calculate the byte range needed to complete the current block.
