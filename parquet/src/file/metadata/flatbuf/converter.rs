@@ -721,9 +721,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 let packed = pack_statistics(
                     physical_type,
                     min,
-                    stats.is_min_max_backwards_compatible(),
+                    stats.min_is_exact(),
                     max,
-                    stats.is_min_max_backwards_compatible(),
+                    stats.max_is_exact(),
                 );
                 (Some(packed.min), Some(packed.max), packed.prefix)
             } else {
@@ -972,31 +972,33 @@ impl FlatBufferConverter {
         let null_count = fb_stats.null_count().map(|n| n as u64);
 
         // Unpack min/max values
-        let (min_bytes, max_bytes) = if fb_stats.min_len().is_some() && fb_stats.max_len().is_some()
-        {
-            let packed = MinMax {
-                min: PackedStats {
-                    lo4: fb_stats.min_lo4(),
-                    lo8: fb_stats.min_lo8(),
-                    hi8: fb_stats.min_hi8(),
-                    len: fb_stats.min_len().unwrap_or(0),
-                },
-                max: PackedStats {
-                    lo4: fb_stats.max_lo4(),
-                    lo8: fb_stats.max_lo8(),
-                    hi8: fb_stats.max_hi8(),
-                    len: fb_stats.max_len().unwrap_or(0),
-                },
-                prefix: fb_stats.prefix().unwrap_or("").to_string(),
-            };
+        let (min_bytes, min_exact, max_bytes, max_exact) =
+            if fb_stats.min_len().is_some() && fb_stats.max_len().is_some() {
+                let packed = MinMax {
+                    min: PackedStats {
+                        lo4: fb_stats.min_lo4(),
+                        lo8: fb_stats.min_lo8(),
+                        hi8: fb_stats.min_hi8(),
+                        len: fb_stats.min_len().unwrap_or(0),
+                    },
+                    max: PackedStats {
+                        lo4: fb_stats.max_lo4(),
+                        lo8: fb_stats.max_lo8(),
+                        hi8: fb_stats.max_hi8(),
+                        len: fb_stats.max_len().unwrap_or(0),
+                    },
+                    prefix: fb_stats.prefix().unwrap_or("").to_string(),
+                };
 
-            match unpack_statistics(physical_type, &packed) {
-                Some((min, _min_exact, max, _max_exact)) => (Some(min), Some(max)),
-                None => (None, None),
-            }
-        } else {
-            (None, None)
-        };
+                match unpack_statistics(physical_type, &packed) {
+                    Some((min, min_exact, max, max_exact)) => {
+                        (Some(min), min_exact, Some(max), max_exact)
+                    }
+                    None => (None, false, None, false),
+                }
+            } else {
+                (None, false, None, false)
+            };
 
         // Create statistics based on physical type
         let stats = match physical_type {
@@ -1116,11 +1118,40 @@ impl FlatBufferConverter {
             }
         };
 
-        Ok(Some(stats))
+        Ok(Some(with_statistics_exactness(stats, min_exact, max_exact)))
     }
 }
 
 // Conversion helper functions
+
+fn with_statistics_exactness(stats: Statistics, min_exact: bool, max_exact: bool) -> Statistics {
+    match stats {
+        Statistics::Boolean(v) => {
+            Statistics::Boolean(v.with_min_is_exact(min_exact).with_max_is_exact(max_exact))
+        }
+        Statistics::Int32(v) => {
+            Statistics::Int32(v.with_min_is_exact(min_exact).with_max_is_exact(max_exact))
+        }
+        Statistics::Int64(v) => {
+            Statistics::Int64(v.with_min_is_exact(min_exact).with_max_is_exact(max_exact))
+        }
+        Statistics::Int96(v) => {
+            Statistics::Int96(v.with_min_is_exact(min_exact).with_max_is_exact(max_exact))
+        }
+        Statistics::Float(v) => {
+            Statistics::Float(v.with_min_is_exact(min_exact).with_max_is_exact(max_exact))
+        }
+        Statistics::Double(v) => {
+            Statistics::Double(v.with_min_is_exact(min_exact).with_max_is_exact(max_exact))
+        }
+        Statistics::ByteArray(v) => {
+            Statistics::ByteArray(v.with_min_is_exact(min_exact).with_max_is_exact(max_exact))
+        }
+        Statistics::FixedLenByteArray(v) => {
+            Statistics::FixedLenByteArray(v.with_min_is_exact(min_exact).with_max_is_exact(max_exact))
+        }
+    }
+}
 
 fn convert_type_to_fb(t: Type) -> fb::Type {
     match t {
@@ -1531,6 +1562,7 @@ pub fn extract_flatbuffer(buf: &[u8]) -> Result<ExtractResult> {
 mod tests {
     use super::*;
     use crate::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
+    use crate::file::statistics::ValueStatistics;
     use crate::schema::parser::parse_message_type;
 
     fn test_schema() -> SchemaDescPtr {
@@ -1771,6 +1803,59 @@ mod tests {
             converted_metadata.file_metadata().column_order(1),
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)
         );
+    }
+
+    #[test]
+    fn test_metadata_roundtrip_preserves_stats_exactness() {
+        use crate::file::metadata::{
+            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaDataBuilder,
+            RowGroupMetaDataBuilder,
+        };
+
+        let schema_descr = test_schema();
+        let file_meta = FileMetaData::new(2, 1000, None, None, schema_descr.clone(), None);
+
+        let mut rg_builder = RowGroupMetaDataBuilder::new(schema_descr.clone())
+            .set_num_rows(1000)
+            .set_total_byte_size(10000);
+
+        for i in 0..schema_descr.num_columns() {
+            let col_descr = schema_descr.column(i);
+            let mut cc_builder = ColumnChunkMetaDataBuilder::new(col_descr)
+                .set_compression(Compression::SNAPPY)
+                .set_num_values(1000)
+                .set_total_compressed_size(1000)
+                .set_total_uncompressed_size(2000)
+                .set_data_page_offset(1000 + (i as i64 * 1000));
+
+            if i == 0 {
+                let stats = Statistics::Int32(
+                    ValueStatistics::new(Some(10), Some(20), None, Some(0), true)
+                        .with_min_is_exact(false)
+                        .with_max_is_exact(true),
+                );
+                cc_builder = cc_builder.set_statistics(stats);
+            }
+
+            let cc = cc_builder.build().unwrap();
+            rg_builder = rg_builder.add_column_metadata(cc);
+        }
+        let row_group = rg_builder.build().unwrap();
+
+        let original_metadata = ParquetMetaDataBuilder::new(file_meta)
+            .add_row_group(row_group)
+            .build();
+
+        let fb_bytes = parquet_metadata_to_flatbuf(&original_metadata);
+        let converted_metadata = flatbuf_to_parquet_metadata(&fb_bytes, schema_descr).unwrap();
+
+        let orig_stats = original_metadata.row_group(0).column(0).statistics().unwrap();
+        let conv_stats = converted_metadata.row_group(0).column(0).statistics().unwrap();
+
+        assert_eq!(orig_stats.min_bytes_opt(), conv_stats.min_bytes_opt());
+        assert_eq!(orig_stats.max_bytes_opt(), conv_stats.max_bytes_opt());
+        assert_eq!(orig_stats.min_is_exact(), conv_stats.min_is_exact());
+        assert_eq!(orig_stats.max_is_exact(), conv_stats.max_is_exact());
     }
 
     #[test]
