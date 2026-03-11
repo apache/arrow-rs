@@ -18,6 +18,7 @@
 //! Defines take kernel for [Array]
 
 use std::fmt::Display;
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use arrow_array::builder::{BufferBuilder, UInt32Builder};
@@ -723,46 +724,157 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
         ArrowError::InvalidArgumentError(format!("Cannot convert size '{}' to usize", size))
     })?;
 
-    let values_buffer = values.values().as_slice();
-    let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
+    return match size_usize {
+        1 => take_fixed_size_binary_impl_static_size::<IndexType, 1>(values, indices),
+        2 => take_fixed_size_binary_impl_static_size::<IndexType, 2>(values, indices),
+        4 => take_fixed_size_binary_impl_static_size::<IndexType, 4>(values, indices),
+        8 => take_fixed_size_binary_impl_static_size::<IndexType, 8>(values, indices),
+        12 => take_fixed_size_binary_impl_static_size::<IndexType, 12>(values, indices),
+        16 => take_fixed_size_binary_impl_static_size::<IndexType, 16>(values, indices),
+        _ => take_fixed_size_binary_impl(values, indices, size_usize),
+    };
 
-    if indices.null_count() == 0 {
-        let array_iter = indices.values().iter().map(|idx| {
-            let offset = idx.as_usize() * size_usize;
-            &values_buffer[offset..offset + size_usize]
-        });
-        for slice in array_iter {
-            values_buffer_builder.append_slice(slice);
-        }
-    } else {
-        // The indices nullability cannot be ignored here because the values buffer may contain
-        // nulls which should not cause a panic.
-        let array_iter = indices.iter().map(|idx| {
-            idx.map(|idx| {
-                let offset = idx.as_usize() * size_usize;
-                &values_buffer[offset..offset + size_usize]
-            })
-        });
-        for slice in array_iter {
-            match slice {
-                None => values_buffer_builder.append_n(size_usize, 0),
-                Some(slice) => values_buffer_builder.append_slice(slice),
-            }
-        }
+    /// Implementation of the take kernel for fixed size binary arrays.
+    ///
+    /// This allows us to parameterize the kernel implementation with a compile-time constant for
+    /// often-used fixed-size binary lengths. Via monomorphization this allows tailoring the take
+    /// kernel implementation for a given size, reaching similar performance as the primitive array
+    /// take kernel.
+    #[inline(never)]
+    fn take_fixed_size_binary_impl_static_size<IndexType: ArrowPrimitiveType, const N: usize>(
+        values: &FixedSizeBinaryArray,
+        indices: &PrimitiveArray<IndexType>,
+    ) -> Result<FixedSizeBinaryArray, ArrowError> {
+        let result_buffer = take_fixed_size::<IndexType, N>(values.values(), indices);
+        let value_nulls = take_nulls(values.nulls(), indices);
+        let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
+
+        let size_i32 = i32::try_from(N)
+            .expect("Usize argument has been converted from i32, Constants known and within range");
+        let array_data = ArrayDataBuilder::new(DataType::FixedSizeBinary(size_i32))
+            .len(indices.len())
+            .nulls(final_nulls)
+            .offset(0)
+            .add_buffer(result_buffer)
+            .build()?;
+
+        Ok(FixedSizeBinaryArray::from(array_data))
     }
 
-    let values_buffer = values_buffer_builder.finish();
-    let value_nulls = take_nulls(values.nulls(), indices);
-    let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
+    /// Implementation of the take kernel for fixed size binary arrays.
+    #[inline(never)]
+    fn take_fixed_size_binary_impl<IndexType: ArrowPrimitiveType>(
+        values: &FixedSizeBinaryArray,
+        indices: &PrimitiveArray<IndexType>,
+        size_usize: usize,
+    ) -> Result<FixedSizeBinaryArray, ArrowError> {
+        let values_buffer = values.values().as_slice();
+        let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
 
-    let array_data = ArrayDataBuilder::new(DataType::FixedSizeBinary(size))
-        .len(indices.len())
-        .nulls(final_nulls)
-        .offset(0)
-        .add_buffer(values_buffer)
-        .build()?;
+        if indices.null_count() == 0 {
+            let array_iter = indices.values().iter().map(|idx| {
+                let offset = idx.as_usize() * size_usize;
+                &values_buffer[offset..offset + size_usize]
+            });
+            for slice in array_iter {
+                values_buffer_builder.append_slice(slice);
+            }
+        } else {
+            // The indices nullability cannot be ignored here because the values buffer may contain
+            // nulls which should not cause a panic.
+            let array_iter = indices.iter().map(|idx| {
+                idx.map(|idx| {
+                    let offset = idx.as_usize() * size_usize;
+                    &values_buffer[offset..offset + size_usize]
+                })
+            });
+            for slice in array_iter {
+                match slice {
+                    None => values_buffer_builder.append_n(size_usize, 0),
+                    Some(slice) => values_buffer_builder.append_slice(slice),
+                }
+            }
+        }
 
-    Ok(FixedSizeBinaryArray::from(array_data))
+        let values_buffer = values_buffer_builder.finish();
+        let value_nulls = take_nulls(values.nulls(), indices);
+        let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
+
+        let size_i32 = i32::try_from(size_usize)
+            .expect("Usize argument has been converted from i32, Constants known and within range");
+        let array_data = ArrayDataBuilder::new(DataType::FixedSizeBinary(size_i32))
+            .len(indices.len())
+            .nulls(final_nulls)
+            .offset(0)
+            .add_buffer(values_buffer)
+            .build()?;
+
+        Ok(FixedSizeBinaryArray::from(array_data))
+    }
+}
+
+/// Implements the take kernel semantics over a flat [`Buffer`], interpreting it as a slice of
+/// `&[[u8; N]]`, where `N` is a compile-time constant. The usage of a flat [`Buffer`] allows using
+/// this kernel without an available [`ArrowPrimitiveType`] (e.g., for `[u8; 5]`).
+///
+/// # Using This Function in the Primitive Take Kernel
+///
+/// This function is basically the same as [`take_native`] but just on a flat [`Buffer`] instead of
+/// the primitive [`ScalarBuffer`]. Ideally, the [`take_primitive`] kernel should just use this
+/// more general function. However, the "idiomatic code" requires the
+/// [feature(generic_const_exprs)](https://github.com/rust-lang/rust/issues/76560) for calling
+/// `take_fixed_size<I, { size_of::<T::Native> () } >(...)`. Once this feature has been stabilized,
+/// we can use this function also in the primitive kernels.
+fn take_fixed_size<IndexType: ArrowPrimitiveType, const N: usize>(
+    buffer: &Buffer,
+    indices: &PrimitiveArray<IndexType>,
+) -> Buffer {
+    assert_eq!(
+        buffer.len() % N,
+        0,
+        "Invalid array length in take_fixed_size"
+    );
+
+    let ptr = buffer.as_ptr();
+    let chunk_ptr = ptr.cast::<[u8; N]>();
+    let chunk_len = buffer.len() / N;
+    let buffer: &[[u8; N]] = unsafe {
+        // SAFETY: interpret an already valid slice as a slice of N-byte chunks. N divides buffer
+        // length without remainder.
+        std::slice::from_raw_parts(chunk_ptr, chunk_len)
+    };
+
+    let result_buffer = match indices.nulls().filter(|n| n.null_count() > 0) {
+        Some(n) => indices
+            .values()
+            .iter()
+            .enumerate()
+            .map(|(idx, index)| match buffer.get(index.as_usize()) {
+                Some(v) => *v,
+                // SAFETY: idx<indices.len()
+                None => match unsafe { n.inner().value_unchecked(idx) } {
+                    false => [0u8; N],
+                    true => panic!("Out-of-bounds index {index:?}"),
+                },
+            })
+            .collect::<Vec<_>>(),
+        None => indices
+            .values()
+            .iter()
+            .map(|index| buffer[index.as_usize()])
+            .collect::<Vec<_>>(),
+    };
+
+    let mut vec = ManuallyDrop::new(result_buffer); // Prevent de-allocation
+    let ptr = vec.as_mut_ptr();
+    let len = vec.len();
+    let cap = vec.capacity();
+    let result_buffer = unsafe {
+        // SAFETY: flattening an already valid Vec.
+        Vec::from_raw_parts(ptr.cast::<u8>(), len * N, cap * N)
+    };
+
+    Buffer::from_vec(result_buffer)
 }
 
 /// `take` implementation for dictionary arrays
@@ -2142,6 +2254,35 @@ mod tests {
         let indices = UInt32Array::from(vec![Some(0), None, None, Some(3)]);
 
         let result = take_fixed_size_binary(&fsb, &indices, 4).unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(
+            result.nulls().unwrap().iter().collect::<Vec<_>>(),
+            vec![true, false, false, true]
+        );
+    }
+
+    /// The [`take_fixed_size_binary`] kernel contains optimizations that provide a faster
+    /// implementation for commonly-used value lengths. This test uses a value length that is not
+    /// optimized to test both code paths.
+    #[test]
+    fn test_take_fixed_size_binary_with_nulls_indices_not_optimized_length() {
+        let fsb = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            [
+                Some(vec![0x01, 0x01, 0x01, 0x01, 0x01]),
+                Some(vec![0x02, 0x02, 0x02, 0x02, 0x01]),
+                Some(vec![0x03, 0x03, 0x03, 0x03, 0x01]),
+                Some(vec![0x04, 0x04, 0x04, 0x04, 0x01]),
+            ]
+            .into_iter(),
+            5,
+        )
+        .unwrap();
+
+        // The two middle indices are null -> Should be null in the output.
+        let indices = UInt32Array::from(vec![Some(0), None, None, Some(3)]);
+
+        let result = take_fixed_size_binary(&fsb, &indices, 5).unwrap();
         assert_eq!(result.len(), 4);
         assert_eq!(result.null_count(), 2);
         assert_eq!(
