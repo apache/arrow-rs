@@ -724,50 +724,34 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
         ArrowError::InvalidArgumentError(format!("Cannot convert size '{}' to usize", size))
     })?;
 
-    return match size_usize {
-        1 => take_fixed_size_binary_impl_static_size::<IndexType, 1>(values, indices),
-        2 => take_fixed_size_binary_impl_static_size::<IndexType, 2>(values, indices),
-        4 => take_fixed_size_binary_impl_static_size::<IndexType, 4>(values, indices),
-        8 => take_fixed_size_binary_impl_static_size::<IndexType, 8>(values, indices),
-        12 => take_fixed_size_binary_impl_static_size::<IndexType, 12>(values, indices),
-        16 => take_fixed_size_binary_impl_static_size::<IndexType, 16>(values, indices),
-        _ => take_fixed_size_binary_impl(values, indices, size_usize),
+    let result_buffer = match size_usize {
+        1 => take_fixed_size::<IndexType, 1>(values.values(), indices),
+        2 => take_fixed_size::<IndexType, 2>(values.values(), indices),
+        4 => take_fixed_size::<IndexType, 4>(values.values(), indices),
+        8 => take_fixed_size::<IndexType, 8>(values.values(), indices),
+        12 => take_fixed_size::<IndexType, 12>(values.values(), indices),
+        16 => take_fixed_size::<IndexType, 16>(values.values(), indices),
+        _ => take_fixed_size_binary_buffer_dynamic_length(values, indices, size_usize),
     };
 
-    /// Implementation of the take kernel for fixed size binary arrays.
-    ///
-    /// This allows us to parameterize the kernel implementation with a compile-time constant for
-    /// often-used fixed-size binary lengths. Via monomorphization this allows tailoring the take
-    /// kernel implementation for a given size, reaching similar performance as the primitive array
-    /// take kernel.
-    #[inline(never)]
-    fn take_fixed_size_binary_impl_static_size<IndexType: ArrowPrimitiveType, const N: usize>(
-        values: &FixedSizeBinaryArray,
-        indices: &PrimitiveArray<IndexType>,
-    ) -> Result<FixedSizeBinaryArray, ArrowError> {
-        let result_buffer = take_fixed_size::<IndexType, N>(values.values(), indices);
-        let value_nulls = take_nulls(values.nulls(), indices);
-        let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
+    let value_nulls = take_nulls(values.nulls(), indices);
+    let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
+    let array_data = ArrayDataBuilder::new(DataType::FixedSizeBinary(size))
+        .len(indices.len())
+        .nulls(final_nulls)
+        .offset(0)
+        .add_buffer(result_buffer)
+        .build()?;
 
-        let size_i32 = i32::try_from(N)
-            .expect("Usize argument has been converted from i32, Constants known and within range");
-        let array_data = ArrayDataBuilder::new(DataType::FixedSizeBinary(size_i32))
-            .len(indices.len())
-            .nulls(final_nulls)
-            .offset(0)
-            .add_buffer(result_buffer)
-            .build()?;
-
-        Ok(FixedSizeBinaryArray::from(array_data))
-    }
+    return Ok(FixedSizeBinaryArray::from(array_data));
 
     /// Implementation of the take kernel for fixed size binary arrays.
     #[inline(never)]
-    fn take_fixed_size_binary_impl<IndexType: ArrowPrimitiveType>(
+    fn take_fixed_size_binary_buffer_dynamic_length<IndexType: ArrowPrimitiveType>(
         values: &FixedSizeBinaryArray,
         indices: &PrimitiveArray<IndexType>,
         size_usize: usize,
-    ) -> Result<FixedSizeBinaryArray, ArrowError> {
+    ) -> Buffer {
         let values_buffer = values.values().as_slice();
         let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
 
@@ -796,20 +780,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
             }
         }
 
-        let values_buffer = values_buffer_builder.finish();
-        let value_nulls = take_nulls(values.nulls(), indices);
-        let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
-
-        let size_i32 = i32::try_from(size_usize)
-            .expect("Usize argument has been converted from i32, Constants known and within range");
-        let array_data = ArrayDataBuilder::new(DataType::FixedSizeBinary(size_i32))
-            .len(indices.len())
-            .nulls(final_nulls)
-            .offset(0)
-            .add_buffer(values_buffer)
-            .build()?;
-
-        Ok(FixedSizeBinaryArray::from(array_data))
+        values_buffer_builder.finish()
     }
 }
 
