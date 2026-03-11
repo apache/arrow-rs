@@ -773,6 +773,20 @@ impl RecordBatch {
         RecordBatch::try_new(schema, columns)
     }
 
+    /// Registers all buffers in this record batch with the provided [`MemoryPool`].
+    ///
+    /// This claims memory for all columns in the batch by calling [`Array::claim`]
+    /// on each column.
+    ///
+    /// [`MemoryPool`]: arrow_buffer::MemoryPool
+    /// [`Array::claim`]: crate::Array::claim
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        for column in self.columns() {
+            column.claim(pool);
+        }
+    }
+
     /// Returns the total number of bytes of memory occupied physically by this batch.
     ///
     /// Note that this does not always correspond to the exact memory usage of a
