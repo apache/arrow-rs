@@ -33,19 +33,16 @@ use std::sync::Arc;
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 
 use crate::basic::{ColumnOrder, Compression, Encoding, LogicalType, Repetition, Type};
+use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    ColumnChunkMetaData, ColumnChunkMetaDataBuilder, FileMetaData, KeyValue,
-    ParquetMetaData, RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
+    ColumnChunkMetaData, ColumnChunkMetaDataBuilder, FileMetaData, KeyValue, ParquetMetaData,
+    RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
 };
-use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use crate::file::statistics::Statistics;
-use crate::schema::types::{
-    ColumnDescriptor, SchemaDescPtr, SchemaDescriptor, Type as SchemaType,
-};
+use crate::schema::types::{ColumnDescriptor, SchemaDescPtr, SchemaDescriptor, Type as SchemaType};
 
 use super::parquet_generated::parquet::format as fb;
-
 
 /// Packed min/max statistics for FlatBuffers format
 #[derive(Debug, Default, Clone)]
@@ -160,12 +157,7 @@ fn pack_statistics(
 }
 
 /// Pack byte array statistics with common prefix extraction
-fn pack_byte_array_stats(
-    min: &[u8],
-    is_min_exact: bool,
-    max: &[u8],
-    is_max_exact: bool,
-) -> MinMax {
+fn pack_byte_array_stats(min: &[u8], is_min_exact: bool, max: &[u8], is_max_exact: bool) -> MinMax {
     // Find common prefix
     let prefix_len = min
         .iter()
@@ -250,7 +242,9 @@ fn unpack_statistics(
                     result.extend_from_slice(&p.lo8.to_be_bytes());
                     (result, true)
                 } else {
-                    result.extend_from_slice(&p.lo4.to_be_bytes()[..(p.len.unsigned_abs() as usize).min(4)]);
+                    result.extend_from_slice(
+                        &p.lo4.to_be_bytes()[..(p.len.unsigned_abs() as usize).min(4)],
+                    );
                     (result, p.len >= 0)
                 }
             };
@@ -286,7 +280,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         let schema_descr = file_metadata.schema_descr();
 
         // Build schema elements
-        let schema_offsets = self.build_schema(schema_descr);
+        let schema_offsets = self.build_schema(file_metadata);
         let schema = self.builder.create_vector(&schema_offsets);
 
         // Build row groups
@@ -320,6 +314,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 row_groups: Some(row_groups),
                 kv,
                 created_by,
+                encryption_algorithm_type: fb::EncryptionAlgorithm::NONE,
+                encryption_algorithm: None,
+                footer_signing_key_metadata: None,
             },
         );
 
@@ -330,11 +327,21 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
     /// Build the flattened schema element vector from the schema descriptor.
     fn build_schema(
         &mut self,
-        schema_descr: &SchemaDescriptor,
+        file_metadata: &FileMetaData,
     ) -> Vec<WIPOffset<fb::SchemaElement<'a>>> {
-        let root_schema = schema_descr.root_schema();
+        let root_schema = file_metadata.schema_descr().root_schema();
+        let column_orders = file_metadata
+            .column_orders()
+            .map(|orders| orders.as_slice());
         let mut elements = Vec::new();
-        self.build_schema_element(root_schema, &mut elements, true, schema_descr);
+        let mut leaf_idx = 0;
+        self.build_schema_element(
+            root_schema,
+            &mut elements,
+            true,
+            column_orders,
+            &mut leaf_idx,
+        );
         elements
     }
 
@@ -344,7 +351,8 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         schema_type: &SchemaType,
         elements: &mut Vec<WIPOffset<fb::SchemaElement<'a>>>,
         is_root: bool,
-        _schema_descr: &SchemaDescriptor,
+        column_orders: Option<&[ColumnOrder]>,
+        leaf_idx: &mut usize,
     ) {
         let name = self.builder.create_string(schema_type.name());
 
@@ -388,14 +396,21 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
 
         // Build column order for leaf nodes
         let (column_order_type, column_order) = if !schema_type.is_group() {
-            // For leaf nodes, add column order
-            (
-                fb::ColumnOrder::TypeDefinedOrder,
-                Some(
-                    fb::Empty::create(&mut self.builder, &fb::EmptyArgs {})
-                        .as_union_value(),
-                ),
-            )
+            // Preserve file metadata semantics by only writing type-defined order when present.
+            let column_order = column_orders
+                .and_then(|orders| orders.get(*leaf_idx))
+                .copied()
+                .unwrap_or(ColumnOrder::UNDEFINED);
+            *leaf_idx += 1;
+
+            if matches!(column_order, ColumnOrder::TYPE_DEFINED_ORDER(_)) {
+                (
+                    fb::ColumnOrder::TypeDefinedOrder,
+                    Some(fb::Empty::create(&mut self.builder, &fb::EmptyArgs {}).as_union_value()),
+                )
+            } else {
+                (fb::ColumnOrder::NONE, None)
+            }
         } else {
             (fb::ColumnOrder::NONE, None)
         };
@@ -420,7 +435,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         // Recursively add children
         if schema_type.is_group() {
             for field in schema_type.get_fields() {
-                self.build_schema_element(field, elements, false, _schema_descr);
+                self.build_schema_element(field, elements, false, column_orders, leaf_idx);
             }
         }
     }
@@ -429,7 +444,10 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
     fn build_logical_type(
         &mut self,
         logical_type: Option<&LogicalType>,
-    ) -> (fb::LogicalType, Option<WIPOffset<flatbuffers::UnionWIPOffset>>) {
+    ) -> (
+        fb::LogicalType,
+        Option<WIPOffset<flatbuffers::UnionWIPOffset>>,
+    ) {
         match logical_type {
             None => (fb::LogicalType::NONE, None),
             Some(lt) => match lt {
@@ -507,7 +525,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                         fb::IntOptions::create(
                             &mut self.builder,
                             &fb::IntOptionsArgs {
-                                bit_width: *bit_width as i8,
+                                bit_width: *bit_width,
                                 is_signed: *is_signed,
                             },
                         )
@@ -553,7 +571,10 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 }
                 LogicalType::Geography { crs, algorithm } => {
                     let crs_str = crs.as_ref().map(|s| self.builder.create_string(s));
-                    let algo = algorithm.as_ref().map(|a| convert_edge_interpolation_to_fb(*a)).unwrap_or(fb::EdgeInterpolationAlgorithm::SPHERICAL);
+                    let algo = algorithm
+                        .as_ref()
+                        .map(|a| convert_edge_interpolation_to_fb(*a))
+                        .unwrap_or(fb::EdgeInterpolationAlgorithm::SPHERICAL);
                     (
                         fb::LogicalType::GeographyType,
                         Some(
@@ -607,6 +628,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 sorting_columns,
                 file_offset: rg.file_offset().unwrap_or(0),
                 total_compressed_size,
+                ordinal: rg.ordinal(),
             },
         )
     }
@@ -620,13 +642,13 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
     ) -> WIPOffset<fb::ColumnChunk<'a>> {
         let meta_data = self.build_column_metadata(cc, rg);
 
-        let file_path = cc.file_path().map(|s| self.builder.create_string(s));
-
         fb::ColumnChunk::create(
             &mut self.builder,
             &fb::ColumnChunkArgs {
-                file_path,
                 meta_data: Some(meta_data),
+                crypto_metadata_type: fb::ColumnCryptoMetadata::NONE,
+                crypto_metadata: None,
+                encrypted_column_metadata: None,
             },
         )
     }
@@ -641,7 +663,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         let key_value_metadata = None; // Column-level KV metadata not commonly used
 
         // Build statistics
-        let statistics = cc.statistics().map(|stats| self.build_statistics(stats, cc.column_type()));
+        let statistics = cc
+            .statistics()
+            .map(|stats| self.build_statistics(stats, cc.column_type()));
 
         // Determine if fully dictionary encoded
         let is_fully_dict_encoded = cc.dictionary_page_offset().is_some()
@@ -660,10 +684,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         let bloom_filter = match (cc.bloom_filter_offset(), cc.bloom_filter_length()) {
             (Some(offset), Some(length)) => Some(fb::BloomFilterInfo::create(
                 &mut self.builder,
-                &fb::BloomFilterInfoArgs {
-                    offset,
-                    length,
-                },
+                &fb::BloomFilterInfoArgs { offset, length },
             )),
             _ => None,
         };
@@ -695,20 +716,19 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         let null_count = stats.null_count_opt().map(|n| n as i32);
 
         // Pack min/max values
-        let (min_stats, max_stats, prefix_str) = if let (Some(min), Some(max)) =
-            (stats.min_bytes_opt(), stats.max_bytes_opt())
-        {
-            let packed = pack_statistics(
-                physical_type,
-                min,
-                stats.is_min_max_backwards_compatible(),
-                max,
-                stats.is_min_max_backwards_compatible(),
-            );
-            (Some(packed.min), Some(packed.max), packed.prefix)
-        } else {
-            (None, None, String::new())
-        };
+        let (min_stats, max_stats, prefix_str) =
+            if let (Some(min), Some(max)) = (stats.min_bytes_opt(), stats.max_bytes_opt()) {
+                let packed = pack_statistics(
+                    physical_type,
+                    min,
+                    stats.is_min_max_backwards_compatible(),
+                    max,
+                    stats.is_min_max_backwards_compatible(),
+                );
+                (Some(packed.min), Some(packed.max), packed.prefix)
+            } else {
+                (None, None, String::new())
+            };
 
         let prefix = if !prefix_str.is_empty() {
             Some(self.builder.create_string(&prefix_str))
@@ -796,19 +816,42 @@ impl FlatBufferConverter {
         });
 
         // Extract column orders from schema elements
-        let column_orders = fb_meta.schema().map(|schema| {
-            schema
+        let column_orders = if let Some(schema) = fb_meta.schema() {
+            let leaf_nodes: Vec<_> = schema.iter().filter(|e| e.num_children() == 0).collect();
+            if leaf_nodes.len() != schema_descr.num_columns() {
+                return Err(ParquetError::General(
+                    "FlatBuffer column order length mismatch".to_string(),
+                ));
+            }
+
+            if leaf_nodes
                 .iter()
-                .filter(|e| e.num_children() == 0) // Only leaf nodes
-                .map(|e| {
-                    if e.column_order_type() == fb::ColumnOrder::TypeDefinedOrder {
-                        ColumnOrder::TYPE_DEFINED_ORDER(crate::basic::SortOrder::SIGNED)
-                    } else {
-                        ColumnOrder::UNDEFINED
-                    }
-                })
-                .collect()
-        });
+                .all(|e| e.column_order_type() != fb::ColumnOrder::TypeDefinedOrder)
+            {
+                None
+            } else {
+                Some(
+                    leaf_nodes
+                        .into_iter()
+                        .zip(schema_descr.columns().iter())
+                        .map(|(e, column)| {
+                            if e.column_order_type() == fb::ColumnOrder::TypeDefinedOrder {
+                                let sort_order = ColumnOrder::sort_order_for_type(
+                                    column.logical_type_ref(),
+                                    column.converted_type(),
+                                    column.physical_type(),
+                                );
+                                ColumnOrder::TYPE_DEFINED_ORDER(sort_order)
+                            } else {
+                                ColumnOrder::UNDEFINED
+                            }
+                        })
+                        .collect(),
+                )
+            }
+        } else {
+            None
+        };
 
         Ok(FileMetaData::new(
             version,
@@ -850,6 +893,10 @@ impl FlatBufferConverter {
 
         if fb_rg.file_offset() != 0 {
             builder = builder.set_file_offset(fb_rg.file_offset());
+        }
+
+        if let Some(ordinal) = fb_rg.ordinal() {
+            builder = builder.set_ordinal(ordinal);
         }
 
         // Convert sorting columns
@@ -914,16 +961,14 @@ impl FlatBufferConverter {
             }
         }
 
-        // Set file path if present
-        if let Some(path) = fb_cc.file_path() {
-            builder = builder.set_file_path(path.to_string());
-        }
-
         builder.build()
     }
 
     /// Unpack statistics from the FlatBuffer format into typed [`Statistics`].
-    fn convert_statistics(fb_stats: &fb::Statistics, physical_type: Type) -> Result<Option<Statistics>> {
+    fn convert_statistics(
+        fb_stats: &fb::Statistics,
+        physical_type: Type,
+    ) -> Result<Option<Statistics>> {
         let null_count = fb_stats.null_count().map(|n| n as u64);
 
         // Unpack min/max values
@@ -1141,9 +1186,9 @@ fn convert_compression_from_fb(c: fb::CompressionCodec) -> Compression {
 
 fn convert_time_unit_to_fb(unit: &crate::basic::TimeUnit) -> fb::TimeUnit {
     match unit {
-        crate::basic::TimeUnit::MILLIS => fb::TimeUnit::Millisecond,
-        crate::basic::TimeUnit::MICROS => fb::TimeUnit::Microsecond,
-        crate::basic::TimeUnit::NANOS => fb::TimeUnit::Nanosecond,
+        crate::basic::TimeUnit::MILLIS => fb::TimeUnit::MILLIS,
+        crate::basic::TimeUnit::MICROS => fb::TimeUnit::MICROS,
+        crate::basic::TimeUnit::NANOS => fb::TimeUnit::NANOS,
     }
 }
 
@@ -1181,7 +1226,7 @@ pub fn flatbuf_to_parquet_metadata(
     FlatBufferConverter::convert(buf, schema_descr)
 }
 
- // ============================================================================
+// ============================================================================
 // Thrift Extension Embedding
 // ============================================================================
 //
@@ -1196,8 +1241,7 @@ pub fn flatbuf_to_parquet_metadata(
 
 /// UUID marker for the FlatBuffer extension
 const EXT_UUID: [u8; 16] = [
-    0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe,
-    0xef,
+    0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
 ];
 
 /// Minimum compression ratio to use compression (1.2x)
@@ -1290,7 +1334,7 @@ fn uleb32_len(v: u32) -> usize {
         return 1;
     }
     let bits = 32 - v.leading_zeros();
-    ((bits + 6) / 7) as usize
+    bits.div_ceil(7) as usize
 }
 
 /// Append a FlatBuffer as an extended field to Thrift-serialized metadata.
@@ -1368,12 +1412,13 @@ pub fn extract_flatbuffer(buf: &[u8]) -> Result<ExtractResult> {
                 "FlatBuffer extraction doesn't support encrypted footer".to_string(),
             ));
         }
-        return Err(ParquetError::General("Invalid Parquet magic number".to_string()));
+        return Err(ParquetError::General(
+            "Invalid Parquet magic number".to_string(),
+        ));
     }
 
     // Read metadata length
-    let md_len =
-        u32::from_le_bytes(buf[buf.len() - 8..buf.len() - 4].try_into().unwrap()) as usize;
+    let md_len = u32::from_le_bytes(buf[buf.len() - 8..buf.len() - 4].try_into().unwrap()) as usize;
 
     if md_len < 34 {
         return Ok(ExtractResult::NotFound);
@@ -1387,7 +1432,7 @@ pub fn extract_flatbuffer(buf: &[u8]) -> Result<ExtractResult> {
     // Check for UUID marker at the expected position
     let trailer_start = buf.len() - 42;
     let uuid_pos = trailer_start + 17;
-    if &buf[uuid_pos..uuid_pos + 16] != EXT_UUID {
+    if buf[uuid_pos..uuid_pos + 16] != EXT_UUID {
         return Ok(ExtractResult::NotFound);
     }
 
@@ -1440,11 +1485,7 @@ pub fn extract_flatbuffer(buf: &[u8]) -> Result<ExtractResult> {
 
                 let mut decompressed = Vec::new();
                 let mut codec = create_codec(Compression::LZ4_RAW, &Default::default())?
-                    .ok_or_else(|| {
-                        ParquetError::General(
-                            "LZ4 codec not available".to_string(),
-                        )
-                    })?;
+                    .ok_or_else(|| ParquetError::General("LZ4 codec not available".to_string()))?;
                 let actual_len = codec.decompress(
                     &buf[data_start..data_start + compressed_len],
                     &mut decompressed,
@@ -1489,7 +1530,7 @@ pub fn extract_flatbuffer(buf: &[u8]) -> Result<ExtractResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::Type as PhysicalType;
+    use crate::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
     use crate::schema::parser::parse_message_type;
 
     fn test_schema() -> SchemaDescPtr {
@@ -1540,11 +1581,26 @@ mod tests {
 
     #[test]
     fn test_type_conversion() {
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::BOOLEAN)), Type::BOOLEAN);
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::INT32)), Type::INT32);
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::INT64)), Type::INT64);
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::FLOAT)), Type::FLOAT);
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::DOUBLE)), Type::DOUBLE);
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::BOOLEAN)),
+            Type::BOOLEAN
+        );
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::INT32)),
+            Type::INT32
+        );
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::INT64)),
+            Type::INT64
+        );
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::FLOAT)),
+            Type::FLOAT
+        );
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::DOUBLE)),
+            Type::DOUBLE
+        );
     }
 
     #[test]
@@ -1562,8 +1618,8 @@ mod tests {
     #[test]
     fn test_metadata_roundtrip() {
         use crate::file::metadata::{
-            ColumnChunkMetaDataBuilder, FileMetaData,
-            ParquetMetaDataBuilder, RowGroupMetaDataBuilder,
+            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaDataBuilder,
+            RowGroupMetaDataBuilder,
         };
 
         // Create a test schema
@@ -1571,23 +1627,22 @@ mod tests {
 
         // Build a simple FileMetaData
         let file_meta = FileMetaData::new(
-            2,          // version
-            1000,       // num_rows
+            2,    // version
+            1000, // num_rows
             Some("test-created-by".to_string()),
-            Some(vec![
-                KeyValue {
-                    key: "test-key".to_string(),
-                    value: Some("test-value".to_string()),
-                },
-            ]),
+            Some(vec![KeyValue {
+                key: "test-key".to_string(),
+                value: Some("test-value".to_string()),
+            }]),
             schema_descr.clone(),
-            None,       // column_orders
+            None, // column_orders
         );
 
         // Build a row group with column chunks
         let mut rg_builder = RowGroupMetaDataBuilder::new(schema_descr.clone())
             .set_num_rows(1000)
-            .set_total_byte_size(10000);
+            .set_total_byte_size(10000)
+            .set_ordinal(7);
 
         // Add column chunks for each column
         for i in 0..schema_descr.num_columns() {
@@ -1632,6 +1687,10 @@ mod tests {
             original_metadata.file_metadata().created_by(),
             converted_metadata.file_metadata().created_by()
         );
+        assert_eq!(
+            original_metadata.file_metadata().column_orders(),
+            converted_metadata.file_metadata().column_orders()
+        );
 
         // Verify row group count
         assert_eq!(
@@ -1644,6 +1703,7 @@ mod tests {
         let conv_rg = converted_metadata.row_group(0);
         assert_eq!(orig_rg.num_rows(), conv_rg.num_rows());
         assert_eq!(orig_rg.num_columns(), conv_rg.num_columns());
+        assert_eq!(orig_rg.ordinal(), conv_rg.ordinal());
 
         // Verify column chunk details
         for i in 0..orig_rg.num_columns() {
@@ -1655,6 +1715,62 @@ mod tests {
             assert_eq!(orig_cc.uncompressed_size(), conv_cc.uncompressed_size());
             assert_eq!(orig_cc.data_page_offset(), conv_cc.data_page_offset());
         }
+    }
+
+    #[test]
+    fn test_metadata_roundtrip_with_column_orders() {
+        use crate::file::metadata::{
+            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaDataBuilder,
+            RowGroupMetaDataBuilder,
+        };
+
+        let schema_descr = test_schema();
+        let file_meta = FileMetaData::new(
+            2,
+            1000,
+            Some("test-created-by".to_string()),
+            None,
+            schema_descr.clone(),
+            Some(vec![
+                ColumnOrder::UNDEFINED,
+                ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
+                ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            ]),
+        );
+
+        let mut rg_builder = RowGroupMetaDataBuilder::new(schema_descr.clone())
+            .set_num_rows(1000)
+            .set_total_byte_size(10000);
+
+        for i in 0..schema_descr.num_columns() {
+            let col_descr = schema_descr.column(i);
+            let cc = ColumnChunkMetaDataBuilder::new(col_descr)
+                .set_compression(Compression::SNAPPY)
+                .set_num_values(1000)
+                .set_total_compressed_size(1000)
+                .set_total_uncompressed_size(2000)
+                .set_data_page_offset(1000 + (i as i64 * 1000))
+                .build()
+                .unwrap();
+            rg_builder = rg_builder.add_column_metadata(cc);
+        }
+        let row_group = rg_builder.build().unwrap();
+
+        let original_metadata = ParquetMetaDataBuilder::new(file_meta)
+            .add_row_group(row_group)
+            .build();
+
+        let fb_bytes = parquet_metadata_to_flatbuf(&original_metadata);
+        let converted_metadata = flatbuf_to_parquet_metadata(&fb_bytes, schema_descr).unwrap();
+
+        assert_eq!(
+            original_metadata.file_metadata().column_orders(),
+            converted_metadata.file_metadata().column_orders()
+        );
+        assert_eq!(
+            converted_metadata.file_metadata().column_order(1),
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)
+        );
     }
 
     #[test]
@@ -1728,7 +1844,8 @@ mod tests {
 
     fn create_test_metadata() -> ParquetMetaData {
         use crate::file::metadata::{
-            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaDataBuilder, RowGroupMetaDataBuilder,
+            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaDataBuilder,
+            RowGroupMetaDataBuilder,
         };
 
         let schema_descr = test_schema();
