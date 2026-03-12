@@ -155,17 +155,7 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, PrimitiveArray<T>>::new(values, indices);
     let arrays = &interleaved.arrays;
-    let num_arrays = arrays.len();
     let len = indices.len();
-
-    // Validate all array indices upfront so we can use unchecked indexing in the hot loop
-    for &(a, _) in indices {
-        if a >= num_arrays {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "interleave index out of bounds: array index {a} >= {num_arrays}"
-            )));
-        }
-    }
 
     let mut output = Vec::with_capacity(len);
     let dst: *mut T::Native = output.as_mut_ptr();
@@ -176,18 +166,17 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
     let chunks = indices.chunks_exact(8);
     let remainder = chunks.remainder();
     for chunk in chunks {
-        // SAFETY: all array indices validated above
-        unsafe {
-            let v0 = arrays.get_unchecked(chunk[0].0).value(chunk[0].1);
-            let v1 = arrays.get_unchecked(chunk[1].0).value(chunk[1].1);
-            let v2 = arrays.get_unchecked(chunk[2].0).value(chunk[2].1);
-            let v3 = arrays.get_unchecked(chunk[3].0).value(chunk[3].1);
-            let v4 = arrays.get_unchecked(chunk[4].0).value(chunk[4].1);
-            let v5 = arrays.get_unchecked(chunk[5].0).value(chunk[5].1);
-            let v6 = arrays.get_unchecked(chunk[6].0).value(chunk[6].1);
-            let v7 = arrays.get_unchecked(chunk[7].0).value(chunk[7].1);
+        let v0 = arrays[chunk[0].0].value(chunk[0].1);
+        let v1 = arrays[chunk[1].0].value(chunk[1].1);
+        let v2 = arrays[chunk[2].0].value(chunk[2].1);
+        let v3 = arrays[chunk[3].0].value(chunk[3].1);
+        let v4 = arrays[chunk[4].0].value(chunk[4].1);
+        let v5 = arrays[chunk[5].0].value(chunk[5].1);
+        let v6 = arrays[chunk[6].0].value(chunk[6].1);
+        let v7 = arrays[chunk[7].0].value(chunk[7].1);
 
-            // SAFETY: base+7 < len == output capacity
+        // SAFETY: base+7 < len == output capacity
+        unsafe {
             dst.add(base).write(v0);
             dst.add(base + 1).write(v1);
             dst.add(base + 2).write(v2);
@@ -201,10 +190,8 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
     }
 
     for idx in remainder {
-        // SAFETY: array index validated above, base < len == output capacity
-        unsafe {
-            dst.add(base).write(arrays.get_unchecked(idx.0).value(idx.1));
-        }
+        // SAFETY: base < len == output capacity
+        unsafe { dst.add(base).write(arrays[idx.0].value(idx.1)) };
         base += 1;
     }
 
