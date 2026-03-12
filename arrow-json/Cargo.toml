@@ -61,6 +61,7 @@ tokio = { version = "1.27", default-features = false, features = ["io-util"] }
 bytes = "1.4"
 criterion = { workspace = true, default-features = false }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+arbitrary = { version = "1.4.2", features = ["derive"] }
 
 [[bench]]
 name = "serde"
