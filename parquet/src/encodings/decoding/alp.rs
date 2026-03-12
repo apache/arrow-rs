@@ -1162,7 +1162,8 @@ mod tests {
 
     #[test]
     fn test_bit_unpack_integers_width_two() {
-        let unpacked = bit_unpack_integers::<u32>(Bytes::from_static(&[0b0010_0111]), 2, 3).unwrap();
+        let unpacked =
+            bit_unpack_integers::<u32>(Bytes::from_static(&[0b0010_0111]), 2, 3).unwrap();
         assert_eq!(unpacked, vec![3, 1, 2]);
     }
 
