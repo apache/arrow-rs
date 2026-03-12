@@ -29,7 +29,8 @@ use crate::util::bit_util::{BitReader, FromBytes};
 const ALP_HEADER_SIZE: usize = 7;
 const ALP_COMPRESSION_MODE: u8 = 0;
 const ALP_INTEGER_ENCODING_FOR_BIT_PACK: u8 = 0;
-const ALP_MAX_LOG_VECTOR_SIZE: u8 = 16;
+const ALP_MIN_LOG_VECTOR_SIZE: u8 = 3;
+const ALP_MAX_LOG_VECTOR_SIZE: u8 = 15;
 const ALP_MAX_EXPONENT_F32: u8 = 10;
 const ALP_MAX_EXPONENT_F64: u8 = 18;
 
@@ -345,6 +346,14 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout> 
         return Err(general_err!(
             "Invalid ALP page: unsupported integer encoding {}",
             header.integer_encoding
+        ));
+    }
+
+    if header.log_vector_size < ALP_MIN_LOG_VECTOR_SIZE {
+        return Err(general_err!(
+            "Invalid ALP page: log_vector_size {} below min {}",
+            header.log_vector_size,
+            ALP_MIN_LOG_VECTOR_SIZE
         ));
     }
 
@@ -961,7 +970,7 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_valid() {
-        let data = make_alp_page_bytes(0, 0, 2, 4, &[4], 13);
+        let data = make_alp_page_bytes(0, 0, 3, 4, &[4], 13);
         let parsed = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap();
         assert_eq!(parsed.header.num_elements, 4);
         assert_eq!(parsed.offsets, vec![4]);
@@ -977,18 +986,28 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_alp_page_layout_invalid_log_vector_size() {
-        let data = make_alp_page_bytes(0, 0, 17, 1, &[4], 8);
+    fn test_parse_alp_page_layout_too_small_log_vector_size() {
+        let data = make_alp_page_bytes(0, 0, 2, 1, &[4], 8);
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
-                .contains("Invalid ALP page: log_vector_size 17 exceeds max 16")
+                .contains("Invalid ALP page: log_vector_size 2 below min 3")
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_too_big_log_vector_size() {
+        let data = make_alp_page_bytes(0, 0, 16, 1, &[4], 8);
+        let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: log_vector_size 16 exceeds max 15")
         );
     }
 
     #[test]
     fn test_parse_alp_page_layout_invalid_integer_encoding() {
-        let data = make_alp_page_bytes(0, 1, 2, 1, &[4], 8);
+        let data = make_alp_page_bytes(0, 1, 3, 1, &[4], 8);
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
@@ -998,7 +1017,7 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_negative_num_elements() {
-        let data = make_alp_page_bytes(0, 0, 2, -1, &[4], 8);
+        let data = make_alp_page_bytes(0, 0, 3, -1, &[4], 8);
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
@@ -1009,7 +1028,7 @@ mod tests {
     #[test]
     fn test_parse_alp_page_layout_invalid_exponent_f32() {
         let vector = make_vector_u32(11, 0, 0, 0, 0, &[], &[], &[]);
-        let page = make_page_from_vectors(0, 1, &[vector]);
+        let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
             err.to_string()
@@ -1020,7 +1039,7 @@ mod tests {
     #[test]
     fn test_parse_alp_page_layout_invalid_factor_f32() {
         let vector = make_vector_u32(0, 11, 0, 0, 0, &[], &[], &[]);
-        let page = make_page_from_vectors(0, 1, &[vector]);
+        let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
             err.to_string()
@@ -1031,7 +1050,7 @@ mod tests {
     #[test]
     fn test_parse_alp_page_layout_factor_exceeds_exponent() {
         let vector = make_vector_u32(2, 3, 0, 0, 0, &[], &[], &[]);
-        let page = make_page_from_vectors(0, 1, &[vector]);
+        let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
             err.to_string()
@@ -1042,7 +1061,7 @@ mod tests {
     #[test]
     fn test_parse_alp_page_layout_invalid_num_exceptions() {
         let vector = make_vector_u32(0, 0, 2, 0, 0, &[], &[0, 0], &[0, 0]);
-        let page = make_page_from_vectors(0, 1, &[vector]);
+        let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
             err.to_string()
@@ -1053,7 +1072,7 @@ mod tests {
     #[test]
     fn test_parse_alp_page_layout_invalid_exception_position() {
         let vector = make_vector_u32(0, 0, 1, 0, 0, &[], &[1], &[123]);
-        let page = make_page_from_vectors(0, 1, &[vector]);
+        let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
             err.to_string().contains(
@@ -1064,7 +1083,7 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_non_monotonic_offsets() {
-        let data = make_alp_page_bytes(0, 0, 1, 3, &[12, 8], 12);
+        let data = make_alp_page_bytes(0, 0, 3, 9, &[12, 8], 12);
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
@@ -1080,7 +1099,7 @@ mod tests {
         vector.extend_from_slice(&0u16.to_le_bytes());
         vector.extend_from_slice(&10u32.to_le_bytes());
         vector.push(1);
-        let page = make_page_from_vectors(1, 2, &[vector]);
+        let page = make_page_from_vectors(3, 2, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
             err.to_string()
@@ -1103,7 +1122,7 @@ mod tests {
         vector.extend_from_slice(&42.5_f64.to_le_bytes());
 
         let offsets = [4u32];
-        let mut page = make_alp_page_bytes(0, 0, 0, 1, &offsets, 0);
+        let mut page = make_alp_page_bytes(0, 0, 3, 1, &offsets, 0);
         page.extend_from_slice(&vector);
 
         let parsed = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
@@ -1146,7 +1165,7 @@ mod tests {
     #[test]
     fn test_decode_page_values_f32_no_exceptions() {
         let vector = make_vector_u32(0, 0, 0, 10, 2, &[0b1110_0100], &[], &[]);
-        let page = make_page_from_vectors(2, 4, &[vector]);
+        let page = make_page_from_vectors(3, 4, &[vector]);
         let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
         let decoded = decode_page_values::<f32>(&layout).unwrap();
         assert_eq!(decoded, vec![10.0, 11.0, 12.0, 13.0]);
@@ -1156,10 +1175,13 @@ mod tests {
     fn test_decode_page_values_f64_multi_vector_with_exceptions() {
         let vector0 = make_vector_u64(0, 0, 1, 10, 1, &[0b0000_0010], &[1], &[42.5f64.to_bits()]);
         let vector1 = make_vector_u64(0, 0, 0, 7, 0, &[], &[], &[]);
-        let page = make_page_from_vectors(1, 3, &[vector0, vector1]);
+        let page = make_page_from_vectors(3, 9, &[vector0, vector1]);
         let layout = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
         let decoded = decode_page_values::<f64>(&layout).unwrap();
-        assert_eq!(decoded, vec![10.0, 42.5, 7.0]);
+        assert_eq!(
+            decoded,
+            vec![10.0, 42.5, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 7.0]
+        );
     }
 
     #[test]
@@ -1170,7 +1192,7 @@ mod tests {
             f32::INFINITY.to_bits(),
         ];
         let vector = make_vector_u32(0, 0, 3, 0, 0, &[], &[0, 1, 2], &edge_values);
-        let page = make_page_from_vectors(2, 3, &[vector]);
+        let page = make_page_from_vectors(3, 3, &[vector]);
         let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
         let decoded = decode_page_values::<f32>(&layout).unwrap();
 
@@ -1184,21 +1206,24 @@ mod tests {
     fn test_alp_decoder_get_across_vectors() {
         let vector0 = make_vector_u32(0, 0, 0, 10, 1, &[0b0000_0010], &[], &[]);
         let vector1 = make_vector_u32(0, 0, 0, 20, 1, &[0b0000_0010], &[], &[]);
-        let page = make_page_from_vectors(1, 4, &[vector0, vector1]);
+        let page = make_page_from_vectors(3, 12, &[vector0, vector1]);
 
         let mut decoder = AlpDecoder::<FloatType>::new();
-        decoder.set_data(Bytes::from(page), 4).unwrap();
+        decoder.set_data(Bytes::from(page), 12).unwrap();
 
-        let mut first = [0.0f32; 3];
+        let mut first = [0.0f32; 9];
         let read = decoder.get(&mut first).unwrap();
-        assert_eq!(read, 3);
-        assert_eq!(first, [10.0, 11.0, 20.0]);
-        assert_eq!(decoder.values_left(), 1);
+        assert_eq!(read, 9);
+        assert_eq!(
+            first,
+            [10.0, 11.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 20.0]
+        );
+        assert_eq!(decoder.values_left(), 3);
 
-        let mut second = [0.0f32; 2];
+        let mut second = [0.0f32; 3];
         let read = decoder.get(&mut second).unwrap();
-        assert_eq!(read, 1);
-        assert_eq!(second[0], 21.0);
+        assert_eq!(read, 3);
+        assert_eq!(second, [21.0, 20.0, 20.0]);
         assert_eq!(decoder.values_left(), 0);
     }
 
@@ -1206,35 +1231,40 @@ mod tests {
     fn test_alp_decoder_skip_across_vectors() {
         let vector0 = make_vector_u32(0, 0, 0, 10, 1, &[0b0000_0010], &[], &[]);
         let vector1 = make_vector_u32(0, 0, 0, 20, 1, &[0b0000_0010], &[], &[]);
-        let page = make_page_from_vectors(1, 4, &[vector0, vector1]);
+        let page = make_page_from_vectors(3, 12, &[vector0, vector1]);
 
         let mut decoder = AlpDecoder::<FloatType>::new();
-        decoder.set_data(Bytes::from(page), 4).unwrap();
+        decoder.set_data(Bytes::from(page), 12).unwrap();
 
-        let skipped = decoder.skip(3).unwrap();
-        assert_eq!(skipped, 3);
-        assert_eq!(decoder.values_left(), 1);
+        let skipped = decoder.skip(9).unwrap();
+        assert_eq!(skipped, 9);
+        assert_eq!(decoder.values_left(), 3);
 
         let mut out = [0.0f32; 1];
         let read = decoder.get(&mut out).unwrap();
         assert_eq!(read, 1);
         assert_eq!(out[0], 21.0);
-        assert_eq!(decoder.values_left(), 0);
+        assert_eq!(decoder.values_left(), 2);
     }
 
     #[test]
     fn test_alp_decoder_get_fast_path_full_read() {
         let vector0 = make_vector_u32(0, 0, 0, 10, 1, &[0b0000_0010], &[], &[]);
         let vector1 = make_vector_u32(0, 0, 0, 20, 1, &[0b0000_0010], &[], &[]);
-        let page = make_page_from_vectors(1, 4, &[vector0, vector1]);
+        let page = make_page_from_vectors(3, 12, &[vector0, vector1]);
 
         let mut decoder = AlpDecoder::<FloatType>::new();
-        decoder.set_data(Bytes::from(page), 4).unwrap();
+        decoder.set_data(Bytes::from(page), 12).unwrap();
 
-        let mut out = [0.0f32; 4];
+        let mut out = [0.0f32; 12];
         let read = decoder.get(&mut out).unwrap();
-        assert_eq!(read, 4);
-        assert_eq!(out, [10.0, 11.0, 20.0, 21.0]);
+        assert_eq!(read, 12);
+        assert_eq!(
+            out,
+            [
+                10.0, 11.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 20.0, 21.0, 20.0, 20.0
+            ]
+        );
         assert_eq!(decoder.values_left(), 0);
         assert!(!decoder.needs_decode);
         assert!(decoder.decoded_values.is_empty());
