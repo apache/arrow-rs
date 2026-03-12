@@ -26,25 +26,22 @@ use crate::encodings::decoding::Decoder;
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::{BitReader, FromBytes};
 
-const ALP_HEADER_SIZE: usize = 8;
-const ALP_VERSION: u8 = 1;
+const ALP_HEADER_SIZE: usize = 7;
 const ALP_COMPRESSION_MODE: u8 = 0;
 const ALP_INTEGER_ENCODING_FOR_BIT_PACK: u8 = 0;
 const ALP_MAX_LOG_VECTOR_SIZE: u8 = 16;
 const ALP_MAX_EXPONENT_F32: u8 = 10;
 const ALP_MAX_EXPONENT_F64: u8 = 18;
 
-/// Page-level ALP header (version 1, 8 bytes).
+/// Page-level ALP header (7 bytes).
 ///
 /// Layout in bytes:
-/// - `[0]` `version`
-/// - `[1]` `compression_mode`
-/// - `[2]` `integer_encoding`
-/// - `[3]` `log_vector_size`
-/// - `[4..8]` `num_elements` (little-endian `i32`)
+/// - `[0]` `compression_mode`
+/// - `[1]` `integer_encoding`
+/// - `[2]` `log_vector_size`
+/// - `[3..7]` `num_elements` (little-endian `i32`)
 #[derive(Debug, Clone, Copy)]
 struct AlpHeader {
-    version: u8,
     compression_mode: u8,
     integer_encoding: u8,
     log_vector_size: u8,
@@ -316,7 +313,7 @@ impl AlpFloat for f64 {
 /// Parse and validate a full ALP-encoded page body.
 ///
 /// Validation includes:
-/// - header fields/version/encoding
+/// - header fields/encoding
 /// - non-negative `num_elements`
 /// - offsets bounds + monotonicity
 /// - per-vector metadata/data section lengths
@@ -331,20 +328,11 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout> 
     }
 
     let header = AlpHeader {
-        version: data_ref[0],
-        compression_mode: data_ref[1],
-        integer_encoding: data_ref[2],
-        log_vector_size: data_ref[3],
-        num_elements: i32::from_le_bytes([data_ref[4], data_ref[5], data_ref[6], data_ref[7]]),
+        compression_mode: data_ref[0],
+        integer_encoding: data_ref[1],
+        log_vector_size: data_ref[2],
+        num_elements: i32::from_le_bytes([data_ref[3], data_ref[4], data_ref[5], data_ref[6]]),
     };
-
-    if header.version != ALP_VERSION {
-        return Err(general_err!(
-            "Invalid ALP page: unsupported version {}, expected {}",
-            header.version,
-            ALP_VERSION
-        ));
-    }
 
     if header.compression_mode != ALP_COMPRESSION_MODE {
         return Err(general_err!(
@@ -866,7 +854,6 @@ mod tests {
     use crate::data_type::FloatType;
 
     fn make_alp_page_bytes(
-        version: u8,
         compression_mode: u8,
         integer_encoding: u8,
         log_vector_size: u8,
@@ -875,7 +862,6 @@ mod tests {
         body_tail_len: usize,
     ) -> Vec<u8> {
         let mut out = Vec::with_capacity(ALP_HEADER_SIZE + offsets.len() * 4 + body_tail_len);
-        out.push(version);
         out.push(compression_mode);
         out.push(integer_encoding);
         out.push(log_vector_size);
@@ -966,7 +952,7 @@ mod tests {
             running_offset += vector.len() as u32;
         }
 
-        let mut page = make_alp_page_bytes(1, 0, 0, log_vector_size, num_elements, &offsets, 0);
+        let mut page = make_alp_page_bytes(0, 0, log_vector_size, num_elements, &offsets, 0);
         for vector in vectors {
             page.extend_from_slice(vector);
         }
@@ -975,9 +961,8 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_valid() {
-        let data = make_alp_page_bytes(1, 0, 0, 2, 4, &[4], 13);
+        let data = make_alp_page_bytes(0, 0, 2, 4, &[4], 13);
         let parsed = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap();
-        assert_eq!(parsed.header.version, 1);
         assert_eq!(parsed.header.num_elements, 4);
         assert_eq!(parsed.offsets, vec![4]);
     }
@@ -987,13 +972,13 @@ mod tests {
         let err = parse_alp_page_layout::<u64>(Bytes::from_static(&[0, 1, 2])).unwrap_err();
         assert!(
             err.to_string()
-                .contains("Invalid ALP page: expected at least 8 bytes for header")
+                .contains("Invalid ALP page: expected at least 7 bytes for header")
         );
     }
 
     #[test]
     fn test_parse_alp_page_layout_invalid_log_vector_size() {
-        let data = make_alp_page_bytes(1, 0, 0, 17, 1, &[4], 8);
+        let data = make_alp_page_bytes(0, 0, 17, 1, &[4], 8);
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
@@ -1003,7 +988,7 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_invalid_integer_encoding() {
-        let data = make_alp_page_bytes(1, 0, 1, 2, 1, &[4], 8);
+        let data = make_alp_page_bytes(0, 1, 2, 1, &[4], 8);
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
@@ -1013,7 +998,7 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_negative_num_elements() {
-        let data = make_alp_page_bytes(1, 0, 0, 2, -1, &[4], 8);
+        let data = make_alp_page_bytes(0, 0, 2, -1, &[4], 8);
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
@@ -1079,7 +1064,7 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_non_monotonic_offsets() {
-        let data = make_alp_page_bytes(1, 0, 0, 1, 3, &[12, 8], 12);
+        let data = make_alp_page_bytes(0, 0, 1, 3, &[12, 8], 12);
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
@@ -1118,7 +1103,7 @@ mod tests {
         vector.extend_from_slice(&42.5_f64.to_le_bytes());
 
         let offsets = [4u32];
-        let mut page = make_alp_page_bytes(1, 0, 0, 0, 1, &offsets, 0);
+        let mut page = make_alp_page_bytes(0, 0, 0, 1, &offsets, 0);
         page.extend_from_slice(&vector);
 
         let parsed = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
