@@ -871,60 +871,49 @@ mod tests {
         out
     }
 
-    fn make_vector_u32(
-        exponent: u8,
-        factor: u8,
-        num_exceptions: u16,
-        frame_of_reference: u32,
-        bit_width: u8,
-        packed_values: &[u8],
-        exception_positions: &[u16],
-        exception_values: &[u32],
-    ) -> Vec<u8> {
-        assert_eq!(num_exceptions as usize, exception_positions.len());
-        assert_eq!(num_exceptions as usize, exception_values.len());
-
-        let mut out = Vec::new();
-        out.push(exponent);
-        out.push(factor);
-        out.extend_from_slice(&num_exceptions.to_le_bytes());
-        out.extend_from_slice(&frame_of_reference.to_le_bytes());
-        out.push(bit_width);
-        out.extend_from_slice(packed_values);
-        for position in exception_positions {
-            out.extend_from_slice(&position.to_le_bytes());
-        }
-        for value in exception_values {
-            out.extend_from_slice(&value.to_le_bytes());
-        }
-        out
+    trait AppendLeBytes {
+        fn append_le_bytes(self, out: &mut Vec<u8>);
     }
 
-    fn make_vector_u64(
+    impl AppendLeBytes for u32 {
+        fn append_le_bytes(self, out: &mut Vec<u8>) {
+            out.extend_from_slice(&self.to_le_bytes());
+        }
+    }
+
+    impl AppendLeBytes for u64 {
+        fn append_le_bytes(self, out: &mut Vec<u8>) {
+            out.extend_from_slice(&self.to_le_bytes());
+        }
+    }
+
+    struct VectorSpec<'a, Exact> {
         exponent: u8,
         factor: u8,
-        num_exceptions: u16,
-        frame_of_reference: u64,
+        frame_of_reference: Exact,
         bit_width: u8,
-        packed_values: &[u8],
-        exception_positions: &[u16],
-        exception_values: &[u64],
-    ) -> Vec<u8> {
-        assert_eq!(num_exceptions as usize, exception_positions.len());
-        assert_eq!(num_exceptions as usize, exception_values.len());
+        packed_values: &'a [u8],
+        exception_positions: &'a [u16],
+        exception_values: &'a [Exact],
+    }
+
+    fn make_vector<Exact: AppendLeBytes + Copy>(spec: VectorSpec<'_, Exact>) -> Vec<u8> {
+        let num_exceptions = spec.exception_positions.len();
+        assert_eq!(num_exceptions, spec.exception_values.len());
+        assert!(u16::try_from(num_exceptions).is_ok());
 
         let mut out = Vec::new();
-        out.push(exponent);
-        out.push(factor);
-        out.extend_from_slice(&num_exceptions.to_le_bytes());
-        out.extend_from_slice(&frame_of_reference.to_le_bytes());
-        out.push(bit_width);
-        out.extend_from_slice(packed_values);
-        for position in exception_positions {
+        out.push(spec.exponent);
+        out.push(spec.factor);
+        out.extend_from_slice(&(num_exceptions as u16).to_le_bytes());
+        spec.frame_of_reference.append_le_bytes(&mut out);
+        out.push(spec.bit_width);
+        out.extend_from_slice(spec.packed_values);
+        for position in spec.exception_positions {
             out.extend_from_slice(&position.to_le_bytes());
         }
-        for value in exception_values {
-            out.extend_from_slice(&value.to_le_bytes());
+        for value in spec.exception_values {
+            value.append_le_bytes(&mut out);
         }
         out
     }
@@ -1017,7 +1006,15 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_invalid_exponent_f32() {
-        let vector = make_vector_u32(11, 0, 0, 0, 0, &[], &[], &[]);
+        let vector = make_vector(VectorSpec {
+            exponent: 11,
+            factor: 0,
+            frame_of_reference: 0u32,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[],
+            exception_values: &[],
+        });
         let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
@@ -1028,7 +1025,15 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_invalid_factor_f32() {
-        let vector = make_vector_u32(0, 11, 0, 0, 0, &[], &[], &[]);
+        let vector = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 11,
+            frame_of_reference: 0u32,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[],
+            exception_values: &[],
+        });
         let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
@@ -1039,7 +1044,15 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_factor_exceeds_exponent() {
-        let vector = make_vector_u32(2, 3, 0, 0, 0, &[], &[], &[]);
+        let vector = make_vector(VectorSpec {
+            exponent: 2,
+            factor: 3,
+            frame_of_reference: 0u32,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[],
+            exception_values: &[],
+        });
         let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
@@ -1050,7 +1063,15 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_invalid_num_exceptions() {
-        let vector = make_vector_u32(0, 0, 2, 0, 0, &[], &[0, 0], &[0, 0]);
+        let vector = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 0u32,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[0, 0],
+            exception_values: &[0, 0],
+        });
         let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
@@ -1061,7 +1082,15 @@ mod tests {
 
     #[test]
     fn test_parse_alp_page_layout_invalid_exception_position() {
-        let vector = make_vector_u32(0, 0, 1, 0, 0, &[], &[1], &[123]);
+        let vector = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 0u32,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[1],
+            exception_values: &[123],
+        });
         let page = make_page_from_vectors(3, 1, &[vector]);
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
@@ -1146,7 +1175,15 @@ mod tests {
 
     #[test]
     fn test_decode_page_values_f32_no_exceptions() {
-        let vector = make_vector_u32(0, 0, 0, 10, 2, &[0b1110_0100], &[], &[]);
+        let vector = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 10u32,
+            bit_width: 2,
+            packed_values: &[0b1110_0100],
+            exception_positions: &[],
+            exception_values: &[],
+        });
         let page = make_page_from_vectors(3, 4, &[vector]);
         let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
         let decoded = decode_page_values::<f32>(&layout).unwrap();
@@ -1155,8 +1192,24 @@ mod tests {
 
     #[test]
     fn test_decode_page_values_f64_multi_vector_with_exceptions() {
-        let vector0 = make_vector_u64(0, 0, 1, 10, 1, &[0b0000_0010], &[1], &[42.5f64.to_bits()]);
-        let vector1 = make_vector_u64(0, 0, 0, 7, 0, &[], &[], &[]);
+        let vector0 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 10u64,
+            bit_width: 1,
+            packed_values: &[0b0000_0010],
+            exception_positions: &[1],
+            exception_values: &[42.5f64.to_bits()],
+        });
+        let vector1 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 7u64,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[],
+            exception_values: &[],
+        });
         let page = make_page_from_vectors(3, 9, &[vector0, vector1]);
         let layout = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
         let decoded = decode_page_values::<f64>(&layout).unwrap();
@@ -1173,7 +1226,15 @@ mod tests {
             (-0.0f32).to_bits(),
             f32::INFINITY.to_bits(),
         ];
-        let vector = make_vector_u32(0, 0, 3, 0, 0, &[], &[0, 1, 2], &edge_values);
+        let vector = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 0u32,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[0, 1, 2],
+            exception_values: &edge_values,
+        });
         let page = make_page_from_vectors(3, 3, &[vector]);
         let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
         let decoded = decode_page_values::<f32>(&layout).unwrap();
@@ -1186,8 +1247,24 @@ mod tests {
 
     #[test]
     fn test_alp_decoder_get_across_vectors() {
-        let vector0 = make_vector_u32(0, 0, 0, 10, 1, &[0b0000_0010], &[], &[]);
-        let vector1 = make_vector_u32(0, 0, 0, 20, 1, &[0b0000_0010], &[], &[]);
+        let vector0 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 10u32,
+            bit_width: 1,
+            packed_values: &[0b0000_0010],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        let vector1 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 20u32,
+            bit_width: 1,
+            packed_values: &[0b0000_0010],
+            exception_positions: &[],
+            exception_values: &[],
+        });
         let page = make_page_from_vectors(3, 12, &[vector0, vector1]);
 
         let mut decoder = AlpDecoder::<FloatType>::new();
@@ -1211,8 +1288,24 @@ mod tests {
 
     #[test]
     fn test_alp_decoder_skip_across_vectors() {
-        let vector0 = make_vector_u32(0, 0, 0, 10, 1, &[0b0000_0010], &[], &[]);
-        let vector1 = make_vector_u32(0, 0, 0, 20, 1, &[0b0000_0010], &[], &[]);
+        let vector0 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 10u32,
+            bit_width: 1,
+            packed_values: &[0b0000_0010],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        let vector1 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 20u32,
+            bit_width: 1,
+            packed_values: &[0b0000_0010],
+            exception_positions: &[],
+            exception_values: &[],
+        });
         let page = make_page_from_vectors(3, 12, &[vector0, vector1]);
 
         let mut decoder = AlpDecoder::<FloatType>::new();
@@ -1231,8 +1324,24 @@ mod tests {
 
     #[test]
     fn test_alp_decoder_get_fast_path_full_read() {
-        let vector0 = make_vector_u32(0, 0, 0, 10, 1, &[0b0000_0010], &[], &[]);
-        let vector1 = make_vector_u32(0, 0, 0, 20, 1, &[0b0000_0010], &[], &[]);
+        let vector0 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 10u32,
+            bit_width: 1,
+            packed_values: &[0b0000_0010],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        let vector1 = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 20u32,
+            bit_width: 1,
+            packed_values: &[0b0000_0010],
+            exception_positions: &[],
+            exception_values: &[],
+        });
         let page = make_page_from_vectors(3, 12, &[vector0, vector1]);
 
         let mut decoder = AlpDecoder::<FloatType>::new();
