@@ -581,7 +581,7 @@ fn parse_vector_view<Exact: AlpExact>(
 
 /// Decode bit-packed deltas into exact integers.
 fn bit_unpack_integers<Exact: AlpExact + FromBytes>(
-    packed_values: &[u8],
+    packed_values: Bytes,
     bit_width: u8,
     num_elements: u16,
 ) -> Result<Vec<Exact>> {
@@ -598,7 +598,7 @@ fn bit_unpack_integers<Exact: AlpExact + FromBytes>(
     }
 
     let mut out = vec![Exact::zero(); num_elements as usize];
-    let mut reader = BitReader::new(Bytes::copy_from_slice(packed_values));
+    let mut reader = BitReader::new(packed_values);
     let read = reader.get_batch::<Exact>(&mut out, bit_width as usize);
     if read != out.len() {
         return Err(general_err!(
@@ -621,11 +621,11 @@ fn inverse_for<Exact: AlpExact>(deltas: &mut [Exact], frame_of_reference: Exact)
 /// Decode one vector into output floating values:
 /// bit-unpack -> inverse FOR -> decimal decode -> patch exceptions.
 fn decode_vector_values<Value: AlpFloat>(
-    body: &[u8],
+    body: &Bytes,
     vector: &AlpEncodedVectorView<Value::Exact>,
 ) -> Result<Vec<Value>> {
     let mut exact_values = bit_unpack_integers(
-        &body[vector.packed_values.clone()],
+        body.slice(vector.packed_values.clone()),
         vector.for_info.bit_width,
         vector.num_elements,
     )?;
@@ -691,7 +691,7 @@ fn decode_page_values_into<Value: AlpFloat>(
 
     let mut output_offset = 0usize;
     for vector in &layout.vectors {
-        let vector_values = decode_vector_values::<Value>(layout.body.as_ref(), vector)?;
+        let vector_values = decode_vector_values::<Value>(&layout.body, vector)?;
         let next_offset = output_offset + vector_values.len();
         out[output_offset..next_offset].copy_from_slice(&vector_values);
         output_offset = next_offset;
@@ -1127,13 +1127,13 @@ mod tests {
 
     #[test]
     fn test_bit_unpack_integers_width_zero() {
-        let unpacked = bit_unpack_integers::<u32>(&[], 0, 3).unwrap();
+        let unpacked = bit_unpack_integers::<u32>(Bytes::new(), 0, 3).unwrap();
         assert_eq!(unpacked, vec![0, 0, 0]);
     }
 
     #[test]
     fn test_bit_unpack_integers_width_two() {
-        let unpacked = bit_unpack_integers::<u32>(&[0b0010_0111], 2, 3).unwrap();
+        let unpacked = bit_unpack_integers::<u32>(Bytes::from_static(&[0b0010_0111]), 2, 3).unwrap();
         assert_eq!(unpacked, vec![3, 1, 2]);
     }
 
