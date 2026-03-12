@@ -154,13 +154,51 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
     data_type: &DataType,
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, PrimitiveArray<T>>::new(values, indices);
+    let arrays = &interleaved.arrays;
+    let len = indices.len();
 
-    let values = indices
-        .iter()
-        .map(|(a, b)| interleaved.arrays[*a].value(*b))
-        .collect::<Vec<_>>();
+    let mut output = Vec::with_capacity(len);
+    let dst: *mut T::Native = output.as_mut_ptr();
+    let mut base = 0;
 
-    let array = PrimitiveArray::<T>::try_new(values.into(), interleaved.nulls)?;
+    // Process 8 elements at a time to issue multiple independent loads
+    // and increase memory-level parallelism for random access patterns.
+    let chunks = indices.chunks_exact(8);
+    let remainder = chunks.remainder();
+    for chunk in chunks {
+        let v0 = arrays[chunk[0].0].value(chunk[0].1);
+        let v1 = arrays[chunk[1].0].value(chunk[1].1);
+        let v2 = arrays[chunk[2].0].value(chunk[2].1);
+        let v3 = arrays[chunk[3].0].value(chunk[3].1);
+        let v4 = arrays[chunk[4].0].value(chunk[4].1);
+        let v5 = arrays[chunk[5].0].value(chunk[5].1);
+        let v6 = arrays[chunk[6].0].value(chunk[6].1);
+        let v7 = arrays[chunk[7].0].value(chunk[7].1);
+
+        // SAFETY: base+7 < len == output capacity
+        unsafe {
+            dst.add(base).write(v0);
+            dst.add(base + 1).write(v1);
+            dst.add(base + 2).write(v2);
+            dst.add(base + 3).write(v3);
+            dst.add(base + 4).write(v4);
+            dst.add(base + 5).write(v5);
+            dst.add(base + 6).write(v6);
+            dst.add(base + 7).write(v7);
+        }
+        base += 8;
+    }
+
+    for idx in remainder {
+        // SAFETY: base < len == output capacity
+        unsafe { dst.add(base).write(arrays[idx.0].value(idx.1)) };
+        base += 1;
+    }
+
+    // SAFETY: all `len` elements have been initialized
+    unsafe { output.set_len(len) };
+
+    let array = PrimitiveArray::<T>::try_new(output.into(), interleaved.nulls)?;
     Ok(Arc::new(array.with_data_type(data_type.clone())))
 }
 
