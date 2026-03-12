@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Asyncronous implementation of Avro file reader.
+//!
+//! This module provides [`AsyncAvroFileReader`], which supports reading and decoding
+//! the Avro OCF format from any source that implements [`AsyncFileReader`].
+
 use crate::compression::CompressionCodec;
 use crate::reader::Decoder;
 use crate::reader::block::{BlockDecoder, BlockDecoderState};
@@ -32,7 +37,7 @@ mod async_file_reader;
 mod builder;
 
 pub use async_file_reader::AsyncFileReader;
-pub use builder::ReaderBuilder;
+pub use builder::{ReaderBuilder, read_header_info};
 
 #[cfg(feature = "object_store")]
 mod store;

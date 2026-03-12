@@ -18,7 +18,7 @@
 use crate::codec::AvroFieldBuilder;
 use crate::errors::AvroError;
 use crate::reader::async_reader::ReaderState;
-use crate::reader::header::{Header, HeaderDecoder};
+use crate::reader::header::{Header, HeaderDecoder, HeaderInfo};
 use crate::reader::record::RecordDecoder;
 use crate::reader::{AsyncAvroFileReader, AsyncFileReader, Decoder};
 use crate::schema::{AvroSchema, FingerprintAlgorithm, SCHEMA_METADATA_KEY};
@@ -109,50 +109,71 @@ impl<R> ReaderBuilder<R> {
     }
 }
 
-impl<R: AsyncFileReader> ReaderBuilder<R> {
-    async fn read_header(&mut self) -> Result<(Header, u64), AvroError> {
-        let mut decoder = HeaderDecoder::default();
-        let mut position = 0;
-        loop {
-            let range_to_fetch = position
-                ..(position + self.header_size_hint.unwrap_or(DEFAULT_HEADER_SIZE_HINT))
-                    .min(self.file_size);
+/// Reads the Avro file header (magic, metadata, sync marker) asynchronously from `reader`.
+///
+/// On success, returns the parsed [`HeaderInfo`] containing the header and its length in bytes.
+pub async fn read_header_info<R>(
+    reader: &mut R,
+    file_size: u64,
+    header_size_hint: Option<u64>,
+) -> Result<HeaderInfo, AvroError>
+where
+    R: AsyncFileReader,
+{
+    read_header(reader, file_size, header_size_hint)
+        .await
+        .map(|(header, header_len)| HeaderInfo::new(header, header_len))
+}
 
-            // Maybe EOF after the header, no actual data
-            if range_to_fetch.is_empty() {
-                break;
-            }
+async fn read_header<R>(
+    reader: &mut R,
+    file_size: u64,
+    header_size_hint: Option<u64>,
+) -> Result<(Header, u64), AvroError>
+where
+    R: AsyncFileReader,
+{
+    let mut decoder = HeaderDecoder::default();
+    let mut position = 0;
+    loop {
+        let range_to_fetch = position
+            ..(position + header_size_hint.unwrap_or(DEFAULT_HEADER_SIZE_HINT)).min(file_size);
 
-            let current_data = self
-                .reader
-                .get_bytes(range_to_fetch.clone())
-                .await
-                .map_err(|err| {
-                    AvroError::General(format!(
-                        "Error fetching Avro header from file reader: {err}"
-                    ))
-                })?;
-            if current_data.is_empty() {
-                return Err(AvroError::EOF(
-                    "Unexpected EOF while fetching header data".into(),
-                ));
-            }
-
-            let read = current_data.len();
-            let decoded = decoder.decode(&current_data)?;
-            if decoded != read {
-                position += decoded as u64;
-                break;
-            }
-            position += read as u64;
+        // Maybe EOF after the header, no actual data
+        if range_to_fetch.is_empty() {
+            break;
         }
 
-        decoder
-            .flush()
-            .map(|header| (header, position))
-            .ok_or_else(|| AvroError::EOF("Unexpected EOF while reading Avro header".into()))
+        let current_data = reader
+            .get_bytes(range_to_fetch.clone())
+            .await
+            .map_err(|err| {
+                AvroError::General(format!(
+                    "Error fetching Avro header from file reader: {err}"
+                ))
+            })?;
+        if current_data.is_empty() {
+            return Err(AvroError::EOF(
+                "Unexpected EOF while fetching header data".into(),
+            ));
+        }
+
+        let read = current_data.len();
+        let decoded = decoder.decode(&current_data)?;
+        if decoded != read {
+            position += decoded as u64;
+            break;
+        }
+        position += read as u64;
     }
 
+    decoder
+        .flush()
+        .map(|header| (header, position))
+        .ok_or_else(|| AvroError::EOF("Unexpected EOF while reading Avro header".into()))
+}
+
+impl<R: AsyncFileReader> ReaderBuilder<R> {
     /// Build the asynchronous Avro reader with the provided parameters.
     /// This reads the header first to initialize the reader state.
     pub async fn try_build(mut self) -> Result<AsyncAvroFileReader<R>, AvroError> {
@@ -162,7 +183,27 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
 
         // Start by reading the header from the beginning of the avro file
         // take the writer schema from the header
-        let (header, header_len) = self.read_header().await?;
+        let (header, header_len) =
+            read_header(&mut self.reader, self.file_size, self.header_size_hint).await?;
+        self.build_internal(&header, header_len)
+    }
+
+    /// Build the asynchronous Avro reader with the provided header.
+    ///
+    /// This allows initializing the reader with pre-parsed header information.
+    /// Note that this method is not async because it does not need to perform any I/O operations.
+    pub fn build_with_header(
+        self,
+        header_info: HeaderInfo,
+    ) -> Result<AsyncAvroFileReader<R>, AvroError> {
+        self.build_internal(header_info.header(), header_info.header_len())
+    }
+
+    fn build_internal(
+        self,
+        header: &Header,
+        header_len: u64,
+    ) -> Result<AsyncAvroFileReader<R>, AvroError> {
         let writer_schema = {
             let raw = header.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
                 AvroError::ParseError("No Avro schema present in file header".to_string())

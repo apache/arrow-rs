@@ -500,7 +500,9 @@ mod record;
 mod vlq;
 
 #[cfg(feature = "async")]
-mod async_reader;
+pub mod async_reader;
+
+pub use header::{HeaderInfo, read_header_info};
 
 #[cfg(feature = "object_store")]
 pub use async_reader::AvroObjectReader;
@@ -1273,7 +1275,7 @@ impl ReaderBuilder {
     /// the discovered writer (and optional reader) schema, and prepares to iterate blocks,
     /// decompressing if necessary.
     pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
-        let header = read_header(&mut reader)?;
+        let (header, _) = read_header(&mut reader)?;
         let decoder = self.make_decoder(Some(&header), self.reader_schema.as_ref())?;
         Ok(Reader {
             reader,
@@ -1632,7 +1634,7 @@ mod test {
 
     fn load_writer_schema_json(path: &str) -> Value {
         let file = File::open(path).unwrap();
-        let header = super::read_header(BufReader::new(file)).unwrap();
+        let (header, _) = super::read_header(BufReader::new(file)).unwrap();
         let schema = header.schema().unwrap().unwrap();
         serde_json::to_value(&schema).unwrap()
     }
