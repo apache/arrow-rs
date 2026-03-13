@@ -38,7 +38,6 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 snappy_src = { version = "0.2", default-features = false, optional = true }
 
 [dependencies]
-link-cplusplus = "1"
 arrow-array = { workspace = true, optional = true }
 arrow-buffer = { workspace = true, optional = true }
 arrow-csv = { workspace = true, optional = true }
