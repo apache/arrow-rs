@@ -1287,6 +1287,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_builder_with_header_info() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let mut file_reader = AvroObjectReader::new(store, location);
+
+        let header_info = read_header_info(&mut file_reader, file_size, None)
+            .await
+            .unwrap();
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .build_with_header(header_info)
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 8)
+    }
+
+    #[tokio::test]
     async fn test_roundtrip_write_then_async_read() {
         use crate::writer::AvroWriter;
         use arrow_array::{Float64Array, StringArray};
