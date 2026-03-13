@@ -1676,13 +1676,11 @@ mod tests {
 
         // log10 should be 76 or 77
         let result = large.checked_ilog(i256::from(10));
-        assert!(result.is_some());
-        assert!(result.unwrap() >= 76 && result.unwrap() <= 77);
+        assert_eq!(result.unwrap(), 76);
 
         // log5
         let result = large.checked_ilog(i256::from(5));
-        assert!(result.is_some());
-        assert!(result.unwrap() >= 109 && result.unwrap() <= 110);
+        assert_eq!(result.unwrap(), 109);
     }
 
     #[test]
