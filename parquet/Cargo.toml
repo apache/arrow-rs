@@ -53,7 +53,7 @@ object_store = { version = "0.13.1", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
-snap = { git = "https://github.com/Dandandan/rust-snappy", rev = "498b1754", default-features = false, optional = true }
+snap = { git = "https://github.com/Dandandan/rust-snappy", rev = "ba0978fc", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
 # To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
 flate2 = { version = "1.1", default-features = false, optional = true }
@@ -81,7 +81,7 @@ ring = { version = "0.17", default-features = false, features = ["std"], optiona
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
-snap = { git = "https://github.com/Dandandan/rust-snappy", rev = "498b1754", default-features = false }
+snap = { git = "https://github.com/Dandandan/rust-snappy", rev = "ba0978fc", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = { workspace = true, default-features = true }
 brotli = { version = "8.0", default-features = false, features = ["std"] }
