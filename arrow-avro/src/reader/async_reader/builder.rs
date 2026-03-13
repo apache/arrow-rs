@@ -53,7 +53,7 @@ impl<R> ReaderBuilder<R> {
             header_size_hint: None,
             utf8_view: false,
             strict_mode: false,
-            use_tz: Tz::Utc,
+            use_tz: Default::default(),
         }
     }
 
