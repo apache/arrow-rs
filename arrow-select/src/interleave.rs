@@ -173,12 +173,15 @@ fn interleave_bytes<T: ByteArrayType>(
     let mut capacity = 0;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(T::Offset::from_usize(0).unwrap());
-    offsets.extend(indices.iter().map(|(a, b)| {
+    for (a, b) in indices {
         let o = interleaved.arrays[*a].value_offsets();
         let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
         capacity += element_len;
-        T::Offset::from_usize(capacity).expect("overflow")
-    }));
+        offsets.push(
+            T::Offset::from_usize(capacity)
+                .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+        );
+    }
 
     let mut values = Vec::with_capacity(capacity);
     for (a, b) in indices {
@@ -331,12 +334,14 @@ fn interleave_list<O: OffsetSizeTrait>(
     let mut capacity = 0usize;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(O::from_usize(0).unwrap());
-    offsets.extend(indices.iter().map(|(array, row)| {
+    for (array, row) in indices {
         let o = interleaved.arrays[*array].value_offsets();
         let element_len = o[*row + 1].as_usize() - o[*row].as_usize();
         capacity += element_len;
-        O::from_usize(capacity).expect("offset overflow")
-    }));
+        offsets.push(
+            O::from_usize(capacity).ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+        );
+    }
 
     let mut child_indices = Vec::with_capacity(capacity);
     for (array, row) in indices {
@@ -1413,5 +1418,34 @@ mod tests {
                 Some("qux")
             ]
         );
+    }
+
+    #[test]
+    fn test_interleave_bytes_offset_overflow() {
+        let indices: Vec<(usize, usize)> = vec![(0, 0); (i32::MAX >> 4) as usize];
+        let text = ('a'..='z').collect::<String>();
+        let values = StringArray::from(vec![Some(text)]);
+        assert!(matches!(
+            interleave(&[&values], &indices),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
+    }
+
+    #[test]
+    fn test_interleave_list_offset_overflow() {
+        // Build a ListArray<i32> with a single row containing many elements
+        let mut builder = GenericListBuilder::<i32, _>::new(Int32Builder::new());
+        for i in 0..32 {
+            builder.values().append_value(i);
+        }
+        builder.append(true);
+        let list = builder.finish();
+
+        // Interleave enough copies to overflow i32 offsets
+        let indices: Vec<(usize, usize)> = vec![(0, 0); (i32::MAX as usize / 32) + 1];
+        assert!(matches!(
+            interleave(&[&list], &indices),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
     }
 }
