@@ -44,7 +44,7 @@ name = "parquet_variant_compute"
 bench = false
 
 [dev-dependencies]
-rand = "0.9.1"
+rand = "0.10.0"
 criterion = { workspace = true, default-features = false }
 arrow = { workspace = true, features = ["test_utils"] }
 
