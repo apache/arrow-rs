@@ -656,8 +656,12 @@ impl i256 {
     /// Returns `None` if `self` is less than or equal to zero.
     #[inline]
     pub fn checked_ilog2(self) -> Option<u32> {
-        // Switch to I256::checked_ilog2 when I256 switches MSRV
-        self.checked_ilog(i256::from(2))
+        if self <= Self::ZERO {
+            None
+        } else {
+            // Invariants are enforced, so this call cannot fail
+            self.to_ext_i256().checked_ilog2()
+        }
     }
 
     /// Computes the base 2 logarithm of the number, rounded down.
