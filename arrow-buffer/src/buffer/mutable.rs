@@ -872,15 +872,16 @@ impl MutableBuffer {
 
         let mut buffer = MutableBuffer::new(len);
 
-        let mut dst = buffer.data.as_ptr();
-        for item in iterator {
+        let mut dst = buffer.data.as_ptr() as *mut T;
+        iterator.for_each(|item| {
             // note how there is no reserve here (compared with `extend_from_iter`)
-            let src = item.to_byte_slice().as_ptr();
-            unsafe { std::ptr::copy_nonoverlapping(src, dst, item_size) };
-            dst = unsafe { dst.add(item_size) };
-        }
+            unsafe {
+                std::ptr::write(dst, item);
+                dst = dst.add(1);
+            }
+        });
         assert_eq!(
-            unsafe { dst.offset_from(buffer.data.as_ptr()) } as usize,
+            unsafe { (dst as *mut u8).offset_from(buffer.data.as_ptr()) } as usize,
             len,
             "Trusted iterator length was not accurately reported"
         );
