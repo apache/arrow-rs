@@ -3142,7 +3142,6 @@ mod test {
     }
 
     #[test]
-    // TODO: avoid requiring snappy for this file
     fn test_timestamp_with_utc_tz() {
         let path = arrow_test_data("avro/alltypes_plain.avro");
         let reader_schema =
