@@ -61,6 +61,8 @@ pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
 pub const DEFAULT_COERCE_TYPES: bool = false;
+/// Default values for [`WriterProperties::internal_buffer_enabled`]
+pub const DEFAULT_INTERNAL_BUFFER_ENABLED: bool = true;
 
 /// Parquet writer version.
 ///
@@ -168,6 +170,7 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    internal_buffer_enabled: bool,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -364,6 +367,13 @@ impl WriterProperties {
         self.coerce_types
     }
 
+    /// Returns `true` if internal buffer is enabled.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_internal_buffer_enabled`]
+    pub fn internal_buffer_enabled(&self) -> bool {
+        self.internal_buffer_enabled
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     ///
     /// This is not configurable.
@@ -487,6 +497,7 @@ pub struct WriterPropertiesBuilder {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    internal_buffer_enabled: bool,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -510,6 +521,7 @@ impl Default for WriterPropertiesBuilder {
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
+            internal_buffer_enabled: DEFAULT_INTERNAL_BUFFER_ENABLED,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -535,6 +547,7 @@ impl WriterPropertiesBuilder {
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
+            internal_buffer_enabled: self.internal_buffer_enabled,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -747,6 +760,21 @@ impl WriterPropertiesBuilder {
     /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
+        self
+    }
+
+    /// Enables an internal buffer to improve small write operations.
+    ///
+    /// If `true` (default), small writes will be collected into an internal
+    /// buffer before calling the underlying `Write::write` method. This is
+    /// essential for maintaining good performance when the underlying writer
+    /// is an I/O-sensitive sink (like a network socket or raw file handle).
+    ///
+    /// Buffering is often redundant and can be slightly less performant when
+    /// the underlying writer is already buffered (e.g., writing to a `Vec<u8>`
+    /// or a `std::io::BufWriter`). In such cases, this option can be set to `false`.
+    pub fn set_internal_buffer_enabled(mut self, internal_buffer_enabled: bool) -> Self {
+        self.internal_buffer_enabled = internal_buffer_enabled;
         self
     }
 
@@ -1032,6 +1060,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             sorting_columns: props.sorting_columns,
             column_index_truncate_length: props.column_index_truncate_length,
             statistics_truncate_length: props.statistics_truncate_length,
+            internal_buffer_enabled: props.internal_buffer_enabled,
             coerce_types: props.coerce_types,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,

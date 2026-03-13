@@ -45,20 +45,35 @@ use crate::file::reader::ChunkReader;
 use crate::file::{PARQUET_MAGIC, metadata::*};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
+/// WriterMode for the [`TrackedWrite`]
+enum WriterMode<W: Write> {
+    Buffered(BufWriter<W>),
+    Unbuffered(W),
+}
+
 /// A wrapper around a [`Write`] that keeps track of the number
-/// of bytes that have been written. The given [`Write`] is wrapped
-/// with a [`BufWriter`] to optimize writing performance.
+/// of bytes that have been written. In buffered mode the given
+/// [`Write`] is wrapped with a [`BufWriter`] to optimize writing
+/// performance for I/O-sensitive sinks.
 pub struct TrackedWrite<W: Write> {
-    inner: BufWriter<W>,
+    inner: WriterMode<W>,
     bytes_written: usize,
 }
 
 impl<W: Write> TrackedWrite<W> {
-    /// Create a new [`TrackedWrite`] from a [`Write`]
+    /// Create a new [`TrackedWrite`] from a [`Write`] with buffer
     pub fn new(inner: W) -> Self {
         let buf_write = BufWriter::new(inner);
         Self {
-            inner: buf_write,
+            inner: WriterMode::Buffered(buf_write),
+            bytes_written: 0,
+        }
+    }
+
+    /// Create a new unbuffered [`TrackedWrite`] from a [`Write`]
+    pub fn new_unbuffered(inner: W) -> Self {
+        Self {
+            inner: WriterMode::Unbuffered(inner),
             bytes_written: 0,
         }
     }
@@ -70,7 +85,10 @@ impl<W: Write> TrackedWrite<W> {
 
     /// Returns a reference to the underlying writer.
     pub fn inner(&self) -> &W {
-        self.inner.get_ref()
+        match &self.inner {
+            WriterMode::Buffered(w) => w.get_ref(),
+            WriterMode::Unbuffered(w) => w,
+        }
     }
 
     /// Returns a mutable reference to the underlying writer.
@@ -78,39 +96,53 @@ impl<W: Write> TrackedWrite<W> {
     /// It is inadvisable to directly write to the underlying writer, doing so
     /// will likely result in data corruption
     pub fn inner_mut(&mut self) -> &mut W {
-        self.inner.get_mut()
+        match &mut self.inner {
+            WriterMode::Buffered(w) => w.get_mut(),
+            WriterMode::Unbuffered(w) => w,
+        }
     }
 
     /// Returns the underlying writer.
     pub fn into_inner(self) -> Result<W> {
-        self.inner.into_inner().map_err(|err| {
-            ParquetError::General(format!("fail to get inner writer: {:?}", err.to_string()))
-        })
+        match self.inner {
+            WriterMode::Buffered(w) => w.into_inner().map_err(|err| {
+                ParquetError::General(format!("fail to get inner writer: {:?}", err.to_string()))
+            }),
+            WriterMode::Unbuffered(w) => Ok(w),
+        }
+    }
+
+    /// Returns the selected writer for write operations
+    fn writer(&mut self) -> &mut dyn Write {
+        match &mut self.inner {
+            WriterMode::Buffered(w) => w,
+            WriterMode::Unbuffered(w) => w,
+        }
     }
 }
 
 impl<W: Write> Write for TrackedWrite<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let bytes = self.inner.write(buf)?;
+        let bytes = self.writer().write(buf)?;
         self.bytes_written += bytes;
         Ok(bytes)
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
-        let bytes = self.inner.write_vectored(bufs)?;
+        let bytes = self.writer().write_vectored(bufs)?;
         self.bytes_written += bytes;
         Ok(bytes)
     }
 
     fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.inner.write_all(buf)?;
+        self.writer().write_all(buf)?;
         self.bytes_written += buf.len();
 
         Ok(())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
+        self.writer().flush()
     }
 }
 
@@ -184,7 +216,11 @@ impl<W: Write> Debug for SerializedFileWriter<W> {
 impl<W: Write + Send> SerializedFileWriter<W> {
     /// Creates new file writer.
     pub fn new(buf: W, schema: TypePtr, properties: WriterPropertiesPtr) -> Result<Self> {
-        let mut buf = TrackedWrite::new(buf);
+        let mut buf = if properties.internal_buffer_enabled() {
+            TrackedWrite::new(buf)
+        } else {
+            TrackedWrite::new_unbuffered(buf)
+        };
 
         let schema_descriptor = SchemaDescriptor::new(schema.clone());
 
