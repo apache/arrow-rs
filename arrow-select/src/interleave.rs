@@ -176,6 +176,7 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
         let v7 = arrays[chunk[7].0].value(chunk[7].1);
 
         // SAFETY: base+7 < len == output capacity
+        debug_assert!(base + 7 < len);
         unsafe {
             dst.add(base).write(v0);
             dst.add(base + 1).write(v1);
@@ -191,11 +192,13 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 
     for idx in remainder {
         // SAFETY: base < len == output capacity
+        debug_assert!(base < len);
         unsafe { dst.add(base).write(arrays[idx.0].value(idx.1)) };
         base += 1;
     }
 
     // SAFETY: all `len` elements have been initialized
+    debug_assert!(base == len);
     unsafe { output.set_len(len) };
 
     let array = PrimitiveArray::<T>::try_new(output.into(), interleaved.nulls)?;
