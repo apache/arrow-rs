@@ -1300,6 +1300,20 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(header_info.header_len(), 675);
+
+        let writer_schema = header_info.writer_schema().unwrap();
+        let expected_avro_json: serde_json::Value = serde_json::from_str(
+            get_alltypes_schema()
+                .metadata()
+                .get(SCHEMA_METADATA_KEY)
+                .unwrap(),
+        )
+        .unwrap();
+        let actual_avro_json: serde_json::Value =
+            serde_json::from_str(&writer_schema.json_string).unwrap();
+        assert_eq!(actual_avro_json, expected_avro_json);
+
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
             .build_with_header(header_info)
             .unwrap();
