@@ -350,12 +350,10 @@ impl<W: Write + Send> ArrowWriter<W> {
 
         let in_progress = match &mut self.in_progress {
             Some(in_progress) => in_progress,
-            x => {
-                let rg = self
-                    .row_group_writer_factory
-                    .create_row_group_writer(self.writer.flushed_row_groups().len())?;
-                x.insert(rg)
-            }
+            x => x.insert(
+                self.row_group_writer_factory
+                    .create_row_group_writer(self.writer.flushed_row_groups().len())?,
+            ),
         };
 
         if let Some(max_rows) = self.max_row_group_row_count {
@@ -441,10 +439,8 @@ impl<W: Write + Send> ArrowWriter<W> {
             None => return Ok(()),
         };
 
-        let chunks = in_progress.close()?;
-
         let mut row_group_writer = self.writer.next_row_group()?;
-        for chunk in chunks {
+        for chunk in in_progress.close()? {
             chunk.append_to_row_group(&mut row_group_writer)?;
         }
         row_group_writer.close()?;
