@@ -804,6 +804,9 @@ impl ArrayLevels {
     }
 
     /// Create a sliced view of this `ArrayLevels` for a CDC chunk.
+    ///
+    /// Note: `def_levels`, `rep_levels`, and `non_null_indices` are copied (not zero-copy),
+    /// while `array` is sliced without copying.
     pub(crate) fn slice_for_chunk(&self, chunk: &Chunk) -> Self {
         let level_offset = chunk.level_offset;
         let num_levels = chunk.num_levels;

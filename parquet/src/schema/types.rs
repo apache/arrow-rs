@@ -876,11 +876,21 @@ impl ColumnDescriptor {
         max_rep_level: i16,
         path: ColumnPath,
     ) -> Self {
+        Self::new_with_repeated_ancestor(primitive_type, max_def_level, max_rep_level, path, 0)
+    }
+
+    pub(crate) fn new_with_repeated_ancestor(
+        primitive_type: TypePtr,
+        max_def_level: i16,
+        max_rep_level: i16,
+        path: ColumnPath,
+        repeated_ancestor_def_level: i16,
+    ) -> Self {
         Self {
             primitive_type,
             max_def_level,
             max_rep_level,
-            repeated_ancestor_def_level: 0,
+            repeated_ancestor_def_level,
             path,
         }
     }
@@ -1240,13 +1250,13 @@ fn build_tree<'a>(
         Type::PrimitiveType { .. } => {
             let mut path: Vec<String> = vec![];
             path.extend(path_so_far.iter().copied().map(String::from));
-            let mut desc = ColumnDescriptor::new(
+            let desc = ColumnDescriptor::new_with_repeated_ancestor(
                 tp.clone(),
                 max_def_level,
                 max_rep_level,
                 ColumnPath::new(path),
+                repeated_ancestor_def_level,
             );
-            desc.repeated_ancestor_def_level = repeated_ancestor_def_level;
             leaves.push(Arc::new(desc));
             leaf_to_base.push(root_idx);
         }

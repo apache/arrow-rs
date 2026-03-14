@@ -266,14 +266,17 @@ impl<W: Write + Send> ArrowWriter<W> {
         let row_group_writer_factory =
             ArrowRowGroupWriterFactory::new(&file_writer, arrow_schema.clone());
 
-        let cdc_chunkers = props_ptr.content_defined_chunking().map(|opts| {
-            file_writer
+        let cdc_chunkers = props_ptr
+            .content_defined_chunking()
+            .map(|opts| {
+                file_writer
                     .schema_descr()
                     .columns()
                     .iter()
                     .map(|desc| ContentDefinedChunker::new(desc, opts))
                     .collect::<Result<Vec<_>>>()
-        }).transpose()?;
+            })
+            .transpose()?;
 
         Ok(Self {
             writer: file_writer,
