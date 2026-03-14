@@ -83,10 +83,12 @@ pub struct CdcOptions {
     pub min_chunk_size: usize,
     /// Maximum chunk size in bytes, default is 1024 KiB.
     /// The chunker will create a new chunk whenever the chunk size exceeds this value.
-    /// Note that the parquet writer has a related `data_page_size_limit` property that
+    /// Note that the parquet writer has a related [`data_page_size_limit`] property that
     /// controls the maximum size of a parquet data page after encoding. While setting
     /// `data_page_size_limit` to a smaller value than `max_chunk_size` doesn't affect
     /// the chunking effectiveness, it results in more small parquet data pages.
+    ///
+    /// [`data_page_size_limit`]: WriterPropertiesBuilder::set_data_page_size_limit
     pub max_chunk_size: usize,
     /// Number of bit adjustment to the gearhash mask in order to center the chunk size
     /// around the average size more aggressively, default is 0.
