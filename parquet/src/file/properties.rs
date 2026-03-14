@@ -61,6 +61,12 @@ pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
 pub const DEFAULT_COERCE_TYPES: bool = false;
+/// Default minimum chunk size for content-defined chunking: 256 KiB.
+pub const DEFAULT_CDC_MIN_CHUNK_SIZE: usize = 256 * 1024;
+/// Default maximum chunk size for content-defined chunking: 1024 KiB.
+pub const DEFAULT_CDC_MAX_CHUNK_SIZE: usize = 1024 * 1024;
+/// Default normalization level for content-defined chunking.
+pub const DEFAULT_CDC_NORM_LEVEL: i32 = 0;
 
 /// EXPERIMENTAL: Options for content-defined chunking (CDC).
 ///
@@ -107,9 +113,9 @@ pub struct CdcOptions {
 impl Default for CdcOptions {
     fn default() -> Self {
         Self {
-            min_chunk_size: 256 * 1024,
-            max_chunk_size: 1024 * 1024,
-            norm_level: 0,
+            min_chunk_size: DEFAULT_CDC_MIN_CHUNK_SIZE,
+            max_chunk_size: DEFAULT_CDC_MAX_CHUNK_SIZE,
+            norm_level: DEFAULT_CDC_NORM_LEVEL,
         }
     }
 }
