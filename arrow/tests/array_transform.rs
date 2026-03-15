@@ -17,9 +17,9 @@
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
-    FixedSizeListBuilder, Int16Array, Int32Array, Int64Array, Int64Builder, ListArray, ListBuilder,
-    MapBuilder, NullArray, StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
-    UInt8Array, UInt16Array, UInt16Builder, UnionArray,
+    FixedSizeListBuilder, GenericListBuilder, Int16Array, Int32Array, Int64Array, Int64Builder,
+    ListArray, ListBuilder, ListViewArray, MapBuilder, NullArray, StringArray, StringBuilder,
+    StringDictionaryBuilder, StructArray, UInt8Array, UInt16Array, UInt16Builder, UnionArray,
 };
 use arrow::datatypes::Int16Type;
 use arrow_array::StringViewArray;
@@ -1150,4 +1150,54 @@ fn test_fixed_size_list_append() {
     )
     .unwrap();
     assert_eq!(finished, expected_fixed_size_list_data);
+}
+
+#[test]
+fn test_list_view_mutable_array_data_extend() {
+    // Repro: MutableArrayData's extend for ListView copies offsets/sizes
+    // but does not copy the child data, resulting in an invalid array.
+    //
+    // Build a ListViewArray: [[1, 2], null, [3]]
+    let mut builder = GenericListBuilder::<i32, _>::new(Int64Builder::new());
+    builder.values().append_value(1);
+    builder.values().append_value(2);
+    builder.append(true);
+    builder.append(false);
+    builder.values().append_value(3);
+    builder.append(true);
+    let list: ListViewArray = builder.finish().into();
+
+    let data = list.to_data();
+    let mut mutable = MutableArrayData::new(vec![&data], false, 3);
+
+    // Extend with all 3 elements
+    mutable.extend(0, 0, 3);
+
+    let result = mutable.freeze();
+    let result_array = arrow_array::make_array(result);
+    let result_list_view = result_array
+        .as_any()
+        .downcast_ref::<ListViewArray>()
+        .unwrap();
+
+    // The result should have length 3 and match the original.
+    assert_eq!(result_list_view.len(), 3);
+
+    // Verify the child values were actually copied. MutableArrayData currently
+    // copies offsets/sizes but not child data, so the values array is empty
+    // even though offsets still point into the original range.
+    let values = result_list_view.values();
+    let offsets = result_list_view.offsets();
+    let sizes = result_list_view.sizes();
+    assert_eq!(
+        values.len(),
+        list.values().len(),
+        "Child values were not copied: expected {} child elements, got {}.\n\
+         Offsets: {:?}, Sizes: {:?}, but values array has length {}",
+        list.values().len(),
+        values.len(),
+        offsets.as_ref(),
+        sizes.as_ref(),
+        values.len(),
+    );
 }
