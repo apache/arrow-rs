@@ -632,7 +632,9 @@ pub fn interleave_record_batch(
 mod tests {
     use super::*;
     use arrow_array::Int32RunArray;
-    use arrow_array::builder::{GenericListBuilder, Int32Builder, PrimitiveRunBuilder};
+    use arrow_array::builder::{
+        GenericListBuilder, Int32Builder, Int64Builder, PrimitiveRunBuilder,
+    };
     use arrow_array::types::Int8Type;
     use arrow_buffer::ScalarBuffer;
     use arrow_schema::Field;
