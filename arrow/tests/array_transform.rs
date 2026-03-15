@@ -1183,21 +1183,20 @@ fn test_list_view_mutable_array_data_extend() {
     // The result should have length 3 and match the original.
     assert_eq!(result_list_view.len(), 3);
 
-    // Verify the child values were actually copied. MutableArrayData currently
-    // copies offsets/sizes but not child data, so the values array is empty
-    // even though offsets still point into the original range.
-    let values = result_list_view.values();
-    let offsets = result_list_view.offsets();
-    let sizes = result_list_view.sizes();
-    assert_eq!(
-        values.len(),
-        list.values().len(),
-        "Child values were not copied: expected {} child elements, got {}.\n\
-         Offsets: {:?}, Sizes: {:?}, but values array has length {}",
-        list.values().len(),
-        values.len(),
-        offsets.as_ref(),
-        sizes.as_ref(),
-        values.len(),
-    );
+    // Verify the child values were actually copied.
+    assert_eq!(result_list_view.values().len(), list.values().len());
+
+    // Collect the list elements to confirm they are accessible and correct.
+    let collected: Vec<Option<Vec<i64>>> = (0..result_list_view.len())
+        .map(|i| {
+            if result_list_view.is_null(i) {
+                None
+            } else {
+                let arr = result_list_view.value(i);
+                let int_arr = arr.as_any().downcast_ref::<Int64Array>().unwrap();
+                Some(int_arr.values().to_vec())
+            }
+        })
+        .collect();
+    assert_eq!(collected, vec![Some(vec![1, 2]), None, Some(vec![3])]);
 }
