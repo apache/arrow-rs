@@ -26,7 +26,7 @@ use crate::{Buffer, MutableBuffer};
 /// that it is null.
 ///
 /// # See also
-/// * [`NullBufferBuilder`] for creating `NullBuffer`s  
+/// * [`NullBufferBuilder`] for creating `NullBuffer`s
 ///
 /// [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html#validity-bitmaps
 /// [`NullBufferBuilder`]: crate::NullBufferBuilder
@@ -230,6 +230,13 @@ impl NullBuffer {
         let bb = BooleanBuffer::new(buffer.into(), 0, len);
         let nb = NullBuffer::new(bb);
         (nb.null_count() > 0).then_some(nb)
+    }
+
+    /// Claim memory used by this null buffer in the provided memory pool.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        // NullBuffer wraps a BooleanBuffer which wraps a Buffer
+        self.buffer.inner().claim(pool);
     }
 }
 

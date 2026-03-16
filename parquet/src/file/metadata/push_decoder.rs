@@ -308,7 +308,7 @@ impl ParquetMetaDataPushDecoder {
 
     #[cfg(feature = "encryption")]
     /// Provide decryption properties for decoding encrypted Parquet files
-    pub(crate) fn with_file_decryption_properties(
+    pub fn with_file_decryption_properties(
         mut self,
         file_decryption_properties: Option<std::sync::Arc<FileDecryptionProperties>>,
     ) -> Self {
