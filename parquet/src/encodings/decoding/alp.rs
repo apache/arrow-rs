@@ -295,10 +295,7 @@ pub(super) trait AlpFloat: Copy + Default {
     fn decode_scale(exponent: u8, factor: u8) -> Self::Scale;
 
     /// Decode one signed exact integer using a precomputed two-step scale.
-    fn decode_value(
-        signed_encoded: <Self::Exact as AlpExact>::Signed,
-        scale: Self::Scale,
-    ) -> Self;
+    fn decode_value(signed_encoded: <Self::Exact as AlpExact>::Signed, scale: Self::Scale) -> Self;
 
     fn from_exact_bits(bits: Self::Exact) -> Self;
 }
@@ -310,7 +307,10 @@ impl AlpFloat for f32 {
     fn decode_scale(exponent: u8, factor: u8) -> Self::Scale {
         debug_assert!(exponent <= ALP_MAX_EXPONENT_F32);
         debug_assert!(factor <= exponent);
-        (ALP_POW10_F32[factor as usize], ALP_NEG_POW10_F32[exponent as usize])
+        (
+            ALP_POW10_F32[factor as usize],
+            ALP_NEG_POW10_F32[exponent as usize],
+        )
     }
 
     fn decode_value(signed_encoded: i32, scale: Self::Scale) -> Self {
@@ -329,7 +329,10 @@ impl AlpFloat for f64 {
     fn decode_scale(exponent: u8, factor: u8) -> Self::Scale {
         debug_assert!(exponent <= ALP_MAX_EXPONENT_F64);
         debug_assert!(factor <= exponent);
-        (ALP_POW10_F64[factor as usize], ALP_NEG_POW10_F64[exponent as usize])
+        (
+            ALP_POW10_F64[factor as usize],
+            ALP_NEG_POW10_F64[exponent as usize],
+        )
     }
 
     fn decode_value(signed_encoded: i64, scale: Self::Scale) -> Self {
@@ -485,7 +488,9 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<E
             parse_vector_view::<Exact>(body_ref, vector_start, vector_end, vector_num_elements)?;
         expected_next_offset = vector_start
             .checked_add(vector.expected_stored_size())
-            .ok_or_else(|| general_err!("Invalid ALP page: expected next vector offset overflow"))?;
+            .ok_or_else(|| {
+                general_err!("Invalid ALP page: expected next vector offset overflow")
+            })?;
         vectors.push(vector);
     }
 
@@ -1164,8 +1169,9 @@ mod tests {
         let data = make_alp_page_bytes(0, 0, 3, 9, &[12, 8], 12);
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
-            err.to_string()
-                .contains("Invalid ALP page: vector offset 12 at index 0 does not match expected 8")
+            err.to_string().contains(
+                "Invalid ALP page: vector offset 12 at index 0 does not match expected 8"
+            )
         );
     }
 
