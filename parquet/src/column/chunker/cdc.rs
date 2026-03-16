@@ -19,7 +19,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::properties::CdcOptions;
 use crate::schema::types::ColumnDescriptor;
 
-use super::Chunk;
+use super::CdcChunk;
 use super::cdc_generated::{GEARHASH_TABLE, NUM_GEARHASH_TABLES};
 
 /// CDC (Content-Defined Chunking) divides data into variable-sized chunks based on
@@ -279,7 +279,7 @@ impl ContentDefinedChunker {
         rep_levels: Option<&[i16]>,
         num_levels: usize,
         mut roll_value: F,
-    ) -> Vec<Chunk>
+    ) -> Vec<CdcChunk>
     where
         F: FnMut(&mut Self, usize),
     {
@@ -297,7 +297,7 @@ impl ContentDefinedChunker {
             for offset in 0..num_levels {
                 roll_value(self, offset);
                 if self.need_new_chunk() {
-                    chunks.push(Chunk {
+                    chunks.push(CdcChunk {
                         level_offset: prev_offset,
                         value_offset: prev_offset,
                         num_levels: offset - prev_offset,
@@ -319,7 +319,7 @@ impl ContentDefinedChunker {
                     roll_value(self, offset);
                 }
                 if self.need_new_chunk() {
-                    chunks.push(Chunk {
+                    chunks.push(CdcChunk {
                         level_offset: prev_offset,
                         value_offset: prev_offset,
                         num_levels: offset - prev_offset,
@@ -350,7 +350,7 @@ impl ContentDefinedChunker {
                     // If we are at a record boundary and need a new chunk, create one.
                     let levels_to_write = offset - prev_offset;
                     if levels_to_write > 0 {
-                        chunks.push(Chunk {
+                        chunks.push(CdcChunk {
                             level_offset: prev_offset,
                             value_offset: prev_value_offset,
                             num_levels: levels_to_write,
@@ -370,7 +370,7 @@ impl ContentDefinedChunker {
 
         // Add the last chunk if we have any levels left.
         if prev_offset < num_levels {
-            chunks.push(Chunk {
+            chunks.push(CdcChunk {
                 level_offset: prev_offset,
                 value_offset: prev_value_offset,
                 num_levels: num_levels - prev_offset,
@@ -392,7 +392,7 @@ impl ContentDefinedChunker {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
         array: &dyn arrow_array::Array,
-    ) -> Result<Vec<Chunk>> {
+    ) -> Result<Vec<CdcChunk>> {
         use arrow_array::cast::AsArray;
         use arrow_schema::DataType;
 
@@ -474,7 +474,7 @@ impl ContentDefinedChunker {
     }
 
     #[cfg(debug_assertions)]
-    fn validate_chunks(&self, chunks: &[Chunk], num_levels: usize, total_values: usize) {
+    fn validate_chunks(&self, chunks: &[CdcChunk], num_levels: usize, total_values: usize) {
         assert!(!chunks.is_empty(), "chunks must be non-empty");
 
         let first = &chunks[0];

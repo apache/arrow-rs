@@ -40,7 +40,7 @@
 //!
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
-use crate::column::chunker::Chunk;
+use crate::column::chunker::CdcChunk;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
@@ -807,7 +807,7 @@ impl ArrayLevels {
     ///
     /// Note: `def_levels`, `rep_levels`, and `non_null_indices` are copied (not zero-copy),
     /// while `array` is sliced without copying.
-    pub(crate) fn slice_for_chunk(&self, chunk: &Chunk) -> Self {
+    pub(crate) fn slice_for_chunk(&self, chunk: &CdcChunk) -> Self {
         let level_offset = chunk.level_offset;
         let num_levels = chunk.num_levels;
         let value_offset = chunk.value_offset;
@@ -853,7 +853,7 @@ impl ArrayLevels {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::column::chunker::Chunk;
+    use crate::column::chunker::CdcChunk;
 
     use arrow_array::builder::*;
     use arrow_array::types::Int32Type;
@@ -2147,7 +2147,11 @@ mod tests {
 
     #[test]
     fn test_slice_for_chunk_flat() {
-        // Required field (no levels): array [1..=6], slice values 2..5
+        // Case 1: required field (max_def_level=0, no def/rep levels stored).
+        // Array has 6 values; all are non-null so non_null_indices covers every position.
+        // The chunk selects value_offset=2, num_values=3 → the sub-array [3, 4, 5].
+        // Since there are no levels, num_levels=0 and level_offset are irrelevant.
+        // non_null_indices [0,1,2,3,4,5] filtered to [2,4) and shifted by -2 → [0,1,2].
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
         let logical_nulls = array.logical_nulls();
         let levels = ArrayLevels {
@@ -2159,7 +2163,7 @@ mod tests {
             array,
             logical_nulls,
         };
-        let sliced = levels.slice_for_chunk(&Chunk {
+        let sliced = levels.slice_for_chunk(&CdcChunk {
             level_offset: 0,
             num_levels: 0,
             value_offset: 2,
@@ -2170,8 +2174,16 @@ mod tests {
         assert_eq!(sliced.non_null_indices, vec![0, 1, 2]);
         assert_eq!(sliced.array.len(), 3);
 
-        // Optional field (def levels only): [1, null, 3, null, 5, 6]
-        // Slice levels 1..4 (def=[0,1,0]), values 1..4 → non_null_indices [2]→[1]
+        // Case 2: optional field (max_def_level=1, def levels present, no rep levels).
+        // Array: [Some(1), None, Some(3), None, Some(5), Some(6)]
+        // def_levels: [1, 0, 1, 0, 1, 1]  (1=non-null, 0=null)
+        // non_null_indices: [0, 2, 4, 5]  (array positions of the four non-null values)
+        //
+        // The chunk selects level_offset=1, num_levels=3, value_offset=1, num_values=3:
+        //   - def_levels[1..4] = [0, 1, 0]  → null, non-null, null
+        //   - sub-array slice(1, 3) = [None, Some(3), None]
+        //   - non_null_indices filtered to [value_offset=1, value_end=4): only index 2 qualifies,
+        //     shifted by -1 → [1]  (position of Some(3) within the sliced sub-array)
         let array: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
             None,
@@ -2190,7 +2202,7 @@ mod tests {
             array,
             logical_nulls,
         };
-        let sliced = levels.slice_for_chunk(&Chunk {
+        let sliced = levels.slice_for_chunk(&CdcChunk {
             level_offset: 1,
             num_levels: 3,
             value_offset: 1,
@@ -2217,7 +2229,7 @@ mod tests {
             array,
             logical_nulls,
         };
-        let sliced = levels.slice_for_chunk(&Chunk {
+        let sliced = levels.slice_for_chunk(&CdcChunk {
             level_offset: 2,
             num_levels: 3,
             value_offset: 2,
@@ -2246,7 +2258,7 @@ mod tests {
         };
         assert_eq!(
             levels
-                .slice_for_chunk(&Chunk {
+                .slice_for_chunk(&CdcChunk {
                     level_offset: 0,
                     num_levels: 1,
                     value_offset: 0,
@@ -2258,7 +2270,7 @@ mod tests {
         // idx 2 in range [1,3), shifted -1 → 1
         assert_eq!(
             levels
-                .slice_for_chunk(&Chunk {
+                .slice_for_chunk(&CdcChunk {
                     level_offset: 1,
                     num_levels: 2,
                     value_offset: 1,
@@ -2270,7 +2282,7 @@ mod tests {
         // idx 2 excluded from [1,2)
         assert_eq!(
             levels
-                .slice_for_chunk(&Chunk {
+                .slice_for_chunk(&CdcChunk {
                     level_offset: 1,
                     num_levels: 1,
                     value_offset: 1,

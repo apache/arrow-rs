@@ -28,7 +28,7 @@ pub(crate) use cdc::ContentDefinedChunker;
 
 /// A chunk of data with level and value offsets for record-shredded nested data.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Chunk {
+pub(crate) struct CdcChunk {
     /// The start offset of this chunk inside the given levels.
     pub level_offset: usize,
     /// The start offset of this chunk inside the given values array.
