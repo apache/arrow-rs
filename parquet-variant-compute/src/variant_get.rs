@@ -465,10 +465,17 @@ mod test {
         };
     }
 
-    /// Build the mixed input [typed, null, "n/a", typed] and let shred_variant
+    /// Build a mixed input [typed, null, fallback, typed] and let shred_variant
     /// generate the shredded fixture for the requested type.
     macro_rules! partially_shredded_variant_array_gen {
         ($func_name:ident,  $typed_value_array_gen: expr) => {
+            partially_shredded_variant_array_gen!(
+                $func_name,
+                $typed_value_array_gen,
+                Variant::from("n/a")
+            );
+        };
+        ($func_name:ident,  $typed_value_array_gen: expr, $fallback_variant:expr) => {
             fn $func_name() -> ArrayRef {
                 let typed_value: ArrayRef = Arc::new($typed_value_array_gen());
                 let typed_as_variant = cast_to_variant(typed_value.as_ref())
@@ -476,7 +483,7 @@ mod test {
                 let mut input_builder = VariantArrayBuilder::new(typed_as_variant.len());
                 input_builder.append_variant(typed_as_variant.value(0));
                 input_builder.append_null();
-                input_builder.append_variant(Variant::from("n/a"));
+                input_builder.append_variant($fallback_variant);
                 input_builder.append_variant(typed_as_variant.value(3));
 
                 let variant_array = shred_variant(&input_builder.build(), typed_value.data_type())
@@ -533,9 +540,11 @@ mod test {
         arrow::array::BooleanArray::from(vec![Some(true), None, None, Some(false)])
     });
 
-    partially_shredded_variant_array_gen!(partially_shredded_utf8_variant_array, || {
-        StringArray::from(vec![Some("hello"), None, None, Some("world")])
-    });
+    partially_shredded_variant_array_gen!(
+        partially_shredded_utf8_variant_array,
+        || { StringArray::from(vec![Some("hello"), None, None, Some("world")]) },
+        Variant::from(42i32)
+    );
 
     partially_shredded_variant_array_gen!(partially_shredded_date32_variant_array, || {
         Date32Array::from(vec![
@@ -606,7 +615,7 @@ mod test {
         // Expect the values are the same as the original values
         assert_eq!(result.value(0), Variant::from("hello"));
         assert!(!result.is_valid(1));
-        assert_eq!(result.value(2), Variant::from("n/a"));
+        assert_eq!(result.value(2), Variant::from(42i32));
         assert_eq!(result.value(3), Variant::from("world"));
     }
 
