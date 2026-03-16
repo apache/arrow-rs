@@ -1031,7 +1031,7 @@ mod test {
         ($func:ident, $typed_value_gen:expr) => {
             fn $func() -> ArrayRef {
                 // Prefer producing fixtures with shred_variant from unshredded input.
-                // Fall back for non-shreddable test-only Arrow types (e.g. LargeUtf8/LargeBinary/Null).
+                // Fall back for remaining non-shreddable test-only Arrow types (currently Null).
                 let typed_value: ArrayRef = Arc::new($typed_value_gen());
                 if let Some(shredded) = cast_to_variant(typed_value.as_ref())
                     .ok()
