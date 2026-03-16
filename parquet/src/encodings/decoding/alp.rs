@@ -202,26 +202,40 @@ impl AlpExact for u64 {
     }
 }
 
-const ALP_I64_POW10: [i64; 19] = [
-    1,
-    10,
-    100,
-    1_000,
-    10_000,
-    100_000,
-    1_000_000,
-    10_000_000,
-    100_000_000,
-    1_000_000_000,
-    10_000_000_000,
-    100_000_000_000,
-    1_000_000_000_000,
-    10_000_000_000_000,
-    100_000_000_000_000,
-    1_000_000_000_000_000,
-    10_000_000_000_000_000,
-    100_000_000_000_000_000,
-    1_000_000_000_000_000_000,
+const ALP_POW10_F32: [f32; 11] = [
+    1.0,
+    10.0,
+    100.0,
+    1000.0,
+    10000.0,
+    100000.0,
+    1000000.0,
+    10000000.0,
+    100000000.0,
+    1000000000.0,
+    10000000000.0,
+];
+
+const ALP_POW10_F64: [f64; 19] = [
+    1.0,
+    10.0,
+    100.0,
+    1000.0,
+    10000.0,
+    100000.0,
+    1000000.0,
+    10000000.0,
+    100000000.0,
+    1000000000.0,
+    10000000000.0,
+    100000000000.0,
+    1000000000000.0,
+    10000000000000.0,
+    100000000000000.0,
+    1000000000000000.0,
+    10000000000000000.0,
+    100000000000000000.0,
+    1000000000000000000.0,
 ];
 
 const ALP_NEG_POW10_F32: [f32; 11] = [
@@ -262,30 +276,35 @@ const ALP_NEG_POW10_F64: [f64; 19] = [
 
 pub(super) trait AlpFloat: Copy + Default {
     type Exact: AlpExact + FromBytes;
+    type Scale: Copy;
 
-    /// Precompute vector-level ALP decimal scale for:
-    /// `value = encoded * 10^(factor) * 10^(-exponent)`.
+    /// Precompute vector-level ALP decimal scale constants for:
+    /// `value = (encoded * 10^(factor)) * 10^(-exponent)`.
     ///
     /// Preconditions are validated during page parse.
-    fn decode_scale(exponent: u8, factor: u8) -> Self;
+    fn decode_scale(exponent: u8, factor: u8) -> Self::Scale;
 
-    /// Decode one signed exact integer using a precomputed scale.
-    fn decode_value(signed_encoded: <Self::Exact as AlpExact>::Signed, scale: Self) -> Self;
+    /// Decode one signed exact integer using a precomputed two-step scale.
+    fn decode_value(
+        signed_encoded: <Self::Exact as AlpExact>::Signed,
+        scale: Self::Scale,
+    ) -> Self;
 
     fn from_exact_bits(bits: Self::Exact) -> Self;
 }
 
 impl AlpFloat for f32 {
     type Exact = u32;
+    type Scale = (f32, f32);
 
-    fn decode_scale(exponent: u8, factor: u8) -> Self {
+    fn decode_scale(exponent: u8, factor: u8) -> Self::Scale {
         debug_assert!(exponent <= ALP_MAX_EXPONENT_F32);
         debug_assert!(factor <= exponent);
-        (ALP_I64_POW10[factor as usize] as f32) * ALP_NEG_POW10_F32[exponent as usize]
+        (ALP_POW10_F32[factor as usize], ALP_NEG_POW10_F32[exponent as usize])
     }
 
-    fn decode_value(signed_encoded: i32, scale: Self) -> Self {
-        (signed_encoded as f32) * scale
+    fn decode_value(signed_encoded: i32, scale: Self::Scale) -> Self {
+        ((signed_encoded as f32) * scale.0) * scale.1
     }
 
     fn from_exact_bits(bits: Self::Exact) -> Self {
@@ -295,15 +314,16 @@ impl AlpFloat for f32 {
 
 impl AlpFloat for f64 {
     type Exact = u64;
+    type Scale = (f64, f64);
 
-    fn decode_scale(exponent: u8, factor: u8) -> Self {
+    fn decode_scale(exponent: u8, factor: u8) -> Self::Scale {
         debug_assert!(exponent <= ALP_MAX_EXPONENT_F64);
         debug_assert!(factor <= exponent);
-        (ALP_I64_POW10[factor as usize] as f64) * ALP_NEG_POW10_F64[exponent as usize]
+        (ALP_POW10_F64[factor as usize], ALP_NEG_POW10_F64[exponent as usize])
     }
 
-    fn decode_value(signed_encoded: i64, scale: Self) -> Self {
-        (signed_encoded as f64) * scale
+    fn decode_value(signed_encoded: i64, scale: Self::Scale) -> Self {
+        ((signed_encoded as f64) * scale.0) * scale.1
     }
 
     fn from_exact_bits(bits: Self::Exact) -> Self {
@@ -1244,6 +1264,54 @@ mod tests {
         assert_eq!(decoded[1], -0.0);
         assert!(decoded[1].is_sign_negative());
         assert_eq!(decoded[2], f32::INFINITY);
+    }
+
+    #[test]
+    fn test_decode_page_values_f32_two_step_decimal_multiply() {
+        let encoded = 1_970_570_984_i32;
+        let vector = make_vector(VectorSpec {
+            exponent: 1,
+            factor: 1,
+            frame_of_reference: encoded as u32,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        let page = make_page_from_vectors(3, 1, &[vector]);
+        let layout = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap();
+        let decoded = decode_page_values::<f32>(&layout).unwrap();
+
+        let expected_two_step = ((encoded as f32) * ALP_POW10_F32[1]) * ALP_NEG_POW10_F32[1];
+        let one_step_scale = ALP_POW10_F32[1] * ALP_NEG_POW10_F32[1];
+        let expected_one_step = (encoded as f32) * one_step_scale;
+
+        assert_eq!(decoded[0].to_bits(), expected_two_step.to_bits());
+        assert_ne!(decoded[0].to_bits(), expected_one_step.to_bits());
+    }
+
+    #[test]
+    fn test_decode_page_values_f64_two_step_decimal_multiply() {
+        let encoded = -3_900_047_474_048_127_703_i64;
+        let vector = make_vector(VectorSpec {
+            exponent: 1,
+            factor: 1,
+            frame_of_reference: encoded as u64,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        let page = make_page_from_vectors(3, 1, &[vector]);
+        let layout = parse_alp_page_layout::<u64>(Bytes::from(page)).unwrap();
+        let decoded = decode_page_values::<f64>(&layout).unwrap();
+
+        let expected_two_step = ((encoded as f64) * ALP_POW10_F64[1]) * ALP_NEG_POW10_F64[1];
+        let one_step_scale = ALP_POW10_F64[1] * ALP_NEG_POW10_F64[1];
+        let expected_one_step = (encoded as f64) * one_step_scale;
+
+        assert_eq!(decoded[0].to_bits(), expected_two_step.to_bits());
+        assert_ne!(decoded[0].to_bits(), expected_one_step.to_bits());
     }
 
     #[test]
