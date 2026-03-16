@@ -130,6 +130,16 @@ struct AlpEncodedVectorView<Exact: AlpExact> {
     exception_values: Vec<Exact>,
 }
 
+impl<Exact: AlpExact> AlpEncodedVectorView<Exact> {
+    fn expected_stored_size(&self) -> usize {
+        AlpEncodedVectorInfo::STORED_SIZE
+            + AlpEncodedForVectorInfo::<Exact>::stored_size()
+            + self
+                .for_info
+                .get_data_stored_size(self.num_elements, self.alp_info.num_exceptions)
+    }
+}
+
 /// Parsed ALP page layout for one exact integer width (`u32` for float pages,
 /// `u64` for double pages).
 #[derive(Debug)]
@@ -445,6 +455,7 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<E
     }
 
     let mut vectors = Vec::with_capacity(num_vectors);
+    let mut expected_vectors_size = 0usize;
     for (vector_idx, vector_offset) in offsets.iter().enumerate() {
         let vector_start = *vector_offset as usize;
         let vector_end = if vector_idx + 1 < offsets.len() {
@@ -463,7 +474,21 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<E
         let vector_num_elements = header.vector_num_elements(vector_idx);
         let vector =
             parse_vector_view::<Exact>(body_ref, vector_start, vector_end, vector_num_elements)?;
+        expected_vectors_size = expected_vectors_size
+            .checked_add(vector.expected_stored_size())
+            .ok_or_else(|| general_err!("Invalid ALP page: expected vectors size overflow"))?;
         vectors.push(vector);
+    }
+
+    let expected_body_len = offsets_section_size
+        .checked_add(expected_vectors_size)
+        .ok_or_else(|| general_err!("Invalid ALP page: expected body size overflow"))?;
+    if body_len != expected_body_len {
+        return Err(general_err!(
+            "Invalid ALP page: body size {} does not match expected {} (offsets + vectors)",
+            body_len,
+            expected_body_len
+        ));
     }
 
     Ok(AlpPageLayout {
@@ -548,15 +573,23 @@ fn parse_vector_view<Exact: AlpExact>(
     };
 
     let data_size = for_info.get_data_stored_size(num_elements, alp_info.num_exceptions);
-    if vector_bytes.len() < metadata_size + data_size {
+    let expected_size = metadata_size + data_size;
+    if vector_bytes.len() < expected_size {
         return Err(general_err!(
             "Invalid ALP page: vector data too short, expected at least {} bytes, got {}",
-            metadata_size + data_size,
+            expected_size,
+            vector_bytes.len()
+        ));
+    }
+    if vector_bytes.len() > expected_size {
+        return Err(general_err!(
+            "Invalid ALP page: vector data too long, expected {} bytes, got {}",
+            expected_size,
             vector_bytes.len()
         ));
     }
 
-    let data = &vector_bytes[metadata_size..metadata_size + data_size];
+    let data = &vector_bytes[metadata_size..expected_size];
     let packed_size = for_info.get_bit_packed_size(num_elements);
     let positions_size = alp_info.num_exceptions as usize * std::mem::size_of::<u16>();
     let values_size = alp_info.num_exceptions as usize * Exact::WIDTH;
@@ -1143,6 +1176,53 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Invalid ALP page: vector data too short")
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_vector_data_too_long() {
+        let mut vector = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 0u32,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+        vector.push(0xAB);
+
+        let page = make_page_from_vectors(3, 1, &[vector]);
+        let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid ALP page: vector data too long, expected 9 bytes, got 10")
+        );
+    }
+
+    #[test]
+    fn test_parse_alp_page_layout_body_size_mismatch_unclaimed_bytes() {
+        let vector = make_vector(VectorSpec {
+            exponent: 0,
+            factor: 0,
+            frame_of_reference: 0u32,
+            bit_width: 0,
+            packed_values: &[],
+            exception_positions: &[],
+            exception_values: &[],
+        });
+
+        // offsets section is 4 bytes for one vector, so offset=5 leaves one
+        // unclaimed byte between offsets and vector data.
+        let mut page = make_alp_page_bytes(0, 0, 3, 1, &[5], 0);
+        page.push(0);
+        page.extend_from_slice(&vector);
+
+        let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "Invalid ALP page: body size 14 does not match expected 13 (offsets + vectors)"
+            )
         );
     }
 
