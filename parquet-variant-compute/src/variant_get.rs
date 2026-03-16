@@ -2626,7 +2626,7 @@ mod test {
     #[test]
     fn test_error_message_boolean_type_display() {
         let mut builder = VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::Int32(123));
+        builder.append_variant(Variant::Null);
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         // Request Boolean with strict casting to force an error
@@ -2647,7 +2647,7 @@ mod test {
     #[test]
     fn test_error_message_numeric_type_display() {
         let mut builder = VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::BooleanTrue);
+        builder.append_variant(Variant::Null);
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         // Request Boolean with strict casting to force an error
