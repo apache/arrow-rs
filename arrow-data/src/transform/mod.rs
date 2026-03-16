@@ -719,7 +719,7 @@ impl<'a> MutableArrayData<'a> {
     /// Extends the in progress array with a region of the input arrays
     ///
     /// # Arguments
-    /// * `index` - the index of array that you what to copy values from
+    /// * `index` - the index of array that you want to copy values from
     /// * `start` - the start index of the chunk (inclusive)
     /// * `end` - the end index of the chunk (exclusive)
     ///
