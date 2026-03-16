@@ -468,6 +468,16 @@ unsafe impl Array for StructArray {
         }
         size
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        for field in &self.fields {
+            field.claim(pool);
+        }
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+    }
 }
 
 impl From<Vec<(FieldRef, ArrayRef)>> for StructArray {

@@ -489,6 +489,14 @@ impl BooleanBuffer {
         self.buffer
     }
 
+    /// Claim memory used by this buffer in the provided memory pool.
+    ///
+    /// See [`Buffer::claim`] for details.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        self.buffer.claim(pool);
+    }
+
     /// Returns an iterator over the bits in this [`BooleanBuffer`]
     pub fn iter(&self) -> BitIterator<'_> {
         self.into_iter()

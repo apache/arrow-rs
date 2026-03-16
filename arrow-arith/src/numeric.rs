@@ -1320,7 +1320,10 @@ mod tests {
             "1960-01-30T04:23:20Z",
         ]
         .into_iter()
-        .map(|x| T::make_value(DateTime::parse_from_rfc3339(x).unwrap().naive_utc()).unwrap())
+        .map(|x| {
+            T::from_naive_datetime(DateTime::parse_from_rfc3339(x).unwrap().naive_utc(), None)
+                .unwrap()
+        })
         .collect();
 
         let a = PrimitiveArray::<T>::new(values, None);

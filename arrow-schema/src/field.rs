@@ -830,6 +830,9 @@ impl Field {
                         .try_for_each(|f| builder.try_merge(f))?;
                     *nested_fields = builder.finish().fields;
                 }
+                DataType::Null => {
+                    self.nullable = true;
+                }
                 _ => {
                     return Err(ArrowError::SchemaError(format!(
                         "Fail to merge schema field '{}' because the from data_type = {} is not DataType::Struct",
@@ -840,6 +843,9 @@ impl Field {
             DataType::Union(nested_fields, _) => match &from.data_type {
                 DataType::Union(from_nested_fields, _) => {
                     nested_fields.try_merge(from_nested_fields)?
+                }
+                DataType::Null => {
+                    self.nullable = true;
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(format!(
@@ -854,6 +860,9 @@ impl Field {
                     f.try_merge(from_field)?;
                     (*field) = Arc::new(f);
                 }
+                DataType::Null => {
+                    self.nullable = true;
+                }
                 _ => {
                     return Err(ArrowError::SchemaError(format!(
                         "Fail to merge schema field '{}' because the from data_type = {} is not DataType::List",
@@ -866,6 +875,9 @@ impl Field {
                     let mut f = (**field).clone();
                     f.try_merge(from_field)?;
                     (*field) = Arc::new(f);
+                }
+                DataType::Null => {
+                    self.nullable = true;
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(format!(
@@ -1460,5 +1472,59 @@ mod test {
         let field = Field::new("name", DataType::Boolean, false).with_metadata(metadata);
 
         assert_binary_serde_round_trip(field)
+    }
+
+    #[test]
+    fn test_merge_compound_with_null() {
+        // Struct + Null
+        let mut field = Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, false)])),
+            false,
+        );
+        field
+            .try_merge(&Field::new("s", DataType::Null, true))
+            .expect("Struct should merge with Null");
+        assert!(field.is_nullable());
+        assert!(matches!(field.data_type(), DataType::Struct(_)));
+
+        // List + Null
+        let mut field = Field::new(
+            "l",
+            DataType::List(Field::new("item", DataType::Utf8, false).into()),
+            false,
+        );
+        field
+            .try_merge(&Field::new("l", DataType::Null, true))
+            .expect("List should merge with Null");
+        assert!(field.is_nullable());
+        assert!(matches!(field.data_type(), DataType::List(_)));
+
+        // LargeList + Null
+        let mut field = Field::new(
+            "ll",
+            DataType::LargeList(Field::new("item", DataType::Utf8, false).into()),
+            false,
+        );
+        field
+            .try_merge(&Field::new("ll", DataType::Null, true))
+            .expect("LargeList should merge with Null");
+        assert!(field.is_nullable());
+        assert!(matches!(field.data_type(), DataType::LargeList(_)));
+
+        // Union + Null
+        let mut field = Field::new(
+            "u",
+            DataType::Union(
+                UnionFields::try_new(vec![0], vec![Field::new("f", DataType::Int32, false)])
+                    .unwrap(),
+                UnionMode::Dense,
+            ),
+            false,
+        );
+        field
+            .try_merge(&Field::new("u", DataType::Null, true))
+            .expect("Union should merge with Null");
+        assert!(matches!(field.data_type(), DataType::Union(_, _)));
     }
 }

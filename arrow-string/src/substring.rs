@@ -22,7 +22,7 @@
 use arrow_array::builder::BufferBuilder;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::Zero;
 use std::cmp::Ordering;
@@ -216,8 +216,7 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
     let nulls = array
         .nulls()
         .map(|n| n.inner().sliced())
-        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
-        .filter(|n| n.null_count() > 0);
+        .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()));
     Ok(GenericStringArray::<OffsetSize>::new(
         offsets, values, nulls,
     ))
@@ -318,8 +317,7 @@ where
     let nulls = array
         .nulls()
         .map(|n| n.inner().sliced())
-        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, array.len())))
-        .filter(|n| n.null_count() > 0);
+        .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()));
     Ok(Arc::new(GenericByteArray::<T>::new(offsets, values, nulls)))
 }
 
@@ -356,8 +354,8 @@ fn fixed_size_binary_substring(
     let mut nulls = array
         .nulls()
         .map(|n| n.inner().sliced())
-        .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, num_of_elements)))
-        .filter(|n| n.null_count() > 0);
+        .and_then(|b| NullBuffer::from_unsliced_buffer(b, num_of_elements));
+
     if new_len == 0 && nulls.is_none() {
         // FixedSizeBinaryArray::new takes length from the values buffer, except when size == 0.
         // In that case it uses the null buffer length, so preserve the original length here.
@@ -365,6 +363,7 @@ fn fixed_size_binary_substring(
         // otherwise it collapses to an empty array (len=0).
         nulls = Some(NullBuffer::new_valid(num_of_elements));
     }
+
     Ok(Arc::new(FixedSizeBinaryArray::new(
         new_len,
         new_values.into(),
@@ -375,6 +374,7 @@ fn fixed_size_binary_substring(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::BooleanBuffer;
     use arrow_buffer::Buffer;
 
     /// A helper macro to generate test cases.
