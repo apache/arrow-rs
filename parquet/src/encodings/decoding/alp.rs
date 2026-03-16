@@ -455,9 +455,18 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<E
     }
 
     let mut vectors = Vec::with_capacity(num_vectors);
-    let mut expected_vectors_size = 0usize;
+    let mut expected_next_offset = offsets_section_size;
     for (vector_idx, vector_offset) in offsets.iter().enumerate() {
         let vector_start = *vector_offset as usize;
+        if vector_start != expected_next_offset {
+            return Err(general_err!(
+                "Invalid ALP page: vector offset {} at index {} does not match expected {}",
+                vector_start,
+                vector_idx,
+                expected_next_offset
+            ));
+        }
+
         let vector_end = if vector_idx + 1 < offsets.len() {
             offsets[vector_idx + 1] as usize
         } else {
@@ -474,20 +483,17 @@ fn parse_alp_page_layout<Exact: AlpExact>(data: Bytes) -> Result<AlpPageLayout<E
         let vector_num_elements = header.vector_num_elements(vector_idx);
         let vector =
             parse_vector_view::<Exact>(body_ref, vector_start, vector_end, vector_num_elements)?;
-        expected_vectors_size = expected_vectors_size
+        expected_next_offset = vector_start
             .checked_add(vector.expected_stored_size())
-            .ok_or_else(|| general_err!("Invalid ALP page: expected vectors size overflow"))?;
+            .ok_or_else(|| general_err!("Invalid ALP page: expected next vector offset overflow"))?;
         vectors.push(vector);
     }
 
-    let expected_body_len = offsets_section_size
-        .checked_add(expected_vectors_size)
-        .ok_or_else(|| general_err!("Invalid ALP page: expected body size overflow"))?;
-    if body_len != expected_body_len {
+    if expected_next_offset != body_len {
         return Err(general_err!(
             "Invalid ALP page: body size {} does not match expected {} (offsets + vectors)",
             body_len,
-            expected_body_len
+            expected_next_offset
         ));
     }
 
@@ -1159,7 +1165,7 @@ mod tests {
         let err = parse_alp_page_layout::<u64>(Bytes::from(data)).unwrap_err();
         assert!(
             err.to_string()
-                .contains("Invalid ALP page: vector offsets are not monotonic at index 0")
+                .contains("Invalid ALP page: vector offset 12 at index 0 does not match expected 8")
         );
     }
 
@@ -1220,9 +1226,8 @@ mod tests {
 
         let err = parse_alp_page_layout::<u32>(Bytes::from(page)).unwrap_err();
         assert!(
-            err.to_string().contains(
-                "Invalid ALP page: body size 14 does not match expected 13 (offsets + vectors)"
-            )
+            err.to_string()
+                .contains("Invalid ALP page: vector offset 5 at index 0 does not match expected 4")
         );
     }
 
