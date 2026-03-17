@@ -157,6 +157,16 @@ impl BooleanArray {
         &self.values
     }
 
+    /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
+    /// Folding this many u64 chunks at a time allows the compiler to autovectorize
+    /// the inner loop while still enabling short-circuit exits.
+    const CHUNK_FOLD_BLOCK_SIZE: usize = 64;
+
+    /// Returns an [`UnalignedBitChunk`] over this array's values.
+    fn unaligned_bit_chunks(&self) -> UnalignedBitChunk<'_> {
+        UnalignedBitChunk::new(self.values().values(), self.values().offset(), self.len())
+    }
+
     /// Returns the number of non null, true values within this array.
     /// If you only need to check if there is at least one true value, consider using `has_true()` which can short-circuit and be more efficient.
     pub fn true_count(&self) -> usize {
@@ -193,15 +203,11 @@ impl BooleanArray {
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & v) != 0)
             }
             None => {
-                let bit_chunks = UnalignedBitChunk::new(
-                    self.values().values(),
-                    self.values().offset(),
-                    self.len(),
-                );
+                let bit_chunks = self.unaligned_bit_chunks();
                 bit_chunks.prefix().unwrap_or(0) != 0
                     || bit_chunks
                         .chunks()
-                        .chunks(64)
+                        .chunks(Self::CHUNK_FOLD_BLOCK_SIZE)
                         .any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0)
                     || bit_chunks.suffix().unwrap_or(0) != 0
             }
@@ -222,11 +228,7 @@ impl BooleanArray {
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & !v) != 0)
             }
             None => {
-                let bit_chunks = UnalignedBitChunk::new(
-                    self.values().values(),
-                    self.values().offset(),
-                    self.len(),
-                );
+                let bit_chunks = self.unaligned_bit_chunks();
                 // UnalignedBitChunk zeros padding bits; fill them with 1s so
                 // they don't appear as false values.
                 let lead_mask = !((1u64 << bit_chunks.lead_padding()) - 1);
@@ -235,8 +237,6 @@ impl BooleanArray {
                 } else {
                     (1u64 << (64 - bit_chunks.trailing_padding())) - 1
                 };
-                // If both prefix and suffix exist, suffix gets trail_mask.
-                // If only prefix exists, it gets both masks.
                 let (prefix_fill, suffix_fill) = match (bit_chunks.prefix(), bit_chunks.suffix()) {
                     (Some(_), Some(_)) => (!lead_mask, !trail_mask),
                     (Some(_), None) => (!lead_mask | !trail_mask, 0),
@@ -248,7 +248,7 @@ impl BooleanArray {
                     .is_some_and(|v| (v | prefix_fill) != u64::MAX)
                     || bit_chunks
                         .chunks()
-                        .chunks(64)
+                        .chunks(Self::CHUNK_FOLD_BLOCK_SIZE)
                         .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX)
                     || bit_chunks
                         .suffix()
