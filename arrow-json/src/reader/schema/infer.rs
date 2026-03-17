@@ -30,8 +30,10 @@ enum TyKind {
     Any,
     Scalar(ScalarTy),
     Array(InferTy),
-    Object(Arc<[(Arc<str>, InferTy)]>),
+    Object(Arc<[InferField]>),
 }
+
+pub type InferField = (Arc<str>, InferTy);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ScalarTy {
@@ -42,13 +44,13 @@ enum ScalarTy {
     // NOTE: Null isn't needed because it's absorbed into Any
 }
 
-pub static ANY_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_any());
+pub static ANY_TY: LazyLock<InferTy> = LazyLock::new(InferTy::new_any);
 pub static BOOL_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_scalar(ScalarTy::Bool));
 pub static INT64_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_scalar(ScalarTy::Int64));
 pub static FLOAT64_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_scalar(ScalarTy::Float64));
 pub static STRING_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_scalar(ScalarTy::String));
 pub static ARRAY_OF_ANY_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_array(&*ANY_TY));
-pub static EMPTY_FIELDS: LazyLock<Arc<[(Arc<str>, InferTy)]>> = LazyLock::new(|| Arc::new([]));
+pub static EMPTY_FIELDS: LazyLock<Arc<[InferField]>> = LazyLock::new(|| Arc::new([]));
 pub static EMPTY_OBJECT_TY: LazyLock<InferTy> =
     LazyLock::new(|| InferTy::new_object(EMPTY_FIELDS.clone()));
 
@@ -181,33 +183,30 @@ impl InferTy {
     }
 
     fn kind(&self) -> &TyKind {
-        &*self.0
+        &self.0
     }
 
     fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
-    pub fn into_datatype(&self) -> DataType {
+    pub fn to_datatype(&self) -> DataType {
         match self.kind() {
             TyKind::Any => DataType::Null,
             TyKind::Scalar(s) => s.into_datatype(),
-            TyKind::Array(elem) => DataType::List(elem.into_list_field().into()),
-            TyKind::Object(fields) => DataType::Struct(
-                fields
-                    .iter()
-                    .map(|(key, ty)| ty.into_field(&**key))
-                    .collect(),
-            ),
+            TyKind::Array(elem) => DataType::List(elem.to_list_field().into()),
+            TyKind::Object(fields) => {
+                DataType::Struct(fields.iter().map(|(key, ty)| ty.to_field(&**key)).collect())
+            }
         }
     }
 
-    pub fn into_field(&self, name: impl Into<String>) -> Field {
-        Field::new(name, self.into_datatype(), true)
+    pub fn to_field(&self, name: impl Into<String>) -> Field {
+        Field::new(name, self.to_datatype(), true)
     }
 
-    pub fn into_list_field(&self) -> Field {
-        Field::new_list_field(self.into_datatype(), true)
+    pub fn to_list_field(&self) -> Field {
+        Field::new_list_field(self.to_datatype(), true)
     }
 
     pub fn into_schema(self) -> Result<Schema, ArrowError> {
@@ -219,7 +218,7 @@ impl InferTy {
 
         let fields = fields
             .iter()
-            .map(|(key, ty)| ty.into_field(&**key))
+            .map(|(key, ty)| ty.to_field(&**key))
             .collect::<Fields>();
 
         Ok(Schema::new(fields))
