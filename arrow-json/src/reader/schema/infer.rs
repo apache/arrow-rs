@@ -16,21 +16,21 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
 
 use arrow_schema::{ArrowError, DataType, Field, Fields, Schema};
-use bumpalo::Bump;
 
 use crate::reader::tape::{Tape, TapeElement};
 
-#[derive(Clone, Copy, Debug)]
-pub struct InferredType<'t>(&'t TyKind<'t>);
+#[derive(Clone, Debug)]
+pub struct InferTy(Arc<TyKind>);
 
-#[derive(Clone, Copy, Debug)]
-enum TyKind<'t> {
+#[derive(Clone, Debug)]
+enum TyKind {
     Any,
     Scalar(ScalarTy),
-    Array(InferredType<'t>),
-    Object(&'t [(&'t str, InferredType<'t>)]),
+    Array(InferTy),
+    Object(Arc<[(Arc<str>, InferTy)]>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -39,23 +39,24 @@ enum ScalarTy {
     Int64,
     Float64,
     String,
-    // NOTE: Null isn't needed because it's absorbed into Never
+    // NOTE: Null isn't needed because it's absorbed into Any
 }
 
-pub static ANY_TY: InferredType<'static> = InferredType(&TyKind::Any);
-pub static BOOL_TY: InferredType<'static> = InferredType(&TyKind::Scalar(ScalarTy::Bool));
-pub static INT64_TY: InferredType<'static> = InferredType(&TyKind::Scalar(ScalarTy::Int64));
-pub static FLOAT64_TY: InferredType<'static> = InferredType(&TyKind::Scalar(ScalarTy::Float64));
-pub static STRING_TY: InferredType<'static> = InferredType(&TyKind::Scalar(ScalarTy::String));
-pub static ARRAY_OF_ANY_TY: InferredType<'static> = InferredType(&TyKind::Array(ANY_TY));
-pub static EMPTY_OBJECT_TY: InferredType<'static> = InferredType(&TyKind::Object(&[]));
+pub static ANY_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_any());
+pub static BOOL_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_scalar(ScalarTy::Bool));
+pub static INT64_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_scalar(ScalarTy::Int64));
+pub static FLOAT64_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_scalar(ScalarTy::Float64));
+pub static STRING_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_scalar(ScalarTy::String));
+pub static ARRAY_OF_ANY_TY: LazyLock<InferTy> = LazyLock::new(|| InferTy::new_array(&*ANY_TY));
+pub static EMPTY_FIELDS: LazyLock<Arc<[(Arc<str>, InferTy)]>> = LazyLock::new(|| Arc::new([]));
+pub static EMPTY_OBJECT_TY: LazyLock<InferTy> =
+    LazyLock::new(|| InferTy::new_object(EMPTY_FIELDS.clone()));
 
 /// Infers the type of the provided JSON value, given an expected type.
-pub fn infer_json_type<'a, 't>(
+pub fn infer_json_type<'a>(
     value: impl JsonValue<'a>,
-    expected: InferredType<'t>,
-    arena: &'t Bump,
-) -> Result<InferredType<'t>, ArrowError> {
+    expected: InferTy,
+) -> Result<InferTy, ArrowError> {
     let make_err = |got| {
         let expected = match expected.kind() {
             TyKind::Any => unreachable!(),
@@ -70,20 +71,20 @@ pub fn infer_json_type<'a, 't>(
     let infer_scalar = |scalar: ScalarTy, got: &'static str| {
         Ok(match expected.kind() {
             TyKind::Any => match scalar {
-                ScalarTy::Bool => BOOL_TY,
-                ScalarTy::Int64 => INT64_TY,
-                ScalarTy::Float64 => FLOAT64_TY,
-                ScalarTy::String => STRING_TY,
+                ScalarTy::Bool => BOOL_TY.clone(),
+                ScalarTy::Int64 => INT64_TY.clone(),
+                ScalarTy::Float64 => FLOAT64_TY.clone(),
+                ScalarTy::String => STRING_TY.clone(),
             },
             TyKind::Scalar(expect) => match (expect, &scalar) {
-                (ScalarTy::Bool, ScalarTy::Bool) => BOOL_TY,
-                (ScalarTy::Int64, ScalarTy::Int64) => INT64_TY,
+                (ScalarTy::Bool, ScalarTy::Bool) => BOOL_TY.clone(),
+                (ScalarTy::Int64, ScalarTy::Int64) => INT64_TY.clone(),
                 // Mixed numbers coerce to f64
                 (ScalarTy::Int64 | ScalarTy::Float64, ScalarTy::Int64 | ScalarTy::Float64) => {
-                    FLOAT64_TY
+                    FLOAT64_TY.clone()
                 }
                 // Any other combination coerces to string
-                _ => STRING_TY,
+                _ => STRING_TY.clone(),
             },
             _ => Err(make_err(got))?,
         })
@@ -96,54 +97,52 @@ pub fn infer_json_type<'a, 't>(
         JsonType::Float64 => infer_scalar(ScalarTy::Float64, "a number"),
         JsonType::String => infer_scalar(ScalarTy::String, "a string"),
         JsonType::Array => {
-            let (expected, expected_elem) = match *expected.kind() {
-                TyKind::Any => (ARRAY_OF_ANY_TY, ANY_TY),
-                TyKind::Array(inner) => (expected, inner),
+            let (expected_elem, expected) = match expected.kind() {
+                TyKind::Any => (ANY_TY.clone(), ARRAY_OF_ANY_TY.clone()),
+                TyKind::Array(inner) => (inner.clone(), expected),
                 _ => Err(make_err("an array"))?,
             };
 
             let elem = value
                 .elements()
-                .try_fold(expected_elem, |expected, value| {
-                    infer_json_type(value, expected, arena)
+                .try_fold(expected_elem.clone(), |expected, value| {
+                    infer_json_type(value, expected)
                 })?;
 
-            if elem.ptr_eq(expected_elem) {
+            if elem.ptr_eq(&expected_elem) {
                 return Ok(expected);
             }
 
-            Ok(InferredType::new_array(elem, arena))
+            Ok(InferTy::new_array(elem))
         }
         JsonType::Object => {
-            let (expected, expected_fields) = match *expected.kind() {
-                TyKind::Any => (EMPTY_OBJECT_TY, &[] as &[_]),
-                TyKind::Object(fields) => (expected, fields),
+            let (expected_fields, expected) = match expected.kind() {
+                TyKind::Any => (EMPTY_FIELDS.clone(), EMPTY_OBJECT_TY.clone()),
+                TyKind::Object(fields) => (fields.clone(), expected),
                 _ => Err(make_err("an object"))?,
             };
 
             let mut num_fields = expected_fields.len();
-            let mut substs = HashMap::<usize, (&'t str, InferredType<'t>)>::new();
+            let mut substs = HashMap::<usize, (Arc<str>, InferTy)>::new();
 
             for (key, value) in value.fields() {
                 let existing_field = expected_fields
                     .iter()
-                    .copied()
                     .enumerate()
-                    .find(|(_, (existing_key, _))| *existing_key == key);
+                    .find(|(_, (existing_key, _))| &**existing_key == key);
 
                 match existing_field {
                     Some((field_idx, (key, expect_ty))) => {
-                        let ty = infer_json_type(value, expect_ty, arena)?;
+                        let ty = infer_json_type(value, expect_ty.clone())?;
                         if !ty.ptr_eq(expect_ty) {
-                            substs.insert(field_idx, (key, ty));
+                            substs.insert(field_idx, (key.clone(), ty));
                         }
                     }
                     None => {
                         let field_idx = num_fields;
                         num_fields += 1;
-                        let key = arena.alloc_str(key);
-                        let ty = infer_json_type(value, ANY_TY, arena)?;
-                        substs.insert(field_idx, (key, ty));
+                        let ty = infer_json_type(value, ANY_TY.clone())?;
+                        substs.insert(field_idx, (key.into(), ty));
                     }
                 };
             }
@@ -152,54 +151,62 @@ pub fn infer_json_type<'a, 't>(
                 return Ok(expected);
             }
 
-            let fields = (0..num_fields).map(|idx| match substs.get(&idx) {
-                Some(subst) => *subst,
-                None => expected_fields[idx],
-            });
+            let fields = (0..num_fields)
+                .map(|idx| match substs.remove(&idx) {
+                    Some(subst) => subst,
+                    None => expected_fields[idx].clone(),
+                })
+                .collect();
 
-            Ok(InferredType::new_object(fields, arena))
+            Ok(InferTy::new_object(fields))
         }
     }
 }
 
-impl<'t> InferredType<'t> {
-    fn new_array(inner: InferredType<'t>, arena: &'t Bump) -> Self {
-        Self(arena.alloc(TyKind::Array(inner)))
+impl InferTy {
+    fn new_any() -> Self {
+        Self(TyKind::Any.into())
     }
 
-    fn new_object<F>(fields: F, arena: &'t Bump) -> Self
-    where
-        F: IntoIterator<Item = (&'t str, InferredType<'t>)>,
-        F::IntoIter: ExactSizeIterator,
-    {
-        let fields = arena.alloc_slice_fill_iter(fields);
-        Self(arena.alloc(TyKind::Object(fields)))
+    fn new_scalar(scalar: ScalarTy) -> Self {
+        Self(TyKind::Scalar(scalar).into())
     }
 
-    fn kind(self) -> &'t TyKind<'t> {
-        self.0
+    fn new_array(inner: impl Into<Self>) -> Self {
+        Self(TyKind::Array(inner.into()).into())
     }
 
-    fn ptr_eq(self, other: Self) -> bool {
-        std::ptr::eq(self.kind(), other.kind())
+    fn new_object(fields: Arc<[(Arc<str>, InferTy)]>) -> Self {
+        Self(TyKind::Object(fields).into())
     }
 
-    pub fn into_datatype(self) -> DataType {
+    fn kind(&self) -> &TyKind {
+        &*self.0
+    }
+
+    fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    pub fn into_datatype(&self) -> DataType {
         match self.kind() {
             TyKind::Any => DataType::Null,
             TyKind::Scalar(s) => s.into_datatype(),
             TyKind::Array(elem) => DataType::List(elem.into_list_field().into()),
-            TyKind::Object(fields) => {
-                DataType::Struct(fields.iter().map(|(key, ty)| ty.into_field(*key)).collect())
-            }
+            TyKind::Object(fields) => DataType::Struct(
+                fields
+                    .iter()
+                    .map(|(key, ty)| ty.into_field(&**key))
+                    .collect(),
+            ),
         }
     }
 
-    pub fn into_field(self, name: impl Into<String>) -> Field {
+    pub fn into_field(&self, name: impl Into<String>) -> Field {
         Field::new(name, self.into_datatype(), true)
     }
 
-    pub fn into_list_field(self) -> Field {
+    pub fn into_list_field(&self) -> Field {
         Field::new_list_field(self.into_datatype(), true)
     }
 
@@ -212,10 +219,16 @@ impl<'t> InferredType<'t> {
 
         let fields = fields
             .iter()
-            .map(|(key, ty)| ty.into_field(*key))
+            .map(|(key, ty)| ty.into_field(&**key))
             .collect::<Fields>();
 
         Ok(Schema::new(fields))
+    }
+}
+
+impl From<&InferTy> for InferTy {
+    fn from(value: &InferTy) -> Self {
+        Self(value.0.clone())
     }
 }
 

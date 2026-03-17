@@ -19,11 +19,10 @@ use std::borrow::Borrow;
 use std::io::{BufRead, Seek};
 
 use arrow_schema::{ArrowError, Schema};
-use bumpalo::Bump;
 use serde_json::Value;
 
 use super::tape::TapeDecoder;
-use infer::{ANY_TY, EMPTY_OBJECT_TY, InferredType, TapeValue, infer_json_type};
+use infer::{ANY_TY, EMPTY_OBJECT_TY, InferTy, TapeValue, infer_json_type};
 
 mod infer;
 
@@ -103,8 +102,7 @@ pub fn infer_json_schema<R: BufRead>(
     mut reader: R,
     max_read_records: Option<usize>,
 ) -> Result<(Schema, usize), ArrowError> {
-    let arena = Bump::new();
-    let mut decoder = SchemaDecoder::new(max_read_records, &arena);
+    let mut decoder = SchemaDecoder::new(max_read_records);
 
     loop {
         let buf = reader.fill_buf()?;
@@ -143,32 +141,28 @@ where
     I: Iterator<Item = Result<V, ArrowError>>,
     V: Borrow<Value>,
 {
-    let arena = &Bump::new();
-
     value_iter
         .into_iter()
-        .try_fold(EMPTY_OBJECT_TY, |ty, record| {
-            infer_json_type(record?.borrow(), ty, arena)
+        .try_fold(EMPTY_OBJECT_TY.clone(), |ty, record| {
+            infer_json_type(record?.borrow(), ty)
         })?
         .into_schema()
 }
 
-struct SchemaDecoder<'a> {
+struct SchemaDecoder {
     decoder: TapeDecoder,
     max_read_records: Option<usize>,
     record_count: usize,
-    schema: InferredType<'a>,
-    arena: &'a Bump,
+    schema: InferTy,
 }
 
-impl<'a> SchemaDecoder<'a> {
-    pub fn new(max_read_records: Option<usize>, arena: &'a Bump) -> Self {
+impl SchemaDecoder {
+    pub fn new(max_read_records: Option<usize>) -> Self {
         Self {
             decoder: TapeDecoder::new(1024, 8),
             max_read_records,
             record_count: 0,
-            schema: ANY_TY,
-            arena,
+            schema: ANY_TY.clone(),
         }
     }
 
@@ -198,7 +192,7 @@ impl<'a> SchemaDecoder<'a> {
             .take(remaining_records);
 
         for record in records {
-            self.schema = infer_json_type(record, self.schema, self.arena)?;
+            self.schema = infer_json_type(record, self.schema.clone())?;
             self.record_count += 1;
         }
 
