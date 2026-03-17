@@ -166,6 +166,11 @@ required-features = ["arrow"]
 path = "./tests/arrow_reader/mod.rs"
 
 [[test]]
+name = "arrow_writer"
+required-features = ["arrow"]
+path = "./tests/arrow_writer.rs"
+
+[[test]]
 name = "encryption"
 required-features = ["arrow"]
 path = "./tests/encryption/mod.rs"
