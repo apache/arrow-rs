@@ -32,6 +32,8 @@ const BATCH_SIZE: usize = 1 << 13; // 8K rows per batch
 const WIDE_FIELDS: usize = 64;
 const BINARY_BYTES: usize = 64;
 const WIDE_PROJECTION_TOTAL_FIELDS: usize = 100; // 100 fields total, select only 3
+const LIST_SHORT_ELEMENTS: usize = 5;
+const LIST_LONG_ELEMENTS: usize = 100;
 
 fn decode_and_flush(decoder: &mut Decoder, data: &[u8]) {
     let mut offset = 0;
@@ -240,11 +242,94 @@ fn bench_wide_projection(c: &mut Criterion) {
     );
 }
 
+fn build_list_json(rows: usize, elements: usize) -> Vec<u8> {
+    // Builds newline-delimited JSON objects with a single list field.
+    // Example (rows=2, elements=3):
+    // {"list":[0,1,2]}
+    // {"list":[1,2,3]}
+    let mut out = String::with_capacity(rows * (elements * 6 + 16));
+    for row in 0..rows {
+        out.push_str("{\"list\":[");
+        for i in 0..elements {
+            if i > 0 {
+                out.push(',');
+            }
+            write!(&mut out, "{}", (row + i) as i64).unwrap();
+        }
+        out.push_str("]}\n");
+    }
+    out.into_bytes()
+}
+
+fn build_list_values(rows: usize, elements: usize) -> Vec<Value> {
+    // Mirrors build_list_json but returns structured serde_json::Value objects.
+    let mut out = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let arr: Vec<Value> = (0..elements)
+            .map(|i| Value::Number(Number::from((row + i) as i64)))
+            .collect();
+        let mut map = Map::with_capacity(1);
+        map.insert("list".to_string(), Value::Array(arr));
+        out.push(Value::Object(map));
+    }
+    out
+}
+
+fn build_list_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![Field::new(
+        "list",
+        DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
+        false,
+    )]))
+}
+
+fn bench_decode_list(c: &mut Criterion) {
+    let schema = build_list_schema();
+
+    // Short lists: tests list handling overhead (few elements per row)
+    let short_data = build_list_json(ROWS, LIST_SHORT_ELEMENTS);
+    bench_decode_schema(c, "decode_list_short_i64_json", &short_data, schema.clone());
+
+    // Long lists: tests child element decode throughput (many elements per row)
+    let long_data = build_list_json(ROWS, LIST_LONG_ELEMENTS);
+    bench_decode_schema(c, "decode_list_long_i64_json", &long_data, schema);
+}
+
+fn bench_serialize_list(c: &mut Criterion) {
+    let schema = build_list_schema();
+
+    let short_values = build_list_values(ROWS, LIST_SHORT_ELEMENTS);
+    c.bench_function("decode_list_short_i64_serialize", |b| {
+        b.iter(|| {
+            let mut decoder = ReaderBuilder::new(schema.clone())
+                .with_batch_size(BATCH_SIZE)
+                .build_decoder()
+                .unwrap();
+            decoder.serialize(&short_values).unwrap();
+            while let Some(_batch) = decoder.flush().unwrap() {}
+        })
+    });
+
+    let long_values = build_list_values(ROWS, LIST_LONG_ELEMENTS);
+    c.bench_function("decode_list_long_i64_serialize", |b| {
+        b.iter(|| {
+            let mut decoder = ReaderBuilder::new(schema.clone())
+                .with_batch_size(BATCH_SIZE)
+                .build_decoder()
+                .unwrap();
+            decoder.serialize(&long_values).unwrap();
+            while let Some(_batch) = decoder.flush().unwrap() {}
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_decode_wide_object,
     bench_serialize_wide_object,
     bench_binary_hex,
-    bench_wide_projection
+    bench_wide_projection,
+    bench_decode_list,
+    bench_serialize_list
 );
 criterion_main!(benches);

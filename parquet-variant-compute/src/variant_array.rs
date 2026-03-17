@@ -1181,15 +1181,22 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
         FixedSizeBinary(16) => borrow!(),
         FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
 
-        // We can _possibly_ allow (some of) these some day?
-        ListView(_) | LargeList(_) | LargeListView(_) => {
-            fail!()
-        }
-
-        // Lists and struct are allowed, maps and unions are not
+        // List-like containers and struct are allowed, maps and unions are not
         List(field) => match canonicalize_and_verify_field(field)? {
             Cow::Borrowed(_) => borrow!(),
             Cow::Owned(new_field) => Cow::Owned(DataType::List(new_field)),
+        },
+        LargeList(field) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => borrow!(),
+            Cow::Owned(new_field) => Cow::Owned(DataType::LargeList(new_field)),
+        },
+        ListView(field) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => borrow!(),
+            Cow::Owned(new_field) => Cow::Owned(DataType::ListView(new_field)),
+        },
+        LargeListView(field) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => borrow!(),
+            Cow::Owned(new_field) => Cow::Owned(DataType::LargeListView(new_field)),
         },
         // Struct is used by the internal layout, and can also represent a shredded variant object.
         Struct(fields) => {
@@ -1235,9 +1242,10 @@ mod test {
 
     use super::*;
     use arrow::array::{
-        BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array, Int32Array,
-        Time64MicrosecondArray,
+        BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array, Int32Array, Int64Array,
+        LargeListArray, LargeListViewArray, ListArray, ListViewArray, Time64MicrosecondArray,
     };
+    use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, ShortString};
 
@@ -1335,6 +1343,17 @@ mod test {
         Arc::new(Int32Array::from(vec![1]))
     }
 
+    fn make_variant_struct_with_typed_value(typed_value: ArrayRef) -> StructArray {
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+            EMPTY_VARIANT_METADATA_BYTES,
+            typed_value.len(),
+        ));
+        StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), false)
+            .with_field("typed_value", typed_value, true)
+            .build()
+    }
+
     #[test]
     fn all_null_shredding_state() {
         // Verify the shredding state is AllNull
@@ -1418,6 +1437,81 @@ mod test {
                 typed_value: None
             }
         ));
+    }
+
+    #[test]
+    fn canonicalize_and_verify_list_like_data_types() {
+        // `parquet/tests/variant_integration.rs` validates Parquet shredded-variant fixtures that
+        // use Parquet LIST encoding, but those fixtures do not cover Arrow-specific list container
+        // variants (`LargeList`, `ListView`, `LargeListView`) accepted by `VariantArray::try_new`.
+        let make_item_binary = || Arc::new(Field::new("item", DataType::Binary, true));
+        let make_item_binary_view = || Arc::new(Field::new("item", DataType::BinaryView, true));
+
+        let cases = vec![
+            (
+                DataType::LargeList(make_item_binary()),
+                DataType::LargeList(make_item_binary_view()),
+            ),
+            (
+                DataType::ListView(make_item_binary()),
+                DataType::ListView(make_item_binary_view()),
+            ),
+            (
+                DataType::LargeListView(make_item_binary()),
+                DataType::LargeListView(make_item_binary_view()),
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(
+                canonicalize_and_verify_data_type(&input).unwrap().as_ref(),
+                &expected
+            );
+        }
+    }
+
+    #[test]
+    fn variant_array_try_new_supports_list_like_typed_value() {
+        let item_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
+
+        let typed_values = vec![
+            Arc::new(ListArray::new(
+                item_field.clone(),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 3])),
+                values.clone(),
+                None,
+            )) as ArrayRef,
+            Arc::new(LargeListArray::new(
+                item_field.clone(),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i64, 2, 3])),
+                values.clone(),
+                None,
+            )) as ArrayRef,
+            Arc::new(ListViewArray::new(
+                item_field.clone(),
+                ScalarBuffer::from(vec![0, 2]),
+                ScalarBuffer::from(vec![2, 1]),
+                values.clone(),
+                None,
+            )) as ArrayRef,
+            Arc::new(LargeListViewArray::new(
+                item_field,
+                ScalarBuffer::from(vec![0_i64, 2]),
+                ScalarBuffer::from(vec![2_i64, 1]),
+                values,
+                None,
+            )) as ArrayRef,
+        ];
+
+        for typed_value in typed_values {
+            let input = make_variant_struct_with_typed_value(typed_value.clone());
+            let variant_array = VariantArray::try_new(&input).unwrap();
+            assert_eq!(
+                variant_array.typed_value_field().unwrap().data_type(),
+                typed_value.data_type(),
+            );
+        }
     }
 
     #[test]

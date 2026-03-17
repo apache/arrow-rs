@@ -220,6 +220,12 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         self.0
     }
 
+    /// Claim memory used by this buffer in the provided memory pool.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        self.0.claim(pool);
+    }
+
     /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self(self.0.slice(offset, len.saturating_add(1)))

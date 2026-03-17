@@ -20,7 +20,7 @@ mod filter;
 
 use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
-use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
+use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
@@ -437,6 +437,13 @@ impl RowGroupReaderBuilder {
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
+                // Reset to original policy before each predicate so the override
+                // can detect page skipping for THIS predicate's columns.
+                // Without this reset, a prior predicate's override (e.g. Mask)
+                // carries forward and the check returns early, missing unfetched
+                // pages for subsequent predicates.
+                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+
                 // Prepare to evaluate the filter.
                 // Note: first update the selection strategy to properly handle any pages
                 // pruned during fetch
@@ -604,7 +611,7 @@ impl RowGroupReaderBuilder {
                 let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_parquet_metadata(&self.metadata);
                 let array_reader = if let Some(cache_info) = cache_info.as_ref() {
-                    let cache_options = cache_info.builder().consumer();
+                    let cache_options: CacheOptions = cache_info.builder().consumer();
                     array_reader_builder
                         .with_cache_options(Some(&cache_options))
                         .build_array_reader(self.fields.as_deref(), &self.projection)

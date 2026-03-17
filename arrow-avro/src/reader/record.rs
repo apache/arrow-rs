@@ -18,8 +18,8 @@
 //! Avro Decoder for Arrow types.
 
 use crate::codec::{
-    AvroDataType, AvroField, AvroLiteral, Codec, Promotion, ResolutionInfo, ResolvedRecord,
-    ResolvedUnion,
+    AvroDataType, AvroLiteral, Codec, EnumMapping, Promotion, ResolutionInfo, ResolvedField,
+    ResolvedRecord, ResolvedUnion,
 };
 use crate::errors::AvroError;
 use crate::reader::cursor::AvroCursor;
@@ -38,22 +38,14 @@ use arrow_schema::{
 };
 #[cfg(feature = "avro_custom_types")]
 use arrow_select::take::{TakeOptions, take};
-use std::cmp::Ordering;
-use std::sync::Arc;
 use strum_macros::AsRefStr;
 use uuid::Uuid;
 
-const DEFAULT_CAPACITY: usize = 1024;
+use std::cmp::Ordering;
+use std::mem;
+use std::sync::Arc;
 
-/// Runtime plan for decoding reader-side `["null", T]` types.
-#[derive(Clone, Copy, Debug)]
-enum NullablePlan {
-    /// Writer actually wrote a union (branch tag present).
-    ReadTag,
-    /// Writer wrote a single (non-union) value resolved to the non-null branch
-    /// of the reader union; do NOT read a branch tag, but apply any promotion.
-    FromSingle { promotion: Promotion },
-}
+const DEFAULT_CAPACITY: usize = 1024;
 
 /// Macro to decode a decimal payload for a given width and integer type.
 macro_rules! decode_decimal {
@@ -121,13 +113,22 @@ impl RecordDecoder {
                 // Build Arrow schema fields and per-child decoders
                 let mut arrow_fields = Vec::with_capacity(reader_fields.len());
                 let mut encodings = Vec::with_capacity(reader_fields.len());
+                let mut field_defaults = Vec::with_capacity(reader_fields.len());
                 for avro_field in reader_fields.iter() {
                     arrow_fields.push(avro_field.field());
                     encodings.push(Decoder::try_new(avro_field.data_type())?);
+
+                    if let Some(ResolutionInfo::DefaultValue(lit)) =
+                        avro_field.data_type().resolution.as_ref()
+                    {
+                        field_defaults.push(Some(lit.clone()));
+                    } else {
+                        field_defaults.push(None);
+                    }
                 }
                 let projector = match data_type.resolution.as_ref() {
                     Some(ResolutionInfo::Record(rec)) => {
-                        Some(ProjectorBuilder::try_new(rec, reader_fields).build()?)
+                        Some(ProjectorBuilder::try_new(rec, &field_defaults).build()?)
                     }
                     _ => None,
                 };
@@ -179,12 +180,6 @@ impl RecordDecoder {
     }
 }
 
-#[derive(Debug)]
-struct EnumResolution {
-    mapping: Arc<[i32]>,
-    default_index: i32,
-}
-
 #[derive(Debug, AsRefStr)]
 enum Decoder {
     Null(usize),
@@ -199,6 +194,34 @@ enum Decoder {
     DurationMicrosecond(Vec<i64>),
     #[cfg(feature = "avro_custom_types")]
     DurationNanosecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    Int8(Vec<i8>),
+    #[cfg(feature = "avro_custom_types")]
+    Int16(Vec<i16>),
+    #[cfg(feature = "avro_custom_types")]
+    UInt8(Vec<u8>),
+    #[cfg(feature = "avro_custom_types")]
+    UInt16(Vec<u16>),
+    #[cfg(feature = "avro_custom_types")]
+    UInt32(Vec<u32>),
+    #[cfg(feature = "avro_custom_types")]
+    UInt64(Vec<u64>),
+    #[cfg(feature = "avro_custom_types")]
+    Float16(Vec<u16>), // Stored as raw IEEE-754 f16 bits
+    #[cfg(feature = "avro_custom_types")]
+    Date64(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    TimeNanos(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    Time32Secs(Vec<i32>),
+    #[cfg(feature = "avro_custom_types")]
+    TimestampSecs(bool, Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    IntervalYearMonth(Vec<i32>),
+    #[cfg(feature = "avro_custom_types")]
+    IntervalMonthDayNano(Vec<IntervalMonthDayNano>),
+    #[cfg(feature = "avro_custom_types")]
+    IntervalDayTime(Vec<IntervalDayTime>),
     Float32(Vec<f32>),
     Float64(Vec<f64>),
     Date32(Vec<i32>),
@@ -221,7 +244,12 @@ enum Decoder {
     /// String data encoded as UTF-8 bytes, but mapped to Arrow's StringViewArray
     StringView(OffsetBufferBuilder<i32>, Vec<u8>),
     Array(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
-    Record(Fields, Vec<Decoder>, Option<Projector>),
+    Record(
+        Fields,
+        Vec<Decoder>,
+        Vec<Option<AvroLiteral>>,
+        Option<Projector>,
+    ),
     Map(
         FieldRef,
         OffsetBufferBuilder<i32>,
@@ -242,7 +270,7 @@ enum Decoder {
     #[cfg(feature = "avro_custom_types")]
     RunEndEncoded(u8, usize, Box<Decoder>),
     Union(UnionDecoder),
-    Nullable(Nullability, NullBufferBuilder, Box<Decoder>, NullablePlan),
+    Nullable(NullablePlan, NullBufferBuilder, Box<Decoder>),
 }
 
 impl Decoder {
@@ -251,7 +279,7 @@ impl Decoder {
             if info.writer_is_union && !info.reader_is_union {
                 let mut clone = data_type.clone();
                 clone.resolution = None; // Build target base decoder without Union resolution
-                let target = Box::new(Self::try_new_internal(&clone)?);
+                let target = Self::try_new_internal(&clone)?;
                 let decoder = Self::Union(
                     UnionDecoderBuilder::new()
                         .with_resolved_union(info.clone())
@@ -267,7 +295,7 @@ impl Decoder {
     fn try_new_internal(data_type: &AvroDataType) -> Result<Self, AvroError> {
         // Extract just the Promotion (if any) to simplify pattern matching
         let promotion = match data_type.resolution.as_ref() {
-            Some(ResolutionInfo::Promotion(p)) => Some(p),
+            Some(ResolutionInfo::Promotion(p)) => Some(*p),
             _ => None,
         };
         let decoder = match (data_type.codec(), promotion) {
@@ -344,6 +372,42 @@ impl Decoder {
             (Codec::DurationSeconds, _) => {
                 Self::DurationSecond(Vec::with_capacity(DEFAULT_CAPACITY))
             }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Int8, _) => Self::Int8(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Int16, _) => Self::Int16(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::UInt8, _) => Self::UInt8(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::UInt16, _) => Self::UInt16(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::UInt32, _) => Self::UInt32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::UInt64, _) => Self::UInt64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Float16, _) => Self::Float16(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Date64, _) => Self::Date64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::TimeNanos, _) => Self::TimeNanos(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::Time32Secs, _) => Self::Time32Secs(Vec::with_capacity(DEFAULT_CAPACITY)),
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::TimestampSecs(is_utc), _) => {
+                Self::TimestampSecs(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::IntervalYearMonth, _) => {
+                Self::IntervalYearMonth(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::IntervalMonthDayNano, _) => {
+                Self::IntervalMonthDayNano(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::IntervalDayTime, _) => {
+                Self::IntervalDayTime(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
             (Codec::Fixed(sz), _) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Decimal(precision, scale, size), _) => {
                 let p = *precision;
@@ -402,10 +466,9 @@ impl Decoder {
             }
             (Codec::Enum(symbols), _) => {
                 let res = match data_type.resolution.as_ref() {
-                    Some(ResolutionInfo::EnumMapping(mapping)) => Some(EnumResolution {
-                        mapping: mapping.mapping.clone(),
-                        default_index: mapping.default_index,
-                    }),
+                    Some(ResolutionInfo::EnumMapping(mapping)) => {
+                        Some(EnumResolution::new(mapping))
+                    }
                     _ => None,
                 };
                 Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone(), res)
@@ -413,18 +476,27 @@ impl Decoder {
             (Codec::Struct(fields), _) => {
                 let mut arrow_fields = Vec::with_capacity(fields.len());
                 let mut encodings = Vec::with_capacity(fields.len());
+                let mut field_defaults = Vec::with_capacity(fields.len());
                 for avro_field in fields.iter() {
                     let encoding = Self::try_new(avro_field.data_type())?;
                     arrow_fields.push(avro_field.field());
                     encodings.push(encoding);
+
+                    if let Some(ResolutionInfo::DefaultValue(lit)) =
+                        avro_field.data_type().resolution.as_ref()
+                    {
+                        field_defaults.push(Some(lit.clone()));
+                    } else {
+                        field_defaults.push(None);
+                    }
                 }
                 let projector =
                     if let Some(ResolutionInfo::Record(rec)) = data_type.resolution.as_ref() {
-                        Some(ProjectorBuilder::try_new(rec, fields).build()?)
+                        Some(ProjectorBuilder::try_new(rec, &field_defaults).build()?)
                     } else {
                         None
                     };
-                Self::Record(arrow_fields.into(), encodings, projector)
+                Self::Record(arrow_fields.into(), encodings, field_defaults, projector)
             }
             (Codec::Map(child), _) => {
                 let val_field = child.field_with_name("value");
@@ -504,20 +576,49 @@ impl Decoder {
         };
         Ok(match data_type.nullability() {
             Some(nullability) => {
-                // Default to reading a union branch tag unless the resolution proves otherwise.
-                let mut plan = NullablePlan::ReadTag;
-                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
-                    if !info.writer_is_union && info.reader_is_union {
-                        if let Some(Some((_reader_idx, promo))) = info.writer_to_reader.first() {
-                            plan = NullablePlan::FromSingle { promotion: *promo };
+                // Default to reading a union branch tag unless the resolution directs otherwise.
+                let plan = match &data_type.resolution {
+                    None => NullablePlan::ReadTag {
+                        nullability,
+                        resolution: ResolutionPlan::Promotion(Promotion::Direct),
+                    },
+                    Some(ResolutionInfo::Promotion(_)) => {
+                        // Promotions should have been incorporated
+                        // into the inner decoder.
+                        NullablePlan::FromSingle {
+                            resolution: ResolutionPlan::Promotion(Promotion::Direct),
                         }
                     }
-                }
+                    Some(ResolutionInfo::Union(info)) if !info.writer_is_union => {
+                        let Some(Some((_, resolution))) = info.writer_to_reader.first() else {
+                            return Err(AvroError::SchemaError(
+                                "unexpected union resolution info for non-union writer and union reader type".into(),
+                            ));
+                        };
+                        let resolution = ResolutionPlan::try_new(&decoder, resolution)?;
+                        NullablePlan::FromSingle { resolution }
+                    }
+                    Some(ResolutionInfo::Union(info)) => {
+                        let Some((_, resolution)) =
+                            info.writer_to_reader[nullability.non_null_index()].as_ref()
+                        else {
+                            return Err(AvroError::SchemaError(
+                                "unexpected union resolution info for nullable writer type".into(),
+                            ));
+                        };
+                        NullablePlan::ReadTag {
+                            nullability,
+                            resolution: ResolutionPlan::try_new(&decoder, resolution)?,
+                        }
+                    }
+                    Some(resolution) => NullablePlan::FromSingle {
+                        resolution: ResolutionPlan::try_new(&decoder, resolution)?,
+                    },
+                };
                 Self::Nullable(
-                    nullability,
+                    plan,
                     NullBufferBuilder::new(DEFAULT_CAPACITY),
                     Box::new(decoder),
-                    plan,
                 )
             }
             None => decoder,
@@ -541,6 +642,28 @@ impl Decoder {
             | Self::DurationMillisecond(v)
             | Self::DurationMicrosecond(v)
             | Self::DurationNanosecond(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16(v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64(v) | Self::TimeNanos(v) | Self::TimestampSecs(_, v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime(v) => v.push(IntervalDayTime::new(0, 0)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano(v) => v.push(IntervalMonthDayNano::new(0, 0, 0)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs(v) | Self::IntervalYearMonth(v) => v.push(0),
             Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
             Self::Float64(v)
             | Self::Int32ToFloat64(v)
@@ -559,7 +682,7 @@ impl Decoder {
             Self::Array(_, offsets, _) => {
                 offsets.push_length(0);
             }
-            Self::Record(_, e, _) => {
+            Self::Record(_, e, _, _) => {
                 for encoding in e.iter_mut() {
                     encoding.append_null()?;
                 }
@@ -584,7 +707,7 @@ impl Decoder {
                 inner.append_null()?;
             }
             Self::Union(u) => u.append_null()?,
-            Self::Nullable(_, null_buffer, inner, _) => {
+            Self::Nullable(_, null_buffer, inner) => {
                 null_buffer.append(false);
                 inner.append_null()?;
             }
@@ -595,7 +718,7 @@ impl Decoder {
     /// Append a single default literal into the decoder's buffers
     fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), AvroError> {
         match self {
-            Self::Nullable(_, nb, inner, _) => {
+            Self::Nullable(_, nb, inner) => {
                 if matches!(lit, AvroLiteral::Null) {
                     nb.append(false);
                     inner.append_null()
@@ -642,6 +765,189 @@ impl Decoder {
                 }
                 _ => Err(AvroError::InvalidArgument(
                     "Default for duration long must be long".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    let x = i8::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for int8 out of range for i8: {i}"
+                        ))
+                    })?;
+                    v.push(x);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for int8 must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    let x = i16::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for int16 out of range for i16: {i}"
+                        ))
+                    })?;
+                    v.push(x);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for int16 must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    let x = u8::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for uint8 out of range for u8: {i}"
+                        ))
+                    })?;
+                    v.push(x);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for uint8 must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    let x = u16::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for uint16 out of range for u16: {i}"
+                        ))
+                    })?;
+                    v.push(x);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for uint16 must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32(v) => match lit {
+                AvroLiteral::Long(i) => {
+                    let x = u32::try_from(*i).map_err(|_| {
+                        AvroError::InvalidArgument(format!(
+                            "Default for uint32 out of range for u32: {i}"
+                        ))
+                    })?;
+                    v.push(x);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for uint32 must be long".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 8 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "uint64 default must be exactly 8 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    v.push(u64::from_le_bytes([
+                        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                    ]));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for uint64 must be bytes (8-byte LE)".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 2 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "float16 default must be exactly 2 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    v.push(u16::from_le_bytes([b[0], b[1]]));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for float16 must be bytes (2-byte LE IEEE-754)".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64(v) | Self::TimeNanos(v) | Self::TimestampSecs(_, v) => match lit {
+                AvroLiteral::Long(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for date64/time-nanos/timestamp-secs must be long".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for time32-secs must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalYearMonth(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 4 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "interval-year-month default must be exactly 4 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    v.push(i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for interval-year-month must be bytes (4-byte LE)".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 16 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "interval-month-day-nano default must be exactly 16 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    let months = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                    let days = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                    let nanos =
+                        i64::from_le_bytes([b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
+                    v.push(IntervalMonthDayNano::new(months, days, nanos));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for interval-month-day-nano must be bytes (16-byte LE)".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime(v) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 8 {
+                        return Err(AvroError::InvalidArgument(format!(
+                            "interval-day-time default must be exactly 8 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    let days = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                    let milliseconds = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                    v.push(IntervalDayTime::new(days, milliseconds));
+                    Ok(())
+                }
+                _ => Err(AvroError::InvalidArgument(
+                    "Default for interval-day-time must be bytes (8-byte LE)".to_string(),
                 )),
             },
             Self::Int64(v)
@@ -818,14 +1124,14 @@ impl Decoder {
                 inner.append_default(lit)
             }
             Self::Union(u) => u.append_default(lit),
-            Self::Record(field_meta, decoders, projector) => match lit {
+            Self::Record(field_meta, decoders, field_defaults, _) => match lit {
                 AvroLiteral::Map(entries) => {
                     for (i, dec) in decoders.iter_mut().enumerate() {
                         let name = field_meta[i].name();
                         if let Some(sub) = entries.get(name) {
                             dec.append_default(sub)?;
-                        } else if let Some(proj) = projector.as_ref() {
-                            proj.project_default(dec, i)?;
+                        } else if let Some(default_literal) = field_defaults[i].as_ref() {
+                            dec.append_default(default_literal)?;
                         } else {
                             dec.append_null()?;
                         }
@@ -834,8 +1140,8 @@ impl Decoder {
                 }
                 AvroLiteral::Null => {
                     for (i, dec) in decoders.iter_mut().enumerate() {
-                        if let Some(proj) = projector.as_ref() {
-                            proj.project_default(dec, i)?;
+                        if let Some(default_literal) = field_defaults[i].as_ref() {
+                            dec.append_default(default_literal)?;
                         } else {
                             dec.append_null()?;
                         }
@@ -867,6 +1173,86 @@ impl Decoder {
             | Self::DurationMillisecond(values)
             | Self::DurationMicrosecond(values)
             | Self::DurationNanosecond(values) => values.push(buf.get_long()?),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8(values) => {
+                let raw = buf.get_int()?;
+                let x = i8::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("int8 value {raw} out of range for i8"))
+                })?;
+                values.push(x);
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16(values) => {
+                let raw = buf.get_int()?;
+                let x = i16::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("int16 value {raw} out of range for i16"))
+                })?;
+                values.push(x);
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8(values) => {
+                let raw = buf.get_int()?;
+                let x = u8::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("uint8 value {raw} out of range for u8"))
+                })?;
+                values.push(x);
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16(values) => {
+                let raw = buf.get_int()?;
+                let x = u16::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("uint16 value {raw} out of range for u16"))
+                })?;
+                values.push(x);
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32(values) => {
+                let raw = buf.get_long()?;
+                let x = u32::try_from(raw).map_err(|_| {
+                    AvroError::ParseError(format!("uint32 value {raw} out of range for u32"))
+                })?;
+                values.push(x);
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64(values) => {
+                let b = buf.get_fixed(8)?;
+                values.push(u64::from_le_bytes([
+                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                ]));
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16(values) => {
+                let b = buf.get_fixed(2)?;
+                values.push(u16::from_le_bytes([b[0], b[1]]));
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64(values) | Self::TimeNanos(values) | Self::TimestampSecs(_, values) => {
+                values.push(buf.get_long()?)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs(values) => values.push(buf.get_int()?),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalYearMonth(values) => {
+                let b = buf.get_fixed(4)?;
+                values.push(i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano(values) => {
+                let b = buf.get_fixed(16)?;
+                let months = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                let days = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                let nanos =
+                    i64::from_le_bytes([b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
+                values.push(IntervalMonthDayNano::new(months, days, nanos));
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime(values) => {
+                let b = buf.get_fixed(8)?;
+                // Read as two i32s: days (4 bytes) and milliseconds (4 bytes)
+                let days = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                let milliseconds = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                values.push(IntervalDayTime::new(days, milliseconds));
+            }
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
             Self::Int32ToInt64(values) => values.push(buf.get_int()? as i64),
@@ -897,12 +1283,12 @@ impl Decoder {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
                 off.push_length(total_items);
             }
-            Self::Record(_, encodings, None) => {
+            Self::Record(_, encodings, _, None) => {
                 for encoding in encodings {
                     encoding.decode(buf)?;
                 }
             }
-            Self::Record(_, encodings, Some(proj)) => {
+            Self::Record(_, encodings, _, Some(proj)) => {
                 proj.project_record(buf, encodings)?;
             }
             Self::Map(_, koff, moff, kdata, valdec) => {
@@ -937,24 +1323,14 @@ impl Decoder {
             }
             Self::Enum(indices, _, Some(res)) => {
                 let raw = buf.get_int()?;
-                let resolved = usize::try_from(raw)
-                    .ok()
-                    .and_then(|idx| res.mapping.get(idx).copied())
-                    .filter(|&idx| idx >= 0)
-                    .unwrap_or(res.default_index);
-                if resolved >= 0 {
-                    indices.push(resolved);
-                } else {
-                    return Err(AvroError::ParseError(format!(
-                        "Enum symbol index {raw} not resolvable and no default provided",
-                    )));
-                }
+                let resolved = res.resolve(raw)?;
+                indices.push(resolved);
             }
             Self::Duration(builder) => {
                 let b = buf.get_fixed(12)?;
-                let months = u32::from_le_bytes(b[0..4].try_into().unwrap());
-                let days = u32::from_le_bytes(b[4..8].try_into().unwrap());
-                let millis = u32::from_le_bytes(b[8..12].try_into().unwrap());
+                let months = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                let days = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                let millis = u32::from_le_bytes([b[8], b[9], b[10], b[11]]);
                 let nanos = (millis as i64) * 1_000_000;
                 builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
             }
@@ -964,21 +1340,24 @@ impl Decoder {
                 inner.decode(buf)?;
             }
             Self::Union(u) => u.decode(buf)?,
-            Self::Nullable(order, nb, encoding, plan) => {
-                match *plan {
-                    NullablePlan::FromSingle { promotion } => {
-                        encoding.decode_with_promotion(buf, promotion)?;
+            Self::Nullable(plan, nb, encoding) => {
+                match plan {
+                    NullablePlan::FromSingle { resolution } => {
+                        encoding.decode_with_resolution(buf, resolution)?;
                         nb.append(true);
                     }
-                    NullablePlan::ReadTag => {
+                    NullablePlan::ReadTag {
+                        nullability,
+                        resolution,
+                    } => {
                         let branch = buf.read_vlq()?;
-                        let is_not_null = match *order {
+                        let is_not_null = match *nullability {
                             Nullability::NullFirst => branch != 0,
                             Nullability::NullSecond => branch == 0,
                         };
                         if is_not_null {
                             // It is important to decode before appending to null buffer in case of decode error
-                            encoding.decode(buf)?;
+                            encoding.decode_with_resolution(buf, resolution)?;
                         } else {
                             encoding.append_null()?;
                         }
@@ -1054,10 +1433,49 @@ impl Decoder {
         }
     }
 
+    fn decode_with_resolution<'d>(
+        &'d mut self,
+        buf: &mut AvroCursor<'_>,
+        resolution: &'d ResolutionPlan,
+    ) -> Result<(), AvroError> {
+        #[cfg(feature = "avro_custom_types")]
+        if let Self::RunEndEncoded(_, len, inner) = self {
+            *len += 1;
+            return inner.decode_with_resolution(buf, resolution);
+        }
+
+        match resolution {
+            ResolutionPlan::Promotion(promotion) => {
+                let promotion = *promotion;
+                self.decode_with_promotion(buf, promotion)
+            }
+            ResolutionPlan::DefaultValue(lit) => self.append_default(lit),
+            ResolutionPlan::EnumMapping(res) => {
+                let Self::Enum(indices, _, _) = self else {
+                    return Err(AvroError::SchemaError(
+                        "enum mapping resolution provided for non-enum decoder".into(),
+                    ));
+                };
+                let raw = buf.get_int()?;
+                let resolved = res.resolve(raw)?;
+                indices.push(resolved);
+                Ok(())
+            }
+            ResolutionPlan::Record(proj) => {
+                let Self::Record(_, encodings, _, _) = self else {
+                    return Err(AvroError::SchemaError(
+                        "record projection provided for non-record decoder".into(),
+                    ));
+                };
+                proj.project_record(buf, encodings)
+            }
+        }
+    }
+
     /// Flush decoded records to an [`ArrayRef`]
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, AvroError> {
         Ok(match self {
-            Self::Nullable(_, n, e, _) => e.flush(n.finish())?,
+            Self::Nullable(_, n, e) => e.flush(n.finish())?,
             Self::Null(size) => Arc::new(NullArray::new(std::mem::replace(size, 0))),
             Self::Boolean(b) => Arc::new(BooleanArray::new(b.finish(), nulls)),
             Self::Int32(values) => Arc::new(flush_primitive::<Int32Type>(values, nulls)),
@@ -1096,6 +1514,54 @@ impl Decoder {
             #[cfg(feature = "avro_custom_types")]
             Self::DurationNanosecond(values) => {
                 Arc::new(flush_primitive::<DurationNanosecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int8(values) => Arc::new(flush_primitive::<Int8Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Int16(values) => Arc::new(flush_primitive::<Int16Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt8(values) => Arc::new(flush_primitive::<UInt8Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt16(values) => Arc::new(flush_primitive::<UInt16Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt32(values) => Arc::new(flush_primitive::<UInt32Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::UInt64(values) => Arc::new(flush_primitive::<UInt64Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::Float16(values) => {
+                // Convert Vec<u16> to Float16Array by reinterpreting the raw bytes.
+                // This is safe because f16 and u16 have the same size and alignment.
+                let len = values.len();
+                let buf: Buffer = std::mem::take(values).into();
+                let scalar_buf = ScalarBuffer::new(buf, 0, len);
+                Arc::new(Float16Array::new(scalar_buf, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Date64(values) => Arc::new(flush_primitive::<Date64Type>(values, nulls)),
+            #[cfg(feature = "avro_custom_types")]
+            Self::TimeNanos(values) => {
+                Arc::new(flush_primitive::<Time64NanosecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::Time32Secs(values) => {
+                Arc::new(flush_primitive::<Time32SecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::TimestampSecs(is_utc, values) => Arc::new(
+                flush_primitive::<TimestampSecondType>(values, nulls)
+                    .with_timezone_opt(is_utc.then(|| "+00:00")),
+            ),
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalYearMonth(values) => {
+                Arc::new(flush_primitive::<IntervalYearMonthType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalMonthDayNano(values) => {
+                Arc::new(flush_primitive::<IntervalMonthDayNanoType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::IntervalDayTime(values) => {
+                Arc::new(flush_primitive::<IntervalDayTimeType>(values, nulls))
             }
             Self::Float32(values) => Arc::new(flush_primitive::<Float32Type>(values, nulls)),
             Self::Float64(values) => Arc::new(flush_primitive::<Float64Type>(values, nulls)),
@@ -1138,7 +1604,7 @@ impl Decoder {
                 let offsets = flush_offsets(offsets);
                 Arc::new(ListArray::try_new(field.clone(), offsets, values, nulls)?)
             }
-            Self::Record(fields, encodings, _) => {
+            Self::Record(fields, encodings, _, _) => {
                 let arrays = encodings
                     .iter_mut()
                     .map(|x| x.flush(None))
@@ -1283,6 +1749,83 @@ impl Decoder {
     }
 }
 
+/// Runtime plan for decoding reader-side `["null", T]` types.
+#[derive(Debug)]
+enum NullablePlan {
+    /// Writer actually wrote a union (branch tag present).
+    ReadTag {
+        nullability: Nullability,
+        resolution: ResolutionPlan,
+    },
+    /// Writer wrote a single (non-union) value resolved to the non-null branch
+    /// of the reader union; do NOT read a branch tag, but apply any resolution.
+    FromSingle { resolution: ResolutionPlan },
+}
+
+/// Runtime plan for resolving writer-reader type differences.
+#[derive(Debug)]
+enum ResolutionPlan {
+    /// Indicates that the writer's type should be promoted to the reader's type.
+    Promotion(Promotion),
+    /// Provides a default value for the field missing in the writer type.
+    DefaultValue(AvroLiteral),
+    /// Provides mapping information for resolving enums.
+    EnumMapping(EnumResolution),
+    /// Provides projection information for record fields.
+    Record(Projector),
+}
+
+impl ResolutionPlan {
+    fn try_new(decoder: &Decoder, resolution: &ResolutionInfo) -> Result<Self, AvroError> {
+        match (decoder, resolution) {
+            (_, ResolutionInfo::Promotion(p)) => Ok(ResolutionPlan::Promotion(*p)),
+            (_, ResolutionInfo::DefaultValue(lit)) => Ok(ResolutionPlan::DefaultValue(lit.clone())),
+            (_, ResolutionInfo::EnumMapping(m)) => {
+                Ok(ResolutionPlan::EnumMapping(EnumResolution::new(m)))
+            }
+            (Decoder::Record(_, _, field_defaults, _), ResolutionInfo::Record(r)) => Ok(
+                ResolutionPlan::Record(ProjectorBuilder::try_new(r, field_defaults).build()?),
+            ),
+            (_, ResolutionInfo::Record(_)) => Err(AvroError::SchemaError(
+                "record resolution on non-record decoder".into(),
+            )),
+            (_, ResolutionInfo::Union(_)) => Err(AvroError::SchemaError(
+                "union variant cannot be resolved to a union type".into(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EnumResolution {
+    mapping: Arc<[i32]>,
+    default_index: i32,
+}
+
+impl EnumResolution {
+    fn new(mapping: &EnumMapping) -> Self {
+        EnumResolution {
+            mapping: mapping.mapping.clone(),
+            default_index: mapping.default_index,
+        }
+    }
+
+    fn resolve(&self, index: i32) -> Result<i32, AvroError> {
+        let resolved = usize::try_from(index)
+            .ok()
+            .and_then(|idx| self.mapping.get(idx).copied())
+            .filter(|&idx| idx >= 0)
+            .unwrap_or(self.default_index);
+        if resolved >= 0 {
+            Ok(resolved)
+        } else {
+            Err(AvroError::ParseError(format!(
+                "Enum symbol index {index} not resolvable and no default provided",
+            )))
+        }
+    }
+}
+
 // A lookup table for resolving fields between writer and reader schemas during record projection.
 #[derive(Debug)]
 struct DispatchLookupTable {
@@ -1302,11 +1845,11 @@ struct DispatchLookupTable {
     // - `to_reader.len() == promotion.len()` and matches the reader field count.
     // - If `to_reader[r] == NO_SOURCE`, `promotion[r]` is ignored.
     to_reader: Box<[i8]>,
-    // For each reader field `r`, specifies the `Promotion` to apply to the writer's value.
+    // For each reader field `r`, specifies the resolution to apply to the writer's value.
     //
     // This is used when a writer field's type can be promoted to a reader field's type
     // (e.g., `Int` to `Long`). It is ignored if `to_reader[r] == NO_SOURCE`.
-    promotion: Box<[Promotion]>,
+    resolution: Box<[ResolutionPlan]>,
 }
 
 // Sentinel used in `DispatchLookupTable::to_reader` to mark
@@ -1315,64 +1858,94 @@ const NO_SOURCE: i8 = -1;
 
 impl DispatchLookupTable {
     fn from_writer_to_reader(
-        promotion_map: &[Option<(usize, Promotion)>],
+        reader_branches: &[Decoder],
+        resolution_map: &[Option<(usize, ResolutionInfo)>],
     ) -> Result<Self, AvroError> {
-        let mut to_reader = Vec::with_capacity(promotion_map.len());
-        let mut promotion = Vec::with_capacity(promotion_map.len());
-        for map in promotion_map {
-            match *map {
-                Some((idx, promo)) => {
+        let mut to_reader = Vec::with_capacity(resolution_map.len());
+        let mut resolution = Vec::with_capacity(resolution_map.len());
+        for map in resolution_map {
+            match map {
+                Some((idx, res)) => {
+                    let idx = *idx;
                     let idx_i8 = i8::try_from(idx).map_err(|_| {
                         AvroError::SchemaError(format!(
                             "Reader branch index {idx} exceeds i8 range (max {})",
                             i8::MAX
                         ))
                     })?;
+                    let plan = ResolutionPlan::try_new(&reader_branches[idx], res)?;
                     to_reader.push(idx_i8);
-                    promotion.push(promo);
+                    resolution.push(plan);
                 }
                 None => {
                     to_reader.push(NO_SOURCE);
-                    promotion.push(Promotion::Direct);
+                    resolution.push(ResolutionPlan::DefaultValue(AvroLiteral::Null));
                 }
             }
         }
         Ok(Self {
             to_reader: to_reader.into_boxed_slice(),
-            promotion: promotion.into_boxed_slice(),
+            resolution: resolution.into_boxed_slice(),
         })
     }
 
-    // Resolve a writer branch index to (reader_idx, promotion)
+    // Resolve a writer branch index to (reader_idx, resolution)
     #[inline]
-    fn resolve(&self, writer_index: usize) -> Option<(usize, Promotion)> {
+    fn resolve(&self, writer_index: usize) -> Option<(usize, &ResolutionPlan)> {
         let reader_index = *self.to_reader.get(writer_index)?;
-        (reader_index >= 0).then(|| (reader_index as usize, self.promotion[writer_index]))
+        (reader_index >= 0).then(|| (reader_index as usize, &self.resolution[writer_index]))
     }
 }
 
 #[derive(Debug)]
 struct UnionDecoder {
     fields: UnionFields,
-    type_ids: Vec<i8>,
-    offsets: Vec<i32>,
-    branches: Vec<Decoder>,
-    counts: Vec<i32>,
-    reader_type_codes: Vec<i8>,
+    branches: UnionDecoderBranches,
     default_emit_idx: usize,
     null_emit_idx: usize,
     plan: UnionReadPlan,
+}
+
+#[derive(Debug, Default)]
+struct UnionDecoderBranches {
+    decoders: Vec<Decoder>,
+    reader_type_codes: Vec<i8>,
+    type_ids: Vec<i8>,
+    offsets: Vec<i32>,
+    counts: Vec<i32>,
+}
+
+impl UnionDecoderBranches {
+    fn new(decoders: Vec<Decoder>, reader_type_codes: Vec<i8>) -> Self {
+        let branch_len = decoders.len().max(reader_type_codes.len());
+        Self {
+            decoders,
+            reader_type_codes,
+            type_ids: Vec::with_capacity(DEFAULT_CAPACITY),
+            offsets: Vec::with_capacity(DEFAULT_CAPACITY),
+            counts: vec![0; branch_len],
+        }
+    }
+
+    fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder, AvroError> {
+        let branches_len = self.decoders.len();
+        let Some(reader_branch) = self.decoders.get_mut(reader_idx) else {
+            return Err(AvroError::ParseError(format!(
+                "Union branch index {reader_idx} out of range ({branches_len} branches)"
+            )));
+        };
+        self.type_ids.push(self.reader_type_codes[reader_idx]);
+        self.offsets.push(self.counts[reader_idx]);
+        self.counts[reader_idx] += 1;
+        Ok(reader_branch)
+    }
 }
 
 impl Default for UnionDecoder {
     fn default() -> Self {
         Self {
             fields: UnionFields::empty(),
-            type_ids: Vec::new(),
-            offsets: Vec::new(),
-            branches: Vec::new(),
-            counts: Vec::new(),
-            reader_type_codes: Vec::new(),
+            branches: Default::default(),
             default_emit_idx: 0,
             null_emit_idx: 0,
             plan: UnionReadPlan::Passthrough,
@@ -1387,7 +1960,7 @@ enum UnionReadPlan {
     },
     FromSingle {
         reader_idx: usize,
-        promotion: Promotion,
+        resolution: ResolutionPlan,
     },
     ToSingle {
         target: Box<Decoder>,
@@ -1396,77 +1969,32 @@ enum UnionReadPlan {
     Passthrough,
 }
 
-impl UnionDecoder {
-    fn try_new(
-        fields: UnionFields,
-        branches: Vec<Decoder>,
+impl UnionReadPlan {
+    fn from_resolved(
+        reader_branches: &[Decoder],
         resolved: Option<ResolvedUnion>,
     ) -> Result<Self, AvroError> {
-        let reader_type_codes = fields.iter().map(|(tid, _)| tid).collect::<Vec<i8>>();
-        let null_branch = branches.iter().position(|b| matches!(b, Decoder::Null(_)));
-        let default_emit_idx = 0;
-        let null_emit_idx = null_branch.unwrap_or(default_emit_idx);
-        let branch_len = branches.len().max(reader_type_codes.len());
-        // Guard against impractically large unions that cannot be indexed by an Avro int
-        let max_addr = (i32::MAX as usize) + 1;
-        if branches.len() > max_addr {
-            return Err(AvroError::SchemaError(format!(
-                "Reader union has {} branches, which exceeds the maximum addressable \
-                 branches by an Avro int tag ({} + 1).",
-                branches.len(),
-                i32::MAX
-            )));
-        }
-        Ok(Self {
-            fields,
-            type_ids: Vec::with_capacity(DEFAULT_CAPACITY),
-            offsets: Vec::with_capacity(DEFAULT_CAPACITY),
-            branches,
-            counts: vec![0; branch_len],
-            reader_type_codes,
-            default_emit_idx,
-            null_emit_idx,
-            plan: Self::plan_from_resolved(resolved)?,
-        })
-    }
-
-    fn try_new_from_writer_union(
-        info: ResolvedUnion,
-        target: Box<Decoder>,
-    ) -> Result<Self, AvroError> {
-        // This constructor is only for writer-union to single-type resolution
-        debug_assert!(info.writer_is_union && !info.reader_is_union);
-        let lookup_table = DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader)?;
-        Ok(Self {
-            plan: UnionReadPlan::ToSingle {
-                target,
-                lookup_table,
-            },
-            ..Self::default()
-        })
-    }
-
-    fn plan_from_resolved(resolved: Option<ResolvedUnion>) -> Result<UnionReadPlan, AvroError> {
         let Some(info) = resolved else {
-            return Ok(UnionReadPlan::Passthrough);
+            return Ok(Self::Passthrough);
         };
         match (info.writer_is_union, info.reader_is_union) {
             (true, true) => {
                 let lookup_table =
-                    DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader)?;
-                Ok(UnionReadPlan::ReaderUnion { lookup_table })
+                    DispatchLookupTable::from_writer_to_reader(reader_branches, &info.writer_to_reader)?;
+                Ok(Self::ReaderUnion { lookup_table })
             }
             (false, true) => {
-                let Some(&(reader_idx, promotion)) =
+                let Some((idx, resolution)) =
                     info.writer_to_reader.first().and_then(Option::as_ref)
                 else {
                     return Err(AvroError::SchemaError(
                         "Writer type does not match any reader union branch".to_string(),
                     ));
                 };
-                Ok(UnionReadPlan::FromSingle {
+                let reader_idx = *idx;
+                Ok(Self::FromSingle {
                     reader_idx,
-                    promotion,
+                    resolution: ResolutionPlan::try_new(&reader_branches[reader_idx], resolution)?,
                 })
             }
             (true, false) => Err(AvroError::InvalidArgument(
@@ -1479,6 +2007,53 @@ impl UnionDecoder {
                     .to_string(),
             )),
         }
+    }
+}
+
+impl UnionDecoder {
+    fn try_new(
+        fields: UnionFields,
+        branches: Vec<Decoder>,
+        resolved: Option<ResolvedUnion>,
+    ) -> Result<Self, AvroError> {
+        let reader_type_codes = fields.iter().map(|(tid, _)| tid).collect::<Vec<i8>>();
+        let null_branch = branches.iter().position(|b| matches!(b, Decoder::Null(_)));
+        let default_emit_idx = 0;
+        let null_emit_idx = null_branch.unwrap_or(default_emit_idx);
+        // Guard against impractically large unions that cannot be indexed by an Avro int
+        let max_addr = (i32::MAX as usize) + 1;
+        if branches.len() > max_addr {
+            return Err(AvroError::SchemaError(format!(
+                "Reader union has {} branches, which exceeds the maximum addressable \
+                 branches by an Avro int tag ({} + 1).",
+                branches.len(),
+                i32::MAX
+            )));
+        }
+        let plan = UnionReadPlan::from_resolved(&branches, resolved)?;
+        Ok(Self {
+            fields,
+            branches: UnionDecoderBranches::new(branches, reader_type_codes),
+            default_emit_idx,
+            null_emit_idx,
+            plan,
+        })
+    }
+
+    fn with_single_target(target: Decoder, info: ResolvedUnion) -> Result<Self, AvroError> {
+        // This constructor is only for writer-union to single-type resolution
+        debug_assert!(info.writer_is_union && !info.reader_is_union);
+        let mut reader_branches = [target];
+        let lookup_table =
+            DispatchLookupTable::from_writer_to_reader(&reader_branches, &info.writer_to_reader)?;
+        let target = Box::new(mem::replace(&mut reader_branches[0], Decoder::Null(0)));
+        Ok(Self {
+            plan: UnionReadPlan::ToSingle {
+                target,
+                lookup_table,
+            },
+            ..Self::default()
+        })
     }
 
     #[inline]
@@ -1502,20 +2077,6 @@ impl UnionDecoder {
     }
 
     #[inline]
-    fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder, AvroError> {
-        let branches_len = self.branches.len();
-        let Some(reader_branch) = self.branches.get_mut(reader_idx) else {
-            return Err(AvroError::ParseError(format!(
-                "Union branch index {reader_idx} out of range ({branches_len} branches)"
-            )));
-        };
-        self.type_ids.push(self.reader_type_codes[reader_idx]);
-        self.offsets.push(self.counts[reader_idx]);
-        self.counts[reader_idx] += 1;
-        Ok(reader_branch)
-    }
-
-    #[inline]
     fn on_decoder<F>(&mut self, fallback_idx: usize, action: F) -> Result<(), AvroError>
     where
         F: FnOnce(&mut Decoder) -> Result<(), AvroError>,
@@ -1527,7 +2088,7 @@ impl UnionDecoder {
             UnionReadPlan::FromSingle { reader_idx, .. } => *reader_idx,
             _ => fallback_idx,
         };
-        self.emit_to(reader_idx).and_then(action)
+        self.branches.emit_to(reader_idx).and_then(action)
     }
 
     fn append_null(&mut self) -> Result<(), AvroError> {
@@ -1539,35 +2100,42 @@ impl UnionDecoder {
     }
 
     fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), AvroError> {
-        let (reader_idx, promotion) = match &mut self.plan {
-            UnionReadPlan::Passthrough => (Self::read_tag(buf)?, Promotion::Direct),
+        match &mut self.plan {
+            UnionReadPlan::Passthrough => {
+                let reader_idx = Self::read_tag(buf)?;
+                let decoder = self.branches.emit_to(reader_idx)?;
+                decoder.decode(buf)
+            }
             UnionReadPlan::ReaderUnion { lookup_table } => {
                 let idx = Self::read_tag(buf)?;
-                lookup_table.resolve(idx).ok_or_else(|| {
-                    AvroError::ParseError(format!(
+                let Some((reader_idx, resolution)) = lookup_table.resolve(idx) else {
+                    return Err(AvroError::ParseError(format!(
                         "Union branch index {idx} not resolvable by reader schema"
-                    ))
-                })?
+                    )));
+                };
+                let decoder = self.branches.emit_to(reader_idx)?;
+                decoder.decode_with_resolution(buf, resolution)
             }
             UnionReadPlan::FromSingle {
                 reader_idx,
-                promotion,
-            } => (*reader_idx, *promotion),
+                resolution,
+            } => {
+                let decoder = self.branches.emit_to(*reader_idx)?;
+                decoder.decode_with_resolution(buf, resolution)
+            }
             UnionReadPlan::ToSingle {
                 target,
                 lookup_table,
             } => {
                 let idx = Self::read_tag(buf)?;
-                return match lookup_table.resolve(idx) {
-                    Some((_, promotion)) => target.decode_with_promotion(buf, promotion),
-                    None => Err(AvroError::ParseError(format!(
-                        "Writer union branch {idx} does not resolve to reader type"
-                    ))),
+                let Some((_, resolution)) = lookup_table.resolve(idx) else {
+                    return Err(AvroError::ParseError(format!(
+                        "Writer union branch index {idx} not resolvable by reader schema"
+                    )));
                 };
+                target.decode_with_resolution(buf, resolution)
             }
-        };
-        let decoder = self.emit_to(reader_idx)?;
-        decoder.decode_with_promotion(buf, promotion)
+        }
     }
 
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, AvroError> {
@@ -1581,13 +2149,20 @@ impl UnionDecoder {
         );
         let children = self
             .branches
+            .decoders
             .iter_mut()
             .map(|d| d.flush(None))
             .collect::<Result<Vec<_>, _>>()?;
         let arr = UnionArray::try_new(
             self.fields.clone(),
-            flush_values(&mut self.type_ids).into_iter().collect(),
-            Some(flush_values(&mut self.offsets).into_iter().collect()),
+            flush_values(&mut self.branches.type_ids)
+                .into_iter()
+                .collect(),
+            Some(
+                flush_values(&mut self.branches.offsets)
+                    .into_iter()
+                    .collect(),
+            ),
             children,
         )
         .map_err(|e| AvroError::ParseError(e.to_string()))?;
@@ -1600,7 +2175,7 @@ struct UnionDecoderBuilder {
     fields: Option<UnionFields>,
     branches: Option<Vec<Decoder>>,
     resolved: Option<ResolvedUnion>,
-    target: Option<Box<Decoder>>,
+    target: Option<Decoder>,
 }
 
 impl UnionDecoderBuilder {
@@ -1623,7 +2198,7 @@ impl UnionDecoderBuilder {
         self
     }
 
-    fn with_target(mut self, target: Box<Decoder>) -> Self {
+    fn with_target(mut self, target: Decoder) -> Self {
         self.target = Some(target);
         self
     }
@@ -1636,7 +2211,7 @@ impl UnionDecoderBuilder {
             (Some(info), None, None, Some(target))
                 if info.writer_is_union && !info.reader_is_union =>
             {
-                UnionDecoder::try_new_from_writer_union(info, target)
+                UnionDecoder::with_single_target(target, info)
             }
             _ => Err(AvroError::InvalidArgument(
                 "Invalid UnionDecoderBuilder configuration: expected either \
@@ -1841,62 +2416,57 @@ fn values_equal_at(arr: &dyn Array, i: usize, j: usize) -> bool {
 
 #[derive(Debug)]
 struct Projector {
-    writer_to_reader: Arc<[Option<usize>]>,
-    skip_decoders: Vec<Option<Skipper>>,
-    field_defaults: Vec<Option<AvroLiteral>>,
+    writer_projections: Vec<FieldProjection>,
     default_injections: Arc<[(usize, AvroLiteral)]>,
+}
+
+#[derive(Debug)]
+enum FieldProjection {
+    ToReader(usize),
+    Skip(Skipper),
 }
 
 #[derive(Debug)]
 struct ProjectorBuilder<'a> {
     rec: &'a ResolvedRecord,
-    reader_fields: Arc<[AvroField]>,
+    field_defaults: &'a [Option<AvroLiteral>],
 }
 
 impl<'a> ProjectorBuilder<'a> {
     #[inline]
-    fn try_new(rec: &'a ResolvedRecord, reader_fields: &Arc<[AvroField]>) -> Self {
+    fn try_new(rec: &'a ResolvedRecord, field_defaults: &'a [Option<AvroLiteral>]) -> Self {
         Self {
             rec,
-            reader_fields: reader_fields.clone(),
+            field_defaults,
         }
     }
 
     #[inline]
     fn build(self) -> Result<Projector, AvroError> {
-        let reader_fields = self.reader_fields;
-        let mut field_defaults: Vec<Option<AvroLiteral>> = Vec::with_capacity(reader_fields.len());
-        for avro_field in reader_fields.as_ref() {
-            if let Some(ResolutionInfo::DefaultValue(lit)) =
-                avro_field.data_type().resolution.as_ref()
-            {
-                field_defaults.push(Some(lit.clone()));
-            } else {
-                field_defaults.push(None);
-            }
-        }
         let mut default_injections: Vec<(usize, AvroLiteral)> =
             Vec::with_capacity(self.rec.default_fields.len());
         for &idx in self.rec.default_fields.as_ref() {
-            let lit = field_defaults
+            let lit = self
+                .field_defaults
                 .get(idx)
                 .and_then(|lit| lit.clone())
                 .unwrap_or(AvroLiteral::Null);
             default_injections.push((idx, lit));
         }
-        let mut skip_decoders: Vec<Option<Skipper>> =
-            Vec::with_capacity(self.rec.skip_fields.len());
-        for datatype in self.rec.skip_fields.as_ref() {
-            let skipper = match datatype {
-                Some(datatype) => Some(Skipper::from_avro(datatype)?),
-                None => None,
-            };
-            skip_decoders.push(skipper);
-        }
+        let writer_projections = self
+            .rec
+            .writer_fields
+            .iter()
+            .map(|field| match field {
+                ResolvedField::ToReader(index) => Ok(FieldProjection::ToReader(*index)),
+                ResolvedField::Skip(datatype) => {
+                    let skipper = Skipper::from_avro(datatype)?;
+                    Ok(FieldProjection::Skip(skipper))
+                }
+            })
+            .collect::<Result<_, AvroError>>()?;
         Ok(Projector {
-            writer_to_reader: self.rec.writer_to_reader.clone(),
-            skip_decoders,
-            field_defaults,
+            writer_projections,
             default_injections: default_injections.into(),
         })
     }
@@ -1904,45 +2474,15 @@ impl<'a> ProjectorBuilder<'a> {
 
 impl Projector {
     #[inline]
-    fn project_default(&self, decoder: &mut Decoder, index: usize) -> Result<(), AvroError> {
-        // SAFETY: `index` is obtained by listing the reader's record fields (i.e., from
-        // `decoders.iter_mut().enumerate()`), and `field_defaults` was built in
-        // `ProjectorBuilder::build` to have exactly one element per reader field.
-        // Therefore, `index < self.field_defaults.len()` always holds here, so
-        // `self.field_defaults[index]` cannot panic. We only take an immutable reference
-        // via `.as_ref()`, and `self` is borrowed immutably.
-        if let Some(default_literal) = self.field_defaults[index].as_ref() {
-            decoder.append_default(default_literal)
-        } else {
-            decoder.append_null()
-        }
-    }
-
-    #[inline]
     fn project_record(
-        &mut self,
+        &self,
         buf: &mut AvroCursor<'_>,
         encodings: &mut [Decoder],
     ) -> Result<(), AvroError> {
-        debug_assert_eq!(
-            self.writer_to_reader.len(),
-            self.skip_decoders.len(),
-            "internal invariant: mapping and skipper lists must have equal length"
-        );
-        for (i, (mapping, skipper_opt)) in self
-            .writer_to_reader
-            .iter()
-            .zip(self.skip_decoders.iter_mut())
-            .enumerate()
-        {
-            match (mapping, skipper_opt.as_mut()) {
-                (Some(reader_index), _) => encodings[*reader_index].decode(buf)?,
-                (None, Some(skipper)) => skipper.skip(buf)?,
-                (None, None) => {
-                    return Err(AvroError::SchemaError(format!(
-                        "No skipper available for writer-only field at index {i}",
-                    )));
-                }
+        for field_proj in self.writer_projections.iter() {
+            match field_proj {
+                FieldProjection::ToReader(index) => encodings[*index].decode(buf)?,
+                FieldProjection::Skip(skipper) => skipper.skip(buf)?,
             }
         }
         for (reader_index, lit) in self.default_injections.as_ref() {
@@ -2001,6 +2541,24 @@ impl Skipper {
             | Codec::DurationMicros
             | Codec::DurationMillis
             | Codec::DurationSeconds => Self::Int64,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Int8 | Codec::Int16 | Codec::UInt8 | Codec::UInt16 | Codec::Time32Secs => {
+                Self::Int32
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt32 | Codec::Date64 | Codec::TimeNanos | Codec::TimestampSecs(_) => {
+                Self::Int64
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::UInt64 => Self::Fixed(8),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::Float16 => Self::Fixed(2),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalYearMonth => Self::Fixed(4),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalMonthDayNano => Self::Fixed(16),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::IntervalDayTime => Self::Fixed(8),
             Codec::Float32 => Self::Float32,
             Codec::Float64 => Self::Float64,
             Codec::Binary => Self::Bytes,
@@ -2046,7 +2604,7 @@ impl Skipper {
         Ok(base)
     }
 
-    fn skip(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), AvroError> {
+    fn skip(&self, buf: &mut AvroCursor<'_>) -> Result<(), AvroError> {
         match self {
             Self::Null => Ok(()),
             Self::Boolean => {
@@ -2054,7 +2612,7 @@ impl Skipper {
                 Ok(())
             }
             Self::Int32 => {
-                buf.get_int()?;
+                buf.skip_int()?;
                 Ok(())
             }
             Self::Int64
@@ -2062,7 +2620,7 @@ impl Skipper {
             | Self::TimestampMillis
             | Self::TimestampMicros
             | Self::TimestampNanos => {
-                buf.get_long()?;
+                buf.skip_long()?;
                 Ok(())
             }
             Self::Float32 => {
@@ -2090,7 +2648,7 @@ impl Skipper {
                 Ok(())
             }
             Self::Enum => {
-                buf.get_int()?;
+                buf.skip_int()?;
                 Ok(())
             }
             Self::DurationFixed12 => {
@@ -2109,7 +2667,7 @@ impl Skipper {
                 Ok(())
             }
             Self::Struct(fields) => {
-                for f in fields.iter_mut() {
+                for f in fields.iter() {
                     f.skip(buf)?
                 }
                 Ok(())
@@ -2128,7 +2686,7 @@ impl Skipper {
                         (usize::BITS as usize)
                     ))
                 })?;
-                let Some(encoding) = encodings.get_mut(idx) else {
+                let Some(encoding) = encodings.get(idx) else {
                     return Err(AvroError::ParseError(format!(
                         "Union branch index {idx} out of range for skipper ({} branches)",
                         encodings.len()
@@ -3075,10 +3633,12 @@ mod tests {
         let dt = avro_from_codec(Codec::Decimal(4, Some(1), None));
         let inner = Decoder::try_new(&dt).unwrap();
         let mut decoder = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
-            NullablePlan::ReadTag,
         );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(0));
@@ -3118,10 +3678,12 @@ mod tests {
         let dt = avro_from_codec(Codec::Decimal(6, Some(2), Some(16)));
         let inner = Decoder::try_new(&dt).unwrap();
         let mut decoder = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
-            NullablePlan::ReadTag,
         );
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
@@ -3281,6 +3843,46 @@ mod tests {
                 days: 5,
                 nanoseconds: 6_000_000,
             }),
+        ]);
+        assert_eq!(interval_array, &expected);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_interval_month_day_nano_custom_decoding_with_nulls() {
+        let avro_type = AvroDataType::new(
+            Codec::IntervalMonthDayNano,
+            Default::default(),
+            Some(Nullability::NullFirst),
+        );
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        // First value: months=1, days=-2, nanos=3
+        data.extend_from_slice(&encode_avro_long(1));
+        data.extend_from_slice(&1i32.to_le_bytes());
+        data.extend_from_slice(&(-2i32).to_le_bytes());
+        data.extend_from_slice(&3i64.to_le_bytes());
+        // Second value: null
+        data.extend_from_slice(&encode_avro_long(0));
+        // Third value: months=-4, days=5, nanos=-6
+        data.extend_from_slice(&encode_avro_long(1));
+        data.extend_from_slice(&(-4i32).to_le_bytes());
+        data.extend_from_slice(&5i32.to_le_bytes());
+        data.extend_from_slice(&(-6i64).to_le_bytes());
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let interval_array = array
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
+        assert_eq!(interval_array.len(), 3);
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(1, -2, 3)),
+            None,
+            Some(IntervalMonthDayNano::new(-4, 5, -6)),
         ]);
         assert_eq!(interval_array, &expected);
     }
@@ -3518,8 +4120,7 @@ mod tests {
 
     fn make_record_resolved_decoder(
         reader_fields: &[(&str, DataType, bool)],
-        writer_to_reader: Vec<Option<usize>>,
-        skip_decoders: Vec<Option<Skipper>>,
+        writer_projections: Vec<FieldProjection>,
     ) -> Decoder {
         let mut field_refs: Vec<FieldRef> = Vec::with_capacity(reader_fields.len());
         let mut encodings: Vec<Decoder> = Vec::with_capacity(reader_fields.len());
@@ -3539,10 +4140,9 @@ mod tests {
         Decoder::Record(
             fields,
             encodings,
+            vec![None; reader_fields.len()],
             Some(Projector {
-                writer_to_reader: Arc::from(writer_to_reader),
-                skip_decoders,
-                field_defaults: vec![None; reader_fields.len()],
+                writer_projections,
                 default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
             }),
         )
@@ -3552,8 +4152,10 @@ mod tests {
     fn test_skip_writer_trailing_field_int32() {
         let mut dec = make_record_resolved_decoder(
             &[("id", arrow_schema::DataType::Int32, false)],
-            vec![Some(0), None],
-            vec![None, Some(super::Skipper::Int32)],
+            vec![
+                FieldProjection::ToReader(0),
+                FieldProjection::Skip(super::Skipper::Int32),
+            ],
         );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(7));
@@ -3580,8 +4182,11 @@ mod tests {
                 ("id", DataType::Int32, false),
                 ("score", DataType::Int64, false),
             ],
-            vec![Some(0), None, Some(1)],
-            vec![None, Some(Skipper::String), None],
+            vec![
+                FieldProjection::ToReader(0),
+                FieldProjection::Skip(Skipper::String),
+                FieldProjection::ToReader(1),
+            ],
         );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(42));
@@ -3612,8 +4217,10 @@ mod tests {
     fn test_skip_writer_array_with_negative_block_count_fast() {
         let mut dec = make_record_resolved_decoder(
             &[("id", DataType::Int32, false)],
-            vec![None, Some(0)],
-            vec![Some(super::Skipper::List(Box::new(Skipper::Int32))), None],
+            vec![
+                FieldProjection::Skip(super::Skipper::List(Box::new(Skipper::Int32))),
+                FieldProjection::ToReader(0),
+            ],
         );
         let mut array_payload = Vec::new();
         array_payload.extend_from_slice(&encode_avro_int(1));
@@ -3644,8 +4251,10 @@ mod tests {
     fn test_skip_writer_map_with_negative_block_count_fast() {
         let mut dec = make_record_resolved_decoder(
             &[("id", DataType::Int32, false)],
-            vec![None, Some(0)],
-            vec![Some(Skipper::Map(Box::new(Skipper::Int32))), None],
+            vec![
+                FieldProjection::Skip(Skipper::Map(Box::new(Skipper::Int32))),
+                FieldProjection::ToReader(0),
+            ],
         );
         let mut entries = Vec::new();
         entries.extend_from_slice(&encode_avro_bytes(b"k1"));
@@ -3677,13 +4286,12 @@ mod tests {
     fn test_skip_writer_nullable_field_union_nullfirst() {
         let mut dec = make_record_resolved_decoder(
             &[("id", DataType::Int32, false)],
-            vec![None, Some(0)],
             vec![
-                Some(super::Skipper::Nullable(
+                FieldProjection::Skip(super::Skipper::Nullable(
                     Nullability::NullFirst,
                     Box::new(super::Skipper::Int32),
                 )),
-                None,
+                FieldProjection::ToReader(0),
             ],
         );
         let mut row1 = Vec::new();
@@ -3893,7 +4501,6 @@ mod tests {
         reader_fields: &[(&str, DataType, bool)],
         field_defaults: Vec<Option<AvroLiteral>>,
         default_injections: Vec<(usize, AvroLiteral)>,
-        writer_to_reader_len: usize,
     ) -> Decoder {
         assert_eq!(
             field_defaults.len(),
@@ -3916,15 +4523,190 @@ mod tests {
             encodings.push(enc);
         }
         let fields: Fields = field_refs.into();
-        let skip_decoders: Vec<Option<Skipper>> =
-            (0..writer_to_reader_len).map(|_| None::<Skipper>).collect();
         let projector = Projector {
-            writer_to_reader: Arc::from(vec![None; writer_to_reader_len]),
-            skip_decoders,
-            field_defaults,
+            writer_projections: vec![],
             default_injections: Arc::from(default_injections),
         };
-        Decoder::Record(fields, encodings, Some(projector))
+        Decoder::Record(fields, encodings, field_defaults, Some(projector))
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_default_append_custom_integer_range_validation() {
+        let mut d_i8 = Decoder::Int8(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_i8.append_default(&AvroLiteral::Int(i8::MIN as i32))
+            .unwrap();
+        d_i8.append_default(&AvroLiteral::Int(i8::MAX as i32))
+            .unwrap();
+        let err_i8_high = d_i8
+            .append_default(&AvroLiteral::Int(i8::MAX as i32 + 1))
+            .unwrap_err();
+        assert!(err_i8_high.to_string().contains("out of range for i8"));
+        let err_i8_low = d_i8
+            .append_default(&AvroLiteral::Int(i8::MIN as i32 - 1))
+            .unwrap_err();
+        assert!(err_i8_low.to_string().contains("out of range for i8"));
+        let arr_i8 = d_i8.flush(None).unwrap();
+        let values_i8 = arr_i8.as_any().downcast_ref::<Int8Array>().unwrap();
+        assert_eq!(values_i8.values(), &[i8::MIN, i8::MAX]);
+
+        let mut d_i16 = Decoder::Int16(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_i16
+            .append_default(&AvroLiteral::Int(i16::MIN as i32))
+            .unwrap();
+        d_i16
+            .append_default(&AvroLiteral::Int(i16::MAX as i32))
+            .unwrap();
+        let err_i16_high = d_i16
+            .append_default(&AvroLiteral::Int(i16::MAX as i32 + 1))
+            .unwrap_err();
+        assert!(err_i16_high.to_string().contains("out of range for i16"));
+        let err_i16_low = d_i16
+            .append_default(&AvroLiteral::Int(i16::MIN as i32 - 1))
+            .unwrap_err();
+        assert!(err_i16_low.to_string().contains("out of range for i16"));
+        let arr_i16 = d_i16.flush(None).unwrap();
+        let values_i16 = arr_i16.as_any().downcast_ref::<Int16Array>().unwrap();
+        assert_eq!(values_i16.values(), &[i16::MIN, i16::MAX]);
+
+        let mut d_u8 = Decoder::UInt8(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_u8.append_default(&AvroLiteral::Int(0)).unwrap();
+        d_u8.append_default(&AvroLiteral::Int(u8::MAX as i32))
+            .unwrap();
+        let err_u8_neg = d_u8.append_default(&AvroLiteral::Int(-1)).unwrap_err();
+        assert!(err_u8_neg.to_string().contains("out of range for u8"));
+        let err_u8_high = d_u8
+            .append_default(&AvroLiteral::Int(u8::MAX as i32 + 1))
+            .unwrap_err();
+        assert!(err_u8_high.to_string().contains("out of range for u8"));
+        let arr_u8 = d_u8.flush(None).unwrap();
+        let values_u8 = arr_u8.as_any().downcast_ref::<UInt8Array>().unwrap();
+        assert_eq!(values_u8.values(), &[0, u8::MAX]);
+
+        let mut d_u16 = Decoder::UInt16(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_u16.append_default(&AvroLiteral::Int(0)).unwrap();
+        d_u16
+            .append_default(&AvroLiteral::Int(u16::MAX as i32))
+            .unwrap();
+        let err_u16_neg = d_u16.append_default(&AvroLiteral::Int(-1)).unwrap_err();
+        assert!(err_u16_neg.to_string().contains("out of range for u16"));
+        let err_u16_high = d_u16
+            .append_default(&AvroLiteral::Int(u16::MAX as i32 + 1))
+            .unwrap_err();
+        assert!(err_u16_high.to_string().contains("out of range for u16"));
+        let arr_u16 = d_u16.flush(None).unwrap();
+        let values_u16 = arr_u16.as_any().downcast_ref::<UInt16Array>().unwrap();
+        assert_eq!(values_u16.values(), &[0, u16::MAX]);
+
+        let mut d_u32 = Decoder::UInt32(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_u32.append_default(&AvroLiteral::Long(0)).unwrap();
+        d_u32
+            .append_default(&AvroLiteral::Long(u32::MAX as i64))
+            .unwrap();
+        let err_u32_neg = d_u32.append_default(&AvroLiteral::Long(-1)).unwrap_err();
+        assert!(err_u32_neg.to_string().contains("out of range for u32"));
+        let err_u32_high = d_u32
+            .append_default(&AvroLiteral::Long(u32::MAX as i64 + 1))
+            .unwrap_err();
+        assert!(err_u32_high.to_string().contains("out of range for u32"));
+        let arr_u32 = d_u32.flush(None).unwrap();
+        let values_u32 = arr_u32.as_any().downcast_ref::<UInt32Array>().unwrap();
+        assert_eq!(values_u32.values(), &[0, u32::MAX]);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_decode_custom_integer_range_validation() {
+        let mut d_i8 = Decoder::try_new(&avro_from_codec(Codec::Int8)).unwrap();
+        d_i8.decode(&mut AvroCursor::new(&encode_avro_int(i8::MIN as i32)))
+            .unwrap();
+        d_i8.decode(&mut AvroCursor::new(&encode_avro_int(i8::MAX as i32)))
+            .unwrap();
+        let err_i8_high = d_i8
+            .decode(&mut AvroCursor::new(&encode_avro_int(i8::MAX as i32 + 1)))
+            .unwrap_err();
+        assert!(err_i8_high.to_string().contains("out of range for i8"));
+        let err_i8_low = d_i8
+            .decode(&mut AvroCursor::new(&encode_avro_int(i8::MIN as i32 - 1)))
+            .unwrap_err();
+        assert!(err_i8_low.to_string().contains("out of range for i8"));
+        let arr_i8 = d_i8.flush(None).unwrap();
+        let values_i8 = arr_i8.as_any().downcast_ref::<Int8Array>().unwrap();
+        assert_eq!(values_i8.values(), &[i8::MIN, i8::MAX]);
+
+        let mut d_i16 = Decoder::try_new(&avro_from_codec(Codec::Int16)).unwrap();
+        d_i16
+            .decode(&mut AvroCursor::new(&encode_avro_int(i16::MIN as i32)))
+            .unwrap();
+        d_i16
+            .decode(&mut AvroCursor::new(&encode_avro_int(i16::MAX as i32)))
+            .unwrap();
+        let err_i16_high = d_i16
+            .decode(&mut AvroCursor::new(&encode_avro_int(i16::MAX as i32 + 1)))
+            .unwrap_err();
+        assert!(err_i16_high.to_string().contains("out of range for i16"));
+        let err_i16_low = d_i16
+            .decode(&mut AvroCursor::new(&encode_avro_int(i16::MIN as i32 - 1)))
+            .unwrap_err();
+        assert!(err_i16_low.to_string().contains("out of range for i16"));
+        let arr_i16 = d_i16.flush(None).unwrap();
+        let values_i16 = arr_i16.as_any().downcast_ref::<Int16Array>().unwrap();
+        assert_eq!(values_i16.values(), &[i16::MIN, i16::MAX]);
+
+        let mut d_u8 = Decoder::try_new(&avro_from_codec(Codec::UInt8)).unwrap();
+        d_u8.decode(&mut AvroCursor::new(&encode_avro_int(0)))
+            .unwrap();
+        d_u8.decode(&mut AvroCursor::new(&encode_avro_int(u8::MAX as i32)))
+            .unwrap();
+        let err_u8_neg = d_u8
+            .decode(&mut AvroCursor::new(&encode_avro_int(-1)))
+            .unwrap_err();
+        assert!(err_u8_neg.to_string().contains("out of range for u8"));
+        let err_u8_high = d_u8
+            .decode(&mut AvroCursor::new(&encode_avro_int(u8::MAX as i32 + 1)))
+            .unwrap_err();
+        assert!(err_u8_high.to_string().contains("out of range for u8"));
+        let arr_u8 = d_u8.flush(None).unwrap();
+        let values_u8 = arr_u8.as_any().downcast_ref::<UInt8Array>().unwrap();
+        assert_eq!(values_u8.values(), &[0, u8::MAX]);
+
+        let mut d_u16 = Decoder::try_new(&avro_from_codec(Codec::UInt16)).unwrap();
+        d_u16
+            .decode(&mut AvroCursor::new(&encode_avro_int(0)))
+            .unwrap();
+        d_u16
+            .decode(&mut AvroCursor::new(&encode_avro_int(u16::MAX as i32)))
+            .unwrap();
+        let err_u16_neg = d_u16
+            .decode(&mut AvroCursor::new(&encode_avro_int(-1)))
+            .unwrap_err();
+        assert!(err_u16_neg.to_string().contains("out of range for u16"));
+        let err_u16_high = d_u16
+            .decode(&mut AvroCursor::new(&encode_avro_int(u16::MAX as i32 + 1)))
+            .unwrap_err();
+        assert!(err_u16_high.to_string().contains("out of range for u16"));
+        let arr_u16 = d_u16.flush(None).unwrap();
+        let values_u16 = arr_u16.as_any().downcast_ref::<UInt16Array>().unwrap();
+        assert_eq!(values_u16.values(), &[0, u16::MAX]);
+
+        let mut d_u32 = Decoder::try_new(&avro_from_codec(Codec::UInt32)).unwrap();
+        d_u32
+            .decode(&mut AvroCursor::new(&encode_avro_long(0)))
+            .unwrap();
+        d_u32
+            .decode(&mut AvroCursor::new(&encode_avro_long(u32::MAX as i64)))
+            .unwrap();
+        let err_u32_neg = d_u32
+            .decode(&mut AvroCursor::new(&encode_avro_long(-1)))
+            .unwrap_err();
+        assert!(err_u32_neg.to_string().contains("out of range for u32"));
+        let err_u32_high = d_u32
+            .decode(&mut AvroCursor::new(&encode_avro_long(u32::MAX as i64 + 1)))
+            .unwrap_err();
+        assert!(err_u32_high.to_string().contains("out of range for u32"));
+        let arr_u32 = d_u32.flush(None).unwrap();
+        let values_u32 = arr_u32.as_any().downcast_ref::<UInt32Array>().unwrap();
+        assert_eq!(values_u32.values(), &[0, u32::MAX]);
     }
 
     #[test]
@@ -3999,10 +4781,12 @@ mod tests {
     fn test_default_append_nullable_int32_null_and_value() {
         let inner = Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY));
         let mut dec = Decoder::Nullable(
-            Nullability::NullFirst,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullFirst,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
-            NullablePlan::ReadTag,
         );
         dec.append_default(&AvroLiteral::Null).unwrap();
         dec.append_default(&AvroLiteral::Int(11)).unwrap();
@@ -4189,7 +4973,6 @@ mod tests {
             &[("a", DataType::Int32, false), ("b", DataType::Utf8, false)],
             field_defaults,
             vec![],
-            0,
         );
         let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
         map.insert("a".to_string(), AvroLiteral::Int(7));
@@ -4222,7 +5005,6 @@ mod tests {
             &[("a", DataType::Int32, false), ("b", DataType::Utf8, false)],
             field_defaults,
             vec![],
-            0,
         );
         rec.append_default(&AvroLiteral::Null).unwrap();
         let arr = rec.flush(None).unwrap();
@@ -4253,29 +5035,32 @@ mod tests {
             field_refs.push(Arc::new(ArrowField::new(*name, dt.clone(), *nullable)));
         }
         let enc_a = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY))),
-            NullablePlan::ReadTag,
         );
         let enc_b = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullSecond,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(Decoder::String(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             )),
-            NullablePlan::ReadTag,
         );
         encoders.push(enc_a);
         encoders.push(enc_b);
+        let field_defaults = vec![None, None]; // no defaults -> append_null
         let projector = Projector {
-            writer_to_reader: Arc::from(vec![]),
-            skip_decoders: vec![],
-            field_defaults: vec![None, None], // no defaults -> append_null
+            writer_projections: vec![],
             default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
         };
-        let mut rec = Decoder::Record(field_refs.into(), encoders, Some(projector));
+        let mut rec = Decoder::Record(field_refs.into(), encoders, field_defaults, Some(projector));
         let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
         map.insert("a".to_string(), AvroLiteral::Int(9));
         rec.append_default(&AvroLiteral::Map(map)).unwrap();
@@ -4312,7 +5097,6 @@ mod tests {
             ],
             defaults,
             injections,
-            0,
         );
         rec.decode(&mut AvroCursor::new(&[])).unwrap();
         let arr = rec.flush(None).unwrap();
@@ -4402,7 +5186,7 @@ mod tests {
             Codec::DurationSeconds,
         ] {
             let dt = make_avro_dt(codec.clone(), None);
-            let mut s = Skipper::from_avro(&dt)?;
+            let s = Skipper::from_avro(&dt)?;
             for &v in &values {
                 let bytes = encode_avro_long(v);
                 let mut cursor = AvroCursor::new(&bytes);
@@ -4423,7 +5207,7 @@ mod tests {
     #[test]
     fn skipper_nullable_custom_duration_respects_null_first() -> Result<(), AvroError> {
         let dt = make_avro_dt(Codec::DurationNanos, Some(Nullability::NullFirst));
-        let mut s = Skipper::from_avro(&dt)?;
+        let s = Skipper::from_avro(&dt)?;
         match &s {
             Skipper::Nullable(Nullability::NullFirst, inner) => match **inner {
                 Skipper::Int64 => {}
@@ -4452,7 +5236,7 @@ mod tests {
     #[test]
     fn skipper_nullable_custom_duration_respects_null_second() -> Result<(), AvroError> {
         let dt = make_avro_dt(Codec::DurationMicros, Some(Nullability::NullSecond));
-        let mut s = Skipper::from_avro(&dt)?;
+        let s = Skipper::from_avro(&dt)?;
         match &s {
             Skipper::Nullable(Nullability::NullSecond, inner) => match **inner {
                 Skipper::Int64 => {}
@@ -4483,7 +5267,7 @@ mod tests {
     #[test]
     fn skipper_interval_is_fixed12_and_skips_12_bytes() -> Result<(), AvroError> {
         let dt = make_avro_dt(Codec::Interval, None);
-        let mut s = Skipper::from_avro(&dt)?;
+        let s = Skipper::from_avro(&dt)?;
         match s {
             Skipper::DurationFixed12 => {}
             other => panic!("expected DurationFixed12, got {:?}", other),
@@ -4595,12 +5379,11 @@ mod tests {
             Box::new(inner_values),
         );
         let mut dec = Decoder::Nullable(
-            Nullability::NullSecond,
+            NullablePlan::FromSingle {
+                resolution: ResolutionPlan::Promotion(Promotion::IntToDouble),
+            },
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(ree),
-            NullablePlan::FromSingle {
-                promotion: Promotion::IntToDouble,
-            },
         );
         for v in [1, 1, 2, 2, 2] {
             let bytes = encode_avro_int(v);
