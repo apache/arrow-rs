@@ -38,7 +38,7 @@ pub struct ReaderBuilder<R> {
     header_size_hint: Option<u64>,
     utf8_view: bool,
     strict_mode: bool,
-    use_tz: Tz,
+    tz: Tz,
 }
 
 impl<R> ReaderBuilder<R> {
@@ -53,7 +53,7 @@ impl<R> ReaderBuilder<R> {
             header_size_hint: None,
             utf8_view: false,
             strict_mode: false,
-            use_tz: Default::default(),
+            tz: Default::default(),
         }
     }
 
@@ -114,7 +114,7 @@ impl<R> ReaderBuilder<R> {
     ///
     /// The default is `Tz::OffsetZero`, meaning the "+00:00" time zone ID.
     pub fn with_tz(mut self, tz: Tz) -> Self {
-        self.use_tz = tz;
+        self.tz = tz;
         self
     }
 }
@@ -218,7 +218,7 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
             builder
                 .with_utf8view(self.utf8_view)
                 .with_strict_mode(self.strict_mode)
-                .use_tz(self.use_tz)
+                .with_tz(self.tz)
                 .build()
         }?;
 

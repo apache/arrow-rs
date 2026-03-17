@@ -642,7 +642,7 @@ pub(crate) struct AvroFieldBuilder<'a> {
     reader_schema: Option<&'a Schema<'a>>,
     use_utf8view: bool,
     strict_mode: bool,
-    use_tz: Tz,
+    tz: Tz,
 }
 
 impl<'a> AvroFieldBuilder<'a> {
@@ -653,7 +653,7 @@ impl<'a> AvroFieldBuilder<'a> {
             reader_schema: None,
             use_utf8view: false,
             strict_mode: false,
-            use_tz: Tz::default(),
+            tz: Tz::default(),
         }
     }
 
@@ -680,8 +680,8 @@ impl<'a> AvroFieldBuilder<'a> {
     }
 
     /// Sets the timezone representation for timestamps.
-    pub(crate) fn use_tz(mut self, tz: Tz) -> Self {
-        self.use_tz = tz;
+    pub(crate) fn with_tz(mut self, tz: Tz) -> Self {
+        self.tz = tz;
         self
     }
 
@@ -689,7 +689,7 @@ impl<'a> AvroFieldBuilder<'a> {
     pub(crate) fn build(self) -> Result<AvroField, ArrowError> {
         match self.writer_schema {
             Schema::Complex(ComplexType::Record(r)) => {
-                let mut resolver = Maker::new(self.use_utf8view, self.strict_mode, self.use_tz);
+                let mut resolver = Maker::new(self.use_utf8view, self.strict_mode, self.tz);
                 let data_type =
                     resolver.make_data_type(self.writer_schema, self.reader_schema, None)?;
                 Ok(AvroField {
@@ -1382,16 +1382,16 @@ struct Maker<'a> {
     resolver: Resolver<'a>,
     use_utf8view: bool,
     strict_mode: bool,
-    use_tz: Tz,
+    tz: Tz,
 }
 
 impl<'a> Maker<'a> {
-    fn new(use_utf8view: bool, strict_mode: bool, use_tz: Tz) -> Self {
+    fn new(use_utf8view: bool, strict_mode: bool, tz: Tz) -> Self {
         Self {
             resolver: Default::default(),
             use_utf8view,
             strict_mode,
-            use_tz,
+            tz,
         }
     }
 
@@ -1655,10 +1655,10 @@ impl<'a> Maker<'a> {
                     (Some("time-millis"), c @ Codec::Int32) => *c = Codec::TimeMillis,
                     (Some("time-micros"), c @ Codec::Int64) => *c = Codec::TimeMicros,
                     (Some("timestamp-millis"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMillis(Some(self.use_tz))
+                        *c = Codec::TimestampMillis(Some(self.tz))
                     }
                     (Some("timestamp-micros"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMicros(Some(self.use_tz))
+                        *c = Codec::TimestampMicros(Some(self.tz))
                     }
                     (Some("local-timestamp-millis"), c @ Codec::Int64) => {
                         *c = Codec::TimestampMillis(None)
@@ -1667,7 +1667,7 @@ impl<'a> Maker<'a> {
                         *c = Codec::TimestampMicros(None)
                     }
                     (Some("timestamp-nanos"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampNanos(Some(self.use_tz))
+                        *c = Codec::TimestampNanos(Some(self.tz))
                     }
                     (Some("local-timestamp-nanos"), c @ Codec::Int64) => {
                         *c = Codec::TimestampNanos(None)
@@ -1769,7 +1769,7 @@ impl<'a> Maker<'a> {
                         .and_then(|v| v.as_str())
                     {
                         if unit == "nanosecond" {
-                            field.codec = Codec::TimestampNanos(Some(self.use_tz));
+                            field.codec = Codec::TimestampNanos(Some(self.tz));
                         }
                     }
                 }

@@ -967,7 +967,7 @@ pub struct ReaderBuilder {
     batch_size: usize,
     strict_mode: bool,
     utf8_view: bool,
-    use_tz: Tz,
+    tz: Tz,
     reader_schema: Option<AvroSchema>,
     projection: Option<Vec<usize>>,
     writer_schema_store: Option<SchemaStore>,
@@ -980,7 +980,7 @@ impl Default for ReaderBuilder {
             batch_size: 1024,
             strict_mode: false,
             utf8_view: false,
-            use_tz: Default::default(),
+            tz: Default::default(),
             reader_schema: None,
             projection: None,
             writer_schema_store: None,
@@ -995,7 +995,7 @@ impl ReaderBuilder {
     /// * `batch_size = 1024`
     /// * `strict_mode = false`
     /// * `utf8_view = false`
-    /// * `use_tz = Tz::OffsetZero`
+    /// * `tz = Tz::OffsetZero`
     /// * `reader_schema = None`
     /// * `projection = None`
     /// * `writer_schema_store = None`
@@ -1016,7 +1016,7 @@ impl ReaderBuilder {
         let root = builder
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
-            .use_tz(self.use_tz)
+            .with_tz(self.tz)
             .build()?;
         RecordDecoder::try_new_with_options(root.data_type())
     }
@@ -1181,7 +1181,7 @@ impl ReaderBuilder {
     ///
     /// The default is `Tz::OffsetZero`, meaning the "+00:00" time zone ID.
     pub fn with_tz(mut self, tz: Tz) -> Self {
-        self.use_tz = tz;
+        self.tz = tz;
         self
     }
 
