@@ -439,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected="operation will overflow read buffer")]
+    #[should_panic(expected = "operation will overflow read buffer")]
     fn test_overflow_read_buffer_bounds() {
         // Tiny buffers so any huge computed index is out-of-bounds.
         let data = [0u8; 1];
@@ -457,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected="operation will overflow write buffer")]
+    #[should_panic(expected = "operation will overflow write buffer")]
     fn test_overflow_write_buffer_bounds() {
         // Tiny buffers so any huge computed index is out-of-bounds.
         let data = [0u8; 1];
