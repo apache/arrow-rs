@@ -497,8 +497,16 @@ impl BooleanBuffer {
         self.buffer.claim(pool);
     }
 
-    /// Apply a bitwise binary operation in-place, avoiding allocation if the
-    /// underlying buffer is not shared.
+    /// Apply a bitwise binary operation to `self`.
+    ///
+    /// If the underlying buffer is uniquely owned, reuses the allocation
+    /// and updates the bytes in place. If the underlying buffer is shared,
+    /// returns a newly allocated buffer.
+    ///
+    /// # API Notes
+    ///
+    /// Note that if the buffer is reused, the result may have non zero offset
+    /// `0`, but if a new buffer is allocated the offset will always be zero. 
     fn bitwise_bin_op_assign<F>(&mut self, rhs: &BooleanBuffer, op: F)
     where
         F: FnMut(u64, u64) -> u64,
