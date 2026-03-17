@@ -526,8 +526,8 @@ impl BooleanBuffer {
     ///
     /// # API Notes
     ///
-    /// Note that if the buffer is reused, the result may have non zero offset
-    /// `0`, but if a new buffer is allocated the offset will always be zero. 
+    /// If the buffer is reused, the result preserves the existing offset, which
+    /// may be non-zero.
     fn bitwise_bin_op_assign<F>(&mut self, rhs: &BooleanBuffer, op: F)
     where
         F: FnMut(u64, u64) -> u64,
@@ -826,6 +826,30 @@ mod tests {
         let expected = &original & &rhs;
         assert_eq!(unshared, expected);
         assert_eq!(shared, expected);
+    }
+
+    #[test]
+    fn test_boolean_bitor_assign() {
+        let rhs = BooleanBuffer::from(&[true, true, false, true, false, true][..]);
+        let original = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+
+        let mut actual = original.clone();
+        actual |= &rhs;
+
+        let expected = &original | &rhs;
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_boolean_bitxor_assign() {
+        let rhs = BooleanBuffer::from(&[true, true, false, true, false, true][..]);
+        let original = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+
+        let mut actual = original.clone();
+        actual ^= &rhs;
+
+        let expected = &original ^ &rhs;
+        assert_eq!(actual, expected);
     }
 
     #[test]
