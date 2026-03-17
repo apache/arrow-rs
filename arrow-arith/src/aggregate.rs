@@ -45,11 +45,7 @@ trait NumericAccumulator<T: ArrowNativeTypeOp>: Copy + Default {
 /// After verifying the generated assembly this can be a simple `if`.
 #[inline(always)]
 fn select<T: Copy>(m: bool, a: T, b: T) -> T {
-    if m {
-        a
-    } else {
-        b
-    }
+    if m { a } else { b }
 }
 
 #[derive(Clone, Copy)]
@@ -194,14 +190,14 @@ fn aggregate_nullable_chunk<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, cons
 }
 
 fn aggregate_nonnull_simple<T: ArrowNativeTypeOp, A: NumericAccumulator<T>>(values: &[T]) -> T {
-    return values
+    values
         .iter()
         .copied()
         .fold(A::default(), |mut a, b| {
             a.accumulate(b);
             a
         })
-        .finish();
+        .finish()
 }
 
 #[inline(never)]
@@ -336,10 +332,10 @@ fn aggregate<T: ArrowNativeTypeOp, P: ArrowPrimitiveType<Native = T>, A: Numeric
 
 /// Returns the minimum value in the boolean array.
 ///
+/// # Example
 /// ```
 /// # use arrow_array::BooleanArray;
 /// # use arrow_arith::aggregate::min_boolean;
-///
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
 /// assert_eq!(min_boolean(&a), Some(false))
 /// ```
@@ -394,10 +390,10 @@ pub fn min_boolean(array: &BooleanArray) -> Option<bool> {
 
 /// Returns the maximum value in the boolean array
 ///
+/// # Example
 /// ```
 /// # use arrow_array::BooleanArray;
 /// # use arrow_arith::aggregate::max_boolean;
-///
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
 /// assert_eq!(max_boolean(&a), Some(true))
 /// ```
@@ -451,11 +447,7 @@ where
             let idx = nulls.valid_indices().reduce(|acc_idx, idx| {
                 let acc = array.value_unchecked(acc_idx);
                 let item = array.value_unchecked(idx);
-                if cmp(&acc, &item) {
-                    idx
-                } else {
-                    acc_idx
-                }
+                if cmp(&acc, &item) { idx } else { acc_idx }
             });
             idx.map(|idx| array.value_unchecked(idx))
         }
@@ -477,11 +469,7 @@ fn min_max_view_helper<T: ByteViewType>(
         let target_idx = (0..array.len()).reduce(|acc, item| {
             // SAFETY:  array's length is correct so item is within bounds
             let cmp = unsafe { GenericByteViewArray::compare_unchecked(array, item, array, acc) };
-            if cmp == swap_cond {
-                item
-            } else {
-                acc
-            }
+            if cmp == swap_cond { item } else { acc }
         });
         // SAFETY: idx came from valid range `0..array.len()`
         unsafe { target_idx.map(|idx| array.value_unchecked(idx)) }
@@ -491,11 +479,7 @@ fn min_max_view_helper<T: ByteViewType>(
         let target_idx = nulls.valid_indices().reduce(|acc_idx, idx| {
             let cmp =
                 unsafe { GenericByteViewArray::compare_unchecked(array, idx, array, acc_idx) };
-            if cmp == swap_cond {
-                idx
-            } else {
-                acc_idx
-            }
+            if cmp == swap_cond { idx } else { acc_idx }
         });
 
         // SAFETY: idx came from valid range `0..array.len()`
@@ -513,6 +497,11 @@ pub fn max_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
     min_max_view_helper(array, Ordering::Greater)
 }
 
+/// Returns the maximum value in the fixed size binary array, according to the natural order.
+pub fn max_fixed_size_binary(array: &FixedSizeBinaryArray) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
+}
+
 /// Returns the minimum value in the binary array, according to the natural order.
 pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
     min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
@@ -521,6 +510,11 @@ pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&
 /// Returns the minimum value in the binary view array, according to the natural order.
 pub fn min_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
     min_max_view_helper(array, Ordering::Less)
+}
+
+/// Returns the minimum value in the fixed size binary array, according to the natural order.
+pub fn min_fixed_size_binary(array: &FixedSizeBinaryArray) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
 }
 
 /// Returns the maximum value in the string array, according to the natural order.
@@ -546,7 +540,7 @@ pub fn min_string_view(array: &StringViewArray) -> Option<&str> {
 /// Returns the sum of values in the array.
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
-/// For an overflow-checking variant, use `sum_array_checked` instead.
+/// For an overflow-checking variant, use [`sum_array_checked`] instead.
 pub fn sum_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
 where
     T: ArrowNumericType,
@@ -573,6 +567,12 @@ where
 
             Some(sum)
         }
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => ree::sum_wrapping::<types::Int16Type, T>(&array),
+            DataType::Int32 => ree::sum_wrapping::<types::Int32Type, T>(&array),
+            DataType::Int64 => ree::sum_wrapping::<types::Int64Type, T>(&array),
+            _ => unreachable!(),
+        },
         _ => sum::<T>(as_primitive_array(&array)),
     }
 }
@@ -580,7 +580,9 @@ where
 /// Returns the sum of values in the array.
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
-/// use `sum_array` instead.
+/// use [`sum_array`] instead.
+/// Additionally returns an `Err` on run-end-encoded arrays with a provided
+/// values type parameter that is incorrect.
 pub fn sum_array_checked<T, A: ArrayAccessor<Item = T::Native>>(
     array: A,
 ) -> Result<Option<T::Native>, ArrowError>
@@ -609,7 +611,107 @@ where
 
             Ok(Some(sum))
         }
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => ree::sum_checked::<types::Int16Type, T>(&array),
+            DataType::Int32 => ree::sum_checked::<types::Int32Type, T>(&array),
+            DataType::Int64 => ree::sum_checked::<types::Int64Type, T>(&array),
+            _ => unreachable!(),
+        },
         _ => sum_checked::<T>(as_primitive_array(&array)),
+    }
+}
+
+// Logic for summing run-end-encoded arrays.
+mod ree {
+    use std::convert::Infallible;
+
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::RunEndIndexType;
+    use arrow_array::{Array, ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray, TypedRunArray};
+    use arrow_buffer::ArrowNativeType;
+    use arrow_schema::ArrowError;
+
+    /// Downcasts an array to a TypedRunArray.
+    fn downcast<'a, I: RunEndIndexType, V: ArrowNumericType>(
+        array: &'a dyn Array,
+    ) -> Option<TypedRunArray<'a, I, PrimitiveArray<V>>> {
+        let array = array.as_run_opt::<I>()?;
+        // We only support RunArray wrapping primitive types.
+        array.downcast::<PrimitiveArray<V>>()
+    }
+
+    /// Computes the sum (wrapping) of the array values.
+    pub(super) fn sum_wrapping<I: RunEndIndexType, V: ArrowNumericType>(
+        array: &dyn Array,
+    ) -> Option<V::Native> {
+        let ree = downcast::<I, V>(array)?;
+        let Ok(sum) = fold(ree, |acc, val, len| -> Result<V::Native, Infallible> {
+            Ok(acc.add_wrapping(val.mul_wrapping(V::Native::usize_as(len))))
+        });
+        sum
+    }
+
+    /// Computes the sum (erroring on overflow) of the array values.
+    pub(super) fn sum_checked<I: RunEndIndexType, V: ArrowNumericType>(
+        array: &dyn Array,
+    ) -> Result<Option<V::Native>, ArrowError> {
+        let Some(ree) = downcast::<I, V>(array) else {
+            return Err(ArrowError::InvalidArgumentError(
+                "Input run array values are not a PrimitiveArray".to_string(),
+            ));
+        };
+        fold(ree, |acc, val, len| -> Result<V::Native, ArrowError> {
+            let Some(len) = V::Native::from_usize(len) else {
+                return Err(ArrowError::ArithmeticOverflow(format!(
+                    "Cannot convert a run-end index ({:?}) to the value type ({})",
+                    len,
+                    std::any::type_name::<V::Native>()
+                )));
+            };
+            acc.add_checked(val.mul_checked(len)?)
+        })
+    }
+
+    /// Folds over the values in a run-end-encoded array.
+    fn fold<'a, I: RunEndIndexType, V: ArrowNumericType, F, E>(
+        array: TypedRunArray<'a, I, PrimitiveArray<V>>,
+        mut f: F,
+    ) -> Result<Option<V::Native>, E>
+    where
+        F: FnMut(V::Native, V::Native, usize) -> Result<V::Native, E>,
+    {
+        let run_ends = array.run_ends();
+        let logical_start = run_ends.offset();
+        let logical_end = run_ends.offset() + run_ends.len();
+        let run_ends = run_ends.sliced_values();
+
+        let values_slice = array.run_array().values_slice();
+        let values = values_slice
+            .as_any()
+            .downcast_ref::<PrimitiveArray<V>>()
+            // Safety: we know the values array is PrimitiveArray<V>.
+            .unwrap();
+
+        let mut prev_end = 0;
+        let mut acc = V::Native::ZERO;
+        let mut has_non_null_value = false;
+
+        for (run_end, value) in run_ends.zip(values) {
+            let current_run_end = run_end.as_usize().clamp(logical_start, logical_end);
+            let run_length = current_run_end - prev_end;
+
+            if let Some(value) = value {
+                has_non_null_value = true;
+                acc = f(acc, value, run_length)?;
+            }
+
+            prev_end = current_run_end;
+            if current_run_end == logical_end {
+                break;
+            }
+        }
+
+        Ok(if has_non_null_value { Some(acc) } else { None })
     }
 }
 
@@ -645,6 +747,20 @@ where
 {
     match array.data_type() {
         DataType::Dictionary(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
+        DataType::RunEndEncoded(run_ends, _) => {
+            // We can directly perform min/max on the values child array, as any
+            // run must have non-zero length.
+            let array: &dyn Array = &array;
+            let values = match run_ends.data_type() {
+                DataType::Int16 => array.as_run_opt::<types::Int16Type>()?.values_slice(),
+                DataType::Int32 => array.as_run_opt::<types::Int32Type>()?.values_slice(),
+                DataType::Int64 => array.as_run_opt::<types::Int64Type>()?.values_slice(),
+                _ => return None,
+            };
+            // We only support RunArray wrapping primitive types.
+            let values = values.as_any().downcast_ref::<PrimitiveArray<T>>()?;
+            m(values)
+        }
         _ => m(as_primitive_array(&array)),
     }
 }
@@ -757,7 +873,7 @@ pub fn bool_or(array: &BooleanArray) -> Option<bool> {
 /// Returns `Ok(None)` if the array is empty or only contains null values.
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
-/// use `sum` instead.
+/// use [`sum`] instead.
 pub fn sum_checked<T>(array: &PrimitiveArray<T>) -> Result<Option<T::Native>, ArrowError>
 where
     T: ArrowNumericType,
@@ -805,7 +921,7 @@ where
 /// Returns `None` if the array is empty or only contains null values.
 ///
 /// This doesn't detect overflow in release mode by default. Once overflowing, the result will
-/// wrap around. For an overflow-checking variant, use `sum_checked` instead.
+/// wrap around. For an overflow-checking variant, use [`sum_checked`] instead.
 pub fn sum<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T::Native: ArrowNativeTypeOp,
@@ -815,6 +931,15 @@ where
 
 /// Returns the minimum value in the array, according to the natural order.
 /// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// # Example
+/// ```rust
+/// # use arrow_array::Int32Array;
+/// # use arrow_arith::aggregate::min;
+/// let array = Int32Array::from(vec![8, 2, 4]);
+/// let result = min(&array);
+/// assert_eq!(result, Some(2));
+/// ```
 pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T::Native: PartialOrd,
@@ -824,6 +949,15 @@ where
 
 /// Returns the maximum value in the array, according to the natural order.
 /// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// # Example
+/// ```rust
+/// # use arrow_array::Int32Array;
+/// # use arrow_arith::aggregate::max;
+/// let array = Int32Array::from(vec![4, 8, 2]);
+/// let result = max(&array);
+/// assert_eq!(result, Some(8));
+/// ```
 pub fn max<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T::Native: PartialOrd,
@@ -1240,6 +1374,41 @@ mod tests {
         assert!(max(&a).unwrap().is_nan());
     }
 
+    fn pad_inputs_and_test_fixed_size_binary(
+        input: Vec<Option<&[u8]>>,
+        expected_min: Option<&[u8]>,
+        expected_max: Option<&[u8]>,
+    ) {
+        fn pad_slice(slice: &[u8], len: usize) -> Vec<u8> {
+            let mut padded = vec![0; len];
+            padded[..slice.len()].copy_from_slice(slice);
+            padded
+        }
+
+        let max_len = input
+            .iter()
+            .filter_map(|x| x.as_ref().map(|b| b.len()))
+            .max()
+            .unwrap_or(0);
+        let padded_input = input
+            .iter()
+            .map(|x| x.as_ref().map(|b| pad_slice(b, max_len)));
+        let input_arr =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(padded_input, max_len as i32)
+                .unwrap();
+        let padded_expected_min = expected_min.map(|b| pad_slice(b, max_len));
+        let padded_expected_max = expected_max.map(|b| pad_slice(b, max_len));
+
+        assert_eq!(
+            padded_expected_min.as_deref(),
+            min_fixed_size_binary(&input_arr)
+        );
+        assert_eq!(
+            padded_expected_max.as_deref(),
+            max_fixed_size_binary(&input_arr)
+        );
+    }
+
     macro_rules! test_binary {
         ($NAME:ident, $ARRAY:expr, $EXPECTED_MIN:expr, $EXPECTED_MAX: expr) => {
             #[test]
@@ -1255,6 +1424,8 @@ mod tests {
                 let binary_view = BinaryViewArray::from($ARRAY);
                 assert_eq!($EXPECTED_MIN, min_binary_view(&binary_view));
                 assert_eq!($EXPECTED_MAX, max_binary_view(&binary_view));
+
+                pad_inputs_and_test_fixed_size_binary($ARRAY, $EXPECTED_MIN, $EXPECTED_MAX);
             }
         };
     }
@@ -1700,5 +1871,171 @@ mod tests {
 
         sum_checked(&a).expect_err("overflow should be detected");
         sum_array_checked::<Int32Type, _>(&a).expect_err("overflow should be detected");
+    }
+
+    /// Helper for building a RunArray.
+    fn make_run_array<'a, I: RunEndIndexType, V: ArrowNumericType, ItemType>(
+        values: impl IntoIterator<Item = &'a ItemType>,
+    ) -> RunArray<I>
+    where
+        ItemType: Clone + Into<Option<V::Native>> + 'static,
+    {
+        let mut builder = arrow_array::builder::PrimitiveRunBuilder::<I, V>::new();
+        for v in values.into_iter() {
+            builder.append_option((*v).clone().into());
+        }
+        builder.finish()
+    }
+
+    #[test]
+    fn test_ree_sum_array_basic() {
+        let run_array = make_run_array::<Int16Type, Int32Type, _>(&[10, 10, 20, 30, 30, 30]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = sum_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(130));
+
+        let result = sum_array_checked::<Int32Type, _>(typed_array).unwrap();
+        assert_eq!(result, Some(130));
+    }
+
+    #[test]
+    fn test_ree_sum_array_empty() {
+        let run_array = make_run_array::<Int16Type, Int32Type, i32>(&[]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = sum_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, None);
+
+        let result = sum_array_checked::<Int32Type, _>(typed_array).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_ree_sum_array_with_nulls() {
+        let run_array =
+            make_run_array::<Int16Type, Int32Type, _>(&[Some(10), None, Some(20), None, Some(30)]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = sum_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(60));
+
+        let result = sum_array_checked::<Int32Type, _>(typed_array).unwrap();
+        assert_eq!(result, Some(60));
+    }
+
+    #[test]
+    fn test_ree_sum_array_with_only_nulls() {
+        let run_array = make_run_array::<Int16Type, Int16Type, _>(&[None, None, None, None, None]);
+        let typed_array = run_array.downcast::<Int16Array>().unwrap();
+
+        let result = sum_array::<Int16Type, _>(typed_array);
+        assert_eq!(result, None);
+
+        let result = sum_array_checked::<Int16Type, _>(typed_array).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_ree_sum_array_overflow() {
+        let run_array = make_run_array::<Int16Type, Int8Type, _>(&[126, 2]);
+        let typed_array = run_array.downcast::<Int8Array>().unwrap();
+
+        // i8 range is -128..=127. 126+2 overflows to -128.
+        let result = sum_array::<Int8Type, _>(typed_array);
+        assert_eq!(result, Some(-128));
+
+        let result = sum_array_checked::<Int8Type, _>(typed_array);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ree_sum_array_sliced() {
+        let run_array = make_run_array::<Int16Type, UInt8Type, _>(&[0, 10, 10, 10, 20, 30, 30, 30]);
+        // Skip 2 values at the start and 1 at the end.
+        let sliced = run_array.slice(2, 5);
+        let typed_array = sliced.downcast::<UInt8Array>().unwrap();
+
+        let result = sum_array::<UInt8Type, _>(typed_array);
+        assert_eq!(result, Some(100));
+
+        let result = sum_array_checked::<UInt8Type, _>(typed_array).unwrap();
+        assert_eq!(result, Some(100));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_basic() {
+        let run_array = make_run_array::<Int16Type, Int32Type, _>(&[30, 30, 10, 20, 20]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = min_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(10));
+
+        let result = max_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(30));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_empty() {
+        let run_array = make_run_array::<Int16Type, Int32Type, i32>(&[]);
+        let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+        let result = min_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, None);
+
+        let result = max_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_ree_min_max_array_float() {
+        let run_array = make_run_array::<Int16Type, Float64Type, _>(&[5.5, 5.5, 2.1, 8.9, 8.9]);
+        let typed_array = run_array.downcast::<Float64Array>().unwrap();
+
+        let result = min_array::<Float64Type, _>(typed_array);
+        assert_eq!(result, Some(2.1));
+
+        let result = max_array::<Float64Type, _>(typed_array);
+        assert_eq!(result, Some(8.9));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_with_nulls() {
+        let run_array = make_run_array::<Int16Type, UInt8Type, _>(&[None, Some(10)]);
+        let typed_array = run_array.downcast::<UInt8Array>().unwrap();
+
+        let result = min_array::<UInt8Type, _>(typed_array);
+        assert_eq!(result, Some(10));
+
+        let result = max_array::<UInt8Type, _>(typed_array);
+        assert_eq!(result, Some(10));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_sliced() {
+        let run_array = make_run_array::<Int16Type, Int32Type, _>(&[0, 30, 30, 10, 20, 20, 100]);
+        // Skip 1 value at the start and 1 at the end.
+        let sliced = run_array.slice(1, 5);
+        let typed_array = sliced.downcast::<Int32Array>().unwrap();
+
+        let result = min_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(10));
+
+        let result = max_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(30));
+    }
+
+    #[test]
+    fn test_ree_min_max_array_sliced_mid_run() {
+        let run_array = make_run_array::<Int16Type, Int32Type, _>(&[0, 0, 30, 10, 20, 100, 100]);
+        // Skip 1 value at the start and 1 at the end.
+        let sliced = run_array.slice(1, 5);
+        let typed_array = sliced.downcast::<Int32Array>().unwrap();
+
+        let result = min_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(0));
+
+        let result = max_array::<Int32Type, _>(typed_array);
+        assert_eq!(result, Some(100));
     }
 }

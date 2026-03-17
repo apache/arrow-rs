@@ -30,7 +30,7 @@ use std::sync::Arc;
 use arrow_arith::boolean::or;
 use arrow_array::array::{Array, UInt32Array, UnionArray};
 use arrow_array::builder::{
-    ArrayBuilder, BooleanBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder, MapBuilder,
+    ArrayBuilder, BooleanBuilder, Int8Builder, Int32Builder, Int64Builder, ListBuilder, MapBuilder,
     StringBuilder, UInt32Builder,
 };
 use arrow_array::{RecordBatch, Scalar};
@@ -172,7 +172,7 @@ static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
         // treat list as nullable b/c that is what the builders make
         Field::new(
             "string_list",
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
             true,
         ),
         Field::new(
@@ -184,7 +184,7 @@ static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
                         Field::new("keys", DataType::Int32, false),
                         Field::new(
                             "values",
-                            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                             true,
                         ),
                     ])),
@@ -196,10 +196,7 @@ static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
         ),
     ];
 
-    // create "type ids", one for each type, assume they go from 0 .. num_fields
-    let type_ids: Vec<i8> = (0..fields.len()).map(|v| v as i8).collect();
-
-    DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
+    DataType::Union(UnionFields::from_fields(fields), UnionMode::Dense)
 });
 
 impl SqlInfoUnionBuilder {
@@ -331,7 +328,7 @@ impl SqlInfoUnionBuilder {
 ///
 /// Servers constuct - usually static - [`SqlInfoData`] via the [`SqlInfoDataBuilder`],
 /// and build responses using [`CommandGetSqlInfo::into_builder`]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SqlInfoDataBuilder {
     /// Use BTreeMap to ensure the values are sorted by value as
     /// to make output consistent
@@ -341,17 +338,10 @@ pub struct SqlInfoDataBuilder {
     infos: BTreeMap<u32, SqlInfoValue>,
 }
 
-impl Default for SqlInfoDataBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SqlInfoDataBuilder {
+    /// Create a new SQL info builder
     pub fn new() -> Self {
-        Self {
-            infos: BTreeMap::new(),
-        }
+        Self::default()
     }
 
     /// register the specific sql metadata item
@@ -451,7 +441,7 @@ pub struct GetSqlInfoBuilder<'a> {
 
 impl CommandGetSqlInfo {
     /// Create a builder suitable for constructing a response
-    pub fn into_builder(self, infos: &SqlInfoData) -> GetSqlInfoBuilder {
+    pub fn into_builder(self, infos: &SqlInfoData) -> GetSqlInfoBuilder<'_> {
         GetSqlInfoBuilder {
             info: self.info,
             infos,

@@ -291,8 +291,8 @@ fn get_tables_schema(include_schema: bool) -> SchemaRef {
 /// The schema for GetTables without `table_schema` column
 static GET_TABLES_SCHEMA_WITHOUT_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
     Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, false),
-        Field::new("db_schema_name", DataType::Utf8, false),
+        Field::new("catalog_name", DataType::Utf8, true),
+        Field::new("db_schema_name", DataType::Utf8, true),
         Field::new("table_name", DataType::Utf8, false),
         Field::new("table_type", DataType::Utf8, false),
     ]))
@@ -301,8 +301,8 @@ static GET_TABLES_SCHEMA_WITHOUT_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
 /// The schema for GetTables with `table_schema` column
 static GET_TABLES_SCHEMA_WITH_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
     Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, false),
-        Field::new("db_schema_name", DataType::Utf8, false),
+        Field::new("catalog_name", DataType::Utf8, true),
+        Field::new("db_schema_name", DataType::Utf8, true),
         Field::new("table_name", DataType::Utf8, false),
         Field::new("table_type", DataType::Utf8, false),
         Field::new("table_schema", DataType::Binary, false),

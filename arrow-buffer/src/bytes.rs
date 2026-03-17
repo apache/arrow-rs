@@ -24,17 +24,27 @@ use std::ptr::NonNull;
 use std::{fmt::Debug, fmt::Formatter};
 
 use crate::alloc::Deallocation;
+use crate::buffer::dangling_ptr;
+
+#[cfg(feature = "pool")]
+use crate::pool::{MemoryPool, MemoryReservation};
+#[cfg(feature = "pool")]
+use std::sync::Mutex;
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
 ///
-/// This structs' API is inspired by the `bytes::Bytes`, but it is not limited to using rust's
-/// global allocator nor u8 alignment.
+/// Note that this structure is an internal implementation detail of the
+/// arrow-rs crate. While it has the same name and similar API as
+/// [`bytes::Bytes`] it is not limited to rust's global allocator nor u8
+/// alignment. It is possible to create a `Bytes` from `bytes::Bytes` using the
+/// `From` implementation.
 ///
 /// In the most common case, this buffer is allocated using [`alloc`](std::alloc::alloc)
 /// with an alignment of [`ALIGNMENT`](crate::alloc::ALIGNMENT)
 ///
 /// When the region is allocated by a different allocator, [Deallocation::Custom], this calls the
 /// custom deallocator to deallocate the region when it is no longer needed.
+///
 pub struct Bytes {
     /// The raw pointer to be beginning of the region
     ptr: NonNull<u8>,
@@ -44,6 +54,10 @@ pub struct Bytes {
 
     /// how to deallocate this region
     deallocation: Deallocation,
+
+    /// Memory reservation for tracking memory usage
+    #[cfg(feature = "pool")]
+    pub(super) reservation: Mutex<Option<Box<dyn MemoryReservation>>>,
 }
 
 impl Bytes {
@@ -65,6 +79,8 @@ impl Bytes {
             ptr,
             len,
             deallocation,
+            #[cfg(feature = "pool")]
+            reservation: Mutex::new(None),
         }
     }
 
@@ -94,6 +110,76 @@ impl Bytes {
             // its underlying capacity might be larger
             Deallocation::Custom(_, size) => size,
         }
+    }
+
+    /// Register this [`Bytes`] with the provided [`MemoryPool`], replacing any prior reservation.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn MemoryPool) {
+        *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
+    }
+
+    /// Resize the memory reservation of this buffer
+    ///
+    /// This is a no-op if this buffer doesn't have a reservation.
+    #[cfg(feature = "pool")]
+    fn resize_reservation(&self, new_size: usize) {
+        let mut guard = self.reservation.lock().unwrap();
+        if let Some(mut reservation) = guard.take() {
+            // Resize the reservation
+            reservation.resize(new_size);
+
+            // Put it back
+            *guard = Some(reservation);
+        }
+    }
+
+    /// Try to reallocate the underlying memory region to a new size (smaller or larger).
+    ///
+    /// Only works for bytes allocated with the standard allocator.
+    /// Returns `Err` if the memory was allocated with a custom allocator,
+    /// or the call to `realloc` failed, for whatever reason.
+    /// In case of `Err`, the [`Bytes`] will remain as it was (i.e. have the old size).
+    pub fn try_realloc(&mut self, new_len: usize) -> Result<(), ()> {
+        if let Deallocation::Standard(old_layout) = self.deallocation {
+            if old_layout.size() == new_len {
+                return Ok(()); // Nothing to do
+            }
+
+            if let Ok(new_layout) = std::alloc::Layout::from_size_align(new_len, old_layout.align())
+            {
+                let old_ptr = self.ptr.as_ptr();
+
+                let new_ptr = match new_layout.size() {
+                    0 => {
+                        // SAFETY: Verified that old_layout.size != new_len (0)
+                        unsafe { std::alloc::dealloc(self.ptr.as_ptr(), old_layout) };
+                        Some(dangling_ptr())
+                    }
+                    // SAFETY: the call to `realloc` is safe if all the following hold (from https://doc.rust-lang.org/stable/std/alloc/trait.GlobalAlloc.html#method.realloc):
+                    // * `old_ptr` must be currently allocated via this allocator (guaranteed by the invariant/contract of `Bytes`)
+                    // * `old_layout` must be the same layout that was used to allocate that block of memory (same)
+                    // * `new_len` must be greater than zero
+                    // * `new_len`, when rounded up to the nearest multiple of `layout.align()`, must not overflow `isize` (guaranteed by the success of `Layout::from_size_align`)
+                    _ => NonNull::new(unsafe { std::alloc::realloc(old_ptr, old_layout, new_len) }),
+                };
+
+                if let Some(ptr) = new_ptr {
+                    self.ptr = ptr;
+                    self.len = new_len;
+                    self.deallocation = Deallocation::Standard(new_layout);
+
+                    #[cfg(feature = "pool")]
+                    {
+                        // Resize reservation
+                        self.resize_reservation(new_len);
+                    }
+
+                    return Ok(());
+                }
+            }
+        }
+
+        Err(())
     }
 
     #[inline]
@@ -152,6 +238,8 @@ impl From<bytes::Bytes> for Bytes {
             len,
             ptr: NonNull::new(value.as_ptr() as _).unwrap(),
             deallocation: Deallocation::Custom(std::sync::Arc::new(value), len),
+            #[cfg(feature = "pool")]
+            reservation: Mutex::new(None),
         }
     }
 }
@@ -162,14 +250,83 @@ mod tests {
 
     #[test]
     fn test_from_bytes() {
-        let bytes = bytes::Bytes::from(vec![1, 2, 3, 4]);
-        let arrow_bytes: Bytes = bytes.clone().into();
+        let message = b"hello arrow";
 
-        assert_eq!(bytes.as_ptr(), arrow_bytes.as_ptr());
+        // we can create a Bytes from bytes::Bytes (created from slices)
+        let c_bytes: bytes::Bytes = message.as_ref().into();
+        let a_bytes: Bytes = c_bytes.into();
+        assert_eq!(a_bytes.as_slice(), message);
 
-        drop(bytes);
-        drop(arrow_bytes);
+        // we can create a Bytes from bytes::Bytes (created from Vec)
+        let c_bytes: bytes::Bytes = bytes::Bytes::from(message.to_vec());
+        let a_bytes: Bytes = c_bytes.into();
+        assert_eq!(a_bytes.as_slice(), message);
+    }
 
-        let _ = Bytes::from(bytes::Bytes::new());
+    #[cfg(feature = "pool")]
+    mod pool_tests {
+        use super::*;
+
+        use crate::pool::TrackingMemoryPool;
+
+        #[test]
+        fn test_bytes_with_pool() {
+            // Create a standard allocation
+            let buffer = unsafe {
+                let layout =
+                    std::alloc::Layout::from_size_align(1024, crate::alloc::ALIGNMENT).unwrap();
+                let ptr = std::alloc::alloc(layout);
+                assert!(!ptr.is_null());
+
+                Bytes::new(
+                    NonNull::new(ptr).unwrap(),
+                    1024,
+                    Deallocation::Standard(layout),
+                )
+            };
+
+            // Create a memory pool
+            let pool = TrackingMemoryPool::default();
+            assert_eq!(pool.used(), 0);
+
+            // Reserve memory and assign to buffer. Claim twice.
+            buffer.claim(&pool);
+            assert_eq!(pool.used(), 1024);
+            buffer.claim(&pool);
+            assert_eq!(pool.used(), 1024);
+
+            // Memory should be released when buffer is dropped
+            drop(buffer);
+            assert_eq!(pool.used(), 0);
+        }
+
+        #[test]
+        fn test_bytes_drop_releases_pool() {
+            let pool = TrackingMemoryPool::default();
+
+            {
+                // Create a buffer with pool
+                let _buffer = unsafe {
+                    let layout =
+                        std::alloc::Layout::from_size_align(1024, crate::alloc::ALIGNMENT).unwrap();
+                    let ptr = std::alloc::alloc(layout);
+                    assert!(!ptr.is_null());
+
+                    let bytes = Bytes::new(
+                        NonNull::new(ptr).unwrap(),
+                        1024,
+                        Deallocation::Standard(layout),
+                    );
+
+                    bytes.claim(&pool);
+                    bytes
+                };
+
+                assert_eq!(pool.used(), 1024);
+            }
+
+            // Buffer has been dropped, memory should be released
+            assert_eq!(pool.used(), 0);
+        }
     }
 }

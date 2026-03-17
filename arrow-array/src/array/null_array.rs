@@ -39,6 +39,7 @@ use std::sync::Arc;
 /// assert!(array.is_nullable());
 /// assert_eq!(array.len(), 10);
 /// assert_eq!(array.null_count(), 0);
+/// assert_eq!(array.logical_null_count(), 10);
 /// assert_eq!(array.logical_nulls().unwrap().null_count(), 10);
 /// ```
 #[derive(Clone)]
@@ -75,7 +76,8 @@ impl NullArray {
     }
 }
 
-impl Array for NullArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for NullArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -120,6 +122,10 @@ impl Array for NullArray {
         !self.is_empty()
     }
 
+    fn logical_null_count(&self) -> usize {
+        self.len
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         0
     }
@@ -127,25 +133,28 @@ impl Array for NullArray {
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, _pool: &dyn arrow_buffer::MemoryPool) {
+        // NullArray has no buffers to claim
+    }
 }
 
 impl From<ArrayData> for NullArray {
     fn from(data: ArrayData) -> Self {
+        let (data_type, len, nulls, _offset, buffers, _child_data) = data.into_parts();
+
         assert_eq!(
-            data.data_type(),
-            &DataType::Null,
+            data_type,
+            DataType::Null,
             "NullArray data type should be Null"
         );
-        assert_eq!(
-            data.buffers().len(),
-            0,
-            "NullArray data should contain 0 buffers"
-        );
+        assert_eq!(buffers.len(), 0, "NullArray data should contain 0 buffers");
         assert!(
-            data.nulls().is_none(),
+            nulls.is_none(),
             "NullArray data should not contain a null buffer, as no buffers are required"
         );
-        Self { len: data.len() }
+        Self { len }
     }
 }
 
@@ -165,6 +174,9 @@ impl std::fmt::Debug for NullArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Int64Array, StructArray, make_array};
+    use arrow_data::transform::MutableArrayData;
+    use arrow_schema::Field;
 
     #[test]
     fn test_null_array() {
@@ -172,6 +184,7 @@ mod tests {
 
         assert_eq!(null_arr.len(), 32);
         assert_eq!(null_arr.null_count(), 0);
+        assert_eq!(null_arr.logical_null_count(), 32);
         assert_eq!(null_arr.logical_nulls().unwrap().null_count(), 32);
         assert!(null_arr.is_valid(0));
         assert!(null_arr.is_nullable());
@@ -184,6 +197,7 @@ mod tests {
         let array2 = array1.slice(8, 16);
         assert_eq!(array2.len(), 16);
         assert_eq!(array2.null_count(), 0);
+        assert_eq!(array2.logical_null_count(), 16);
         assert_eq!(array2.logical_nulls().unwrap().null_count(), 16);
         assert!(array2.is_valid(0));
         assert!(array2.is_nullable());
@@ -193,5 +207,33 @@ mod tests {
     fn test_debug_null_array() {
         let array = NullArray::new(1024 * 1024);
         assert_eq!(format!("{array:?}"), "NullArray(1048576)");
+    }
+
+    #[test]
+    fn test_null_array_with_parent_null_buffer() {
+        let null_array = NullArray::new(1);
+        let int_array = Int64Array::from(vec![42]);
+
+        let fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Null, true),
+        ];
+
+        let struct_array_data = ArrayData::builder(DataType::Struct(fields.into()))
+            .len(1)
+            .add_child_data(int_array.to_data())
+            .add_child_data(null_array.to_data())
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&struct_array_data], true, 1);
+
+        // Simulate a NULL value in the parent array, for instance, if array being queried by
+        // invalid index
+        mutable.extend_nulls(1);
+        let data = mutable.freeze();
+
+        let struct_array = Arc::new(StructArray::from(data.clone()));
+        assert!(make_array(data) == struct_array);
     }
 }

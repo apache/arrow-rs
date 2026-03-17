@@ -33,10 +33,28 @@ use crate::util::bit_util::FromBytes;
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Int96 {
     value: [u32; 3],
 }
+
+const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
+
+/// Number of seconds in a day
+const SECONDS_IN_DAY: i64 = 86_400;
+/// Number of milliseconds in a second
+const MILLISECONDS: i64 = 1_000;
+/// Number of microseconds in a second
+const MICROSECONDS: i64 = 1_000_000;
+/// Number of nanoseconds in a second
+const NANOSECONDS: i64 = 1_000_000_000;
+
+/// Number of milliseconds in a day
+const MILLISECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MILLISECONDS;
+/// Number of microseconds in a day
+const MICROSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MICROSECONDS;
+/// Number of nanoseconds in a day
+const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
 
 impl Int96 {
     /// Creates new INT96 type struct with no data set.
@@ -56,34 +74,88 @@ impl Int96 {
         self.value = [elem0, elem1, elem2];
     }
 
-    /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
-    pub fn to_i64(&self) -> i64 {
-        let (seconds, nanoseconds) = self.to_seconds_and_nanos();
-        seconds * 1_000 + nanoseconds / 1_000_000
+    /// Converts this INT96 into an i64 representing the number of SECONDS since EPOCH
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn to_seconds(&self) -> i64 {
+        let (day, nanos) = self.data_as_days_and_nanos();
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
+            .wrapping_mul(SECONDS_IN_DAY)
+            .wrapping_add(nanos / 1_000_000_000)
+    }
+
+    /// Converts this INT96 into an i64 representing the number of MILLISECONDS since EPOCH
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn to_millis(&self) -> i64 {
+        let (day, nanos) = self.data_as_days_and_nanos();
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
+            .wrapping_mul(MILLISECONDS_IN_DAY)
+            .wrapping_add(nanos / 1_000_000)
+    }
+
+    /// Converts this INT96 into an i64 representing the number of MICROSECONDS since EPOCH
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn to_micros(&self) -> i64 {
+        let (day, nanos) = self.data_as_days_and_nanos();
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
+            .wrapping_mul(MICROSECONDS_IN_DAY)
+            .wrapping_add(nanos / 1_000)
     }
 
     /// Converts this INT96 into an i64 representing the number of NANOSECONDS since EPOCH
     ///
     /// Will wrap around on overflow
+    #[inline]
     pub fn to_nanos(&self) -> i64 {
-        let (seconds, nanoseconds) = self.to_seconds_and_nanos();
-        seconds
-            .wrapping_mul(1_000_000_000)
-            .wrapping_add(nanoseconds)
+        let (day, nanos) = self.data_as_days_and_nanos();
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
+            .wrapping_mul(NANOSECONDS_IN_DAY)
+            .wrapping_add(nanos)
     }
 
-    /// Converts this INT96 to a number of seconds and nanoseconds since EPOCH
-    pub fn to_seconds_and_nanos(&self) -> (i64, i64) {
-        const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
-        const SECONDS_PER_DAY: i64 = 86_400;
+    #[inline]
+    fn get_days(&self) -> i32 {
+        self.data()[2] as i32
+    }
 
-        let day = self.data()[2] as i64;
-        let nanoseconds = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
-        let seconds = (day - JULIAN_DAY_OF_EPOCH) * SECONDS_PER_DAY;
-        (seconds, nanoseconds)
+    #[inline]
+    fn get_nanos(&self) -> i64 {
+        ((self.data()[1] as i64) << 32) + self.data()[0] as i64
+    }
+
+    #[inline]
+    fn data_as_days_and_nanos(&self) -> (i32, i64) {
+        (self.get_days(), self.get_nanos())
     }
 }
 
+impl PartialOrd for Int96 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Int96 {
+    /// Order `Int96` correctly for (deprecated) timestamp types.
+    ///
+    /// Note: this is done even though the Int96 type is deprecated and the
+    /// [spec does not define the sort order]
+    /// because some engines, notably Spark and Databricks Photon still write
+    /// Int96 timestamps and rely on their order for optimization.
+    ///
+    /// [spec does not define the sort order]: https://github.com/apache/parquet-format/blob/cf943c197f4fad826b14ba0c40eb0ffdab585285/src/main/thrift/parquet.thrift#L1079
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.get_days().cmp(&other.get_days()) {
+            Ordering::Equal => self.get_nanos().cmp(&other.get_nanos()),
+            ord => ord,
+        }
+    }
+}
 impl From<Vec<u32>> for Int96 {
     fn from(buf: Vec<u32>) -> Self {
         assert_eq!(buf.len(), 3);
@@ -183,6 +255,7 @@ impl ByteArray {
         )
     }
 
+    /// Try to convert the byte array to a utf8 slice
     pub fn as_utf8(&self) -> Result<&str> {
         self.data
             .as_ref()
@@ -349,20 +422,29 @@ impl From<FixedLenByteArray> for ByteArray {
 pub enum Decimal {
     /// Decimal backed by `i32`.
     Int32 {
+        /// The underlying value
         value: [u8; 4],
+        /// The total number of digits in the number
         precision: i32,
+        /// The number of digits to the right of the decimal point
         scale: i32,
     },
     /// Decimal backed by `i64`.
     Int64 {
+        /// The underlying value
         value: [u8; 8],
+        /// The total number of digits in the number
         precision: i32,
+        /// The number of digits to the right of the decimal point
         scale: i32,
     },
     /// Decimal backed by byte array.
     Bytes {
+        /// The underlying value
         value: ByteArray,
+        /// The total number of digits in the number
         precision: i32,
+        /// The number of digits to the right of the decimal point
         scale: i32,
     },
 }
@@ -580,7 +662,7 @@ impl AsBytes for Vec<u8> {
     }
 }
 
-impl<'a> AsBytes for &'a str {
+impl AsBytes for &str {
     fn as_bytes(&self) -> &[u8] {
         (self as &str).as_bytes()
     }
@@ -596,7 +678,7 @@ pub(crate) mod private {
     use bytes::Bytes;
 
     use crate::encodings::decoding::PlainDecoderDetails;
-    use crate::util::bit_util::{read_num_bytes, BitReader, BitWriter};
+    use crate::util::bit_util::{BitReader, BitWriter, read_num_bytes};
 
     use super::{ParquetError, Result, SliceAsBytes};
     use crate::basic::Type;
@@ -1120,6 +1202,7 @@ pub(crate) mod private {
 /// Contains the Parquet physical type information as well as the Rust primitive type
 /// presentation.
 pub trait DataType: 'static + Send {
+    /// The physical type of the Parquet data type.
     type T: private::ParquetValueType;
 
     /// Returns Parquet physical type.
@@ -1130,20 +1213,24 @@ pub trait DataType: 'static + Send {
     /// Returns size in bytes for Rust representation of the physical type.
     fn get_type_size() -> usize;
 
+    /// Returns the underlying [`ColumnReaderImpl`] for the given [`ColumnReader`].
     fn get_column_reader(column_writer: ColumnReader) -> Option<ColumnReaderImpl<Self>>
     where
         Self: Sized;
 
+    /// Returns the underlying [`ColumnWriterImpl`] for the given [`ColumnWriter`].
     fn get_column_writer(column_writer: ColumnWriter<'_>) -> Option<ColumnWriterImpl<'_, Self>>
     where
         Self: Sized;
 
+    /// Returns a reference to the underlying [`ColumnWriterImpl`] for the given [`ColumnWriter`].
     fn get_column_writer_ref<'a, 'b: 'a>(
         column_writer: &'b ColumnWriter<'a>,
     ) -> Option<&'b ColumnWriterImpl<'a, Self>>
     where
         Self: Sized;
 
+    /// Returns a mutable reference to the underlying [`ColumnWriterImpl`] for the given
     fn get_column_writer_mut<'a, 'b: 'a>(
         column_writer: &'a mut ColumnWriter<'b>,
     ) -> Option<&'a mut ColumnWriterImpl<'b, Self>>
@@ -1151,22 +1238,9 @@ pub trait DataType: 'static + Send {
         Self: Sized;
 }
 
-// Workaround bug in specialization
-pub trait SliceAsBytesDataType: DataType
-where
-    Self::T: SliceAsBytes,
-{
-}
-
-impl<T> SliceAsBytesDataType for T
-where
-    T: DataType,
-    <T as DataType>::T: SliceAsBytes,
-{
-}
-
 macro_rules! make_type {
     ($name:ident, $reader_ident: ident, $writer_ident: ident, $native_ty:ty, $size:expr) => {
+        #[doc = concat!("Parquet physical type: ", stringify!($name))]
         #[derive(Clone)]
         pub struct $name {}
 

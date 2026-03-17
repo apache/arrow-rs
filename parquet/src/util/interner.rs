@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::data_type::AsBytes;
-use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
+use hashbrown::HashTable;
 
 const DEFAULT_DEDUP_CAPACITY: usize = 4096;
 
@@ -25,7 +24,7 @@ const DEFAULT_DEDUP_CAPACITY: usize = 4096;
 pub trait Storage {
     type Key: Copy;
 
-    type Value: AsBytes + PartialEq + ?Sized;
+    type Value: AsBytes + ?Sized;
 
     /// Gets an element by its key
     fn get(&self, idx: Self::Key) -> &Self::Value;
@@ -44,11 +43,7 @@ pub struct Interner<S: Storage> {
     state: ahash::RandomState,
 
     /// Used to provide a lookup from value to unique value
-    ///
-    /// Note: `S::Key`'s hash implementation is not used, instead the raw entry
-    /// API is used to store keys w.r.t the hash of the strings themselves
-    ///
-    dedup: HashMap<S::Key, (), ()>,
+    dedup: HashTable<S::Key>,
 
     storage: S,
 }
@@ -58,7 +53,7 @@ impl<S: Storage> Interner<S> {
     pub fn new(storage: S) -> Self {
         Self {
             state: Default::default(),
-            dedup: HashMap::with_capacity_and_hasher(DEFAULT_DEDUP_CAPACITY, ()),
+            dedup: HashTable::with_capacity(DEFAULT_DEDUP_CAPACITY),
             storage,
         }
     }
@@ -67,23 +62,16 @@ impl<S: Storage> Interner<S> {
     pub fn intern(&mut self, value: &S::Value) -> S::Key {
         let hash = self.state.hash_one(value.as_bytes());
 
-        let entry = self
+        *self
             .dedup
-            .raw_entry_mut()
-            .from_hash(hash, |index| value == self.storage.get(*index));
-
-        match entry {
-            RawEntryMut::Occupied(entry) => *entry.into_key(),
-            RawEntryMut::Vacant(entry) => {
-                let key = self.storage.push(value);
-
-                *entry
-                    .insert_with_hasher(hash, key, (), |key| {
-                        self.state.hash_one(self.storage.get(*key).as_bytes())
-                    })
-                    .0
-            }
-        }
+            .entry(
+                hash,
+                // Compare bytes rather than directly comparing values so NaNs can be interned
+                |index| value.as_bytes() == self.storage.get(*index).as_bytes(),
+                |key| self.state.hash_one(self.storage.get(*key).as_bytes()),
+            )
+            .or_insert_with(|| self.storage.push(value))
+            .get()
     }
 
     /// Return estimate of the memory used, in bytes

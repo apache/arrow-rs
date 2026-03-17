@@ -64,8 +64,9 @@ use std::{
 };
 
 use arrow_data::ffi::FFI_ArrowArray;
-use arrow_schema::{ffi::FFI_ArrowSchema, ArrowError, Schema, SchemaRef};
+use arrow_schema::{ArrowError, Schema, SchemaRef, ffi::FFI_ArrowSchema};
 
+use crate::RecordBatchOptions;
 use crate::array::Array;
 use crate::array::StructArray;
 use crate::ffi::from_ffi_and_data_type;
@@ -105,13 +106,13 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
     if stream.is_null() {
         return;
     }
-    let stream = &mut *stream;
+    let stream = unsafe { &mut *stream };
 
     stream.get_schema = None;
     stream.get_next = None;
     stream.get_last_error = None;
 
-    let private_data = Box::from_raw(stream.private_data as *mut StreamPrivateData);
+    let private_data = unsafe { Box::from_raw(stream.private_data as *mut StreamPrivateData) };
     drop(private_data);
 
     stream.release = None;
@@ -188,7 +189,7 @@ impl FFI_ArrowArrayStream {
     /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
     /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Self {
-        std::ptr::replace(raw_stream, Self::empty())
+        unsafe { std::ptr::replace(raw_stream, Self::empty()) }
     }
 
     /// Creates a new empty [FFI_ArrowArrayStream]. Used to import from the C Stream Interface.
@@ -330,7 +331,7 @@ impl ArrowArrayStreamReader {
     ///
     /// See [`FFI_ArrowArrayStream::from_raw`]
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
-        Self::try_new(FFI_ArrowArrayStream::from_raw(raw_stream))
+        Self::try_new(unsafe { FFI_ArrowArrayStream::from_raw(raw_stream) })
     }
 
     /// Get the last error from `ArrowArrayStreamReader`
@@ -364,7 +365,14 @@ impl Iterator for ArrowArrayStreamReader {
             let result = unsafe {
                 from_ffi_and_data_type(array, DataType::Struct(self.schema().fields().clone()))
             };
-            Some(result.map(|data| RecordBatch::from(StructArray::from(data))))
+            Some(result.and_then(|data| {
+                let len = data.len();
+                RecordBatch::try_new_with_options(
+                    self.schema.clone(),
+                    StructArray::from(data).into_parts().1,
+                    &RecordBatchOptions::new().with_row_count(Some(len)),
+                )
+            }))
         } else {
             let last_error = self.get_stream_last_error();
             let err = ArrowError::CDataInterface(last_error.unwrap());
@@ -379,24 +387,10 @@ impl RecordBatchReader for ArrowArrayStreamReader {
     }
 }
 
-/// Exports a record batch reader to raw pointer of the C Stream Interface provided by the consumer.
-///
-/// # Safety
-/// Assumes that the pointer represents valid C Stream Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-#[deprecated(note = "Use FFI_ArrowArrayStream::new")]
-pub unsafe fn export_reader_into_raw(
-    reader: Box<dyn RecordBatchReader + Send>,
-    out_stream: *mut FFI_ArrowArrayStream,
-) {
-    let stream = FFI_ArrowArrayStream::new(reader);
-
-    std::ptr::write_unaligned(out_stream, stream);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     use arrow_schema::Field;
 
@@ -431,13 +425,7 @@ mod tests {
         }
     }
 
-    fn _test_round_trip_export(arrays: Vec<Arc<dyn Array>>) -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", arrays[0].data_type().clone(), true),
-            Field::new("b", arrays[1].data_type().clone(), true),
-            Field::new("c", arrays[2].data_type().clone(), true),
-        ]));
-        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+    fn _test_round_trip_export(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
@@ -466,8 +454,14 @@ mod tests {
             }
 
             let array = unsafe { from_ffi(ffi_array, &ffi_schema) }.unwrap();
+            let len = array.len();
 
-            let record_batch = RecordBatch::from(StructArray::from(array));
+            let record_batch = RecordBatch::try_new_with_options(
+                SchemaRef::from(exported_schema.clone()),
+                StructArray::from(array).into_parts().1,
+                &RecordBatchOptions::new().with_row_count(Some(len)),
+            )
+            .unwrap();
             produced_batches.push(record_batch);
         }
 
@@ -476,13 +470,7 @@ mod tests {
         Ok(())
     }
 
-    fn _test_round_trip_import(arrays: Vec<Arc<dyn Array>>) -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", arrays[0].data_type().clone(), true),
-            Field::new("b", arrays[1].data_type().clone(), true),
-            Field::new("c", arrays[2].data_type().clone(), true),
-        ]));
-        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+    fn _test_round_trip_import(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
@@ -505,19 +493,40 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_round_trip_export() -> Result<()> {
+    fn test_stream_round_trip() {
         let array = Int32Array::from(vec![Some(2), None, Some(1), None]);
         let array: Arc<dyn Array> = Arc::new(array);
+        let metadata = HashMap::from([("foo".to_owned(), "bar".to_owned())]);
 
-        _test_round_trip_export(vec![array.clone(), array.clone(), array])
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("a", array.data_type().clone(), true).with_metadata(metadata.clone()),
+                Field::new("b", array.data_type().clone(), true).with_metadata(metadata.clone()),
+                Field::new("c", array.data_type().clone(), true).with_metadata(metadata.clone()),
+            ],
+            metadata,
+        ));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array.clone(), array.clone(), array])
+            .unwrap();
+
+        _test_round_trip_export(batch.clone(), schema.clone()).unwrap();
+        _test_round_trip_import(batch, schema).unwrap();
     }
 
     #[test]
-    fn test_stream_round_trip_import() -> Result<()> {
-        let array = Int32Array::from(vec![Some(2), None, Some(1), None]);
-        let array: Arc<dyn Array> = Arc::new(array);
+    fn test_stream_round_trip_no_columns() {
+        let metadata = HashMap::from([("foo".to_owned(), "bar".to_owned())]);
 
-        _test_round_trip_import(vec![array.clone(), array.clone(), array])
+        let schema = Arc::new(Schema::new_with_metadata(Vec::<Field>::new(), metadata));
+        let batch = RecordBatch::try_new_with_options(
+            schema.clone(),
+            Vec::<Arc<dyn Array>>::new(),
+            &RecordBatchOptions::new().with_row_count(Some(10)),
+        )
+        .unwrap();
+
+        _test_round_trip_export(batch.clone(), schema.clone()).unwrap();
+        _test_round_trip_import(batch, schema).unwrap();
     }
 
     #[test]

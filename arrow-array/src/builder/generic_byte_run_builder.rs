@@ -19,8 +19,8 @@ use crate::types::bytes::ByteArrayNativeType;
 use std::{any::Any, sync::Arc};
 
 use crate::{
-    types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type},
     ArrayRef, ArrowPrimitiveType, RunArray,
+    types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type},
 };
 
 use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
@@ -375,11 +375,11 @@ pub type LargeBinaryRunBuilder<K> = GenericByteRunBuilder<K, LargeBinaryType>;
 mod tests {
     use super::*;
 
+    use crate::GenericByteArray;
+    use crate::Int16RunArray;
     use crate::array::Array;
     use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type};
-    use crate::GenericByteArray;
-    use crate::Int16RunArray;
 
     fn test_bytes_run_builder<T>(values: Vec<&T::Native>)
     where
@@ -403,6 +403,7 @@ mod tests {
 
         assert_eq!(array.len(), 11);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 2);
 
         assert_eq!(array.run_ends().values(), &[3, 5, 7, 11]);
 
@@ -448,6 +449,7 @@ mod tests {
 
         assert_eq!(array.len(), 5);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
 
         assert_eq!(array.run_ends().values(), &[1, 2, 4, 5]);
 
@@ -469,6 +471,7 @@ mod tests {
 
         assert_eq!(array.len(), 8);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
 
         assert_eq!(array.run_ends().values(), &[1, 2, 4, 7, 8]);
 

@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{trailers::LazyTrailers, utils::flight_data_to_arrow_batch, FlightData};
+use crate::{FlightData, trailers::LazyTrailers, utils::flight_data_to_arrow_batch};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
 use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
-use futures::{ready, stream::BoxStream, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready, stream::BoxStream};
 use std::{collections::HashMap, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use tonic::metadata::MetadataMap;
 
@@ -136,12 +136,6 @@ impl FlightRecordBatchStream {
     /// Only after calling `next()` returns `None`, might any available trailers be returned.
     pub fn trailers(&self) -> Option<MetadataMap> {
         self.trailers.as_ref().and_then(|trailers| trailers.get())
-    }
-
-    /// Has a message defining the schema been received yet?
-    #[deprecated = "use schema().is_some() instead"]
-    pub fn got_schema(&self) -> bool {
-        self.schema().is_some()
     }
 
     /// Return schema for the stream, if it has been received
@@ -295,7 +289,7 @@ impl FlightDataDecoder {
                     ));
                 };
 
-                let buffer = Buffer::from_bytes(data.data_body.into());
+                let buffer = Buffer::from(data.data_body);
                 let dictionary_batch = message.header_as_dictionary_batch().ok_or_else(|| {
                     FlightError::protocol(
                         "Could not get dictionary batch from DictionaryBatch message",
@@ -388,11 +382,14 @@ struct FlightStreamState {
 /// FlightData and the decoded payload (Schema, RecordBatch), if any
 #[derive(Debug)]
 pub struct DecodedFlightData {
+    /// The original FlightData message
     pub inner: FlightData,
+    /// The decoded payload
     pub payload: DecodedPayload,
 }
 
 impl DecodedFlightData {
+    /// Create a new DecodedFlightData with no payload
     pub fn new_none(inner: FlightData) -> Self {
         Self {
             inner,
@@ -400,6 +397,7 @@ impl DecodedFlightData {
         }
     }
 
+    /// Create a new DecodedFlightData with a [`Schema`] payload
     pub fn new_schema(inner: FlightData, schema: SchemaRef) -> Self {
         Self {
             inner,
@@ -407,6 +405,7 @@ impl DecodedFlightData {
         }
     }
 
+    /// Create a new [`DecodedFlightData`] with a [`RecordBatch`] payload
     pub fn new_record_batch(inner: FlightData, batch: RecordBatch) -> Self {
         Self {
             inner,
@@ -414,7 +413,7 @@ impl DecodedFlightData {
         }
     }
 
-    /// return the metadata field of the inner flight data
+    /// Return the metadata field of the inner flight data
     pub fn app_metadata(&self) -> Bytes {
         self.inner.app_metadata.clone()
     }

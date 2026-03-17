@@ -53,7 +53,7 @@ pip install -e dev/archery[integration]
 
 ### Build the C++ binaries:
 
-Follow the [C++ Direction](https://github.com/apache/arrow/tree/master/docs/source/developers/cpp) and build the integration test binaries with a command like this:
+Follow the [C++ Direction](https://github.com/apache/arrow/tree/main/docs/source/developers/cpp) and build the integration test binaries with a command like this:
 
 ```
 # build cpp binaries

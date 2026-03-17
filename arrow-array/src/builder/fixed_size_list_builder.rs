@@ -172,7 +172,8 @@ where
         let nulls = self.null_buffer_builder.finish();
 
         assert_eq!(
-            values.len(), len * self.list_len as usize,
+            values.len(),
+            len * self.list_len as usize,
             "Length of the child array ({}) must be the multiple of the value length ({}) and the array length ({}).",
             values.len(),
             self.list_len,
@@ -182,7 +183,7 @@ where
         let field = self
             .field
             .clone()
-            .unwrap_or_else(|| Arc::new(Field::new("item", values.data_type().clone(), true)));
+            .unwrap_or_else(|| Arc::new(Field::new_list_field(values.data_type().clone(), true)));
 
         FixedSizeListArray::new(field, self.list_len, values, nulls)
     }
@@ -194,7 +195,8 @@ where
         let nulls = self.null_buffer_builder.finish_cloned();
 
         assert_eq!(
-            values.len(), len * self.list_len as usize,
+            values.len(),
+            len * self.list_len as usize,
             "Length of the child array ({}) must be the multiple of the value length ({}) and the array length ({}).",
             values.len(),
             self.list_len,
@@ -204,7 +206,7 @@ where
         let field = self
             .field
             .clone()
-            .unwrap_or_else(|| Arc::new(Field::new("item", values.data_type().clone(), true)));
+            .unwrap_or_else(|| Arc::new(Field::new_list_field(values.data_type().clone(), true)));
 
         FixedSizeListArray::new(field, self.list_len, values, nulls)
     }
@@ -220,9 +222,9 @@ mod tests {
     use super::*;
     use arrow_schema::DataType;
 
-    use crate::builder::Int32Builder;
     use crate::Array;
     use crate::Int32Array;
+    use crate::builder::Int32Builder;
 
     fn make_list_builder(
         include_null_element: bool,

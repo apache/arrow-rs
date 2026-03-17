@@ -20,7 +20,7 @@
 mod binary_array;
 
 use crate::types::*;
-use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -72,8 +72,32 @@ mod byte_view_array;
 
 pub use byte_view_array::*;
 
-/// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
-pub trait Array: std::fmt::Debug + Send + Sync {
+mod list_view_array;
+
+pub use list_view_array::*;
+
+use crate::iterator::ArrayIter;
+
+/// An array in the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html)
+///
+/// # Safety
+///
+/// Implementations of this trait must ensure that all methods implementations comply with
+/// the Arrow specification. No safety guards are placed and failing to comply with it can
+/// translate into panics or undefined behavior. For example, a value computed based on `len`
+/// may be used as a direct index into memory regions without checks.
+///
+/// Note that it is likely impossible to correctly implement the trait for a
+/// third party type, as substantial arrow-rs functionality is based on the
+/// return values of [`Array::data_type`] and third party types cannot extend
+/// the [`DataType`] enum. So any code that attempts casting based on data type
+/// (including internal arrow library code) risks a panic or undefined behavior.
+/// See [this discussion] for more details.
+///
+/// This trait might be sealed in the future. Use at your own risk.
+///
+/// [this discussion]: https://github.com/apache/arrow-rs/pull/9234#pullrequestreview-3708950936
+pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
@@ -161,6 +185,12 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn is_empty(&self) -> bool;
 
+    /// Shrinks the capacity of any exclusively owned buffer as much as possible
+    ///
+    /// Shared or externally allocated buffers will be ignored, and
+    /// any buffer offsets will be preserved.
+    fn shrink_to_fit(&mut self) {}
+
     /// Returns the offset into the underlying data used by this array(-slice).
     /// Note that the underlying data can be shared by many arrays.
     /// This defaults to `0`.
@@ -185,7 +215,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// The physical representation is efficient, but is sometimes non intuitive
     /// for certain array types such as those with nullable child arrays like
-    /// [`DictionaryArray::values`] or [`RunArray::values`], or without a
+    /// [`DictionaryArray::values`], [`RunArray::values`] or [`UnionArray`], or without a
     /// null buffer, such as [`NullArray`].
     ///
     /// To determine if each element of such an array is "logically" null,
@@ -205,6 +235,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// * [`DictionaryArray`] where [`DictionaryArray::values`] contains nulls
     /// * [`RunArray`] where [`RunArray::values`] contains nulls
     /// * [`NullArray`] where all indices are nulls
+    /// * [`UnionArray`] where the selected values contains nulls
     ///
     /// In these cases a logical [`NullBuffer`] will be computed, encoding the
     /// logical nullability of these arrays, beyond what is encoded in
@@ -217,7 +248,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// Note: For performance reasons, this method returns nullability solely as determined by the
     /// null buffer. This difference can lead to surprising results, for example, [`NullArray::is_null`] always
-    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray`] and [`RunArray`] may
+    /// returns `false` as the array lacks a null buffer. Similarly [`DictionaryArray`], [`RunArray`] and [`UnionArray`] may
     /// encode nullability in their children. See [`Self::logical_nulls`] for more information.
     ///
     /// # Example:
@@ -274,17 +305,43 @@ pub trait Array: std::fmt::Debug + Send + Sync {
         self.nulls().map(|n| n.null_count()).unwrap_or_default()
     }
 
+    /// Returns the total number of logical null values in this array.
+    ///
+    /// Note: this method returns the logical null count, i.e. that encoded in
+    /// [`Array::logical_nulls`]. In general this is equivalent to [`Array::null_count`] but may differ in the
+    /// presence of logical nullability, see [`Array::nulls`] and [`Array::logical_nulls`].
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// use arrow_array::{Array, Int32Array};
+    ///
+    /// // Construct an array with values [1, NULL, NULL]
+    /// let array = Int32Array::from(vec![Some(1), None, None]);
+    ///
+    /// assert_eq!(array.logical_null_count(), 2);
+    /// ```
+    fn logical_null_count(&self) -> usize {
+        self.logical_nulls()
+            .map(|n| n.null_count())
+            .unwrap_or_default()
+    }
+
     /// Returns `false` if the array is guaranteed to not contain any logical nulls
     ///
-    /// In general this will be equivalent to `Array::null_count() != 0` but may differ in the
-    /// presence of logical nullability, see [`Array::logical_nulls`].
+    /// This is generally equivalent to `Array::logical_null_count() != 0` unless determining
+    /// the logical nulls is expensive, in which case this method can return true even for an
+    /// array without nulls.
+    ///
+    /// This is also generally equivalent to `Array::null_count() != 0` but may differ in the
+    /// presence of logical nullability, see [`Array::logical_null_count`] and [`Array::null_count`].
     ///
     /// Implementations will return `true` unless they can cheaply prove no logical nulls
     /// are present. For example a [`DictionaryArray`] with nullable values will still return true,
     /// even if the nulls present in [`DictionaryArray::values`] are not referenced by any key,
     /// and therefore would not appear in [`Array::logical_nulls`].
     fn is_nullable(&self) -> bool {
-        self.null_count() != 0
+        self.logical_null_count() != 0
     }
 
     /// Returns the total number of bytes of memory pointed to by this array.
@@ -297,13 +354,82 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// This value will always be greater than returned by `get_buffer_memory_size()` and
     /// includes the overhead of the data structures that contain the pointers to the various buffers.
     fn get_array_memory_size(&self) -> usize;
+
+    /// Claim memory used by this array in the provided memory pool.
+    ///
+    /// This recursively claims memory for:
+    /// - All data buffers in this array
+    /// - All child arrays (for nested types like List, Struct, etc.)
+    /// - The null bitmap buffer if present
+    ///
+    /// This method guarantees that the memory pool will only compute occupied memory
+    /// exactly once. For example, if this array is derived from operations like `slice`,
+    /// calling `claim` on it would not change the memory pool's usage if the underlying buffers
+    /// are already counted before.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{Int32Array, Array};
+    /// # use arrow_buffer::TrackingMemoryPool;
+    /// # use arrow_buffer::MemoryPool;
+    ///
+    /// let pool = TrackingMemoryPool::default();
+    ///
+    /// let small_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let small_array_size = small_array.get_buffer_memory_size();
+    ///
+    /// // Claim the array's memory in the pool
+    /// small_array.claim(&pool);
+    ///
+    /// // Create and claim slices of `small_array`; should not increase memory usage
+    /// let slice1 = small_array.slice(0, 2);
+    /// let slice2 = small_array.slice(2, 2);
+    /// slice1.claim(&pool);
+    /// slice2.claim(&pool);
+    ///
+    /// assert_eq!(pool.used(), small_array_size);
+    ///
+    /// // Create a `large_array` which does not derive from the original `small_array`
+    ///
+    /// let large_array = Int32Array::from((0..1000).collect::<Vec<i32>>());
+    /// let large_array_size = large_array.get_buffer_memory_size();
+    ///
+    /// large_array.claim(&pool);
+    ///
+    /// // Trying to claim more than once is a no-op
+    /// large_array.claim(&pool);
+    /// large_array.claim(&pool);
+    ///
+    /// assert_eq!(pool.used(), small_array_size + large_array_size);
+    ///
+    /// let sum_of_all_sizes = small_array_size + large_array_size + slice1.get_buffer_memory_size() + slice2.get_buffer_memory_size();
+    ///
+    /// // `get_buffer_memory_size` works independently of the memory pool, so a sum of all the
+    /// // arrays in scope will always be >= the memory used reported by the memory pool.
+    /// assert_ne!(pool.used(), sum_of_all_sizes);
+    ///
+    /// // Until the final claim is dropped the buffer size remains accounted for
+    /// drop(small_array);
+    /// drop(slice1);
+    ///
+    /// assert_eq!(pool.used(), small_array_size + large_array_size);
+    ///
+    /// // Dropping this finally releases the buffer that was backing `small_array`
+    /// drop(slice2);
+    ///
+    /// assert_eq!(pool.used(), large_array_size);
+    /// ```
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.to_data().claim(pool)
+    }
 }
 
 /// A reference-counted reference to a generic `Array`
 pub type ArrayRef = Arc<dyn Array>;
 
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
-impl Array for ArrayRef {
+unsafe impl Array for ArrayRef {
     fn as_any(&self) -> &dyn Any {
         self.as_ref().as_any()
     }
@@ -332,6 +458,15 @@ impl Array for ArrayRef {
         self.as_ref().is_empty()
     }
 
+    /// For shared buffers, this is a no-op.
+    fn shrink_to_fit(&mut self) {
+        if let Some(slf) = Arc::get_mut(self) {
+            slf.shrink_to_fit();
+        } else {
+            // We ignore shared buffers.
+        }
+    }
+
     fn offset(&self) -> usize {
         self.as_ref().offset()
     }
@@ -356,6 +491,10 @@ impl Array for ArrayRef {
         self.as_ref().null_count()
     }
 
+    fn logical_null_count(&self) -> usize {
+        self.as_ref().logical_null_count()
+    }
+
     fn is_nullable(&self) -> bool {
         self.as_ref().is_nullable()
     }
@@ -367,9 +506,14 @@ impl Array for ArrayRef {
     fn get_array_memory_size(&self) -> usize {
         self.as_ref().get_array_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.as_ref().claim(pool)
+    }
 }
 
-impl<'a, T: Array> Array for &'a T {
+unsafe impl<T: Array> Array for &T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
     }
@@ -422,6 +566,10 @@ impl<'a, T: Array> Array for &'a T {
         T::null_count(self)
     }
 
+    fn logical_null_count(&self) -> usize {
+        T::logical_null_count(self)
+    }
+
     fn is_nullable(&self) -> bool {
         T::is_nullable(self)
     }
@@ -432,6 +580,11 @@ impl<'a, T: Array> Array for &'a T {
 
     fn get_array_memory_size(&self) -> usize {
         T::get_array_memory_size(self)
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        T::claim(self, pool)
     }
 }
 
@@ -530,6 +683,84 @@ pub trait ArrayAccessor: Array {
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
 }
 
+/// A trait for Arrow String Arrays, currently three types are supported:
+/// - `StringArray`
+/// - `LargeStringArray`
+/// - `StringViewArray`
+///
+/// This trait helps to abstract over the different types of string arrays
+/// so that we don't need to duplicate the implementation for each type.
+pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    /// Returns true if all data within this string array is ASCII
+    fn is_ascii(&self) -> bool;
+
+    /// Constructs a new iterator
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, O: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<O> {
+    fn is_ascii(&self) -> bool {
+        GenericStringArray::<O>::is_ascii(self)
+    }
+
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericStringArray::<O>::iter(self)
+    }
+}
+impl<'a> StringArrayType<'a> for &'a StringViewArray {
+    fn is_ascii(&self) -> bool {
+        StringViewArray::is_ascii(self)
+    }
+
+    fn iter(&self) -> ArrayIter<Self> {
+        StringViewArray::iter(self)
+    }
+}
+
+/// A trait for Arrow Binary Arrays, currently four types are supported:
+/// - `BinaryArray`
+/// - `LargeBinaryArray`
+/// - `BinaryViewArray`
+/// - `FixedSizeBinaryArray`
+///
+/// This trait helps to abstract over the different types of binary arrays
+/// so that we don't need to duplicate the implementation for each type.
+pub trait BinaryArrayType<'a>: ArrayAccessor<Item = &'a [u8]> + Sized {
+    /// Constructs a new iterator
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, O: OffsetSizeTrait> BinaryArrayType<'a> for &'a GenericBinaryArray<O> {
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericBinaryArray::<O>::iter(self)
+    }
+}
+impl<'a> BinaryArrayType<'a> for &'a BinaryViewArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        BinaryViewArray::iter(self)
+    }
+}
+impl<'a> BinaryArrayType<'a> for &'a FixedSizeBinaryArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        FixedSizeBinaryArray::iter(self)
+    }
+}
+
+/// A trait for Arrow list-like arrays, abstracting over
+/// [`GenericListArray`], [`GenericListViewArray`], and [`FixedSizeListArray`].
+///
+/// This trait provides a uniform interface for accessing the child values and
+/// computing the element range for a given index, regardless of the underlying
+/// list layout (offsets, offsets+sizes, or fixed-size).
+pub trait ListLikeArray: Array {
+    /// Returns the child values array.
+    fn values(&self) -> &ArrayRef;
+
+    /// Returns the start and end indices into the values array for the list
+    /// element at `index`.
+    fn element_range(&self, index: usize) -> std::ops::Range<usize>;
+}
+
 impl PartialEq for dyn Array + '_ {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
@@ -590,6 +821,12 @@ impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListArray<OffsetSize> {
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListViewArray<OffsetSize> {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_data().eq(&other.to_data())
+    }
+}
+
 impl PartialEq for MapArray {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
@@ -608,8 +845,48 @@ impl PartialEq for StructArray {
     }
 }
 
-/// Constructs an array using the input `data`.
-/// Returns a reference-counted `Array` instance.
+impl<T: ByteViewType + ?Sized> PartialEq for GenericByteViewArray<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_data().eq(&other.to_data())
+    }
+}
+
+impl<R: RunEndIndexType> PartialEq for RunArray<R> {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_data().eq(&other.to_data())
+    }
+}
+
+/// Constructs an [`ArrayRef`] from an [`ArrayData`].
+///
+/// # Notes:
+///
+/// It is more efficient to directly construct the concrete array type rather
+/// than using this function as creating an `ArrayData` requires at least one
+/// additional allocation (the Vec of buffers).
+///
+/// # Example:
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_data::ArrayData;
+/// # use arrow_array::{make_array, ArrayRef, Int32Array};
+/// # use arrow_buffer::{Buffer, ScalarBuffer};
+/// # use arrow_schema::DataType;
+/// // Create an Int32Array with values [1, 2, 3]
+/// let values_buffer = Buffer::from_slice_ref(&[1, 2, 3]);
+/// // ArrayData can be constructed using ArrayDataBuilder
+///  let builder = ArrayData::builder(DataType::Int32)
+///    .len(3)
+///    .add_buffer(values_buffer.clone());
+/// let array_data = builder.build().unwrap();
+/// // Create the ArrayRef from the ArrayData
+/// let array = make_array(array_data);
+///
+/// // It is equivalent to directly constructing the Int32Array
+/// let scalar_buffer = ScalarBuffer::from(values_buffer);
+/// let int32_array: ArrayRef = Arc::new(Int32Array::new(scalar_buffer, None));
+/// assert_eq!(&array, &int32_array);
+/// ```
 pub fn make_array(data: ArrayData) -> ArrayRef {
     match data.data_type() {
         DataType::Boolean => Arc::new(BooleanArray::from(data)) as ArrayRef,
@@ -678,11 +955,13 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Utf8View => Arc::new(StringViewArray::from(data)) as ArrayRef,
         DataType::List(_) => Arc::new(ListArray::from(data)) as ArrayRef,
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
+        DataType::ListView(_) => Arc::new(ListViewArray::from(data)) as ArrayRef,
+        DataType::LargeListView(_) => Arc::new(LargeListViewArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
         DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => Arc::new(FixedSizeListArray::from(data)) as ArrayRef,
-        DataType::Dictionary(ref key_type, _) => match key_type.as_ref() {
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
             DataType::Int8 => Arc::new(DictionaryArray::<Int8Type>::from(data)) as ArrayRef,
             DataType::Int16 => Arc::new(DictionaryArray::<Int16Type>::from(data)) as ArrayRef,
             DataType::Int32 => Arc::new(DictionaryArray::<Int32Type>::from(data)) as ArrayRef,
@@ -691,18 +970,20 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             DataType::UInt16 => Arc::new(DictionaryArray::<UInt16Type>::from(data)) as ArrayRef,
             DataType::UInt32 => Arc::new(DictionaryArray::<UInt32Type>::from(data)) as ArrayRef,
             DataType::UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef,
-            dt => panic!("Unexpected dictionary key type {dt:?}"),
+            dt => unimplemented!("Unexpected dictionary key type {dt}"),
         },
-        DataType::RunEndEncoded(ref run_ends_type, _) => match run_ends_type.data_type() {
+        DataType::RunEndEncoded(run_ends_type, _) => match run_ends_type.data_type() {
             DataType::Int16 => Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef,
             DataType::Int32 => Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef,
             DataType::Int64 => Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef,
-            dt => panic!("Unexpected data type for run_ends array {dt:?}"),
+            dt => unimplemented!("Unexpected data type for run_ends array {dt}"),
         },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
+        DataType::Decimal32(_, _) => Arc::new(Decimal32Array::from(data)) as ArrayRef,
+        DataType::Decimal64(_, _) => Arc::new(Decimal64Array::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
-        dt => panic!("Unexpected data type {dt:?}"),
+        dt => unimplemented!("Unexpected data type {dt}"),
     }
 }
 
@@ -740,22 +1021,25 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
     make_array(ArrayData::new_null(data_type, length))
 }
 
-/// Helper function that gets offset from an [`ArrayData`]
+/// Helper function that creates an [`OffsetBuffer`] from a buffer and array offset/ length
 ///
 /// # Safety
 ///
-/// - ArrayData must contain a valid [`OffsetBuffer`] as its first buffer
-unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
-    match data.is_empty() && data.buffers()[0].is_empty() {
-        true => OffsetBuffer::new_empty(),
-        false => {
-            let buffer =
-                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len() + 1);
-            // Safety:
-            // ArrayData is valid
-            unsafe { OffsetBuffer::new_unchecked(buffer) }
-        }
+/// - buffer must contain valid arrow offsets ( [`OffsetBuffer`] ) for the
+///   given length and offset.
+unsafe fn get_offsets_from_buffer<O: ArrowNativeType>(
+    buffer: Buffer,
+    offset: usize,
+    len: usize,
+) -> OffsetBuffer<O> {
+    if len == 0 && buffer.is_empty() {
+        return OffsetBuffer::new_empty();
     }
+
+    let scalar_buffer = ScalarBuffer::new(buffer, offset, len + 1);
+    // Safety:
+    // Arguments were valid
+    unsafe { OffsetBuffer::new_unchecked(scalar_buffer) }
 }
 
 /// Helper function for printing potentially long arrays.
@@ -822,7 +1106,7 @@ mod tests {
 
     #[test]
     fn test_empty_list_primitive() {
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let array = new_empty_array(&data_type);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 0);
@@ -880,7 +1164,7 @@ mod tests {
 
     #[test]
     fn test_null_list_primitive() {
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 9);
@@ -932,13 +1216,14 @@ mod tests {
     fn test_null_union() {
         for mode in [UnionMode::Sparse, UnionMode::Dense] {
             let data_type = DataType::Union(
-                UnionFields::new(
+                UnionFields::try_new(
                     vec![2, 1],
                     vec![
                         Field::new("foo", DataType::Int32, true),
                         Field::new("bar", DataType::Int64, true),
                     ],
-                ),
+                )
+                .unwrap(),
                 mode,
             );
             let array = new_null_array(&data_type, 4);
@@ -946,11 +1231,13 @@ mod tests {
             let array = as_union_array(array.as_ref());
             assert_eq!(array.len(), 4);
             assert_eq!(array.null_count(), 0);
+            assert_eq!(array.logical_null_count(), 4);
 
             for i in 0..4 {
                 let a = array.value(i);
                 assert_eq!(a.len(), 1);
                 assert_eq!(a.null_count(), 1);
+                assert_eq!(a.logical_null_count(), 1);
                 assert!(a.is_null(0))
             }
 
@@ -974,6 +1261,7 @@ mod tests {
                 array => {
                     assert_eq!(array.len(), 4);
                     assert_eq!(array.null_count(), 0);
+                    assert_eq!(array.logical_null_count(), 4);
                     assert_eq!(array.values().len(), 1);
                     assert_eq!(array.values().null_count(), 1);
                     assert_eq!(array.run_ends().len(), 4);
@@ -999,6 +1287,7 @@ mod tests {
 
             assert_eq!(array.len(), 6);
             assert_eq!(array.null_count(), 6);
+            assert_eq!(array.logical_null_count(), 6);
             array.iter().for_each(|x| assert!(x.is_none()));
         }
     }

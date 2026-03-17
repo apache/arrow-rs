@@ -45,25 +45,39 @@ pub trait Length {
     fn len(&self) -> u64;
 }
 
-/// The ChunkReader trait generates readers of chunks of a source.
+/// Generates [`Read`]ers to read chunks of a Parquet data source.
 ///
-/// For more information see [`File::try_clone`]
+/// The Parquet reader uses [`ChunkReader`] to access Parquet data, allowing
+/// multiple decoders to read concurrently from different locations in the same
+/// file.
+///
+/// The trait functions both as a reader and a factory for readers.
+/// * random access via [`Self::get_bytes`]
+/// * sequential access via the reader returned via factory method [`Self::get_read`]
+///
+/// # Provided Implementations
+/// * [`File`] for reading from local file system
+/// * [`Bytes`] for reading from an in-memory buffer
+///
+/// User provided implementations can implement more sophisticated behaviors
+/// such as on-demand buffering or scan sharing.
 pub trait ChunkReader: Length + Send + Sync {
+    /// The concrete type of reader returned by this trait
     type T: Read;
 
-    /// Get a [`Read`] starting at the provided file offset
+    /// Get a [`Read`] instance starting at the provided file offset
     ///
-    /// Subsequent or concurrent calls to [`Self::get_read`] or [`Self::get_bytes`] may
-    /// side-effect on previously returned [`Self::T`]. Care should be taken to avoid this
-    ///
-    /// See [`File::try_clone`] for more information
+    /// Returned readers follow the model of [`File::try_clone`] where mutations
+    /// of one reader affect all readers. Thus subsequent or concurrent calls to
+    /// [`Self::get_read`] or [`Self::get_bytes`] may cause side-effects on
+    /// previously returned readers. Callers of `get_read` should take care
+    /// to avoid race conditions.
     fn get_read(&self, start: u64) -> Result<Self::T>;
 
-    /// Get a range as bytes
+    /// Get a range of data in memory as [`Bytes`]
     ///
-    /// Concurrent calls to [`Self::get_bytes`] may result in interleaved output
-    ///
-    /// See [`File::try_clone`] for more information
+    /// Similarly to [`Self::get_read`], this method may have side-effects on
+    /// previously returned readers.
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes>;
 }
 
@@ -79,7 +93,7 @@ impl ChunkReader for File {
     fn get_read(&self, start: u64) -> Result<Self::T> {
         let mut reader = self.try_clone()?;
         reader.seek(SeekFrom::Start(start))?;
-        Ok(BufReader::new(self.try_clone()?))
+        Ok(BufReader::new(reader))
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
@@ -110,11 +124,25 @@ impl ChunkReader for Bytes {
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
         let start = start as usize;
+        if start > self.len() {
+            return Err(eof_err!(
+                "Expected to read at offset {start}, while file has length {}",
+                self.len()
+            ));
+        }
         Ok(self.slice(start..).reader())
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
         let start = start as usize;
+        if start > self.len() || start + length > self.len() {
+            return Err(eof_err!(
+                "Expected to read {} bytes at offset {}, while file has length {}",
+                length,
+                start,
+                self.len()
+            ));
+        }
         Ok(self.slice(start..start + length))
     }
 }
@@ -140,7 +168,7 @@ pub trait FileReader: Send + Sync {
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter>;
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>>;
 }
 
 /// Parquet row group reader API. With this, user can get metadata information about the
@@ -198,7 +226,7 @@ pub trait RowGroupReader: Send + Sync {
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter>;
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>>;
 }
 
 // ----------------------------------------------------------------------
@@ -260,3 +288,34 @@ impl Iterator for FilePageIterator {
 }
 
 impl PageIterator for FilePageIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bytes_chunk_reader_get_read_out_of_bounds() {
+        let data = Bytes::from(vec![0, 1, 2, 3]);
+        let err = data.get_read(5).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Expected to read at offset 5, while file has length 4"
+        );
+    }
+
+    #[test]
+    fn test_bytes_chunk_reader_get_bytes_out_of_bounds() {
+        let data = Bytes::from(vec![0, 1, 2, 3]);
+        let err = data.get_bytes(5, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Expected to read 1 bytes at offset 5, while file has length 4"
+        );
+
+        let err = data.get_bytes(2, 3).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Expected to read 3 bytes at offset 2, while file has length 4"
+        );
+    }
+}

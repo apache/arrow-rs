@@ -17,10 +17,10 @@
 
 use crate::reader::tape::TapeElement;
 use lexical_core::FormattedSize;
-use serde::ser::{
+use serde_core::ser::{
     Impossible, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple, SerializeTupleStruct,
 };
-use serde::{Serialize, Serializer};
+use serde_core::{Serialize, Serializer};
 
 #[derive(Debug)]
 pub struct SerializerError(String);
@@ -33,7 +33,7 @@ impl std::fmt::Display for SerializerError {
     }
 }
 
-impl serde::ser::Error for SerializerError {
+impl serde_core::ser::Error for SerializerError {
     fn custom<T>(msg: T) -> Self
     where
         T: std::fmt::Display,
@@ -305,7 +305,7 @@ impl<'a, 'b> ObjectSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeMap for ObjectSerializer<'a, 'b> {
+impl SerializeMap for ObjectSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
@@ -329,7 +329,7 @@ impl<'a, 'b> SerializeMap for ObjectSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeStruct for ObjectSerializer<'a, 'b> {
+impl SerializeStruct for ObjectSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
@@ -368,7 +368,7 @@ impl<'a, 'b> ListSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeSeq for ListSerializer<'a, 'b> {
+impl SerializeSeq for ListSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
@@ -385,7 +385,7 @@ impl<'a, 'b> SerializeSeq for ListSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeTuple for ListSerializer<'a, 'b> {
+impl SerializeTuple for ListSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
@@ -402,7 +402,7 @@ impl<'a, 'b> SerializeTuple for ListSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeTupleStruct for ListSerializer<'a, 'b> {
+impl SerializeTupleStruct for ListSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 

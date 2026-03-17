@@ -20,24 +20,24 @@ mod common;
 use std::{pin::Pin, sync::Arc};
 
 use crate::common::fixture::TestFixture;
-use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow_flight::{
+    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
     decode::FlightRecordBatchStream,
     encode::FlightDataEncoderBuilder,
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
-        server::{FlightSqlService, PeekableFlightDataStream},
         ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult, Any,
         CommandGetCatalogs, CommandGetDbSchemas, CommandGetTableTypes, CommandGetTables,
         CommandPreparedStatementQuery, CommandStatementQuery, DoPutPreparedStatementResult,
         ProstMessageExt, SqlInfo,
+        server::{FlightSqlService, PeekableFlightDataStream},
     },
     utils::batches_to_flight_data,
-    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
 };
 use arrow_ipc::writer::IpcWriteOptions;
-use arrow_schema::{ArrowError, DataType, Field, Schema};
+use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
 use assert_cmd::Command;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
@@ -46,6 +46,11 @@ use tonic::{Request, Response, Status, Streaming};
 
 const QUERY: &str = "SELECT * FROM table;";
 
+/// Return a Command instance for running the `flight_sql_client` CLI
+fn flight_sql_client_cmd() -> Command {
+    Command::new(assert_cmd::cargo::cargo_bin!("flight_sql_client"))
+}
+
 #[tokio::test]
 async fn test_simple() {
     let test_server = FlightSqlServiceImpl::default();
@@ -53,8 +58,7 @@ async fn test_simple() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -77,13 +81,13 @@ async fn test_simple() {
 
     assert_eq!(
         std::str::from_utf8(&stdout).unwrap().trim(),
-        "+--------------+-----------+\
-        \n| field_string | field_int |\
-        \n+--------------+-----------+\
-        \n| Hello        | 42        |\
-        \n| lovely       |           |\
-        \n| FlightSQL!   | 1337      |\
-        \n+--------------+-----------+",
+        "+--------------+-----------+---------------------------+-----------------------------+\
+        \n| field_string | field_int | field_timestamp_nano_notz | field_timestamp_nano_berlin |\
+        \n+--------------+-----------+---------------------------+-----------------------------+\
+        \n| Hello        | 42        |                           |                             |\
+        \n| lovely       |           | 1970-01-01T00:00:00       | 1970-01-01T01:00:00+01:00   |\
+        \n| FlightSQL!   | 1337      | 2024-10-30T11:36:57       | 2024-10-30T12:36:57+01:00   |\
+        \n+--------------+-----------+---------------------------+-----------------------------+",
     );
 }
 
@@ -94,8 +98,7 @@ async fn test_get_catalogs() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -133,8 +136,7 @@ async fn test_get_db_schemas() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -173,8 +175,7 @@ async fn test_get_tables() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -212,8 +213,7 @@ async fn test_get_tables_db_filter() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -253,8 +253,7 @@ async fn test_get_tables_types() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -295,8 +294,7 @@ async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
-            .unwrap()
+        flight_sql_client_cmd()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
             .env("RUST_LOG", "warn")
@@ -321,13 +319,13 @@ async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
 
     assert_eq!(
         std::str::from_utf8(&stdout).unwrap().trim(),
-        "+--------------+-----------+\
-        \n| field_string | field_int |\
-        \n+--------------+-----------+\
-        \n| Hello        | 42        |\
-        \n| lovely       |           |\
-        \n| FlightSQL!   | 1337      |\
-        \n+--------------+-----------+",
+        "+--------------+-----------+---------------------------+-----------------------------+\
+        \n| field_string | field_int | field_timestamp_nano_notz | field_timestamp_nano_berlin |\
+        \n+--------------+-----------+---------------------------+-----------------------------+\
+        \n| Hello        | 42        |                           |                             |\
+        \n| lovely       |           | 1970-01-01T00:00:00       | 1970-01-01T01:00:00+01:00   |\
+        \n| FlightSQL!   | 1337      | 2024-10-30T11:36:57       | 2024-10-30T12:36:57+01:00   |\
+        \n+--------------+-----------+---------------------------+-----------------------------+",
     );
 }
 
@@ -371,28 +369,46 @@ impl FlightSqlServiceImpl {
         FlightServiceServer::new(self.clone())
     }
 
-    fn fake_result() -> Result<RecordBatch, ArrowError> {
-        let schema = Schema::new(vec![
+    fn schema() -> Schema {
+        Schema::new(vec![
             Field::new("field_string", DataType::Utf8, false),
             Field::new("field_int", DataType::Int64, true),
-        ]);
+            Field::new(
+                "field_timestamp_nano_notz",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+            Field::new(
+                "field_timestamp_nano_berlin",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("Europe/Berlin"))),
+                true,
+            ),
+        ])
+    }
+
+    fn fake_result() -> Result<RecordBatch, ArrowError> {
+        let schema = Self::schema();
 
         let string_array = StringArray::from(vec!["Hello", "lovely", "FlightSQL!"]);
         let int_array = Int64Array::from(vec![Some(42), None, Some(1337)]);
+        let timestamp_array =
+            TimestampNanosecondArray::from(vec![None, Some(0), Some(1730288217000000000)]);
+        let timestamp_ts_array = timestamp_array
+            .clone()
+            .with_timezone(Arc::from("Europe/Berlin"));
 
         let cols = vec![
             Arc::new(string_array) as ArrayRef,
             Arc::new(int_array) as ArrayRef,
+            Arc::new(timestamp_array) as ArrayRef,
+            Arc::new(timestamp_ts_array) as ArrayRef,
         ];
         RecordBatch::try_new(Arc::new(schema), cols)
     }
 
     fn create_fake_prepared_stmt() -> Result<ActionCreatePreparedStatementResult, ArrowError> {
         let handle = PREPARED_STATEMENT_HANDLE.to_string();
-        let schema = Schema::new(vec![
-            Field::new("field_string", DataType::Utf8, false),
-            Field::new("field_int", DataType::Int64, true),
-        ]);
+        let schema = Self::schema();
 
         let parameter_schema = Schema::new(vec![
             Field::new("$1", DataType::Utf8, false),

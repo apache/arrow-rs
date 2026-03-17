@@ -41,12 +41,11 @@
 
 use std::fmt;
 
-use crate::format::Statistics as TStatistics;
-
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::thrift::PageStatistics;
 use crate::util::bit_util::FromBytes;
 
 pub(crate) mod private {
@@ -81,9 +80,10 @@ pub(crate) mod private {
     gen_make_statistics!(FixedLenByteArray, FixedLenByteArray);
 }
 
-// Macro to generate methods create Statistics.
+/// Macro to generate methods to create Statistics.
 macro_rules! statistics_new_func {
     ($func:ident, $vtype:ty, $stat:ident) => {
+        #[doc = concat!("Creates new statistics for `", stringify!($stat), "` column type.")]
         pub fn $func(
             min: $vtype,
             max: $vtype,
@@ -119,26 +119,24 @@ macro_rules! statistics_enum_func {
 }
 
 /// Converts Thrift definition into `Statistics`.
-pub fn from_thrift(
+pub(crate) fn from_thrift_page_stats(
     physical_type: Type,
-    thrift_stats: Option<TStatistics>,
+    thrift_stats: Option<PageStatistics>,
 ) -> Result<Option<Statistics>> {
     Ok(match thrift_stats {
         Some(stats) => {
-            // Number of nulls recorded, when it is not available, we just mark it as 0.
-            // TODO this should be `None` if there is no information about NULLS.
-            // see https://github.com/apache/arrow-rs/pull/6216/files
-            let null_count = stats.null_count.unwrap_or(0);
-
-            if null_count < 0 {
-                return Err(ParquetError::General(format!(
-                    "Statistics null count is negative {}",
-                    null_count
-                )));
-            }
-
             // Generic null count.
-            let null_count = Some(null_count as u64);
+            let null_count = stats
+                .null_count
+                .map(|null_count| {
+                    if null_count < 0 {
+                        return Err(ParquetError::General(format!(
+                            "Statistics null count is negative {null_count}",
+                        )));
+                    }
+                    Ok(null_count as u64)
+                })
+                .transpose()?;
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
@@ -155,6 +153,32 @@ pub fn from_thrift(
             } else {
                 stats.max_value
             };
+
+            fn check_len(min: &Option<Vec<u8>>, max: &Option<Vec<u8>>, len: usize) -> Result<()> {
+                if let Some(min) = min {
+                    if min.len() < len {
+                        return Err(ParquetError::General(
+                            "Insufficient bytes to parse min statistic".to_string(),
+                        ));
+                    }
+                }
+                if let Some(max) = max {
+                    if max.len() < len {
+                        return Err(ParquetError::General(
+                            "Insufficient bytes to parse max statistic".to_string(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+
+            match physical_type {
+                Type::BOOLEAN => check_len(&min, &max, 1),
+                Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
+                Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
+                Type::INT96 => check_len(&min, &max, 12),
+                _ => Ok(()),
+            }?;
 
             // Values are encoded using PLAIN encoding definition, except that
             // variable-length byte arrays do not include a length prefix.
@@ -184,16 +208,22 @@ pub fn from_thrift(
                 ),
                 Type::INT96 => {
                     // INT96 statistics may not be correct, because comparison is signed
-                    // byte-wise, not actual timestamps. It is recommended to ignore
-                    // min/max statistics for INT96 columns.
                     let min = if let Some(data) = min {
-                        assert_eq!(data.len(), 12);
+                        if data.len() != 12 {
+                            return Err(ParquetError::General(
+                                "Incorrect Int96 min statistics".to_string(),
+                            ));
+                        }
                         Some(Int96::try_from_le_slice(&data)?)
                     } else {
                         None
                     };
                     let max = if let Some(data) = max {
-                        assert_eq!(data.len(), 12);
+                        if data.len() != 12 {
+                            return Err(ParquetError::General(
+                                "Incorrect Int96 max statistics".to_string(),
+                            ));
+                        }
                         Some(Int96::try_from_le_slice(&data)?)
                     } else {
                         None
@@ -244,24 +274,25 @@ pub fn from_thrift(
     })
 }
 
-// Convert Statistics into Thrift definition.
-pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
+/// Convert Statistics into Thrift definition.
+pub(crate) fn page_stats_to_thrift(stats: Option<&Statistics>) -> Option<PageStatistics> {
     let stats = stats?;
 
-    // record null counts if greater than zero.
-    //
-    // TODO: This should be Some(0) if there are no nulls.
-    // see https://github.com/apache/arrow-rs/pull/6216/files
+    // record null count if it can fit in i64
     let null_count = stats
         .null_count_opt()
-        .map(|value| value as i64)
-        .filter(|&x| x > 0);
+        .and_then(|value| i64::try_from(value).ok());
 
-    let mut thrift_stats = TStatistics {
+    // record distinct count if it can fit in i64
+    let distinct_count = stats
+        .distinct_count_opt()
+        .and_then(|value| i64::try_from(value).ok());
+
+    let mut thrift_stats = PageStatistics {
         max: None,
         min: None,
         null_count,
-        distinct_count: stats.distinct_count_opt().map(|value| value as i64),
+        distinct_count,
         max_value: None,
         min_value: None,
         is_max_value_exact: None,
@@ -294,24 +325,31 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
 
 /// Strongly typed statistics for a column chunk within a row group.
 ///
-/// This structure is a natively typed, in memory representation of the
-/// [`Statistics`] structure in a parquet file footer. The statistics stored in
+/// This structure is a natively typed, in memory representation of the thrift
+/// `Statistics` structure in a Parquet file footer. The statistics stored in
 /// this structure can be used by query engines to skip decoding pages while
 /// reading parquet data.
 ///
-/// Page level statistics are stored separately, in [NativeIndex].
+/// Page level statistics are stored separately, in [ColumnIndexMetaData].
 ///
-/// [`Statistics`]: crate::format::Statistics
-/// [NativeIndex]: crate::file::page_index::index::NativeIndex
+/// [ColumnIndexMetaData]: crate::file::page_index::column_index::ColumnIndexMetaData
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statistics {
+    /// Statistics for Boolean column
     Boolean(ValueStatistics<bool>),
+    /// Statistics for Int32 column
     Int32(ValueStatistics<i32>),
+    /// Statistics for Int64 column
     Int64(ValueStatistics<i64>),
+    /// Statistics for Int96 column
     Int96(ValueStatistics<Int96>),
+    /// Statistics for Float column
     Float(ValueStatistics<f32>),
+    /// Statistics for Double column
     Double(ValueStatistics<f64>),
+    /// Statistics for ByteArray column
     ByteArray(ValueStatistics<ByteArray>),
+    /// Statistics for FixedLenByteArray column
     FixedLenByteArray(ValueStatistics<FixedLenByteArray>),
 }
 
@@ -322,6 +360,7 @@ impl<T: ParquetValueType> From<ValueStatistics<T>> for Statistics {
 }
 
 impl Statistics {
+    /// Creates new statistics for a column type
     pub fn new<T: ParquetValueType>(
         min: Option<T>,
         max: Option<T>,
@@ -384,52 +423,29 @@ impl Statistics {
 
     /// Returns optional value of number of distinct values occurring.
     /// When it is `None`, the value should be ignored.
-    #[deprecated(since = "53.0.0", note = "Use `distinct_count_opt` method instead")]
-    pub fn distinct_count(&self) -> Option<u64> {
-        self.distinct_count_opt()
-    }
-
-    /// Returns optional value of number of distinct values occurring.
-    /// When it is `None`, the value should be ignored.
     pub fn distinct_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, distinct_count]
-    }
-
-    /// Returns number of null values for the column.
-    /// Note that this includes all nulls when column is part of the complex type.
-    ///
-    /// Note this API returns 0 if the null count is not available.
-    #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
-    pub fn null_count(&self) -> u64 {
-        // 0 to remain consistent behavior prior to `null_count_opt`
-        self.null_count_opt().unwrap_or(0)
-    }
-
-    /// Returns `true` if statistics collected any null values, `false` otherwise.
-    #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
-    #[allow(deprecated)]
-    pub fn has_nulls(&self) -> bool {
-        self.null_count() > 0
     }
 
     /// Returns number of null values for the column, if known.
     /// Note that this includes all nulls when column is part of the complex type.
     ///
-    /// Note this API returns Some(0) even if the null count was not present
-    /// in the statistics.
-    /// See <https://github.com/apache/arrow-rs/pull/6216/files>
+    /// Note: Versions of this library prior to `58.1.0` returned `0` if the null count
+    /// was not available. This method now returns `None` in that case.
+    ///
+    /// Also, versions of this library prior to `53.1.0` did not store a null count
+    /// statistic when the null count was `0`.
+    ///
+    /// It is unsound to assume that missing nullcount stats mean the column contains no nulls,
+    /// but code that depends on the old behavior can restore it by defaulting to zero:
+    ///
+    /// ```no_run
+    /// # use parquet::file::statistics::Statistics;
+    /// # let statistics: Statistics = todo!();
+    /// let null_count = statistics.null_count_opt().unwrap_or(0);
+    /// ```
     pub fn null_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, null_count_opt]
-    }
-
-    /// Whether or not min and max values are set.
-    /// Normally both min/max values will be set to `Some(value)` or `None`.
-    #[deprecated(
-        since = "53.0.0",
-        note = "Use `min_bytes_opt` and `max_bytes_opt` methods instead"
-    )]
-    pub fn has_min_max_set(&self) -> bool {
-        statistics_enum_func![self, _internal_has_min_max_set]
     }
 
     /// Returns `true` if the min value is set, and is an exact min value.
@@ -447,23 +463,9 @@ impl Statistics {
         statistics_enum_func![self, min_bytes_opt]
     }
 
-    /// Returns slice of bytes that represent min value.
-    /// Panics if min value is not set.
-    #[deprecated(since = "53.0.0", note = "Use `max_bytes_opt` instead")]
-    pub fn min_bytes(&self) -> &[u8] {
-        self.min_bytes_opt().unwrap()
-    }
-
     /// Returns slice of bytes that represent max value, if max value is known.
     pub fn max_bytes_opt(&self) -> Option<&[u8]> {
         statistics_enum_func![self, max_bytes_opt]
-    }
-
-    /// Returns slice of bytes that represent max value.
-    /// Panics if max value is not set.
-    #[deprecated(since = "53.0.0", note = "Use `max_bytes_opt` instead")]
-    pub fn max_bytes(&self) -> &[u8] {
-        self.max_bytes_opt().unwrap()
     }
 
     /// Returns physical type associated with statistics.
@@ -523,7 +525,7 @@ pub struct ValueStatistics<T> {
     is_min_max_backwards_compatible: bool,
 }
 
-impl<T: ParquetValueType> ValueStatistics<T> {
+impl<T> ValueStatistics<T> {
     /// Creates new typed statistics.
     pub fn new(
         min: Option<T>,
@@ -578,67 +580,14 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         }
     }
 
-    /// Returns min value of the statistics.
-    ///
-    /// Panics if min value is not set, e.g. all values are `null`.
-    /// Use `has_min_max_set` method to check that.
-    #[deprecated(since = "53.0.0", note = "Use `min_opt` instead")]
-    pub fn min(&self) -> &T {
-        self.min.as_ref().unwrap()
-    }
-
     /// Returns min value of the statistics, if known.
     pub fn min_opt(&self) -> Option<&T> {
         self.min.as_ref()
     }
 
-    /// Returns max value of the statistics.
-    ///
-    /// Panics if max value is not set, e.g. all values are `null`.
-    /// Use `has_min_max_set` method to check that.
-    #[deprecated(since = "53.0.0", note = "Use `max_opt` instead")]
-    pub fn max(&self) -> &T {
-        self.max.as_ref().unwrap()
-    }
-
     /// Returns max value of the statistics, if known.
     pub fn max_opt(&self) -> Option<&T> {
         self.max.as_ref()
-    }
-
-    /// Returns min value as bytes of the statistics, if min value is known.
-    pub fn min_bytes_opt(&self) -> Option<&[u8]> {
-        self.min_opt().map(AsBytes::as_bytes)
-    }
-
-    /// Returns min value as bytes of the statistics.
-    ///
-    /// Panics if min value is not set, use `has_min_max_set` method to check
-    /// if values are set.
-    #[deprecated(since = "53.0.0", note = "Use `min_bytes_opt` instead")]
-    pub fn min_bytes(&self) -> &[u8] {
-        self.min_bytes_opt().unwrap()
-    }
-
-    /// Returns max value as bytes of the statistics, if max value is known.
-    pub fn max_bytes_opt(&self) -> Option<&[u8]> {
-        self.max_opt().map(AsBytes::as_bytes)
-    }
-
-    /// Returns max value as bytes of the statistics.
-    ///
-    /// Panics if max value is not set, use `has_min_max_set` method to check
-    /// if values are set.
-    #[deprecated(since = "53.0.0", note = "Use `max_bytes_opt` instead")]
-    pub fn max_bytes(&self) -> &[u8] {
-        self.max_bytes_opt().unwrap()
-    }
-
-    /// Whether or not min and max values are set.
-    /// Normally both min/max values will be set to `Some(value)` or `None`.
-    #[deprecated(since = "53.0.0", note = "Use `min_opt` and `max_opt` methods instead")]
-    pub fn has_min_max_set(&self) -> bool {
-        self._internal_has_min_max_set()
     }
 
     /// Whether or not min and max values are set.
@@ -660,14 +609,6 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     /// Returns optional value of number of distinct values occurring.
     pub fn distinct_count(&self) -> Option<u64> {
         self.distinct_count
-    }
-
-    /// Returns number of null values for the column.
-    /// Note that this includes all nulls when column is part of the complex type.
-    #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
-    pub fn null_count(&self) -> u64 {
-        // 0 to remain consistent behavior prior to `null_count_opt`
-        self.null_count_opt().unwrap_or(0)
     }
 
     /// Returns null count.
@@ -692,6 +633,18 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     /// compatible with being stored in the deprecated `min` and `max` fields
     pub fn is_min_max_backwards_compatible(&self) -> bool {
         self.is_min_max_backwards_compatible
+    }
+}
+
+impl<T: AsBytes> ValueStatistics<T> {
+    /// Returns min value as bytes of the statistics, if min value is known.
+    pub fn min_bytes_opt(&self) -> Option<&[u8]> {
+        self.min_opt().map(AsBytes::as_bytes)
+    }
+
+    /// Returns max value as bytes of the statistics, if max value is known.
+    pub fn max_bytes_opt(&self) -> Option<&[u8]> {
+        self.max_opt().map(AsBytes::as_bytes)
     }
 }
 
@@ -767,7 +720,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "General(\"Statistics null count is negative -10\")")]
     fn test_statistics_negative_null_count() {
-        let thrift_stats = TStatistics {
+        let thrift_stats = PageStatistics {
             max: None,
             min: None,
             null_count: Some(-10),
@@ -778,13 +731,16 @@ mod tests {
             is_min_value_exact: None,
         };
 
-        from_thrift(Type::INT32, Some(thrift_stats)).unwrap();
+        from_thrift_page_stats(Type::INT32, Some(thrift_stats)).unwrap();
     }
 
     #[test]
     fn test_statistics_thrift_none() {
-        assert_eq!(from_thrift(Type::INT32, None).unwrap(), None);
-        assert_eq!(from_thrift(Type::BYTE_ARRAY, None).unwrap(), None);
+        assert_eq!(from_thrift_page_stats(Type::INT32, None).unwrap(), None);
+        assert_eq!(
+            from_thrift_page_stats(Type::BYTE_ARRAY, None).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -929,8 +885,11 @@ mod tests {
         // Helper method to check statistics conversion.
         fn check_stats(stats: Statistics) {
             let tpe = stats.physical_type();
-            let thrift_stats = to_thrift(Some(&stats));
-            assert_eq!(from_thrift(tpe, thrift_stats).unwrap(), Some(stats));
+            let thrift_stats = page_stats_to_thrift(Some(&stats));
+            assert_eq!(
+                from_thrift_page_stats(tpe, thrift_stats).unwrap(),
+                Some(stats)
+            );
         }
 
         check_stats(Statistics::boolean(
@@ -1051,5 +1010,135 @@ mod tests {
             Some(7),
             true,
         ));
+    }
+
+    #[test]
+    fn test_count_encoding() {
+        statistics_count_test(None, None);
+        statistics_count_test(Some(0), Some(0));
+        statistics_count_test(Some(100), Some(2000));
+        statistics_count_test(Some(1), None);
+        statistics_count_test(None, Some(1));
+    }
+
+    #[test]
+    fn test_count_encoding_distinct_too_large() {
+        // statistics are stored using i64, so test trying to store larger values
+        let statistics = make_bool_stats(Some(u64::MAX), Some(100));
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
+        assert_eq!(thrift_stats.distinct_count, None); // can't store u64 max --> null
+        assert_eq!(thrift_stats.null_count, Some(100));
+    }
+
+    #[test]
+    fn test_count_encoding_null_too_large() {
+        // statistics are stored using i64, so test trying to store larger values
+        let statistics = make_bool_stats(Some(100), Some(u64::MAX));
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
+        assert_eq!(thrift_stats.distinct_count, Some(100));
+        assert_eq!(thrift_stats.null_count, None); // can' store u64 max --> null
+    }
+
+    #[test]
+    fn test_count_decoding_null_invalid() {
+        let tstatistics = PageStatistics {
+            null_count: Some(-42),
+            max: None,
+            min: None,
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+        let err = from_thrift_page_stats(Type::BOOLEAN, Some(tstatistics)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Statistics null count is negative -42"
+        );
+    }
+
+    /// Writes statistics to thrift and reads them back and ensures:
+    /// - The statistics are the same
+    /// - The statistics written to thrift are the same as the original statistics
+    fn statistics_count_test(distinct_count: Option<u64>, null_count: Option<u64>) {
+        let statistics = make_bool_stats(distinct_count, null_count);
+
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
+        assert_eq!(thrift_stats.null_count.map(|c| c as u64), null_count);
+        assert_eq!(
+            thrift_stats.distinct_count.map(|c| c as u64),
+            distinct_count
+        );
+
+        let round_tripped = from_thrift_page_stats(Type::BOOLEAN, Some(thrift_stats))
+            .unwrap()
+            .unwrap();
+        assert_eq!(round_tripped, statistics);
+    }
+
+    fn make_bool_stats(distinct_count: Option<u64>, null_count: Option<u64>) -> Statistics {
+        let min = Some(true);
+        let max = Some(false);
+        let is_min_max_deprecated = false;
+
+        // test is about the counts, so we aren't really testing the min/max values
+        Statistics::Boolean(ValueStatistics::new(
+            min,
+            max,
+            distinct_count,
+            null_count,
+            is_min_max_deprecated,
+        ))
+    }
+
+    #[test]
+    fn test_int96_invalid_statistics() {
+        let mut thrift_stats = PageStatistics {
+            max: None,
+            min: Some((0..13).collect()),
+            null_count: Some(0),
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+
+        let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats.clone())).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Incorrect Int96 min statistics"
+        );
+
+        thrift_stats.min = None;
+        thrift_stats.max = Some((0..13).collect());
+        let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Incorrect Int96 max statistics"
+        );
+    }
+
+    // Ensures that we can call ValueStatistics::min_opt from a
+    // generic function without reyling on a bound to a private trait.
+    fn generic_statistics_handler<T: std::fmt::Display>(stats: ValueStatistics<T>) -> String {
+        match stats.min_opt() {
+            Some(s) => format!("min: {}", s),
+            None => "min: NA".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_generic_access() {
+        let stats = Statistics::int32(Some(12), Some(45), None, Some(11), false);
+
+        match stats {
+            Statistics::Int32(v) => {
+                let stats_string = generic_statistics_handler(v);
+                assert_eq!(&stats_string, "min: 12");
+            }
+            _ => unreachable!(),
+        }
     }
 }

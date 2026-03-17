@@ -6,3 +6,6 @@ c_int|c_float|c_string|c_bool|c_date|c_datetime
 5|6.6|""|false|1990-01-01|1990-01-01T03:00:00
 4|4e6||false||
 4|4.0e-6||false||
+6|NaN||false||
+7|inf||false||
+8|-inf||false||

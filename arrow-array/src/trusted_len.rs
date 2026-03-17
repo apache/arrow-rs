@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util};
 
 /// Creates two [`Buffer`]s from an iterator of `Option`.
 /// The first buffer corresponds to a bitmap buffer, the second one
@@ -41,19 +41,19 @@ where
     for (i, item) in iterator.enumerate() {
         let item = item.borrow();
         if let Some(item) = item {
-            std::ptr::write(dst, *item);
-            bit_util::set_bit_raw(dst_null, i);
+            unsafe { std::ptr::write(dst, *item) };
+            unsafe { bit_util::set_bit_raw(dst_null, i) };
         } else {
-            std::ptr::write(dst, T::default());
+            unsafe { std::ptr::write(dst, T::default()) };
         }
-        dst = dst.add(1);
+        dst = unsafe { dst.add(1) };
     }
     assert_eq!(
-        dst.offset_from(buffer.as_ptr() as *mut T) as usize,
+        unsafe { dst.offset_from(buffer.as_ptr() as *mut T) as usize },
         upper,
         "Trusted iterator length was not accurately reported"
     );
-    buffer.set_len(len);
+    unsafe { buffer.set_len(len) };
     (null.into(), buffer.into())
 }
 

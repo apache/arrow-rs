@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::view_buffer::ViewBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
@@ -27,7 +27,8 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow_array::{builder::make_view, ArrayRef};
+use crate::util::utf8::check_valid_utf8;
+use arrow_array::{ArrayRef, builder::make_view};
 use arrow_buffer::Buffer;
 use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
@@ -235,7 +236,7 @@ impl ByteViewArrayDecoder {
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
                 ByteViewArrayDecoder::Dictionary(ByteViewArrayDecoderDictionary::new(
                     data, num_levels, num_values,
-                ))
+                )?)
             }
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
                 ByteViewArrayDecoderDeltaLength::new(data, validate_utf8)?,
@@ -247,7 +248,7 @@ impl ByteViewArrayDecoder {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
                     encoding
-                ))
+                ));
             }
         };
 
@@ -290,7 +291,7 @@ impl ByteViewArrayDecoder {
 
 /// Decoder from [`Encoding::PLAIN`] data to [`ViewBuffer`]
 pub struct ByteViewArrayDecoderPlain {
-    buf: Bytes,
+    buf: Buffer,
     offset: usize,
 
     validate_utf8: bool,
@@ -308,7 +309,7 @@ impl ByteViewArrayDecoderPlain {
         validate_utf8: bool,
     ) -> Self {
         Self {
-            buf,
+            buf: Buffer::from(buf),
             offset: 0,
             max_remaining_values: num_values.unwrap_or(num_levels),
             validate_utf8,
@@ -316,36 +317,62 @@ impl ByteViewArrayDecoderPlain {
     }
 
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
-        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
-        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
-        let buf = arrow_buffer::Buffer::from_bytes(self.buf.clone().into());
-        let block_id = output.append_block(buf);
+        if self.validate_utf8 {
+            self.read_impl::<true>(output, len)
+        } else {
+            self.read_impl::<false>(output, len)
+        }
+    }
+
+    fn read_impl<const VALIDATE_UTF8: bool>(
+        &mut self,
+        output: &mut ViewBuffer,
+        len: usize,
+    ) -> Result<usize> {
+        // avoid creating a new buffer if the last buffer is the same as the current buffer
+        // This is especially useful when row-level filtering is applied, where we call lots of small `read` over the same buffer.
+        let block_id = {
+            if output.buffers.last().is_some_and(|x| x.ptr_eq(&self.buf)) {
+                output.buffers.len() as u32 - 1
+            } else {
+                output.append_block(self.buf.clone())
+            }
+        };
 
         let to_read = len.min(self.max_remaining_values);
 
-        let buf = self.buf.as_ref();
-        let mut read = 0;
+        let buf: &[u8] = self.buf.as_ref();
+        let buf_len = buf.len();
+        let mut end_offset = self.offset;
+        let mut utf8_validation_begin = end_offset;
+
         output.views.reserve(to_read);
 
-        let mut utf8_validation_begin = self.offset;
-        while self.offset < self.buf.len() && read != to_read {
-            if self.offset + 4 > self.buf.len() {
+        // Safety: we reserved enough space in output.views
+        // and we will only write up to to_read views / track how many views we wrote.
+        // Ideally, we would use `Vec::extend` here, but this generates sub-optimal code.
+        let views_ptr = output.views.as_mut_ptr().wrapping_add(output.views.len());
+        for i in 0..to_read {
+            let start_offset = end_offset + 4;
+
+            if start_offset > buf_len {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
-            let len_bytes: [u8; 4] = unsafe {
-                buf.get_unchecked(self.offset..self.offset + 4)
+
+            // Safety: we have checked that start_offset <= buf_len
+            let len = u32::from_le_bytes(
+                unsafe { buf.get_unchecked(end_offset..start_offset) }
                     .try_into()
-                    .unwrap()
-            };
-            let len = u32::from_le_bytes(len_bytes);
+                    .unwrap(),
+            );
 
-            let start_offset = self.offset + 4;
-            let end_offset = start_offset + len as usize;
-            if end_offset > buf.len() {
+            end_offset = start_offset + len as usize;
+
+            if end_offset > buf_len {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
 
-            if self.validate_utf8 {
+            if VALIDATE_UTF8 {
                 // It seems you are trying to understand what's going on here, take a breath and be patient.
                 // Utf-8 validation is a non-trivial task, here are some background facts:
                 // (1) Validating one 2048-byte string is much faster than validating 128 of 16-byte string.
@@ -367,39 +394,47 @@ impl ByteViewArrayDecoderPlain {
                 // The implementation keeps a water mark `utf8_validation_begin` to track the beginning of the buffer that is not validated.
                 // If the length is smaller than 128, then we continue to next string.
                 // If the length is larger than 128, then we validate the buffer before the length bytes, and move the water mark to the beginning of next string.
-                if len < 128 {
-                    // fast path, move to next string.
-                    // the len bytes are valid utf8.
-                } else {
+                if len >= 128 {
                     // unfortunately, the len bytes may not be valid utf8, we need to wrap up and validate everything before it.
                     check_valid_utf8(unsafe {
-                        buf.get_unchecked(utf8_validation_begin..self.offset)
+                        buf.get_unchecked(utf8_validation_begin..start_offset - 4)
                     })?;
                     // move the cursor to skip the len bytes.
                     utf8_validation_begin = start_offset;
                 }
             }
 
+            let view = make_view(
+                unsafe { buf.get_unchecked(start_offset..end_offset) },
+                block_id,
+                start_offset as u32,
+            );
+            // Safety: views_ptr is valid for writes, and we have reserved enough space.
             unsafe {
-                output.append_view_unchecked(block_id, start_offset as u32, len);
+                views_ptr.add(i).write(view);
             }
-            self.offset = end_offset;
-            read += 1;
         }
 
-        // validate the last part of the buffer
-        if self.validate_utf8 {
-            check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..self.offset) })?;
+        // Safety: we have written `to_read` views to `views_ptr`
+        unsafe {
+            output.views.set_len(output.views.len() + to_read);
+        }
+        if VALIDATE_UTF8 {
+            // validate values from the previously validated location up to (but not including)
+            // the length of this string
+            check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..end_offset) })?;
         }
 
+        self.offset = end_offset;
         self.max_remaining_values -= to_read;
+
         Ok(to_read)
     }
 
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let to_skip = to_skip.min(self.max_remaining_values);
         let mut skip = 0;
-        let buf = self.buf.as_ref();
+        let buf: &[u8] = self.buf.as_ref();
 
         while self.offset < self.buf.len() && skip != to_skip {
             if self.offset + 4 > buf.len() {
@@ -420,10 +455,10 @@ pub struct ByteViewArrayDecoderDictionary {
 }
 
 impl ByteViewArrayDecoderDictionary {
-    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
-        Self {
-            decoder: DictIndexDecoder::new(data, num_levels, num_values),
-        }
+    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Result<Self> {
+        Ok(Self {
+            decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
+        })
     }
 
     /// Reads the next indexes from self.decoder
@@ -433,6 +468,8 @@ impl ByteViewArrayDecoderDictionary {
     /// Assumptions / Optimization
     /// This function checks if dict.buffers() are the last buffers in `output`, and if so
     /// reuses the dictionary page buffers directly without copying data
+    ///
+    /// If the dictionary is empty, the buffer contains empty view.
     fn read(&mut self, output: &mut ViewBuffer, dict: &ViewBuffer, len: usize) -> Result<usize> {
         if dict.is_empty() || len == 0 {
             return Ok(0);
@@ -463,32 +500,50 @@ impl ByteViewArrayDecoderDictionary {
         // then the base_buffer_idx is 5 - 2 = 3
         let base_buffer_idx = output.buffers.len() as u32 - dict.buffers.len() as u32;
 
-        self.decoder.read(len, |keys| {
-            for k in keys {
-                let view = dict
+        let mut error = None;
+        let read = self.decoder.read(len, |keys| {
+            if base_buffer_idx == 0 {
+                // the dictionary buffers are the last buffers in output, we can directly use the views
+                output
                     .views
-                    .get(*k as usize)
-                    .ok_or_else(|| general_err!("invalid key={} for dictionary", *k))?;
-                let len = *view as u32;
-                if len <= 12 {
-                    // directly append the view if it is inlined
-                    // Safety: the view is from the dictionary, so it is valid
-                    unsafe {
-                        output.append_raw_view_unchecked(view);
-                    }
-                } else {
-                    // correct the buffer index and append the view
-                    let mut view = ByteView::from(*view);
-                    view.buffer_index += base_buffer_idx;
-                    // Safety: the view is from the dictionary,
-                    // we corrected the index value to point it to output buffer, so it is valid
-                    unsafe {
-                        output.append_raw_view_unchecked(&view.into());
-                    }
-                }
+                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
+                        Some(&view) => view,
+                        None => {
+                            if error.is_none() {
+                                error = Some(general_err!("invalid key={} for dictionary", *k));
+                            }
+                            0
+                        }
+                    }));
+                Ok(())
+            } else {
+                output
+                    .views
+                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
+                        Some(&view) => {
+                            let len = view as u32;
+                            if len <= 12 {
+                                view
+                            } else {
+                                let mut view = ByteView::from(view);
+                                view.buffer_index += base_buffer_idx;
+                                view.into()
+                            }
+                        }
+                        None => {
+                            if error.is_none() {
+                                error = Some(general_err!("invalid key={} for dictionary", *k));
+                            }
+                            0
+                        }
+                    }));
+                Ok(())
             }
-            Ok(())
-        })
+        })?;
+        if let Some(e) = error {
+            return Err(e);
+        }
+        Ok(read)
     }
 
     fn skip(&mut self, dict: &ViewBuffer, to_skip: usize) -> Result<usize> {
@@ -549,22 +604,25 @@ impl ByteViewArrayDecoderDeltaLength {
 
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
 
-        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
-        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
-        let bytes = arrow_buffer::Buffer::from_bytes(self.data.clone().into());
+        // Zero copy convert `bytes::Bytes` into `arrow_buffer::Buffer`
+        let bytes = Buffer::from(self.data.clone());
         let block_id = output.append_block(bytes);
 
         let mut current_offset = self.data_offset;
         let initial_offset = current_offset;
-        for length in src_lengths {
-            // # Safety
-            // The length is from the delta length decoder, so it is valid
-            // The start_offset is calculated from the lengths, so it is valid
-            // `start_offset + length` is guaranteed to be within the bounds of `data`, as checked in `new`
-            unsafe { output.append_view_unchecked(block_id, current_offset as u32, *length as u32) }
 
-            current_offset += *length as usize;
-        }
+        output.views.extend(src_lengths.iter().map(|length| {
+            let len = *length as u32;
+            let start_offset = current_offset;
+            current_offset += len as usize;
+            // # Safety
+            // The length and offset are guaranteed valid by the entry check in `new`
+            make_view(
+                &self.data[start_offset..start_offset + len as usize],
+                block_id,
+                start_offset as u32,
+            )
+        }));
 
         // Delta length encoding has continuous strings, we can validate utf8 in one go
         if self.validate_utf8 {
@@ -633,7 +691,7 @@ impl ByteViewArrayDecoderDelta {
                 // The buffer_id is the last buffer in the output buffers
                 // The offset is calculated from the buffer, so it is valid
                 unsafe {
-                    output.append_raw_view_unchecked(&view);
+                    output.append_raw_view_unchecked(view);
                 }
                 Ok(())
             })?
@@ -658,7 +716,7 @@ impl ByteViewArrayDecoderDelta {
                 // The offset is calculated from the buffer, so it is valid
                 // Utf-8 validation is done later
                 unsafe {
-                    output.append_raw_view_unchecked(&view);
+                    output.append_raw_view_unchecked(view);
                 }
                 Ok(())
             })?;
@@ -677,14 +735,6 @@ impl ByteViewArrayDecoderDelta {
     }
 }
 
-/// Check that `val` is a valid UTF-8 sequence
-pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
-    match std::str::from_utf8(val) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use arrow_array::StringViewArray;
@@ -692,12 +742,13 @@ mod tests {
 
     use crate::{
         arrow::{
-            array_reader::test_util::{byte_array_all_encodings, utf8_column},
+            array_reader::test_util::{byte_array_all_encodings, encode_byte_array, utf8_column},
             buffer::view_buffer::ViewBuffer,
             record_reader::buffer::ValuesBuffer,
         },
         basic::Encoding,
         column::reader::decoder::ColumnValueDecoder,
+        data_type::ByteArray,
     };
 
     use super::*;
@@ -747,5 +798,24 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn test_byte_view_array_plain_decoder_reuse_buffer() {
+        let byte_array = vec!["hello", "world", "large payload over 12 bytes", "b"];
+        let byte_array: Vec<ByteArray> = byte_array.into_iter().map(|x| x.into()).collect();
+        let pages = encode_byte_array(Encoding::PLAIN, &byte_array);
+
+        let column_desc = utf8_column();
+        let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
+
+        let mut view_buffer = ViewBuffer::default();
+        decoder.set_data(Encoding::PLAIN, pages, 4, None).unwrap();
+        decoder.read(&mut view_buffer, 1).unwrap();
+        decoder.read(&mut view_buffer, 1).unwrap();
+        assert_eq!(view_buffer.buffers.len(), 1);
+
+        decoder.read(&mut view_buffer, 1).unwrap();
+        assert_eq!(view_buffer.buffers.len(), 1);
     }
 }

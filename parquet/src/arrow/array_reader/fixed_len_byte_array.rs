@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
-use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::record_reader::GenericRecordReader;
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
@@ -27,15 +27,16 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
-    IntervalDayTimeArray, IntervalYearMonthArray,
+    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
 };
-use arrow_buffer::{i256, Buffer, IntervalDayTime};
+use arrow_buffer::{Buffer, IntervalDayTime, i256};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
 use half::f16;
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided fixed length byte array column
@@ -58,11 +59,27 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid physical type for fixed length byte array reader - {}",
                 t
-            ))
+            ));
         }
     };
     match &data_type {
         ArrowType::FixedSizeBinary(_) => {}
+        ArrowType::Decimal32(_, _) => {
+            if byte_length > 4 {
+                return Err(general_err!(
+                    "decimal 32 type too large, must be less then 4 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
+        ArrowType::Decimal64(_, _) => {
+            if byte_length > 8 {
+                return Err(general_err!(
+                    "decimal 64 type too large, must be less then 8 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
         ArrowType::Decimal128(_, _) => {
             if byte_length > 16 {
                 return Err(general_err!(
@@ -100,7 +117,7 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid data type for fixed length byte array reader - {}",
                 data_type
-            ))
+            ));
         }
     }
 
@@ -167,6 +184,16 @@ impl ArrayReader for FixedLenByteArrayReader {
         // conversion lambdas are all infallible. This improves performance by avoiding a branch in
         // the inner loop (see docs for `PrimitiveArray::from_unary`).
         let array: ArrayRef = match &self.data_type {
+            ArrowType::Decimal32(p, s) => {
+                let f = |b: &[u8]| i32::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal32Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
+            }
+            ArrowType::Decimal64(p, s) => {
+                let f = |b: &[u8]| i64::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal64Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
+            }
             ArrowType::Decimal128(p, s) => {
                 let f = |b: &[u8]| i128::from_be_bytes(sign_extend_be(b));
                 Arc::new(Decimal128Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
@@ -233,6 +260,29 @@ struct FixedLenByteArrayBuffer {
     byte_length: Option<usize>,
 }
 
+#[inline]
+fn move_values<F>(
+    buffer: &mut Vec<u8>,
+    byte_length: usize,
+    values_range: Range<usize>,
+    valid_mask: &[u8],
+    mut op: F,
+) where
+    F: FnMut(&mut Vec<u8>, usize, usize, usize),
+{
+    for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
+        debug_assert!(level_pos >= value_pos);
+        if level_pos <= value_pos {
+            break;
+        }
+
+        let level_pos_bytes = level_pos * byte_length;
+        let value_pos_bytes = value_pos * byte_length;
+
+        op(buffer, level_pos_bytes, value_pos_bytes, byte_length)
+    }
+}
+
 impl ValuesBuffer for FixedLenByteArrayBuffer {
     fn pad_nulls(
         &mut self,
@@ -248,18 +298,26 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
             .resize((read_offset + levels_read) * byte_length, 0);
 
         let values_range = read_offset..read_offset + values_read;
-        for (value_pos, level_pos) in values_range.rev().zip(iter_set_bits_rev(valid_mask)) {
-            debug_assert!(level_pos >= value_pos);
-            if level_pos <= value_pos {
-                break;
-            }
-
-            let level_pos_bytes = level_pos * byte_length;
-            let value_pos_bytes = value_pos * byte_length;
-
-            for i in 0..byte_length {
-                self.buffer[level_pos_bytes + i] = self.buffer[value_pos_bytes + i]
-            }
+        // Move the bytes from value_pos to level_pos. For values of `byte_length` <= 4,
+        // the simple loop is preferred as the compiler can eliminate the loop via unrolling.
+        // For `byte_length > 4`, we instead copy from non-overlapping slices. This allows
+        // the loop to be vectorized, yielding much better performance.
+        const VEC_CUTOFF: usize = 4;
+        if byte_length > VEC_CUTOFF {
+            let op = |buffer: &mut Vec<u8>, level_pos_bytes, value_pos_bytes, byte_length| {
+                let split = buffer.split_at_mut(level_pos_bytes);
+                let dst = &mut split.1[..byte_length];
+                let src = &split.0[value_pos_bytes..value_pos_bytes + byte_length];
+                dst.copy_from_slice(src);
+            };
+            move_values(&mut self.buffer, byte_length, values_range, valid_mask, op);
+        } else {
+            let op = |buffer: &mut Vec<u8>, level_pos_bytes, value_pos_bytes, byte_length| {
+                for i in 0..byte_length {
+                    buffer[level_pos_bytes + i] = buffer[value_pos_bytes + i]
+                }
+            };
+            move_values(&mut self.buffer, byte_length, values_range, valid_mask, op);
         }
     }
 }
@@ -323,7 +381,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 offset: 0,
             },
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Decoder::Dict {
-                decoder: DictIndexDecoder::new(data, num_levels, num_values),
+                decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
             },
             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
                 decoder: DeltaByteArrayDecoder::new(data)?,
@@ -336,7 +394,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 return Err(general_err!(
                     "unsupported encoding for fixed length byte array: {}",
                     encoding
-                ))
+                ));
             }
         });
         Ok(())
@@ -460,8 +518,8 @@ enum Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ListArray};
@@ -476,8 +534,7 @@ mod tests {
         );
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
-        let data = ArrayDataBuilder::new(ArrowType::List(Arc::new(Field::new(
-            "item",
+        let data = ArrayDataBuilder::new(ArrowType::List(Arc::new(Field::new_list_field(
             decimals.data_type().clone(),
             false,
         ))))

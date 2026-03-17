@@ -18,9 +18,9 @@
 //! [`Parser`] implementations for converting strings to Arrow types
 //!
 //! Used by the CSV and JSON readers to convert strings to Arrow types
+use arrow_array::ArrowNativeTypeOp;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
-use arrow_array::ArrowNativeTypeOp;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
@@ -463,20 +463,11 @@ impl Parser for Float64Type {
     }
 }
 
-/// This API is only stable since 1.70 so can't use it when current MSRV is lower
-#[inline(always)]
-fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
-    match opt {
-        None => false,
-        Some(x) => f(x),
-    }
-}
-
 macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                if !is_some_and(string.as_bytes().last(), |x| x.is_ascii_digit()) {
+                if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
                     return None;
                 }
                 match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
@@ -497,6 +488,10 @@ parser_primitive!(Int64Type);
 parser_primitive!(Int32Type);
 parser_primitive!(Int16Type);
 parser_primitive!(Int8Type);
+parser_primitive!(DurationNanosecondType);
+parser_primitive!(DurationMicrosecondType);
+parser_primitive!(DurationMillisecondType);
+parser_primitive!(DurationSecondType);
 
 impl Parser for TimestampNanosecondType {
     fn parse(string: &str) -> Option<i64> {
@@ -591,6 +586,32 @@ const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
 fn parse_date(string: &str) -> Option<NaiveDate> {
+    // If the date has an extended (signed) year such as "+10999-12-31" or "-0012-05-06"
+    //
+    // According to [ISO 8601], years have:
+    //  Four digits or more for the year. Years in the range 0000 to 9999 will be pre-padded by
+    //  zero to ensure four digits. Years outside that range will have a prefixed positive or negative symbol.
+    //
+    // [ISO 8601]: https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/time/format/DateTimeFormatter.html#ISO_LOCAL_DATE
+    if string.starts_with('+') || string.starts_with('-') {
+        // Skip the sign and look for the hyphen that terminates the year digits.
+        // According to ISO 8601 the unsigned part must be at least 4 digits.
+        let rest = &string[1..];
+        let hyphen = rest.find('-')?;
+        if hyphen < 4 {
+            return None;
+        }
+        // The year substring is the sign and the digits (but not the separator)
+        // e.g. for "+10999-12-31", hyphen is 5 and s[..6] is "+10999"
+        let year: i32 = string[..hyphen + 1].parse().ok()?;
+        // The remainder should begin with a '-' which we strip off, leaving the month-day part.
+        let remainder = string[hyphen + 1..].strip_prefix('-')?;
+        let mut parts = remainder.splitn(2, '-');
+        let month: u32 = parts.next()?.parse().ok()?;
+        let day: u32 = parts.next()?.parse().ok()?;
+        return NaiveDate::from_ymd_opt(year, month, day);
+    }
+
     if string.len() > 10 {
         // Try to parse as datetime and return just the date part
         return string_to_datetime(&Utc, string)
@@ -720,32 +741,27 @@ fn parse_e_notation<T: DecimalType>(
     let mut exp: i16 = 0;
     let base = T::Native::usize_as(10);
 
-    let mut exp_start: bool = false;
     // e has a plus sign
     let mut pos_shift_direction: bool = true;
 
-    // skip to point or exponent index
-    let mut bs;
-    if fractionals > 0 {
-        // it's a fraction, so the point index needs to be skipped, so +1
-        bs = s.as_bytes().iter().skip(index + fractionals as usize + 1);
-    } else {
-        // it's actually an integer that is already written into the result, so let's skip on to e
-        bs = s.as_bytes().iter().skip(index);
-    }
+    // skip to the exponent index directly or just after any processed fractionals
+    let mut bs = s.as_bytes().iter().skip(index + fractionals as usize);
 
-    while let Some(b) = bs.next() {
+    // This function is only called from `parse_decimal`, in which we skip parsing any fractionals
+    // after we reach `scale` digits, not knowing ahead of time whether the decimal contains an
+    // e-notation or not.
+    // So once we do hit into an e-notation, and drop down into this function, we need to parse the
+    // remaining unprocessed fractionals too, since otherwise we might lose precision.
+    for b in bs.by_ref() {
         match b {
             b'0'..=b'9' => {
                 result = result.mul_wrapping(base);
                 result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
-                if fractionals > 0 {
-                    fractionals += 1;
-                }
+                fractionals += 1;
                 digits += 1;
             }
-            &b'e' | &b'E' => {
-                exp_start = true;
+            b'e' | b'E' => {
+                break;
             }
             _ => {
                 return Err(ArrowError::ParseError(format!(
@@ -753,38 +769,28 @@ fn parse_e_notation<T: DecimalType>(
                 )));
             }
         };
+    }
 
-        if exp_start {
-            pos_shift_direction = match bs.next() {
-                Some(&b'-') => false,
-                Some(&b'+') => true,
-                Some(b) => {
-                    if !b.is_ascii_digit() {
-                        return Err(ArrowError::ParseError(format!(
-                            "can't parse the string value {s} to decimal"
-                        )));
-                    }
-
-                    exp *= 10;
-                    exp += (b - b'0') as i16;
-
-                    true
-                }
-                None => {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't parse the string value {s} to decimal"
-                    )))
-                }
-            };
-
-            for b in bs.by_ref() {
-                if !b.is_ascii_digit() {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't parse the string value {s} to decimal"
-                    )));
-                }
+    // parse the exponent itself
+    let mut signed = false;
+    for b in bs {
+        match b {
+            b'-' if !signed => {
+                pos_shift_direction = false;
+                signed = true;
+            }
+            b'+' if !signed => {
+                pos_shift_direction = true;
+                signed = true;
+            }
+            b if b.is_ascii_digit() => {
                 exp *= 10;
                 exp += (b - b'0') as i16;
+            }
+            _ => {
+                return Err(ArrowError::ParseError(format!(
+                    "can't parse the string value {s} to decimal"
+                )));
             }
         }
     }
@@ -829,7 +835,11 @@ fn parse_e_notation<T: DecimalType>(
 }
 
 /// Parse the string format decimal value to i128/i256 format and checking the precision and scale.
-/// The result value can't be out of bounds.
+/// Expected behavior:
+/// - The result value can't be out of bounds.
+/// - When parsing a decimal with scale 0, all fractional digits will be discarded. The final
+///   fractional digits may be a subset or a superset of the digits after the decimal point when
+///   e-notation is used.
 pub fn parse_decimal<T: DecimalType>(
     s: &str,
     precision: u8,
@@ -841,19 +851,26 @@ pub fn parse_decimal<T: DecimalType>(
     let base = T::Native::usize_as(10);
 
     let bs = s.as_bytes();
-    let (bs, negative) = match bs.first() {
-        Some(b'-') => (&bs[1..], true),
-        Some(b'+') => (&bs[1..], false),
-        _ => (bs, false),
-    };
 
-    if bs.is_empty() {
+    if !bs
+        .last()
+        .is_some_and(|b| b.is_ascii_digit() || (b == &b'.' && s.len() > 1))
+    {
+        // If the last character is not a digit (or a decimal point prefixed with some digits), then
+        // it's not a valid decimal.
         return Err(ArrowError::ParseError(format!(
             "can't parse the string value {s} to decimal"
         )));
     }
 
-    let mut bs = bs.iter().enumerate();
+    let (signed, negative) = match bs.first() {
+        Some(b'-') => (true, true),
+        Some(b'+') => (true, false),
+        _ => (false, false),
+    };
+
+    // Iterate over the raw input bytes, skipping the sign if any
+    let mut bs = bs.iter().enumerate().skip(signed as usize);
 
     let mut is_e_notation = false;
 
@@ -876,18 +893,15 @@ pub fn parse_decimal<T: DecimalType>(
                 for (_, b) in bs.by_ref() {
                     if !b.is_ascii_digit() {
                         if *b == b'e' || *b == b'E' {
-                            result = match parse_e_notation::<T>(
+                            result = parse_e_notation::<T>(
                                 s,
                                 digits as u16,
                                 fractionals as i16,
                                 result,
-                                point_index,
+                                point_index + 1,
                                 precision as u16,
                                 scale as i16,
-                            ) {
-                                Err(e) => return Err(e),
-                                Ok(v) => v,
-                            };
+                            )?;
 
                             is_e_notation = true;
 
@@ -897,7 +911,7 @@ pub fn parse_decimal<T: DecimalType>(
                             "can't parse the string value {s} to decimal"
                         )));
                     }
-                    if fractionals == scale && scale != 0 {
+                    if fractionals == scale {
                         // We have processed all the digits that we need. All that
                         // is left is to validate that the rest of the string contains
                         // valid digits.
@@ -912,16 +926,9 @@ pub fn parse_decimal<T: DecimalType>(
                 if is_e_notation {
                     break;
                 }
-
-                // Fail on "."
-                if digits == 0 {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't parse the string value {s} to decimal"
-                    )));
-                }
             }
             b'e' | b'E' => {
-                result = match parse_e_notation::<T>(
+                result = parse_e_notation::<T>(
                     s,
                     digits as u16,
                     fractionals as i16,
@@ -929,10 +936,7 @@ pub fn parse_decimal<T: DecimalType>(
                     index,
                     precision as u16,
                     scale as i16,
-                ) {
-                    Err(e) => return Err(e),
-                    Ok(v) => v,
-                };
+                )?;
 
                 is_e_notation = true;
 
@@ -1219,8 +1223,7 @@ impl Interval {
         match (self.months, self.days, self.nanos) {
             (months, days, nanos) if days == 0 && nanos == 0 => Ok(months),
             _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Unable to represent interval with days and nanos as year-months: {:?}",
-                self
+                "Unable to represent interval with days and nanos as year-months: {self:?}"
             ))),
         }
     }
@@ -2598,6 +2601,9 @@ mod tests {
             "1.1e.12",
             "1.23e+3.",
             "1.23e+3.1",
+            "1e",
+            "1e+",
+            "1e-",
         ];
         for s in can_not_parse_tests {
             let result_128 = parse_decimal::<Decimal128Type>(s, 20, 3);
@@ -2621,6 +2627,7 @@ mod tests {
             ("12345678908765.123456", 3),
             ("123456789087651234.56e-4", 3),
             ("1234560000000", 0),
+            ("12345678900.0", 0),
             ("1.23456e12", 0),
         ];
         for (s, scale) in overflow_parse_tests {
@@ -2674,11 +2681,10 @@ mod tests {
                 0i128,
                 15,
             ),
-            (
-                "1.016744e-320",
-                0i128,
-                15,
-            ),
+            ("1.016744e-320", 0i128, 15),
+            ("-1e3", -1000000000i128, 6),
+            ("+1e3", 1000000000i128, 6),
+            ("-1e31", -10000000000000000000000000000000000000i128, 6),
         ];
         for (s, i, scale) in edge_tests_128 {
             let result_128 = parse_decimal::<Decimal128Type>(s, 38, scale);
@@ -2737,6 +2743,45 @@ mod tests {
         for (s, i, scale) in edge_tests_256 {
             let result = parse_decimal::<Decimal256Type>(s, 76, scale);
             assert_eq!(i, result.unwrap());
+        }
+
+        let zero_scale_tests = [
+            (".123", 0, 3),
+            ("0.123", 0, 3),
+            ("1.0", 1, 3),
+            ("1.2", 1, 3),
+            ("1.00", 1, 3),
+            ("1.23", 1, 3),
+            ("1.000", 1, 3),
+            ("1.123", 1, 3),
+            ("123.0", 123, 3),
+            ("123.4", 123, 3),
+            ("123.00", 123, 3),
+            ("123.45", 123, 3),
+            ("123.000000000000000000004", 123, 3),
+            ("0.123e2", 12, 3),
+            ("0.123e4", 1230, 10),
+            ("1.23e4", 12300, 10),
+            ("12.3e4", 123000, 10),
+            ("123e4", 1230000, 10),
+            (
+                "20000000000000000000000000000000000002.0",
+                20000000000000000000000000000000000002,
+                38,
+            ),
+        ];
+        for (s, i, precision) in zero_scale_tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, precision, 0).unwrap();
+            assert_eq!(i, result_128);
+        }
+
+        let can_not_parse_zero_scale = [".", "blag", "", "+", "-", "e"];
+        for s in can_not_parse_zero_scale {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 5, 0);
+            assert_eq!(
+                format!("Parser error: can't parse the string value {s} to decimal"),
+                result_128.unwrap_err().to_string(),
+            );
         }
     }
 

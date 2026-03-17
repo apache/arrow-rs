@@ -30,6 +30,7 @@ mod dictionary;
 mod fixed_binary;
 mod fixed_list;
 mod list;
+mod list_view;
 mod null;
 mod primitive;
 mod run;
@@ -41,6 +42,8 @@ mod variable_size;
 // these methods assume the same type, len and null count.
 // For this reason, they are not exposed and are instead used
 // to build the generic functions below (`equal_range` and `equal`).
+use self::run::run_equal;
+use crate::equal::list_view::list_view_equal;
 use boolean::boolean_equal;
 use byte_view::byte_view_equal;
 use dictionary::dictionary_equal;
@@ -52,8 +55,6 @@ use primitive::primitive_equal;
 use structure::struct_equal;
 use union::union_equal;
 use variable_size::variable_sized_equal;
-
-use self::run::run_equal;
 
 /// Compares the values of two [ArrayData] starting at `lhs_start` and `rhs_start` respectively
 /// for `len` slots.
@@ -78,6 +79,8 @@ fn equal_values(
         DataType::Int64 => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float32 => primitive_equal::<f32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float64 => primitive_equal::<f64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal32(_, _) => primitive_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal64(_, _) => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Decimal128(_, _) => primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Decimal256(_, _) => primitive_equal::<i256>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Date32 | DataType::Time32(_) | DataType::Interval(IntervalUnit::YearMonth) => {
@@ -102,10 +105,9 @@ fn equal_values(
             byte_view_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not yet implemented")
-        }
         DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::ListView(_) => list_view_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::LargeListView(_) => list_view_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::FixedSizeList(_, _) => fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Struct(_) => struct_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Union(_, _) => union_equal(lhs, rhs, lhs_start, rhs_start, len),

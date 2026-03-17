@@ -24,9 +24,10 @@ extern crate arrow;
 use arrow::array::*;
 use arrow::compute::kernels::substring::*;
 use arrow::util::bench_util::*;
+use std::hint;
 
 fn bench_substring(arr: &dyn Array, start: i64, length: Option<u64>) {
-    substring(criterion::black_box(arr), start, length).unwrap();
+    substring(hint::black_box(arr), start, length).unwrap();
 }
 
 fn bench_substring_by_char<O: OffsetSizeTrait>(
@@ -34,7 +35,7 @@ fn bench_substring_by_char<O: OffsetSizeTrait>(
     start: i64,
     length: Option<u64>,
 ) {
-    substring_by_char(criterion::black_box(arr), start, length).unwrap();
+    substring_by_char(hint::black_box(arr), start, length).unwrap();
 }
 
 fn add_benchmark(c: &mut Criterion) {

@@ -142,7 +142,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                         Some(_) => {
                             return Err(ArrowError::ParseError(
                                 "Field 'children' must be an array".to_string(),
-                            ))
+                            ));
                         }
                         None => {
                             return Err(ArrowError::ParseError(
@@ -158,7 +158,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                     Some(_) => {
                         return Err(ArrowError::ParseError(
                             "Field 'children' must be an array".to_string(),
-                        ))
+                        ));
                     }
                     None => {
                         return Err(ArrowError::ParseError(
@@ -177,15 +177,15 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                                 }
                                 t => {
                                     return Err(ArrowError::ParseError(format!(
-                                    "Map children should be a struct with 2 fields, found {t:?}"
-                                )))
+                                        "Map children should be a struct with 2 fields, found {t:?}"
+                                    )));
                                 }
                             }
                         }
                         Some(_) => {
                             return Err(ArrowError::ParseError(
                                 "Field 'children' must be an array with 1 element".to_string(),
-                            ))
+                            ));
                         }
                         None => {
                             return Err(ArrowError::ParseError(
@@ -207,7 +207,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                     Some(_) => {
                         return Err(ArrowError::ParseError(
                             "Field 'children' must be an array".to_string(),
-                        ))
+                        ));
                     }
                     None => {
                         return Err(ArrowError::ParseError(
@@ -252,6 +252,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                 _ => data_type,
             };
 
+            #[allow(deprecated)]
             let mut field = Field::new_dict(name, data_type, nullable, dict_id, dict_is_ordered);
             field.set_metadata(metadata);
             Ok(field)
@@ -274,17 +275,21 @@ pub fn field_to_json(field: &Field) -> serde_json::Value {
     };
 
     match field.data_type() {
-        DataType::Dictionary(ref index_type, ref value_type) => serde_json::json!({
-            "name": field.name(),
-            "nullable": field.is_nullable(),
-            "type": data_type_to_json(value_type),
-            "children": children,
-            "dictionary": {
-                "id": field.dict_id().unwrap(),
-                "indexType": data_type_to_json(index_type),
-                "isOrdered": field.dict_is_ordered().unwrap(),
-            }
-        }),
+        DataType::Dictionary(index_type, value_type) => {
+            #[allow(deprecated)]
+            let dict_id = field.dict_id().unwrap();
+            serde_json::json!({
+                "name": field.name(),
+                "nullable": field.is_nullable(),
+                "type": data_type_to_json(value_type),
+                "children": children,
+                "dictionary": {
+                    "id": dict_id,
+                    "indexType": data_type_to_json(index_type),
+                    "isOrdered": field.dict_is_ordered().unwrap(),
+                }
+            })
+        }
         _ => serde_json::json!({
             "name": field.name(),
             "nullable": field.is_nullable(),

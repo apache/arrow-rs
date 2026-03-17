@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{Extend, _MutableArrayData};
+use super::{_MutableArrayData, Extend};
 use crate::ArrayData;
 
-pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend {
+pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
     let type_ids = array.buffer::<i8>(0);
 
     Box::new(
@@ -36,7 +36,7 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend {
     )
 }
 
-pub(super) fn build_extend_dense(array: &ArrayData) -> Extend {
+pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
     let type_ids = array.buffer::<i8>(0);
     let offsets = array.buffer::<i32>(1);
     let arrow_schema::DataType::Union(src_fields, _) = array.data_type() else {

@@ -15,16 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
+//! Partial support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
 //!
 //! These utilities define structs that read the integration JSON format for integration testing purposes.
 //!
 //! This is not a canonical format, but provides a human-readable way of verifying language implementations
+//!
+//! <div class="warning">
+//!
+//! This crate is **only intended for integration testing the
+//! [Arrow project](https://github.com/apache/arrow-rs)**. It is not [intended for usage outside of
+//! this context](https://github.com/apache/arrow-rs/issues/8684#issuecomment-3433193158).
+//!
+//! </div>
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
-use num::BigInt;
-use num::Signed;
+use num_bigint::BigInt;
+use num_traits::Signed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as SJMap, Value};
 use std::collections::HashMap;
@@ -49,8 +63,11 @@ pub use schema::*;
 /// See <https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format>
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJson {
+    /// The Arrow schema for JSON file
     pub schema: ArrowJsonSchema,
+    /// The `RecordBatch`es in the JSON file
     pub batches: Vec<ArrowJsonBatch>,
+    /// The dictionaries in the JSON file
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dictionaries: Option<Vec<ArrowJsonDictionaryBatch>>,
 }
@@ -60,7 +77,9 @@ pub struct ArrowJson {
 /// Fields are left as JSON `Value` as they vary by `DataType`
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJsonSchema {
+    /// An array of JSON fields
     pub fields: Vec<ArrowJsonField>,
+    /// An array of metadata key-value pairs
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Vec<HashMap<String, String>>>,
 }
@@ -68,13 +87,20 @@ pub struct ArrowJsonSchema {
 /// Fields are left as JSON `Value` as they vary by `DataType`
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJsonField {
+    /// The name of the field
     pub name: String,
+    /// The data type of the field,
+    /// can be any valid JSON value
     #[serde(rename = "type")]
     pub field_type: Value,
+    /// Whether the field is nullable
     pub nullable: bool,
+    /// The children fields
     pub children: Vec<ArrowJsonField>,
+    /// The dictionary for the field
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dictionary: Option<ArrowJsonFieldDictionary>,
+    /// The metadata for the field, if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
 }
@@ -115,20 +141,28 @@ impl From<&Field> for ArrowJsonField {
     }
 }
 
+/// Represents a dictionary-encoded field in the Arrow JSON format
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJsonFieldDictionary {
+    /// A unique identifier for the dictionary
     pub id: i64,
+    /// The type of the dictionary index
     #[serde(rename = "indexType")]
     pub index_type: DictionaryIndexType,
+    /// Whether the dictionary is ordered
     #[serde(rename = "isOrdered")]
     pub is_ordered: bool,
 }
 
+/// Type of an index for a dictionary-encoded field in the Arrow JSON format
 #[derive(Deserialize, Serialize, Debug)]
 pub struct DictionaryIndexType {
+    /// The name of the dictionary index type
     pub name: String,
+    /// Whether the dictionary index type is signed
     #[serde(rename = "isSigned")]
     pub is_signed: bool,
+    /// The bit width of the dictionary index type
     #[serde(rename = "bitWidth")]
     pub bit_width: i64,
 }
@@ -137,6 +171,7 @@ pub struct DictionaryIndexType {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ArrowJsonBatch {
     count: usize,
+    /// The columns in the record batch
     pub columns: Vec<ArrowJsonColumn>,
 }
 
@@ -144,7 +179,9 @@ pub struct ArrowJsonBatch {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[allow(non_snake_case)]
 pub struct ArrowJsonDictionaryBatch {
+    /// The unique identifier for the dictionary
     pub id: i64,
+    /// The data for the dictionary
     pub data: ArrowJsonBatch,
 }
 
@@ -152,15 +189,21 @@ pub struct ArrowJsonDictionaryBatch {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ArrowJsonColumn {
     name: String,
+    /// The number of elements in the column
     pub count: usize,
+    /// The validity bitmap to determine null values
     #[serde(rename = "VALIDITY")]
     pub validity: Option<Vec<u8>>,
+    /// The data values in the column
     #[serde(rename = "DATA")]
     pub data: Option<Vec<Value>>,
+    /// The offsets for variable-sized data types
     #[serde(rename = "OFFSET")]
     pub offset: Option<Vec<Value>>, // leaving as Value as 64-bit offsets are strings
+    /// The type id for union types
     #[serde(rename = "TYPE_ID")]
     pub type_id: Option<Vec<i8>>,
+    /// The children columns for nested types
     pub children: Option<Vec<ArrowJsonColumn>>,
 }
 
@@ -189,6 +232,7 @@ impl ArrowJson {
         Ok(true)
     }
 
+    /// Convert the stored dictionaries to `Vec[RecordBatch]`
     pub fn get_record_batches(&self) -> Result<Vec<RecordBatch>> {
         let schema = self.schema.to_arrow_schema()?;
 
@@ -275,6 +319,7 @@ impl ArrowJsonField {
     }
 }
 
+/// Generates a [`RecordBatch`] from an Arrow JSON batch, given a schema
 pub fn record_batch_from_json(
     schema: &Schema,
     json_batch: ArrowJsonBatch,
@@ -755,14 +800,15 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         DataType::Dictionary(key_type, value_type) => {
+            #[allow(deprecated)]
             let dict_id = field.dict_id().ok_or_else(|| {
-                ArrowError::JsonError(format!("Unable to find dict_id for field {field:?}"))
+                ArrowError::JsonError(format!("Unable to find dict_id for field {field}"))
             })?;
             // find dictionary
             let dictionary = dictionaries
                 .ok_or_else(|| {
                     ArrowError::JsonError(format!(
-                        "Unable to find any dictionaries for field {field:?}"
+                        "Unable to find any dictionaries for field {field}"
                     ))
                 })?
                 .get(&dict_id);
@@ -776,9 +822,45 @@ pub fn array_from_json(
                     dictionaries,
                 ),
                 None => Err(ArrowError::JsonError(format!(
-                    "Unable to find dictionary for field {field:?}"
+                    "Unable to find dictionary for field {field}"
                 ))),
             }
+        }
+        DataType::Decimal32(precision, scale) => {
+            let mut b = Decimal32Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i32>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
+        DataType::Decimal64(precision, scale) => {
+            let mut b = Decimal64Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i64>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
         }
         DataType::Decimal128(precision, scale) => {
             let mut b = Decimal128Builder::with_capacity(json_col.count);
@@ -872,11 +954,12 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(
-            "data type {t:?} not supported"
+            "data type {t} not supported"
         ))),
     }
 }
 
+/// Construct a [`DictionaryArray`] from a partially typed JSON column
 pub fn dictionary_array_from_json(
     field: &Field,
     json_col: ArrowJsonColumn,
@@ -897,10 +980,12 @@ pub fn dictionary_array_from_json(
             let null_buf = create_null_buf(&json_col);
 
             // build the key data into a buffer, then construct values separately
+            #[allow(deprecated)]
             let key_field = Field::new_dict(
                 "key",
                 dict_key.clone(),
                 field.is_nullable(),
+                #[allow(deprecated)]
                 field
                     .dict_id()
                     .expect("Dictionary fields must have a dict_id value"),
@@ -965,6 +1050,17 @@ fn create_null_buf(json_col: &ArrowJsonColumn) -> Buffer {
 }
 
 impl ArrowJsonBatch {
+    /// Convert a [`RecordBatch`] to an [`ArrowJsonBatch`]
+    ///
+    /// <div class="warning">
+    ///
+    /// This function is **deliberately incomplete**! As noted in the crate-level documentation,
+    /// this crate is only intended for use within the Arrow project itself.
+    ///
+    /// Right now, this function only supports `DataType::Int8` columns. Other data types will lead
+    /// to an empty `ArrowJsonColumn`.
+    ///
+    /// </div>
     pub fn from_batch(batch: &RecordBatch) -> ArrowJsonBatch {
         let mut json_batch = ArrowJsonBatch {
             count: batch.num_rows(),
@@ -1158,7 +1254,7 @@ mod tests {
             Field::new("utf8s", DataType::Utf8, true),
             Field::new(
                 "lists",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 true,
             ),
             Field::new(
@@ -1215,7 +1311,7 @@ mod tests {
 
         let value_data = Int32Array::from(vec![None, Some(2), None, None]);
         let value_offsets = Buffer::from_slice_ref([0, 3, 4, 4]);
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)

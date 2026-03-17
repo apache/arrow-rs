@@ -17,17 +17,20 @@
 
 //! Common code used in the integration test binaries
 
+// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
+#![allow(unused_crate_dependencies)]
+#![warn(missing_docs)]
 use serde_json::Value;
 
 use arrow::array::{Array, StructArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::error::{ArrowError, Result};
-use arrow::ffi::{from_ffi_and_data_type, FFI_ArrowArray, FFI_ArrowSchema};
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi_and_data_type};
 use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::arrow_test_data;
 use arrow_integration_test::*;
 use std::collections::HashMap;
-use std::ffi::{c_int, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_int};
 use std::fs::File;
 use std::io::BufReader;
 use std::iter::zip;
@@ -42,7 +45,9 @@ pub const AUTH_PASSWORD: &str = "flight";
 pub mod flight_client_scenarios;
 pub mod flight_server_scenarios;
 
+/// An Arrow file in JSON format
 pub struct ArrowFile {
+    /// The schema of the file
     pub schema: Schema,
     // we can evolve this into a concrete Arrow type
     // this is temporarily not being read from
@@ -51,12 +56,14 @@ pub struct ArrowFile {
 }
 
 impl ArrowFile {
+    /// Read a single [RecordBatch] from the file
     pub fn read_batch(&self, batch_num: usize) -> Result<RecordBatch> {
         let b = self.arrow_json["batches"].get(batch_num).unwrap();
         let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
         record_batch_from_json(&self.schema, json_batch, Some(&self.dictionaries))
     }
 
+    /// Read all [RecordBatch]es from the file
     pub fn read_batches(&self) -> Result<Vec<RecordBatch>> {
         self.arrow_json["batches"]
             .as_array()
@@ -70,7 +77,7 @@ impl ArrowFile {
     }
 }
 
-// Canonicalize the names of map fields in a schema
+/// Canonicalize the names of map fields in a schema
 pub fn canonicalize_schema(schema: &Schema) -> Schema {
     let fields = schema
         .fields()
@@ -107,6 +114,7 @@ pub fn canonicalize_schema(schema: &Schema) -> Schema {
     Schema::new(fields).with_metadata(schema.metadata().clone())
 }
 
+/// Read an Arrow file in JSON format
 pub fn open_json_file(json_name: &str) -> Result<ArrowFile> {
     let json_file = File::open(json_name)?;
     let reader = BufReader::new(json_file);
@@ -157,12 +165,9 @@ pub fn read_gzip_json(version: &str, path: &str) -> ArrowJson {
     arrow_json
 }
 
-//
-// C Data Integration entrypoints
-//
-
+/// C Data Integration entrypoint to export the schema from a JSON file
 fn cdata_integration_export_schema_from_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     out: *mut FFI_ArrowSchema,
 ) -> Result<()> {
     let json_name = unsafe { CStr::from_ptr(c_json_name) };
@@ -173,8 +178,9 @@ fn cdata_integration_export_schema_from_json(
     Ok(())
 }
 
+/// C Data Integration entrypoint to export a batch from a JSON file
 fn cdata_integration_export_batch_from_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     batch_num: c_int,
     out: *mut FFI_ArrowArray,
 ) -> Result<()> {
@@ -188,7 +194,7 @@ fn cdata_integration_export_batch_from_json(
 }
 
 fn cdata_integration_import_schema_and_compare_to_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     c_schema: *mut FFI_ArrowSchema,
 ) -> Result<()> {
     let json_name = unsafe { CStr::from_ptr(c_json_name) };
@@ -201,8 +207,7 @@ fn cdata_integration_import_schema_and_compare_to_json(
     // compare schemas
     if canonicalize_schema(&json_schema) != canonicalize_schema(&imported_schema) {
         return Err(ArrowError::ComputeError(format!(
-            "Schemas do not match.\n- JSON: {:?}\n- Imported: {:?}",
-            json_schema, imported_schema
+            "Schemas do not match.\n- JSON: {json_schema:?}\n- Imported: {imported_schema:?}",
         )));
     }
     Ok(())
@@ -225,7 +230,7 @@ fn compare_batches(a: &RecordBatch, b: &RecordBatch) -> Result<()> {
 }
 
 fn cdata_integration_import_batch_and_compare_to_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     batch_num: c_int,
     c_array: *mut FFI_ArrowArray,
 ) -> Result<()> {
@@ -244,10 +249,10 @@ fn cdata_integration_import_batch_and_compare_to_json(
 }
 
 // If Result is an error, then export a const char* to its string display, otherwise NULL
-fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>) -> *mut i8 {
+fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>) -> *mut c_char {
     match result {
         Ok(_) => ptr::null_mut(),
-        Err(e) => CString::new(format!("{}", e)).unwrap().into_raw(),
+        Err(e) => CString::new(format!("{e}")).unwrap().into_raw(),
     }
 }
 
@@ -256,47 +261,51 @@ fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>
 /// # Safety
 ///
 /// The pointer is assumed to have been obtained using CString::into_raw.
-#[no_mangle]
-pub unsafe extern "C" fn arrow_rs_free_error(c_error: *mut i8) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn arrow_rs_free_error(c_error: *mut c_char) {
     if !c_error.is_null() {
         drop(unsafe { CString::from_raw(c_error) });
     }
 }
 
-#[no_mangle]
+/// A C-ABI for exporting an Arrow schema from a JSON file
+#[unsafe(no_mangle)]
 pub extern "C" fn arrow_rs_cdata_integration_export_schema_from_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     out: *mut FFI_ArrowSchema,
-) -> *mut i8 {
+) -> *mut c_char {
     let r = cdata_integration_export_schema_from_json(c_json_name, out);
     result_to_c_error(&r)
 }
 
-#[no_mangle]
+/// A C-ABI to compare an Arrow schema against a JSON file
+#[unsafe(no_mangle)]
 pub extern "C" fn arrow_rs_cdata_integration_import_schema_and_compare_to_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     c_schema: *mut FFI_ArrowSchema,
-) -> *mut i8 {
+) -> *mut c_char {
     let r = cdata_integration_import_schema_and_compare_to_json(c_json_name, c_schema);
     result_to_c_error(&r)
 }
 
-#[no_mangle]
+/// A C-ABI for exporting a RecordBatch from a JSON file
+#[unsafe(no_mangle)]
 pub extern "C" fn arrow_rs_cdata_integration_export_batch_from_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     batch_num: c_int,
     out: *mut FFI_ArrowArray,
-) -> *mut i8 {
+) -> *mut c_char {
     let r = cdata_integration_export_batch_from_json(c_json_name, batch_num, out);
     result_to_c_error(&r)
 }
 
-#[no_mangle]
+/// A C-ABI to compare a RecordBatch against a JSON file
+#[unsafe(no_mangle)]
 pub extern "C" fn arrow_rs_cdata_integration_import_batch_and_compare_to_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     batch_num: c_int,
     c_array: *mut FFI_ArrowArray,
-) -> *mut i8 {
+) -> *mut c_char {
     let r = cdata_integration_import_batch_and_compare_to_json(c_json_name, batch_num, c_array);
     result_to_c_error(&r)
 }

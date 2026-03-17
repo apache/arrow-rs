@@ -25,8 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_dir = Path::new("../format");
     let proto_path = Path::new("../format/Flight.proto");
 
-    tonic_build::configure()
-        // protoc in unbuntu builder needs this option
+    tonic_prost_build::configure()
+        // protoc in Ubuntu builder needs this option
         .protoc_arg("--experimental_allow_proto3_optional")
         .out_dir("src")
         .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open("src/arrow.flight.protocol.rs")?;
     let mut buffer = String::new();
     file.read_to_string(&mut buffer)?;
-    // append warning that file was auto-generate
+    // append warning that file was auto-generated
     let mut file = OpenOptions::new()
         .write(true)
         .truncate(true)
@@ -48,8 +48,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_dir = Path::new("../format");
     let proto_path = Path::new("../format/FlightSql.proto");
 
-    tonic_build::configure()
-        // protoc in ubuntu builder needs this option
+    tonic_prost_build::configure()
+        // protoc in Ubuntu builder needs this option
         .protoc_arg("--experimental_allow_proto3_optional")
         .out_dir("src/sql")
         .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;

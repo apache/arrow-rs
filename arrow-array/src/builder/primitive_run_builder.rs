@@ -17,7 +17,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use crate::{types::RunEndIndexType, ArrayRef, ArrowPrimitiveType, RunArray};
+use crate::{ArrayRef, ArrowPrimitiveType, RunArray, types::RunEndIndexType};
 
 use super::{ArrayBuilder, PrimitiveBuilder};
 
@@ -107,6 +107,20 @@ where
             current_run_end_index: 0,
             prev_run_end_index: 0,
         }
+    }
+
+    /// Overrides the data type of the values child array.
+    ///
+    /// By default, `V::DATA_TYPE` is used (via [`PrimitiveBuilder`]). This
+    /// allows setting the timezone of a Timestamp, the precision & scale of a
+    /// Decimal, etc.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if `values_builder` rejects `data_type`.
+    pub fn with_data_type(mut self, data_type: arrow_schema::DataType) -> Self {
+        self.values_builder = self.values_builder.with_data_type(data_type);
+        self
     }
 }
 
@@ -259,10 +273,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::DataType;
+
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
-    use crate::types::{Int16Type, UInt32Type};
-    use crate::{Array, UInt32Array};
+    use crate::types::{Decimal128Type, Int16Type, TimestampMicrosecondType, UInt32Type};
+    use crate::{Array, Decimal128Array, TimestampMicrosecondArray, UInt32Array};
 
     #[test]
     fn test_primitive_ree_array_builder() {
@@ -277,6 +293,7 @@ mod tests {
         let array = builder.finish();
 
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
         assert_eq!(array.len(), 6);
 
         assert_eq!(array.run_ends().values(), &[3, 4, 6]);
@@ -302,10 +319,45 @@ mod tests {
 
         assert_eq!(array.len(), 11);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
         assert_eq!(array.run_ends().values(), &[1, 3, 5, 9, 10, 11]);
         assert_eq!(
             array.values().as_primitive::<Int16Type>().values(),
             &[1, 2, 5, 4, 6, 2]
         );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_override_data_type_invalid() {
+        PrimitiveRunBuilder::<Int16Type, UInt32Type>::new().with_data_type(DataType::UInt64);
+    }
+
+    #[test]
+    fn test_override_data_type() {
+        // Noop.
+        PrimitiveRunBuilder::<Int16Type, UInt32Type>::new().with_data_type(DataType::UInt32);
+
+        // Setting scale & precision.
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Decimal128Type>::new()
+            .with_data_type(DataType::Decimal128(1, 2));
+        builder.append_value(123);
+        let array = builder.finish();
+        let array = array.downcast::<Decimal128Array>().unwrap();
+        let values = array.values();
+        assert_eq!(values.precision(), 1);
+        assert_eq!(values.scale(), 2);
+
+        // Setting timezone.
+        let mut builder = PrimitiveRunBuilder::<Int16Type, TimestampMicrosecondType>::new()
+            .with_data_type(DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                Some("Europe/Paris".into()),
+            ));
+        builder.append_value(1);
+        let array = builder.finish();
+        let array = array.downcast::<TimestampMicrosecondArray>().unwrap();
+        let values = array.values();
+        assert_eq!(values.timezone(), Some("Europe/Paris"));
     }
 }

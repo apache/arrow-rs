@@ -36,14 +36,15 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
         .chain(unaligned.chunks().iter().cloned())
         .chain(unaligned.suffix());
 
-    iter.rev().flat_map(move |mut chunk| {
+    iter.rev().flat_map(move |chunk| {
         let chunk_idx = chunk_end_idx - 64;
         chunk_end_idx = chunk_idx;
+        let mut rev_chunk = chunk.reverse_bits();
         std::iter::from_fn(move || {
-            if chunk != 0 {
-                let bit_pos = 63 - chunk.leading_zeros();
-                chunk ^= 1 << bit_pos;
-                return Some(chunk_idx + (bit_pos as usize));
+            if rev_chunk != 0 {
+                let bit_pos = rev_chunk.trailing_zeros();
+                rev_chunk &= rev_chunk - 1;
+                return Some(chunk_idx + (63 - bit_pos as usize));
             }
             None
         })
@@ -65,12 +66,12 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
 mod tests {
     use super::*;
     use arrow_array::builder::BooleanBufferBuilder;
-    use rand::prelude::*;
+    use rand::{prelude::*, rng};
 
     #[test]
     fn test_bit_fns() {
-        let mut rng = thread_rng();
-        let mask_length = rng.gen_range(1..1024);
+        let mut rng = rng();
+        let mask_length = rng.random_range(1..1024);
         let bools: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
             .take(mask_length)
             .collect();
@@ -92,8 +93,8 @@ mod tests {
         assert_eq!(count_set_bits(&[0xFF], 1..1), 0);
 
         for _ in 0..20 {
-            let start = rng.gen_range(0..bools.len());
-            let end = rng.gen_range(start..bools.len());
+            let start = rng.random_range(0..bools.len());
+            let end = rng.random_range(start..bools.len());
 
             let actual = count_set_bits(nulls.as_slice(), start..end);
             let expected = bools[start..end].iter().filter(|x| **x).count();

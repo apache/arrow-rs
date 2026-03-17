@@ -15,4 +15,4 @@
 # specific language governing permissions and limitations
 # under the License.
 
-edition = "2021"
+style_edition = "2024"

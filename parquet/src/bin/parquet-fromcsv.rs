@@ -72,7 +72,7 @@
 
 use std::{
     fmt::Display,
-    fs::{read_to_string, File},
+    fs::{File, read_to_string},
     io::Read,
     path::{Path, PathBuf},
     sync::Arc,
@@ -83,7 +83,7 @@ use arrow_schema::{ArrowError, Schema};
 use clap::{Parser, ValueEnum};
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::{
-    arrow::{parquet_to_arrow_schema, ArrowWriter},
+    arrow::{ArrowWriter, parquet_to_arrow_schema},
     basic::Compression,
     errors::ParquetError,
     file::properties::{WriterProperties, WriterVersion},
@@ -224,9 +224,9 @@ fn compression_from_str(cmp: &str) -> Result<Compression, String> {
         "BROTLI" => Ok(Compression::BROTLI(Default::default())),
         "LZ4" => Ok(Compression::LZ4),
         "ZSTD" => Ok(Compression::ZSTD(Default::default())),
-        v => Err(
-            format!("Unknown compression {v} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help")
-        )
+        v => Err(format!(
+            "Unknown compression {v} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help"
+        )),
     }
 }
 
@@ -297,7 +297,8 @@ fn configure_writer_properties(args: &Args) -> WriterProperties {
         properties_builder = properties_builder.set_writer_version(writer_version);
     }
     if let Some(max_row_group_size) = args.max_row_group_size {
-        properties_builder = properties_builder.set_max_row_group_size(max_row_group_size);
+        properties_builder =
+            properties_builder.set_max_row_group_row_count(Some(max_row_group_size));
     }
     if let Some(enable_bloom_filter) = args.enable_bloom_filter {
         properties_builder = properties_builder.set_bloom_filter_enabled(enable_bloom_filter);

@@ -70,8 +70,10 @@ pub fn div(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
 
 /// Perform `lhs % rhs`
 ///
-/// Overflow or division by zero will result in an error, with exception to
+/// Division by zero will result in an error, with exception to
 /// floating point numbers, which instead follow the IEEE 754 rules
+///
+/// `signed_integer::MIN % -1` will not result in an error but return 0
 pub fn rem(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::Rem, lhs, rhs)
 }
@@ -109,6 +111,20 @@ pub fn neg(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         Float16 => neg_wrapping!(Float16Type, array),
         Float32 => neg_wrapping!(Float32Type, array),
         Float64 => neg_wrapping!(Float64Type, array),
+        Decimal32(p, s) => {
+            let a = array
+                .as_primitive::<Decimal32Type>()
+                .try_unary::<_, Decimal32Type, _>(|x| x.neg_checked())?;
+
+            Ok(Arc::new(a.with_precision_and_scale(*p, *s)?))
+        }
+        Decimal64(p, s) => {
+            let a = array
+                .as_primitive::<Decimal64Type>()
+                .try_unary::<_, Decimal64Type, _>(|x| x.neg_checked())?;
+
+            Ok(Arc::new(a.with_precision_and_scale(*p, *s)?))
+        }
         Decimal128(p, s) => {
             let a = array
                 .as_primitive::<Decimal128Type>()
@@ -232,6 +248,8 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
         (Interval(MonthDayNano), Interval(MonthDayNano)) => interval_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
         (Date32, _) => date_op::<Date32Type>(op, l, l_scalar, r, r_scalar),
         (Date64, _) => date_op::<Date64Type>(op, l, l_scalar, r, r_scalar),
+        (Decimal32(_, _), Decimal32(_, _)) => decimal_op::<Decimal32Type>(op, l, l_scalar, r, r_scalar),
+        (Decimal64(_, _), Decimal64(_, _)) => decimal_op::<Decimal64Type>(op, l, l_scalar, r, r_scalar),
         (Decimal128(_, _), Decimal128(_, _)) => decimal_op::<Decimal128Type>(op, l, l_scalar, r, r_scalar),
         (Decimal256(_, _), Decimal256(_, _)) => decimal_op::<Decimal256Type>(op, l, l_scalar, r, r_scalar),
         (l_t, r_t) => match (l_t, r_t) {
@@ -313,7 +331,13 @@ fn integer_op<T: ArrowPrimitiveType>(
         Op::MulWrapping => op!(l, l_s, r, r_s, l.mul_wrapping(r)),
         Op::Mul => try_op!(l, l_s, r, r_s, l.mul_checked(r)),
         Op::Div => try_op!(l, l_s, r, r_s, l.div_checked(r)),
-        Op::Rem => try_op!(l, l_s, r, r_s, l.mod_checked(r)),
+        Op::Rem => try_op!(l, l_s, r, r_s, {
+            if r.is_zero() {
+                Err(ArrowError::DivideByZero)
+            } else {
+                Ok(l.mod_wrapping(r))
+            }
+        }),
     };
     Ok(Arc::new(array))
 }
@@ -495,54 +519,101 @@ fn timestamp_op<T: TimestampOp>(
                 "Invalid timestamp arithmetic operation: {} {op} {}",
                 l.data_type(),
                 r.data_type()
-            )))
+            )));
         }
     };
     Ok(Arc::new(array.with_timezone_opt(l.timezone())))
 }
 
 /// Arithmetic trait for date arrays
-///
-/// Note: these should be fallible (#4456)
 trait DateOp: ArrowTemporalType {
-    fn add_year_month(timestamp: Self::Native, delta: i32) -> Self::Native;
-    fn add_day_time(timestamp: Self::Native, delta: IntervalDayTime) -> Self::Native;
-    fn add_month_day_nano(timestamp: Self::Native, delta: IntervalMonthDayNano) -> Self::Native;
+    fn add_year_month(timestamp: Self::Native, delta: i32) -> Result<Self::Native, ArrowError>;
+    fn add_day_time(
+        timestamp: Self::Native,
+        delta: IntervalDayTime,
+    ) -> Result<Self::Native, ArrowError>;
+    fn add_month_day_nano(
+        timestamp: Self::Native,
+        delta: IntervalMonthDayNano,
+    ) -> Result<Self::Native, ArrowError>;
 
-    fn sub_year_month(timestamp: Self::Native, delta: i32) -> Self::Native;
-    fn sub_day_time(timestamp: Self::Native, delta: IntervalDayTime) -> Self::Native;
-    fn sub_month_day_nano(timestamp: Self::Native, delta: IntervalMonthDayNano) -> Self::Native;
+    fn sub_year_month(timestamp: Self::Native, delta: i32) -> Result<Self::Native, ArrowError>;
+    fn sub_day_time(
+        timestamp: Self::Native,
+        delta: IntervalDayTime,
+    ) -> Result<Self::Native, ArrowError>;
+    fn sub_month_day_nano(
+        timestamp: Self::Native,
+        delta: IntervalMonthDayNano,
+    ) -> Result<Self::Native, ArrowError>;
 }
 
 macro_rules! date {
     ($t:ty) => {
         impl DateOp for $t {
-            fn add_year_month(left: Self::Native, right: i32) -> Self::Native {
-                Self::add_year_months(left, right)
+            fn add_year_month(left: Self::Native, right: i32) -> Result<Self::Native, ArrowError> {
+                Self::add_year_months_opt(left, right).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Date arithmetic overflow: {left} + {right} months"
+                    ))
+                })
             }
 
-            fn add_day_time(left: Self::Native, right: IntervalDayTime) -> Self::Native {
-                Self::add_day_time(left, right)
+            fn add_day_time(
+                left: Self::Native,
+                right: IntervalDayTime,
+            ) -> Result<Self::Native, ArrowError> {
+                Self::add_day_time_opt(left, right).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Date arithmetic overflow: {left} + {right:?}"
+                    ))
+                })
             }
 
-            fn add_month_day_nano(left: Self::Native, right: IntervalMonthDayNano) -> Self::Native {
-                Self::add_month_day_nano(left, right)
+            fn add_month_day_nano(
+                left: Self::Native,
+                right: IntervalMonthDayNano,
+            ) -> Result<Self::Native, ArrowError> {
+                Self::add_month_day_nano_opt(left, right).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Date arithmetic overflow: {left} + {right:?}"
+                    ))
+                })
             }
 
-            fn sub_year_month(left: Self::Native, right: i32) -> Self::Native {
-                Self::subtract_year_months(left, right)
+            fn sub_year_month(left: Self::Native, right: i32) -> Result<Self::Native, ArrowError> {
+                Self::subtract_year_months_opt(left, right).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Date arithmetic overflow: {left} - {right} months"
+                    ))
+                })
             }
 
-            fn sub_day_time(left: Self::Native, right: IntervalDayTime) -> Self::Native {
-                Self::subtract_day_time(left, right)
+            fn sub_day_time(
+                left: Self::Native,
+                right: IntervalDayTime,
+            ) -> Result<Self::Native, ArrowError> {
+                Self::subtract_day_time_opt(left, right).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Date arithmetic overflow: {left} - {right:?}"
+                    ))
+                })
             }
 
-            fn sub_month_day_nano(left: Self::Native, right: IntervalMonthDayNano) -> Self::Native {
-                Self::subtract_month_day_nano(left, right)
+            fn sub_month_day_nano(
+                left: Self::Native,
+                right: IntervalMonthDayNano,
+            ) -> Result<Self::Native, ArrowError> {
+                Self::subtract_month_day_nano_opt(left, right).ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "Date arithmetic overflow: {left} - {right:?}"
+                    ))
+                })
             }
         }
     };
 }
+
 date!(Date32Type);
 date!(Date64Type);
 
@@ -681,29 +752,29 @@ fn date_op<T: DateOp>(
     match (op, r_t) {
         (Op::Add | Op::AddWrapping, Interval(YearMonth)) => {
             let r = r.as_primitive::<IntervalYearMonthType>();
-            Ok(op_ref!(T, l, l_s, r, r_s, T::add_year_month(l, r)))
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::add_year_month(l, r)))
         }
         (Op::Sub | Op::SubWrapping, Interval(YearMonth)) => {
             let r = r.as_primitive::<IntervalYearMonthType>();
-            Ok(op_ref!(T, l, l_s, r, r_s, T::sub_year_month(l, r)))
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::sub_year_month(l, r)))
         }
 
         (Op::Add | Op::AddWrapping, Interval(DayTime)) => {
             let r = r.as_primitive::<IntervalDayTimeType>();
-            Ok(op_ref!(T, l, l_s, r, r_s, T::add_day_time(l, r)))
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::add_day_time(l, r)))
         }
         (Op::Sub | Op::SubWrapping, Interval(DayTime)) => {
             let r = r.as_primitive::<IntervalDayTimeType>();
-            Ok(op_ref!(T, l, l_s, r, r_s, T::sub_day_time(l, r)))
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::sub_day_time(l, r)))
         }
 
         (Op::Add | Op::AddWrapping, Interval(MonthDayNano)) => {
             let r = r.as_primitive::<IntervalMonthDayNanoType>();
-            Ok(op_ref!(T, l, l_s, r, r_s, T::add_month_day_nano(l, r)))
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::add_month_day_nano(l, r)))
         }
         (Op::Sub | Op::SubWrapping, Interval(MonthDayNano)) => {
             let r = r.as_primitive::<IntervalMonthDayNanoType>();
-            Ok(op_ref!(T, l, l_s, r, r_s, T::sub_month_day_nano(l, r)))
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::sub_month_day_nano(l, r)))
         }
 
         _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -726,6 +797,8 @@ fn decimal_op<T: DecimalType>(
     let r = r.as_primitive::<T>();
 
     let (p1, s1, p2, s2) = match (l.data_type(), r.data_type()) {
+        (DataType::Decimal32(p1, s1), DataType::Decimal32(p2, s2)) => (p1, s1, p2, s2),
+        (DataType::Decimal64(p1, s1), DataType::Decimal64(p2, s2)) => (p1, s1, p2, s2),
         (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => (p1, s1, p2, s2),
         (DataType::Decimal256(p1, s1), DataType::Decimal256(p2, s2)) => (p1, s1, p2, s2),
         _ => unreachable!(),
@@ -848,8 +921,26 @@ fn decimal_op<T: DecimalType>(
 mod tests {
     use super::*;
     use arrow_array::temporal_conversions::{as_date, as_datetime};
-    use arrow_buffer::{i256, ScalarBuffer};
+    use arrow_buffer::{ScalarBuffer, i256};
     use chrono::{DateTime, NaiveDate};
+
+    // The valid date range of NaiveDate is from January 1, -262143 to December 31, 262142 (Gregorian calendar).
+    const MAX_VALID_DATE: NaiveDate = NaiveDate::from_ymd_opt(262142, 12, 31).unwrap();
+    const MIN_VALID_DATE: NaiveDate = NaiveDate::from_ymd_opt(-262143, 1, 1).unwrap();
+    const MAX_VALID_MILLIS: i64 = date_to_millis(MAX_VALID_DATE);
+    const MIN_VALID_MILLIS: i64 = date_to_millis(MIN_VALID_DATE);
+    const MAX_VALID_DAYS: i32 = date_to_days(MAX_VALID_DATE);
+    const MIN_VALID_DAYS: i32 = date_to_days(MIN_VALID_DATE);
+    const EPOCH: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    const YEAR_2000: NaiveDate = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+
+    const fn date_to_millis(date: NaiveDate) -> i64 {
+        date.signed_duration_since(EPOCH).num_milliseconds()
+    }
+
+    const fn date_to_days(date: NaiveDate) -> i32 {
+        date.signed_duration_since(EPOCH).num_days() as i32
+    }
 
     fn test_neg_primitive<T: ArrowPrimitiveType>(
         input: &[T::Native],
@@ -912,6 +1003,28 @@ mod tests {
         assert_eq!(
             err,
             "Arithmetic overflow: Overflow happened on: - -9223372036854775808"
+        );
+
+        let a = Decimal32Array::from(vec![1, 3, -44, 2, 4])
+            .with_precision_and_scale(9, 6)
+            .unwrap();
+
+        let r = neg(&a).unwrap();
+        assert_eq!(r.data_type(), a.data_type());
+        assert_eq!(
+            r.as_primitive::<Decimal32Type>().values(),
+            &[-1, -3, 44, -2, -4]
+        );
+
+        let a = Decimal64Array::from(vec![1, 3, -44, 2, 4])
+            .with_precision_and_scale(9, 6)
+            .unwrap();
+
+        let r = neg(&a).unwrap();
+        assert_eq!(r.data_type(), a.data_type());
+        assert_eq!(
+            r.as_primitive::<Decimal64Type>().values(),
+            &[-1, -3, 44, -2, -4]
         );
 
         let a = Decimal128Array::from(vec![1, 3, -44, 2, 4])
@@ -1042,6 +1155,11 @@ mod tests {
             "Arithmetic overflow: Overflow happened on: -32768 / -1"
         );
 
+        let a = Int16Array::from(vec![i16::MIN]);
+        let b = Int16Array::from(vec![-1]);
+        let result = rem(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &Int16Array::from(vec![0]));
+
         let a = Int16Array::from(vec![21]);
         let b = Int16Array::from(vec![0]);
         let err = div(&a, &b).unwrap_err().to_string();
@@ -1143,7 +1261,10 @@ mod tests {
             .with_precision_and_scale(37, 37)
             .unwrap();
         let err = mul(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Output scale of Decimal128(3, 3) * Decimal128(37, 37) would exceed max scale of 38");
+        assert_eq!(
+            err,
+            "Invalid argument error: Output scale of Decimal128(3, 3) * Decimal128(37, 37) would exceed max scale of 38"
+        );
 
         let a = Decimal128Array::from(vec![1])
             .with_precision_and_scale(3, -2)
@@ -1199,7 +1320,10 @@ mod tests {
             "1960-01-30T04:23:20Z",
         ]
         .into_iter()
-        .map(|x| T::make_value(DateTime::parse_from_rfc3339(x).unwrap().naive_utc()).unwrap())
+        .map(|x| {
+            T::from_naive_datetime(DateTime::parse_from_rfc3339(x).unwrap().naive_utc(), None)
+                .unwrap()
+        })
         .collect();
 
         let a = PrimitiveArray::<T>::new(values, None);
@@ -1519,5 +1643,349 @@ mod tests {
             err,
             "Arithmetic overflow: Overflow happened on: 9223372036854775807 - -1"
         );
+    }
+
+    #[test]
+    fn test_date32_to_naive_date_opt_boundaries() {
+        assert_eq!(MAX_VALID_DAYS, 95026236);
+        assert_eq!(MIN_VALID_DAYS, -96465292);
+
+        // Valid boundary dates work
+        assert!(Date32Type::to_naive_date_opt(MAX_VALID_DAYS).is_some());
+        assert!(Date32Type::to_naive_date_opt(MIN_VALID_DAYS).is_some());
+
+        // Beyond boundaries fail
+        assert!(Date32Type::to_naive_date_opt(MAX_VALID_DAYS + 1).is_none());
+        assert!(Date32Type::to_naive_date_opt(MIN_VALID_DAYS - 1).is_none());
+
+        // Extreme values fail
+        assert!(Date32Type::to_naive_date_opt(i32::MAX).is_none());
+        assert!(Date32Type::to_naive_date_opt(i32::MIN).is_none());
+
+        // Common values work
+        assert!(Date32Type::to_naive_date_opt(0).is_some());
+        assert!(Date32Type::to_naive_date_opt(date_to_days(YEAR_2000)).is_some());
+    }
+
+    #[test]
+    fn test_date64_to_naive_date_opt_boundaries() {
+        const MS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
+
+        // Verify boundary millisecond values
+        assert_eq!(MAX_VALID_MILLIS, 8210266790400000i64);
+        assert_eq!(MIN_VALID_MILLIS, -8334601228800000i64);
+
+        // Valid boundary dates work
+        assert!(Date64Type::to_naive_date_opt(MAX_VALID_MILLIS).is_some());
+        assert!(Date64Type::to_naive_date_opt(MIN_VALID_MILLIS).is_some());
+
+        // Beyond boundaries fail
+        assert!(Date64Type::to_naive_date_opt(MAX_VALID_MILLIS + MS_PER_DAY).is_none());
+        assert!(Date64Type::to_naive_date_opt(MIN_VALID_MILLIS - MS_PER_DAY).is_none());
+
+        // Extreme values fail
+        assert!(Date64Type::to_naive_date_opt(i64::MAX).is_none());
+        assert!(Date64Type::to_naive_date_opt(i64::MIN).is_none());
+
+        // Common values work
+        assert!(Date64Type::to_naive_date_opt(0).is_some());
+        assert!(Date64Type::to_naive_date_opt(date_to_millis(YEAR_2000)).is_some());
+    }
+
+    macro_rules! test_year_month_ops {
+        ($type:ty, $date_fn:expr) => {{
+            let date = $date_fn(YEAR_2000);
+
+            // Normal operations succeed
+            assert!(
+                <$type>::add_year_months_opt(date, 120).is_some(),
+                "add_year_months: normal add"
+            );
+            assert!(
+                <$type>::add_year_months_opt(date, 0).is_some(),
+                "add_year_months: zero interval"
+            );
+            assert!(
+                <$type>::subtract_year_months_opt(date, 120).is_some(),
+                "subtract_year_months: normal subtract"
+            );
+            assert!(
+                <$type>::subtract_year_months_opt(date, 0).is_some(),
+                "subtract_year_months: zero interval"
+            );
+
+            // Large but valid years work
+            let large_year = $date_fn(NaiveDate::from_ymd_opt(5000, 1, 1).unwrap());
+            let neg_year = $date_fn(NaiveDate::from_ymd_opt(-5000, 12, 31).unwrap());
+            assert!(
+                <$type>::add_year_months_opt(large_year, 12).is_some(),
+                "add_year_months: large year"
+            );
+            assert!(
+                <$type>::add_year_months_opt(neg_year, -12).is_some(),
+                "add_year_months: negative year"
+            );
+            assert!(
+                <$type>::subtract_year_months_opt(large_year, 12).is_some(),
+                "subtract_year_months: large year"
+            );
+            assert!(
+                <$type>::subtract_year_months_opt(neg_year, -12).is_some(),
+                "subtract_year_months: negative year"
+            );
+
+            // Overflow handling
+            assert!(
+                <$type>::subtract_year_months_opt($date_fn(MIN_VALID_DATE), 1).is_none(),
+                "subtract_year_months: overflow days from min"
+            );
+            assert!(
+                <$type>::subtract_year_months_opt($date_fn(MAX_VALID_DATE), -1).is_none(),
+                "subtract_year_months: overflow neg days from max"
+            );
+            assert!(
+                <$type>::add_year_months_opt($date_fn(MAX_VALID_DATE), 1).is_none(),
+                "add_year_months: overflow days"
+            );
+            assert!(
+                <$type>::add_year_months_opt($date_fn(MIN_VALID_DATE), -1).is_none(),
+                "add_year_months: overflow neg days"
+            );
+        }};
+    }
+
+    #[test]
+    fn test_date_year_month_operations() {
+        test_year_month_ops!(Date32Type, date_to_days);
+        test_year_month_ops!(Date64Type, date_to_millis);
+    }
+
+    macro_rules! test_day_time_ops {
+        ($type:ty, $date_fn:expr) => {{
+            let date = $date_fn(YEAR_2000);
+
+            // Moderate intervals succeed
+            assert!(
+                <$type>::add_day_time_opt(date, IntervalDayTime::new(30, 0)).is_some(),
+                "add_day_time: +30 days"
+            );
+            assert!(
+                <$type>::add_day_time_opt(date, IntervalDayTime::new(-30, 0)).is_some(),
+                "add_day_time: -30 days"
+            );
+            assert!(
+                <$type>::add_day_time_opt(date, IntervalDayTime::new(1000, 12345)).is_some(),
+                "add_day_time: normal"
+            );
+            assert!(
+                <$type>::subtract_day_time_opt(date, IntervalDayTime::new(30, 0)).is_some(),
+                "subtract_day_time: +30 days"
+            );
+            assert!(
+                <$type>::subtract_day_time_opt(date, IntervalDayTime::new(-30, 0)).is_some(),
+                "subtract_day_time: -30 days"
+            );
+            assert!(
+                <$type>::subtract_day_time_opt(date, IntervalDayTime::new(1000, 12345)).is_some(),
+                "subtract_day_time: normal"
+            );
+
+            // Overflow handling - subtract
+            assert!(
+                <$type>::subtract_day_time_opt(
+                    $date_fn(MIN_VALID_DATE),
+                    IntervalDayTime::new(1, 0)
+                )
+                .is_none(),
+                "subtract_day_time: overflow days from min"
+            );
+            assert!(
+                <$type>::subtract_day_time_opt(
+                    $date_fn(MAX_VALID_DATE),
+                    IntervalDayTime::new(-1, 0)
+                )
+                .is_none(),
+                "subtract_day_time: overflow neg days from max"
+            );
+
+            // Overflow handling - add
+            assert!(
+                <$type>::add_day_time_opt($date_fn(MAX_VALID_DATE), IntervalDayTime::new(1, 0))
+                    .is_none(),
+                "add_day_time: overflow days"
+            );
+            assert!(
+                <$type>::add_day_time_opt($date_fn(MIN_VALID_DATE), IntervalDayTime::new(-1, 0))
+                    .is_none(),
+                "add_day_time: overflow neg days"
+            );
+
+            // Extreme intervals fail
+            assert!(
+                <$type>::add_day_time_opt(
+                    $date_fn(EPOCH),
+                    IntervalDayTime::new(i32::MAX, i32::MAX)
+                )
+                .is_none(),
+                "add_day_time: max interval"
+            );
+            assert!(
+                <$type>::add_day_time_opt(
+                    $date_fn(EPOCH),
+                    IntervalDayTime::new(i32::MIN, i32::MIN)
+                )
+                .is_none(),
+                "add_day_time: min interval"
+            );
+            assert!(
+                <$type>::subtract_day_time_opt(
+                    $date_fn(EPOCH),
+                    IntervalDayTime::new(i32::MAX, i32::MAX)
+                )
+                .is_none(),
+                "subtract_day_time: max interval"
+            );
+            assert!(
+                <$type>::subtract_day_time_opt(
+                    $date_fn(EPOCH),
+                    IntervalDayTime::new(i32::MIN, i32::MIN)
+                )
+                .is_none(),
+                "subtract_day_time: min interval"
+            );
+        }};
+    }
+
+    #[test]
+    fn test_date_day_time_operations() {
+        test_day_time_ops!(Date32Type, date_to_days);
+        test_day_time_ops!(Date64Type, date_to_millis);
+    }
+
+    macro_rules! test_month_day_nano_ops {
+        ($type:ty, $date_fn:expr) => {{
+            let date = $date_fn(YEAR_2000);
+            let zero = IntervalMonthDayNano::new(0, 0, 0);
+
+            // Normal operations succeed
+            assert!(
+                <$type>::add_month_day_nano_opt(date, IntervalMonthDayNano::new(1, 30, 0))
+                    .is_some(),
+                "add_month_day_nano: +1mo +30d"
+            );
+            assert!(
+                <$type>::add_month_day_nano_opt(date, IntervalMonthDayNano::new(-1, -30, 0))
+                    .is_some(),
+                "add_month_day_nano: -1mo -30d"
+            );
+            assert!(
+                <$type>::add_month_day_nano_opt(date, zero).is_some(),
+                "add_month_day_nano: zero interval"
+            );
+            assert!(
+                <$type>::add_month_day_nano_opt(
+                    date,
+                    IntervalMonthDayNano::new(2, 10, 123_456_789_000)
+                )
+                .is_some(),
+                "add_month_day_nano: normal"
+            );
+            assert!(
+                <$type>::subtract_month_day_nano_opt(date, IntervalMonthDayNano::new(1, 30, 0))
+                    .is_some(),
+                "subtract_month_day_nano: +1mo +30d"
+            );
+            assert!(
+                <$type>::subtract_month_day_nano_opt(date, IntervalMonthDayNano::new(-1, -30, 0))
+                    .is_some(),
+                "subtract_month_day_nano: -1mo -30d"
+            );
+            assert!(
+                <$type>::subtract_month_day_nano_opt(date, zero).is_some(),
+                "subtract_month_day_nano: zero interval"
+            );
+            assert!(
+                <$type>::subtract_month_day_nano_opt(
+                    date,
+                    IntervalMonthDayNano::new(2, 10, 123_456_789_000)
+                )
+                .is_some(),
+                "subtract_month_day_nano: normal"
+            );
+
+            // Overflow handling - subtract
+            assert!(
+                <$type>::subtract_month_day_nano_opt(
+                    $date_fn(MIN_VALID_DATE),
+                    IntervalMonthDayNano::new(0, 1, 0)
+                )
+                .is_none(),
+                "subtract_month_day_nano: overflow days from min"
+            );
+            assert!(
+                <$type>::subtract_month_day_nano_opt(
+                    $date_fn(MAX_VALID_DATE),
+                    IntervalMonthDayNano::new(0, -1, 0)
+                )
+                .is_none(),
+                "subtract_month_day_nano: overflow neg days from max"
+            );
+
+            // Overflow handling - add
+            assert!(
+                <$type>::add_month_day_nano_opt(
+                    $date_fn(MAX_VALID_DATE),
+                    IntervalMonthDayNano::new(0, 1, 0)
+                )
+                .is_none(),
+                "add_month_day_nano: overflow days"
+            );
+            assert!(
+                <$type>::add_month_day_nano_opt(
+                    $date_fn(MIN_VALID_DATE),
+                    IntervalMonthDayNano::new(0, -1, 0)
+                )
+                .is_none(),
+                "add_month_day_nano: overflow neg days"
+            );
+
+            // Nanosecond precision works
+            assert!(
+                <$type>::add_month_day_nano_opt(date, IntervalMonthDayNano::new(0, 0, 999_999_999))
+                    .is_some(),
+                "add_month_day_nano: nanos"
+            );
+            assert!(
+                <$type>::subtract_month_day_nano_opt(
+                    date,
+                    IntervalMonthDayNano::new(0, 0, 999_999_999)
+                )
+                .is_some(),
+                "subtract_month_day_nano: nanos"
+            );
+            // 1 day in nanos
+            assert!(
+                <$type>::add_month_day_nano_opt(
+                    date,
+                    IntervalMonthDayNano::new(0, 0, 86_400_000_000_000)
+                )
+                .is_some(),
+                "add_month_day_nano: 1 day nanos"
+            );
+            assert!(
+                <$type>::subtract_month_day_nano_opt(
+                    date,
+                    IntervalMonthDayNano::new(0, 0, 86_400_000_000_000)
+                )
+                .is_some(),
+                "subtract_month_day_nano: 1 day nanos"
+            );
+        }};
+    }
+
+    #[test]
+    fn test_date_month_day_nano_operations() {
+        test_month_day_nano_ops!(Date32Type, date_to_days);
+        test_month_day_nano_ops!(Date64Type, date_to_millis);
     }
 }
