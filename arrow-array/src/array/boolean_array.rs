@@ -240,7 +240,8 @@ impl BooleanArray {
                 let (prefix_fill, suffix_fill) = match (bit_chunks.prefix(), bit_chunks.suffix()) {
                     (Some(_), Some(_)) => (!lead_mask, !trail_mask),
                     (Some(_), None) => (!lead_mask | !trail_mask, 0),
-                    _ => (0, 0),
+                    (None, Some(_)) => (0, !trail_mask),
+                    (None, None) => (0, 0),
                 };
                 bit_chunks
                     .prefix()
@@ -981,6 +982,13 @@ mod tests {
     fn test_has_true_has_false_all_null() {
         let arr = BooleanArray::new_null(5);
         assert!(!arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_aligned_suffix_all_true() {
+        let arr = BooleanArray::from(vec![true; 129]);
+        assert!(arr.has_true());
         assert!(!arr.has_false());
     }
 
