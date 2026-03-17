@@ -67,6 +67,27 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, N
 /// Note that the bits marked `?` are not logically part of the mask and may
 /// contain either `0` or `1`
 ///
+/// # Bitwise Operations
+///
+/// `BooleanBuffer` implements the standard bitwise traits for creating a new
+/// buffer ([`BitAnd`], [`BitOr`], [`BitXor`], [`Not`]) as well as the assign variants
+/// for updating an existing buffer in place when possible ([`BitAndAssign`],
+/// [`BitOrAssign`], [`BitXorAssign`]).
+///
+/// ```
+/// # use arrow_buffer::BooleanBuffer;
+/// let mut left = BooleanBuffer::from(&[true, false, true, true] as &[bool]);
+/// let right = BooleanBuffer::from(&[true, true, false, true] as &[bool]);
+///
+/// // Create a new buffer by applying bitwise AND
+/// let anded = &left & &right;
+/// assert_eq!(anded, BooleanBuffer::from(&[true, false, false, true] as &[bool]));
+///
+/// // Update `left` in place by applying bitwise AND in place
+/// left &= &right;
+/// assert_eq!(left, BooleanBuffer::from(&[true, false, false, true] as &[bool]));
+/// ```
+///
 /// # See Also
 /// * [`BooleanBufferBuilder`] for building [`BooleanBuffer`] instances
 /// * [`NullBuffer`] for representing null values in Arrow arrays
@@ -788,6 +809,23 @@ mod tests {
 
         let expected = BooleanBuffer::new(Buffer::from(&[0, 0, 0, 1, 0]), offset, len);
         assert_eq!(boolean_buf1 ^ boolean_buf2, expected);
+    }
+
+    #[test]
+    fn test_boolean_bitand_assign_shared_and_unshared() {
+        let rhs = BooleanBuffer::from(&[true, true, false, true, false, true][..]);
+        let original = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+
+        let mut unshared = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+        unshared &= &rhs;
+
+        let mut shared = original.clone();
+        let _shared_owner = shared.clone();
+        shared &= &rhs;
+
+        let expected = &original & &rhs;
+        assert_eq!(unshared, expected);
+        assert_eq!(shared, expected);
     }
 
     #[test]
