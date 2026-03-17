@@ -23,7 +23,7 @@ use crate::{
     buffer_bin_xor,
 };
 
-use std::ops::{BitAnd, BitOr, BitXor, Not};
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 ///
@@ -497,6 +497,41 @@ impl BooleanBuffer {
         self.buffer.claim(pool);
     }
 
+    /// Apply a bitwise binary operation in-place, avoiding allocation if the
+    /// underlying buffer is not shared.
+    fn bitwise_bin_op_assign<F>(&mut self, rhs: &BooleanBuffer, op: F)
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        assert_eq!(self.bit_len, rhs.bit_len);
+        // Try to mutate in place if the buffer is uniquely owned
+        let buffer = std::mem::take(&mut self.buffer);
+        match buffer.into_mutable() {
+            Ok(mut buf) => {
+                bit_util::apply_bitwise_binary_op(
+                    &mut buf,
+                    self.bit_offset,
+                    &rhs.buffer,
+                    rhs.bit_offset,
+                    self.bit_len,
+                    op,
+                );
+                self.buffer = buf.into();
+            }
+            Err(buf) => {
+                self.buffer = buf;
+                *self = BooleanBuffer::from_bitwise_binary_op(
+                    self.values(),
+                    self.bit_offset,
+                    rhs.values(),
+                    rhs.bit_offset,
+                    self.bit_len,
+                    op,
+                );
+            }
+        }
+    }
+
     /// Returns an iterator over the bits in this [`BooleanBuffer`]
     pub fn iter(&self) -> BitIterator<'_> {
         self.into_iter()
@@ -580,6 +615,24 @@ impl BitXor<&BooleanBuffer> for &BooleanBuffer {
             bit_offset: 0,
             bit_len: self.bit_len,
         }
+    }
+}
+
+impl BitAndAssign<&BooleanBuffer> for BooleanBuffer {
+    fn bitand_assign(&mut self, rhs: &BooleanBuffer) {
+        self.bitwise_bin_op_assign(rhs, |a, b| a & b);
+    }
+}
+
+impl BitOrAssign<&BooleanBuffer> for BooleanBuffer {
+    fn bitor_assign(&mut self, rhs: &BooleanBuffer) {
+        self.bitwise_bin_op_assign(rhs, |a, b| a | b);
+    }
+}
+
+impl BitXorAssign<&BooleanBuffer> for BooleanBuffer {
+    fn bitxor_assign(&mut self, rhs: &BooleanBuffer) {
+        self.bitwise_bin_op_assign(rhs, |a, b| a ^ b);
     }
 }
 
