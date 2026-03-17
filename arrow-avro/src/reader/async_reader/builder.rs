@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::codec::AvroFieldBuilder;
+use crate::codec::{AvroFieldBuilder, Tz};
 use crate::errors::AvroError;
 use crate::reader::async_reader::ReaderState;
 use crate::reader::header::{Header, HeaderDecoder};
@@ -38,6 +38,7 @@ pub struct ReaderBuilder<R> {
     header_size_hint: Option<u64>,
     utf8_view: bool,
     strict_mode: bool,
+    tz: Tz,
 }
 
 impl<R> ReaderBuilder<R> {
@@ -52,6 +53,7 @@ impl<R> ReaderBuilder<R> {
             header_size_hint: None,
             utf8_view: false,
             strict_mode: false,
+            tz: Default::default(),
         }
     }
 
@@ -106,6 +108,14 @@ impl<R> ReaderBuilder<R> {
             strict_mode,
             ..self
         }
+    }
+
+    /// Sets the timezone representation for Avro timestamp fields.
+    ///
+    /// The default is `Tz::OffsetZero`, meaning the "+00:00" time zone ID.
+    pub fn with_tz(mut self, tz: Tz) -> Self {
+        self.tz = tz;
+        self
     }
 }
 
@@ -208,6 +218,7 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
             builder
                 .with_utf8view(self.utf8_view)
                 .with_strict_mode(self.strict_mode)
+                .with_tz(self.tz)
                 .build()
         }?;
 
