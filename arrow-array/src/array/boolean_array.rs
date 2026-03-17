@@ -1017,4 +1017,46 @@ mod tests {
         assert!(arr.has_true());
         assert!(!arr.has_false());
     }
+
+    #[test]
+    fn test_has_true_has_false_unaligned_slices() {
+        let cases = [
+            (1, 129, true, false),
+            (3, 130, true, false),
+            (5, 65, true, false),
+            (7, 64, true, false),
+        ];
+
+        let base = BooleanArray::from(vec![true; 300]);
+
+        for (offset, len, expected_has_true, expected_has_false) in cases {
+            let arr = base.slice(offset, len);
+            assert_eq!(
+                arr.has_true(),
+                expected_has_true,
+                "offset={offset} len={len}"
+            );
+            assert_eq!(
+                arr.has_false(),
+                expected_has_false,
+                "offset={offset} len={len}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_has_true_has_false_exact_multiples_of_64() {
+        let cases = [
+            (64, true, false),
+            (128, true, false),
+            (192, true, false),
+            (256, true, false),
+        ];
+
+        for (len, expected_has_true, expected_has_false) in cases {
+            let arr = BooleanArray::from(vec![true; len]);
+            assert_eq!(arr.has_true(), expected_has_true, "len={len}");
+            assert_eq!(arr.has_false(), expected_has_false, "len={len}");
+        }
+    }
 }
