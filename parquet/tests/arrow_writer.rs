@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tests that the ArrowWriter correctly lays out values into multiple pages
+//! Tests for [`ArrowWriter`]
 
 use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field, Schema};
