@@ -27,6 +27,7 @@
 
 - Reuse compression dict lz4\_block [\#9566](https://github.com/apache/arrow-rs/issues/9566)
 - \[Variant\] Add `shred_variant` support for `LargeUtf8` and `LargeBinary` types [\#9525](https://github.com/apache/arrow-rs/issues/9525)
+- \[Variant\] `variant_get` tests clean up [\#9517](https://github.com/apache/arrow-rs/issues/9517)
 - parquet\_variant: Support LargeUtf8 typed value in `unshred_variant` [\#9513](https://github.com/apache/arrow-rs/issues/9513)
 - parquet-variant: Support string view typed value in `unshred_variant` [\#9512](https://github.com/apache/arrow-rs/issues/9512)
 - Deprecate ArrowTimestampType::make\_value in favor of from\_naive\_datetime [\#9490](https://github.com/apache/arrow-rs/issues/9490) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
@@ -43,6 +44,7 @@
 
 - MutableArrayData::extend does not copy child values for ListView arrays [\#9561](https://github.com/apache/arrow-rs/issues/9561) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - ListView interleave bug [\#9559](https://github.com/apache/arrow-rs/issues/9559) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Flight encoding panics with "no dict id for field" with nested dict arrays [\#9555](https://github.com/apache/arrow-rs/issues/9555) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - "DeltaBitPackDecoder only supports Int32Type and Int64Type" but unsigned types are supported too [\#9551](https://github.com/apache/arrow-rs/issues/9551) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - handle Null type in try\_merge for Struct, List, LargeList, and Union [\#9523](https://github.com/apache/arrow-rs/issues/9523) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - debug\_assert\_eq! in BatchCoalescer panics in debug mode when batch\_size \< 4 [\#9506](https://github.com/apache/arrow-rs/issues/9506) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
@@ -57,6 +59,7 @@
 **Performance improvements:**
 
 - Introduce `NullBuffer::try_from_unsliced` to simplify array construction [\#9385](https://github.com/apache/arrow-rs/issues/9385) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Use chunks\_exact for has\_true/has\_false to enable compiler unrolling [\#9570](https://github.com/apache/arrow-rs/pull/9570) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([adriangb](https://github.com/adriangb))
 
 **Closed issues:**
 
@@ -66,10 +69,11 @@
 
 **Merged pull requests:**
 
-- Use chunks\_exact for has\_true/has\_false to enable compiler unrolling [\#9570](https://github.com/apache/arrow-rs/pull/9570) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([adriangb](https://github.com/adriangb))
 - Add mutable operations to BooleanBuffer \(Bit\*Assign\) [\#9567](https://github.com/apache/arrow-rs/pull/9567) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
 - chore\(deps\): update lz4\_flex requirement from 0.12 to 0.13 [\#9565](https://github.com/apache/arrow-rs/pull/9565) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([dependabot[bot]](https://github.com/apps/dependabot))
 - arrow-select: fix MutableArrayData interleave for ListView [\#9560](https://github.com/apache/arrow-rs/pull/9560) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([asubiotto](https://github.com/asubiotto))
+- Move `ValueIter` into own module, and add public `record_count` function [\#9557](https://github.com/apache/arrow-rs/pull/9557) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Rafferty97](https://github.com/Rafferty97))
+- arrow-flight: generate dict\_ids for dicts nested inside complex types [\#9556](https://github.com/apache/arrow-rs/pull/9556) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([asubiotto](https://github.com/asubiotto))
 - add `shred_variant` support for `LargeUtf8` and `LargeBinary` [\#9554](https://github.com/apache/arrow-rs/pull/9554) ([sdf-jkl](https://github.com/sdf-jkl))
 - \[minor\] Download clickbench file when missing [\#9553](https://github.com/apache/arrow-rs/pull/9553) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Dandandan](https://github.com/Dandandan))
 - DeltaBitPackEncoderConversion: Fix panic message on invalid type [\#9552](https://github.com/apache/arrow-rs/pull/9552) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([progval](https://github.com/progval))
@@ -79,10 +83,12 @@
 - Add benchmark for `infer_json_schema` [\#9546](https://github.com/apache/arrow-rs/pull/9546) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Rafferty97](https://github.com/Rafferty97))
 - chore\(deps\): bump black from 24.3.0 to 26.3.1 in /parquet/pytest [\#9545](https://github.com/apache/arrow-rs/pull/9545) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([dependabot[bot]](https://github.com/apps/dependabot))
 - Unroll interleave -25-30% [\#9542](https://github.com/apache/arrow-rs/pull/9542) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
+- Optimize `take_fixed_size_binary` For Predefined Value Lengths [\#9535](https://github.com/apache/arrow-rs/pull/9535) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tobixdev](https://github.com/tobixdev))
 - feat: expose arrow schema on async avro reader [\#9534](https://github.com/apache/arrow-rs/pull/9534) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mzabaluev](https://github.com/mzabaluev))
 - Make with\_file\_decryption\_properties pub instead of pub\(crate\) [\#9532](https://github.com/apache/arrow-rs/pull/9532) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Dandandan](https://github.com/Dandandan))
 - fix: handle Null type in try\_merge for Struct, List, LargeList, and Union [\#9524](https://github.com/apache/arrow-rs/pull/9524) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([zhuqi-lucas](https://github.com/zhuqi-lucas))
 - chore: extend record\_batch macro to support variables and expressions [\#9522](https://github.com/apache/arrow-rs/pull/9522) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([buraksenn](https://github.com/buraksenn))
+- \[Variant\] clean up `variant_get` tests [\#9518](https://github.com/apache/arrow-rs/pull/9518) ([sdf-jkl](https://github.com/sdf-jkl))
 - support large string for unshred variant [\#9515](https://github.com/apache/arrow-rs/pull/9515) ([friendlymatthew](https://github.com/friendlymatthew))
 - support string view unshred variant [\#9514](https://github.com/apache/arrow-rs/pull/9514) ([friendlymatthew](https://github.com/friendlymatthew))
 - Add has\_true\(\) and has\_false\(\) to BooleanArray [\#9511](https://github.com/apache/arrow-rs/pull/9511) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([adriangb](https://github.com/adriangb))
@@ -105,6 +111,7 @@
 - refactor: simplify iterator using cloned\(\).map\(Some\) [\#9449](https://github.com/apache/arrow-rs/pull/9449) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([SYaoJun](https://github.com/SYaoJun))
 - docs: fix markdown link syntax in README [\#9440](https://github.com/apache/arrow-rs/pull/9440) ([SYaoJun](https://github.com/SYaoJun))
 - Move `ListLikeArray` to arrow-array to be shared with json writer and parquet unshredding [\#9437](https://github.com/apache/arrow-rs/pull/9437) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([liamzwbao](https://github.com/liamzwbao))
+- Add `claim` method to recordbatch for memory accounting [\#9433](https://github.com/apache/arrow-rs/pull/9433) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([cetra3](https://github.com/cetra3))
 - Add `append_nulls` to `MapBuilder` [\#9432](https://github.com/apache/arrow-rs/pull/9432) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Fokko](https://github.com/Fokko))
 - Add `append_non_nulls` to `StructBuilder` [\#9430](https://github.com/apache/arrow-rs/pull/9430) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Fokko](https://github.com/Fokko))
 - Add `append_value_n` to GenericByteBuilder [\#9426](https://github.com/apache/arrow-rs/pull/9426) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Fokko](https://github.com/Fokko))
