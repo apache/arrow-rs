@@ -156,10 +156,6 @@ impl HeaderInfo {
         Self(Arc::new(HeaderInfoInner { header, header_len }))
     }
 
-    pub(crate) fn header(&self) -> &Header {
-        &self.0.header
-    }
-
     /// Returns the writer schema for this file.
     pub fn writer_schema(&self) -> Result<AvroSchema, AvroError> {
         let raw = self.0.header.get(SCHEMA_METADATA_KEY).ok_or_else(|| {

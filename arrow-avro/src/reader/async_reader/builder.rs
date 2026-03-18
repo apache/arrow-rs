@@ -21,7 +21,7 @@ use crate::reader::async_reader::ReaderState;
 use crate::reader::header::{Header, HeaderDecoder, HeaderInfo};
 use crate::reader::record::RecordDecoder;
 use crate::reader::{AsyncAvroFileReader, AsyncFileReader, Decoder};
-use crate::schema::{AvroSchema, FingerprintAlgorithm, SCHEMA_METADATA_KEY};
+use crate::schema::{AvroSchema, FingerprintAlgorithm};
 use indexmap::IndexMap;
 use std::ops::Range;
 
@@ -183,9 +183,10 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
 
         // Start by reading the header from the beginning of the avro file
         // take the writer schema from the header
-        let (header, header_len) =
-            read_header(&mut self.reader, self.file_size, self.header_size_hint).await?;
-        self.build_internal(&header, header_len)
+        let header_info =
+            read_header_info(&mut self.reader, self.file_size, self.header_size_hint).await?;
+
+        self.build_with_header(header_info)
     }
 
     /// Build the asynchronous Avro reader with the provided header.
@@ -199,25 +200,7 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
         self,
         header_info: HeaderInfo,
     ) -> Result<AsyncAvroFileReader<R>, AvroError> {
-        self.build_internal(header_info.header(), header_info.header_len())
-    }
-
-    fn build_internal(
-        self,
-        header: &Header,
-        header_len: u64,
-    ) -> Result<AsyncAvroFileReader<R>, AvroError> {
-        let writer_schema = {
-            let raw = header.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
-                AvroError::ParseError("No Avro schema present in file header".to_string())
-            })?;
-            let json_string = std::str::from_utf8(raw)
-                .map_err(|e| {
-                    AvroError::ParseError(format!("Invalid UTF-8 in Avro schema header: {e}"))
-                })?
-                .to_string();
-            AvroSchema::new(json_string)
-        };
+        let writer_schema = header_info.writer_schema()?;
 
         // If projection exists, project the reader schema,
         // if no reader schema is provided, parse it from the header(get the raw writer schema), and project that
@@ -263,6 +246,7 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
             IndexMap::new(),
             FingerprintAlgorithm::Rabin,
         );
+        let header_len = header_info.header_len();
         let range = match self.range {
             Some(r) => {
                 // If this PartitionedFile's range starts at 0, we need to skip the header bytes.
@@ -285,8 +269,9 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
                 reader: self.reader,
             }
         };
-        let codec = header.compression()?;
-        let sync_marker = header.sync();
+
+        let codec = header_info.compression()?;
+        let sync_marker = header_info.sync();
 
         Ok(AsyncAvroFileReader::new(
             range,
