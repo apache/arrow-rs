@@ -52,6 +52,146 @@ fn bench_take_bounds_check(values: &dyn Array, indices: &UInt32Array) {
 }
 
 fn add_benchmark(c: &mut Criterion) {
+    let values = create_primitive_array::<Int32Type>(512, 0.0);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take i32 512", |b| b.iter(|| bench_take(&values, &indices)));
+
+    let values = create_primitive_array::<Int32Type>(1024, 0.0);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take i32 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take i32 null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_array::<Int32Type>(1024, 0.5);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take i32 null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take i32 null values null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_array::<Int32Type>(512, 0.0);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take check bounds i32 512", |b| {
+        b.iter(|| bench_take_bounds_check(&values, &indices))
+    });
+    let values = create_primitive_array::<Int32Type>(1024, 0.0);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take check bounds i32 1024", |b| {
+        b.iter(|| bench_take_bounds_check(&values, &indices))
+    });
+
+    let values = create_boolean_array(512, 0.0, 0.5);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take bool 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_boolean_array(1024, 0.0, 0.5);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take bool 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take bool null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_boolean_array(1024, 0.5, 0.5);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take bool null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_boolean_array(1024, 0.5, 0.5);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take bool null values null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_array::<i32>(512, 0.0);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take str 512", |b| b.iter(|| bench_take(&values, &indices)));
+
+    let values = create_string_array::<i32>(1024, 0.0);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take str 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_array::<i32>(512, 0.0);
+    let indices = create_random_index(512, 0.5);
+    c.bench_function("take str null indices 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_array::<i32>(1024, 0.0);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take str null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_array::<i32>(1024, 0.5);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take str null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_array::<i32>(1024, 0.5);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take str null values null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(512, 0.0);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take stringview 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(1024, 0.0);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take stringview 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(512, 0.0);
+    let indices = create_random_index(512, 0.5);
+    c.bench_function("take stringview null indices 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(1024, 0.0);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take stringview null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(1024, 0.5);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take stringview null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_string_view_array(1024, 0.5);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take stringview null values null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_run_array::<Int32Type, Int32Type>(1024, 512);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function(
+        "take primitive run logical len: 1024, physical len: 512, indices: 1024",
+        |b| b.iter(|| bench_take(&values, &indices)),
+    );
     let values = create_fsb_array(1024, 0.0, 12);
     let indices = create_random_index(1024, 0.0);
     c.bench_function("take fsb value len: 12, indices: 1024", |b| {
