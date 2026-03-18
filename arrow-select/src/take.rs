@@ -729,7 +729,6 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
         2 => take_fixed_size::<IndexType, 2>(values.values(), indices),
         4 => take_fixed_size::<IndexType, 4>(values.values(), indices),
         8 => take_fixed_size::<IndexType, 8>(values.values(), indices),
-        12 => take_fixed_size::<IndexType, 12>(values.values(), indices),
         16 => take_fixed_size::<IndexType, 16>(values.values(), indices),
         _ => take_fixed_size_binary_buffer_dynamic_length(values, indices, size_usize),
     };
