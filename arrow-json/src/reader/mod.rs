@@ -766,7 +766,9 @@ fn make_decoder(
     }
     macro_rules! timestamp_decoder {
         ($t:ty, $data_type:expr, $tz:expr) => {{
-            Ok(Box::new(TimestampArrayDecoder::<$t, _>::new(ctx, $data_type, $tz)))
+            Ok(Box::new(TimestampArrayDecoder::<$t, _>::new(
+                ctx, $data_type, $tz,
+            )))
         }};
     }
     macro_rules! decimal_decoder {
