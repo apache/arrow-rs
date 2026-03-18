@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::ArrayDecoder;
+use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 
@@ -25,9 +25,9 @@ pub struct NullArrayDecoder {
     ignore_type_conflicts: bool,
 }
 impl NullArrayDecoder {
-    pub fn new(ignore_type_conflicts: bool) -> Self {
+    pub fn new(ctx: &DecoderContext) -> Self {
         Self {
-            ignore_type_conflicts,
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
         }
     }
 }

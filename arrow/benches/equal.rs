@@ -26,9 +26,10 @@ extern crate arrow;
 
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
+use std::hint;
 
 fn bench_equal<A: Array + PartialEq<A>>(arr_a: &A) {
-    criterion::black_box(arr_a == arr_a);
+    hint::black_box(arr_a == arr_a);
 }
 
 fn add_benchmark(c: &mut Criterion) {

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::ArrayBuilder;
 use crate::{Array, ArrayRef, MapArray, StructArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::{NullBuffer, NullBufferBuilder};
@@ -56,7 +56,7 @@ use std::sync::Arc;
 /// ```
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
-    offsets_builder: BufferBuilder<i32>,
+    offsets_builder: Vec<i32>,
     null_buffer_builder: NullBufferBuilder,
     field_names: MapFieldNames,
     key_builder: K,
@@ -100,8 +100,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         value_builder: V,
         capacity: usize,
     ) -> Self {
-        let mut offsets_builder = BufferBuilder::<i32>::new(capacity + 1);
-        offsets_builder.append(0);
+        let mut offsets_builder = Vec::with_capacity(capacity + 1);
+        offsets_builder.push(0);
         Self {
             offsets_builder,
             null_buffer_builder: NullBufferBuilder::new(capacity),
@@ -154,11 +154,9 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         (&mut self.key_builder, &mut self.value_builder)
     }
 
-    /// Finish the current map array slot
-    ///
-    /// Returns an error if the key and values builders are in an inconsistent state.
+    /// Validates that key and value builders have equal lengths.
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<(), ArrowError> {
+    fn validate_equal_lengths(&self) -> Result<(), ArrowError> {
         if self.key_builder.len() != self.value_builder.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot append to a map builder when its keys and values have unequal lengths of {} and {}",
@@ -166,8 +164,29 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
                 self.value_builder.len()
             )));
         }
-        self.offsets_builder.append(self.key_builder.len() as i32);
+        Ok(())
+    }
+
+    /// Finish the current map array slot
+    ///
+    /// Returns an error if the key and values builders are in an inconsistent state.
+    #[inline]
+    pub fn append(&mut self, is_valid: bool) -> Result<(), ArrowError> {
+        self.validate_equal_lengths()?;
+        self.offsets_builder.push(self.key_builder.len() as i32);
         self.null_buffer_builder.append(is_valid);
+        Ok(())
+    }
+
+    /// Append `n` nulls to this [`MapBuilder`]
+    ///
+    /// Returns an error if the key and values builders are in an inconsistent state.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) -> Result<(), ArrowError> {
+        self.validate_equal_lengths()?;
+        let offset = self.key_builder.len() as i32;
+        self.offsets_builder.extend(std::iter::repeat_n(offset, n));
+        self.null_buffer_builder.append_n_nulls(n);
         Ok(())
     }
 
@@ -177,8 +196,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         // Build the keys
         let keys_arr = self.key_builder.finish();
         let values_arr = self.value_builder.finish();
-        let offset_buffer = self.offsets_builder.finish();
-        self.offsets_builder.append(0);
+        let offset_buffer = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
+        self.offsets_builder.push(0);
         let null_bit_buffer = self.null_buffer_builder.finish();
 
         self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
@@ -284,7 +303,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{make_builder, Int32Builder, StringBuilder};
+    use crate::builder::{Int32Builder, StringBuilder, make_builder};
     use crate::{Int32Array, StringArray};
     use std::collections::HashMap;
 
@@ -434,6 +453,42 @@ mod tests {
                 false
             )
         );
+    }
+
+    #[test]
+    fn test_append_nulls() {
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+
+        builder.keys().append_value(1);
+        builder.values().append_value(100);
+        builder.append(true).unwrap();
+
+        builder.append_nulls(3).unwrap();
+
+        builder.keys().append_value(2);
+        builder.values().append_value(200);
+        builder.append(true).unwrap();
+
+        let map = builder.finish();
+        assert_eq!(map.len(), 5);
+        assert_eq!(map.null_count(), 3);
+        assert!(map.is_valid(0));
+        assert!(map.is_null(1));
+        assert!(map.is_null(2));
+        assert!(map.is_null(3));
+        assert!(map.is_valid(4));
+        assert_eq!(map.value_offsets(), &[0, 1, 1, 1, 1, 2]);
+    }
+
+    #[test]
+    fn test_append_nulls_inconsistent_state() {
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        // Add a key without a matching value
+        builder.keys().append_value(1);
+
+        let result = builder.append_nulls(2);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unequal lengths"));
     }
 
     #[test]

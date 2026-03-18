@@ -21,8 +21,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{ready, FutureExt, Stream, StreamExt};
-use tonic::{metadata::MetadataMap, Status, Streaming};
+use futures::{FutureExt, Stream, StreamExt, ready};
+use tonic::{Status, Streaming, metadata::MetadataMap};
 
 /// Extract [`LazyTrailers`] from [`Streaming`] [tonic] response.
 ///

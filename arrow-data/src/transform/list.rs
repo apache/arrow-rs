@@ -16,14 +16,17 @@
 // under the License.
 
 use super::{
-    Extend, _MutableArrayData,
+    _MutableArrayData, Extend,
     utils::{extend_offsets, get_last_offset},
 };
 use crate::ArrayData;
 use arrow_buffer::ArrowNativeType;
-use num::{CheckedAdd, Integer};
+use num_integer::Integer;
+use num_traits::CheckedAdd;
 
-pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(array: &ArrayData) -> Extend {
+pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
+    array: &ArrayData,
+) -> Extend<'_> {
     let offsets = array.buffer::<T>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {

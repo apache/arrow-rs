@@ -17,11 +17,11 @@
 
 use crate::ArrayData;
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
-use num::traits::AsPrimitive;
-use num::{CheckedAdd, Integer};
+use num_integer::Integer;
+use num_traits::{AsPrimitive, CheckedAdd};
 
 use super::{
-    Extend, _MutableArrayData,
+    _MutableArrayData, Extend,
     utils::{extend_offsets, get_last_offset},
 };
 
@@ -41,7 +41,7 @@ fn extend_offset_values<T: ArrowNativeType + AsPrimitive<usize>>(
 
 pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>>(
     array: &ArrayData,
-) -> Extend {
+) -> Extend<'_> {
     let offsets = array.buffer::<T>(0);
     let values = array.buffers()[1].as_slice();
     Box::new(

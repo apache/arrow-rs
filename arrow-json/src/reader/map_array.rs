@@ -16,11 +16,10 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, ArrayDecoder};
-use crate::StructMode;
+use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
-use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 
@@ -34,52 +33,35 @@ pub struct MapArrayDecoder {
 
 impl MapArrayDecoder {
     pub fn new(
-        data_type: DataType,
-        coerce_primitive: bool,
-        strict_mode: bool,
-        ignore_type_conflicts: bool,
+        ctx: &DecoderContext,
+        data_type: &DataType,
         is_nullable: bool,
-        struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
-        let fields = match &data_type {
+        let fields = match data_type {
             DataType::Map(_, true) => {
                 return Err(ArrowError::NotYetImplemented(
                     "Decoding MapArray with sorted fields".to_string(),
-                ))
+                ));
             }
             DataType::Map(f, _) => match f.data_type() {
                 DataType::Struct(fields) if fields.len() == 2 => fields,
                 d => {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "MapArray must contain struct with two fields, got {d}"
-                    )))
+                    )));
                 }
             },
             _ => unreachable!(),
         };
 
-        let keys = make_decoder(
-            fields[0].data_type().clone(),
-            coerce_primitive,
-            strict_mode,
-            ignore_type_conflicts,
-            fields[0].is_nullable(),
-            struct_mode,
-        )?;
-        let values = make_decoder(
-            fields[1].data_type().clone(),
-            coerce_primitive,
-            strict_mode,
-            ignore_type_conflicts,
-            fields[1].is_nullable(),
-            struct_mode,
-        )?;
+        let keys = ctx.make_decoder(fields[0].data_type(), fields[0].is_nullable())?;
+        let values = ctx.make_decoder(fields[1].data_type(), fields[1].is_nullable())?;
 
         Ok(Self {
-            data_type,
+            data_type: data_type.clone(),
             keys,
             values,
-            ignore_type_conflicts,
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             is_nullable,
         })
     }

@@ -17,18 +17,21 @@
 
 use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 
-/// Builder for creating [`NullBuffer`]
+/// Builder for creating [`NullBuffer`]s (bitmaps indicating validity/nulls).
+///
+/// # See also
+/// * [`BooleanBufferBuilder`] for a lower-level bitmap builder.
+/// * [`Self::allocated_size`] for the current memory allocated by the builder.
 ///
 /// # Performance
 ///
-/// This builder only materializes the buffer when we append `false`.
-/// If you only append `true`s to the builder, what you get will be
-/// `None` when calling [`finish`](#method.finish).
+/// This builder only materializes the buffer when null values (`false`) are
+/// appended. If you only append non-null, (`true`) to the builder, no buffer is
+/// allocated and [`build`](#method.build) or [`finish`](#method.finish) return
+/// `None`.
 ///
 /// This optimization is **very** important for the performance as it avoids
 /// allocating memory for the null buffer when there are no nulls.
-///
-/// See [`Self::allocated_size`] to get the current memory allocated by the builder.
 ///
 /// # Example
 /// ```
@@ -144,6 +147,13 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Sets a bit in the builder at `index`
+    #[inline]
+    pub fn set_bit(&mut self, index: usize, v: bool) {
+        self.materialize_if_needed();
+        self.bitmap_builder.as_mut().unwrap().set_bit(index, v);
+    }
+
     /// Gets a bit in the buffer at `index`
     #[inline]
     pub fn is_valid(&self, index: usize) -> bool {
@@ -179,11 +189,34 @@ impl NullBufferBuilder {
         }
     }
 
-    /// Builds the null buffer and resets the builder.
-    /// Returns `None` if the builder only contains `true`s.
+    /// Append [`NullBuffer`] to this [`NullBufferBuilder`]
+    ///
+    /// This is useful when you want to concatenate two null buffers.
+    pub fn append_buffer(&mut self, buffer: &NullBuffer) {
+        if buffer.null_count() > 0 {
+            self.materialize_if_needed();
+        }
+        if let Some(buf) = self.bitmap_builder.as_mut() {
+            buf.append_buffer(buffer.inner())
+        } else {
+            self.len += buffer.len();
+        }
+    }
+
+    /// Builds the [`NullBuffer`] and resets the builder.
+    ///
+    /// Returns `None` if the builder only contains `true`s. Use [`Self::build`]
+    /// when you don't need to reuse this builder.
     pub fn finish(&mut self) -> Option<NullBuffer> {
         self.len = 0;
-        Some(NullBuffer::new(self.bitmap_builder.take()?.finish()))
+        Some(NullBuffer::new(self.bitmap_builder.take()?.build()))
+    }
+
+    /// Builds the [`NullBuffer`] without resetting the builder.
+    ///
+    /// This consumes the builder. Use [`Self::finish`] to reuse it.
+    pub fn build(self) -> Option<NullBuffer> {
+        self.bitmap_builder.map(NullBuffer::from)
     }
 
     /// Builds the [NullBuffer] without resetting the builder.
@@ -224,9 +257,7 @@ impl NullBufferBuilder {
             .map(|b| b.capacity() / 8)
             .unwrap_or(0)
     }
-}
 
-impl NullBufferBuilder {
     /// Return the number of bits in the buffer.
     pub fn len(&self) -> usize {
         self.bitmap_builder.as_ref().map_or(self.len, |b| b.len())
@@ -338,5 +369,54 @@ mod tests {
         assert_eq!(builder.len(), 2);
         builder.truncate(1);
         assert_eq!(builder.len(), 1);
+    }
+
+    #[test]
+    fn test_append_buffers() {
+        let mut builder = NullBufferBuilder::new(0);
+        let buffer1 = NullBuffer::from(&[true, true]);
+        let buffer2 = NullBuffer::from(&[true, true, false]);
+
+        builder.append_buffer(&buffer1);
+        builder.append_buffer(&buffer2);
+
+        assert_eq!(builder.as_slice().unwrap(), &[0b01111_u8]);
+    }
+
+    #[test]
+    fn test_append_buffers_with_unaligned_length() {
+        let mut builder = NullBufferBuilder::new(0);
+        let buffer = NullBuffer::from(&[true, true, false, true, false]);
+        builder.append_buffer(&buffer);
+        assert_eq!(builder.as_slice().unwrap(), &[0b01011_u8]);
+
+        let buffer = NullBuffer::from(&[false, false, true, true, true, false, false]);
+        builder.append_buffer(&buffer);
+        assert_eq!(builder.as_slice().unwrap(), &[0b10001011_u8, 0b0011_u8]);
+    }
+
+    #[test]
+    fn test_append_empty_buffer() {
+        let mut builder = NullBufferBuilder::new(0);
+        let buffer = NullBuffer::from(&[true, true, false, true]);
+        builder.append_buffer(&buffer);
+        assert_eq!(builder.as_slice().unwrap(), &[0b1011_u8]);
+
+        let buffer = NullBuffer::from(&[]);
+        builder.append_buffer(&buffer);
+
+        assert_eq!(builder.as_slice().unwrap(), &[0b1011_u8]);
+    }
+
+    #[test]
+    fn test_should_not_materialize_when_appending_all_valid_buffers() {
+        let mut builder = NullBufferBuilder::new(0);
+        let buffer = NullBuffer::from(&[true; 10]);
+        builder.append_buffer(&buffer);
+
+        let buffer = NullBuffer::from(&[true; 2]);
+        builder.append_buffer(&buffer);
+
+        assert_eq!(builder.finish(), None);
     }
 }

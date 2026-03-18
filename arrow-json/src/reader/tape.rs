@@ -18,7 +18,7 @@
 use crate::reader::serializer::TapeSerializer;
 use arrow_schema::ArrowError;
 use memchr::memchr2;
-use serde::Serialize;
+use serde_core::Serialize;
 use std::fmt::Write;
 
 /// We decode JSON to a flattened tape representation,
@@ -567,7 +567,10 @@ impl TapeDecoder {
         }
 
         if self.offsets.len() >= u32::MAX as usize {
-            return Err(ArrowError::JsonError(format!("Encountered more than {} bytes of string data, consider using a smaller batch size", u32::MAX)));
+            return Err(ArrowError::JsonError(format!(
+                "Encountered more than {} bytes of string data, consider using a smaller batch size",
+                u32::MAX
+            )));
         }
 
         if self.offsets.len() >= u32::MAX as usize {
@@ -705,9 +708,16 @@ fn err(b: u8, ctx: &str) -> ArrowError {
 
 /// Creates a character from an UTF-16 surrogate pair
 fn char_from_surrogate_pair(low: u16, high: u16) -> Result<char, ArrowError> {
-    let n = (((high - 0xD800) as u32) << 10) | ((low - 0xDC00) as u32 + 0x1_0000);
-    char::from_u32(n)
-        .ok_or_else(|| ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}")))
+    match (low, high) {
+        (0xDC00..=0xDFFF, 0xD800..=0xDBFF) => {
+            let n = (((high - 0xD800) as u32) << 10) | ((low - 0xDC00) as u32 + 0x1_0000);
+            char::from_u32(n)
+                .ok_or_else(|| ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}")))
+        }
+        _ => Err(ArrowError::JsonError(format!(
+            "Invalid UTF-16 surrogate pair. High: {high:#02X}, Low: {low:#02X}"
+        ))),
+    }
 }
 
 /// Writes `c` as UTF-8 to `out`
@@ -950,5 +960,16 @@ mod tests {
         decoder.decode(b"{\"\xe2\" : \"\x96\xa1\"}").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Encountered truncated UTF-8 sequence");
+    }
+
+    #[test]
+    fn test_invalid_surrogates() {
+        let mut decoder = TapeDecoder::new(16, 2);
+        let res = decoder.decode(b"{\"test\": \"\\ud800\\ud801\"}");
+        assert!(res.is_err());
+
+        let mut decoder = TapeDecoder::new(16, 2);
+        let res = decoder.decode(b"{\"test\": \"\\udc00\\udc01\"}");
+        assert!(res.is_err());
     }
 }

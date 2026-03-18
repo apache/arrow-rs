@@ -15,22 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::BooleanBuilder;
 use arrow_array::Array;
+use arrow_array::builder::BooleanBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::ArrayDecoder;
+use crate::reader::{ArrayDecoder, DecoderContext};
 
 #[derive(Default)]
 pub struct BooleanArrayDecoder {
     ignore_type_conflicts: bool,
 }
 impl BooleanArrayDecoder {
-    pub fn new(ignore_type_conflicts: bool) -> Self {
+    pub fn new(ctx: &DecoderContext) -> Self {
         Self {
-            ignore_type_conflicts,
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
         }
     }
 }

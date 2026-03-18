@@ -15,59 +15,56 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains Rust mappings for Thrift definition.
-//! Refer to [`parquet.thrift`](https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift) file to see raw definitions.
+//! Contains Rust mappings for Thrift definition. This module contains only mappings for thrift
+//! enums and unions. Thrift structs are handled elsewhere.
+//! Refer to [`parquet.thrift`](https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift)
+//! file to see raw definitions.
 
+use std::io::Write;
 use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
-use crate::format as parquet;
+use crate::file::metadata::HeapSize;
+use crate::parquet_thrift::{
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    WriteThrift, WriteThriftField,
+};
+use crate::{thrift_enum, thrift_struct, thrift_union_all_empty, write_thrift_field};
 
 use crate::errors::{ParquetError, Result};
-
-// Re-export crate::format types used in this module
-pub use crate::format::{
-    BsonType, DateType, DecimalType, EnumType, IntType, JsonType, ListType, MapType, NullType,
-    StringType, TimeType, TimeUnit, TimestampType, UUIDType,
-};
 
 // ----------------------------------------------------------------------
 // Types from the Thrift definition
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::Type`
+// Mirrors thrift enum `Type`
 
+thrift_enum!(
 /// Types supported by Parquet.
 ///
 /// These physical types are intended to be used in combination with the encodings to
 /// control the on disk storage format.
 /// For example INT16 is not included as a type since a good encoding of INT32
 /// would handle this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(non_camel_case_types)]
-pub enum Type {
-    /// A boolean value.
-    BOOLEAN,
-    /// 32-bit signed integer.
-    INT32,
-    /// 64-bit signed integer.
-    INT64,
-    /// 96-bit signed integer for timestamps.
-    INT96,
-    /// IEEE 754 single-precision floating point value.
-    FLOAT,
-    /// IEEE 754 double-precision floating point value.
-    DOUBLE,
-    /// Arbitrary length byte array.
-    BYTE_ARRAY,
-    /// Fixed length byte array.
-    FIXED_LEN_BYTE_ARRAY,
+enum Type {
+  BOOLEAN = 0;
+  INT32 = 1;
+  INT64 = 2;
+  INT96 = 3;  // deprecated, only used by legacy implementations.
+  FLOAT = 4;
+  DOUBLE = 5;
+  BYTE_ARRAY = 6;
+  FIXED_LEN_BYTE_ARRAY = 7;
 }
+);
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::ConvertedType`
+// Mirrors thrift enum `ConvertedType`
 
+// TODO(ets): Adding the `NONE` variant to this enum is a bit awkward. We should
+// look into removing it and using `Option<ConvertedType>` instead.
+thrift_enum!(
 /// Common types (converted types) used by frameworks when using Parquet.
 ///
 /// This helps map between types in those frameworks to the base types in Parquet.
@@ -75,103 +72,166 @@ pub enum Type {
 ///
 /// This struct was renamed from `LogicalType` in version 4.0.0.
 /// If targeting Parquet format 2.4.0 or above, please use [LogicalType] instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum ConvertedType {
-    /// No type conversion.
-    NONE,
-    /// A BYTE_ARRAY actually contains UTF8 encoded chars.
-    UTF8,
+enum ConvertedType {
+  /// Not defined in the spec, used internally to indicate no type conversion
+  NONE = -1;
 
-    /// A map is converted as an optional field containing a repeated key/value pair.
-    MAP,
+  /// A BYTE_ARRAY actually contains UTF8 encoded chars.
+  UTF8 = 0;
 
-    /// A key/value pair is converted into a group of two fields.
-    MAP_KEY_VALUE,
+  /// A map is converted as an optional field containing a repeated key/value pair.
+  MAP = 1;
 
-    /// A list is converted into an optional field containing a repeated field for its
-    /// values.
-    LIST,
+  /// A key/value pair is converted into a group of two fields.
+  MAP_KEY_VALUE = 2;
 
-    /// An enum is converted into a binary field
-    ENUM,
+  /// A list is converted into an optional field containing a repeated field for its
+  /// values.
+  LIST = 3;
 
-    /// A decimal value.
-    /// This may be used to annotate binary or fixed primitive types. The
-    /// underlying byte array stores the unscaled value encoded as two's
-    /// complement using big-endian byte order (the most significant byte is the
-    /// zeroth element).
-    ///
-    /// This must be accompanied by a (maximum) precision and a scale in the
-    /// SchemaElement. The precision specifies the number of digits in the decimal
-    /// and the scale stores the location of the decimal point. For example 1.23
-    /// would have precision 3 (3 total digits) and scale 2 (the decimal point is
-    /// 2 digits over).
-    DECIMAL,
+  /// An enum is converted into a BYTE_ARRAY field
+  ENUM = 4;
 
-    /// A date stored as days since Unix epoch, encoded as the INT32 physical type.
-    DATE,
+  /// A decimal value.
+  ///
+  /// This may be used to annotate BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY primitive
+  /// types. The underlying byte array stores the unscaled value encoded as two's
+  /// complement using big-endian byte order (the most significant byte is the
+  /// zeroth element). The value of the decimal is the value * 10^{-scale}.
+  ///
+  /// This must be accompanied by a (maximum) precision and a scale in the
+  /// SchemaElement. The precision specifies the number of digits in the decimal
+  /// and the scale stores the location of the decimal point. For example 1.23
+  /// would have precision 3 (3 total digits) and scale 2 (the decimal point is
+  /// 2 digits over).
+  DECIMAL = 5;
 
-    /// The total number of milliseconds since midnight. The value is stored as an INT32
-    /// physical type.
-    TIME_MILLIS,
+  /// A date stored as days since Unix epoch, encoded as the INT32 physical type.
+  DATE = 6;
 
-    /// The total number of microseconds since midnight. The value is stored as an INT64
-    /// physical type.
-    TIME_MICROS,
+  /// The total number of milliseconds since midnight. The value is stored as an INT32
+  /// physical type.
+  TIME_MILLIS = 7;
 
-    /// Date and time recorded as milliseconds since the Unix epoch.
-    /// Recorded as a physical type of INT64.
-    TIMESTAMP_MILLIS,
+  /// The total number of microseconds since midnight. The value is stored as an INT64
+  /// physical type.
+  TIME_MICROS = 8;
 
-    /// Date and time recorded as microseconds since the Unix epoch.
-    /// The value is stored as an INT64 physical type.
-    TIMESTAMP_MICROS,
+  /// Date and time recorded as milliseconds since the Unix epoch.
+  /// Recorded as a physical type of INT64.
+  TIMESTAMP_MILLIS = 9;
 
-    /// An unsigned 8 bit integer value stored as INT32 physical type.
-    UINT_8,
+  /// Date and time recorded as microseconds since the Unix epoch.
+  /// The value is stored as an INT64 physical type.
+  TIMESTAMP_MICROS = 10;
 
-    /// An unsigned 16 bit integer value stored as INT32 physical type.
-    UINT_16,
+  /// An unsigned 8 bit integer value stored as INT32 physical type.
+  UINT_8 = 11;
 
-    /// An unsigned 32 bit integer value stored as INT32 physical type.
-    UINT_32,
+  /// An unsigned 16 bit integer value stored as INT32 physical type.
+  UINT_16 = 12;
 
-    /// An unsigned 64 bit integer value stored as INT64 physical type.
-    UINT_64,
+  /// An unsigned 32 bit integer value stored as INT32 physical type.
+  UINT_32 = 13;
 
-    /// A signed 8 bit integer value stored as INT32 physical type.
-    INT_8,
+  /// An unsigned 64 bit integer value stored as INT64 physical type.
+  UINT_64 = 14;
 
-    /// A signed 16 bit integer value stored as INT32 physical type.
-    INT_16,
+  /// A signed 8 bit integer value stored as INT32 physical type.
+  INT_8 = 15;
 
-    /// A signed 32 bit integer value stored as INT32 physical type.
-    INT_32,
+  /// A signed 16 bit integer value stored as INT32 physical type.
+  INT_16 = 16;
 
-    /// A signed 64 bit integer value stored as INT64 physical type.
-    INT_64,
+  /// A signed 32 bit integer value stored as INT32 physical type.
+  INT_32 = 17;
 
-    /// A JSON document embedded within a single UTF8 column.
-    JSON,
+  /// A signed 64 bit integer value stored as INT64 physical type.
+  INT_64 = 18;
 
-    /// A BSON document embedded within a single BINARY column.
-    BSON,
+  /// A JSON document embedded within a single UTF8 column.
+  JSON = 19;
 
-    /// An interval of time.
-    ///
-    /// This type annotates data stored as a FIXED_LEN_BYTE_ARRAY of length 12.
-    /// This data is composed of three separate little endian unsigned integers.
-    /// Each stores a component of a duration of time. The first integer identifies
-    /// the number of months associated with the duration, the second identifies
-    /// the number of days associated with the duration and the third identifies
-    /// the number of milliseconds associated with the provided duration.
-    /// This duration of time is independent of any particular timezone or date.
-    INTERVAL,
+   /// A BSON document embedded within a single BINARY column.
+  BSON = 20;
+
+  /// An interval of time
+  ///
+  /// This type annotates data stored as a FIXED_LEN_BYTE_ARRAY of length 12.
+  /// This data is composed of three separate little endian unsigned integers.
+  /// Each stores a component of a duration of time. The first integer identifies
+  /// the number of months associated with the duration, the second identifies
+  /// the number of days associated with the duration and the third identifies
+  /// the number of milliseconds associated with the provided duration.
+  /// This duration of time is independent of any particular timezone or date.
+  INTERVAL = 21;
 }
+);
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::LogicalType`
+// Mirrors thrift union `TimeUnit`
+
+thrift_union_all_empty!(
+/// Time unit for `Time` and `Timestamp` logical types.
+union TimeUnit {
+  1: MilliSeconds MILLIS
+  2: MicroSeconds MICROS
+  3: NanoSeconds NANOS
+}
+);
+
+// ----------------------------------------------------------------------
+// Mirrors thrift union `LogicalType`
+
+// private structs for decoding logical type
+
+thrift_struct!(
+struct DecimalType {
+  1: required i32 scale
+  2: required i32 precision
+}
+);
+
+thrift_struct!(
+struct TimestampType {
+  1: required bool is_adjusted_to_u_t_c
+  2: required TimeUnit unit
+}
+);
+
+// they are identical
+use TimestampType as TimeType;
+
+thrift_struct!(
+struct IntType {
+  1: required i8 bit_width
+  2: required bool is_signed
+}
+);
+
+thrift_struct!(
+struct VariantType {
+  // The version of the variant specification that the variant was
+  // written with.
+  1: optional i8 specification_version
+}
+);
+
+thrift_struct!(
+struct GeometryType<'a> {
+  1: optional string<'a> crs;
+}
+);
+
+thrift_struct!(
+struct GeographyType<'a> {
+  1: optional string<'a> crs;
+  2: optional EdgeInterpolationAlgorithm algorithm;
+}
+);
+
+// TODO(ets): should we switch to tuple variants so we can use
+// the thrift macros?
 
 /// Logical types used by version 2.4.0+ of the Parquet format.
 ///
@@ -228,26 +288,272 @@ pub enum LogicalType {
     Uuid,
     /// A 16-bit floating point number.
     Float16,
+    /// A Variant value.
+    Variant {
+        /// The version of the variant specification that the variant was written with.
+        specification_version: Option<i8>,
+    },
+    /// A geospatial feature in the Well-Known Binary (WKB) format with linear/planar edges interpolation.
+    Geometry {
+        /// A custom CRS. If unset the defaults to `OGC:CRS84`, which means that the geometries
+        /// must be stored in longitude, latitude based on the WGS84 datum.
+        crs: Option<String>,
+    },
+    /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
+    Geography {
+        /// A custom CRS. If unset the defaults to `OGC:CRS84`.
+        crs: Option<String>,
+        /// An optional algorithm can be set to correctly interpret edges interpolation
+        /// of the geometries. If unset, the algorithm defaults to `SPHERICAL`.
+        algorithm: Option<EdgeInterpolationAlgorithm>,
+    },
+    /// For forward compatibility; used when an unknown union value is encountered.
+    _Unknown {
+        /// The field id encountered when parsing the unknown logical type.
+        field_id: i16,
+    },
 }
 
-// ----------------------------------------------------------------------
-// Mirrors `parquet::FieldRepetitionType`
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for LogicalType {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let field_ident = prot.read_field_begin(0)?;
+        if field_ident.field_type == FieldType::Stop {
+            return Err(general_err!("received empty union from remote LogicalType"));
+        }
+        let ret = match field_ident.id {
+            1 => {
+                prot.skip_empty_struct()?;
+                Self::String
+            }
+            2 => {
+                prot.skip_empty_struct()?;
+                Self::Map
+            }
+            3 => {
+                prot.skip_empty_struct()?;
+                Self::List
+            }
+            4 => {
+                prot.skip_empty_struct()?;
+                Self::Enum
+            }
+            5 => {
+                let val = DecimalType::read_thrift(&mut *prot)?;
+                Self::Decimal {
+                    scale: val.scale,
+                    precision: val.precision,
+                }
+            }
+            6 => {
+                prot.skip_empty_struct()?;
+                Self::Date
+            }
+            7 => {
+                let val = TimeType::read_thrift(&mut *prot)?;
+                Self::Time {
+                    is_adjusted_to_u_t_c: val.is_adjusted_to_u_t_c,
+                    unit: val.unit,
+                }
+            }
+            8 => {
+                let val = TimestampType::read_thrift(&mut *prot)?;
+                Self::Timestamp {
+                    is_adjusted_to_u_t_c: val.is_adjusted_to_u_t_c,
+                    unit: val.unit,
+                }
+            }
+            10 => {
+                let val = IntType::read_thrift(&mut *prot)?;
+                Self::Integer {
+                    is_signed: val.is_signed,
+                    bit_width: val.bit_width,
+                }
+            }
+            11 => {
+                prot.skip_empty_struct()?;
+                Self::Unknown
+            }
+            12 => {
+                prot.skip_empty_struct()?;
+                Self::Json
+            }
+            13 => {
+                prot.skip_empty_struct()?;
+                Self::Bson
+            }
+            14 => {
+                prot.skip_empty_struct()?;
+                Self::Uuid
+            }
+            15 => {
+                prot.skip_empty_struct()?;
+                Self::Float16
+            }
+            16 => {
+                let val = VariantType::read_thrift(&mut *prot)?;
+                Self::Variant {
+                    specification_version: val.specification_version,
+                }
+            }
+            17 => {
+                let val = GeometryType::read_thrift(&mut *prot)?;
+                Self::Geometry {
+                    crs: val.crs.map(|s| s.to_owned()),
+                }
+            }
+            18 => {
+                let val = GeographyType::read_thrift(&mut *prot)?;
+                // unset algorithm means SPHERICAL, per the spec:
+                // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#geography
+                let algorithm = val
+                    .algorithm
+                    .unwrap_or(EdgeInterpolationAlgorithm::SPHERICAL);
+                Self::Geography {
+                    crs: val.crs.map(|s| s.to_owned()),
+                    algorithm: Some(algorithm),
+                }
+            }
+            _ => {
+                prot.skip(field_ident.field_type)?;
+                Self::_Unknown {
+                    field_id: field_ident.id,
+                }
+            }
+        };
+        let field_ident = prot.read_field_begin(field_ident.id)?;
+        if field_ident.field_type != FieldType::Stop {
+            return Err(general_err!(
+                "Received multiple fields for union from remote LogicalType"
+            ));
+        }
+        Ok(ret)
+    }
+}
 
+impl WriteThrift for LogicalType {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        match self {
+            Self::String => {
+                writer.write_empty_struct(1, 0)?;
+            }
+            Self::Map => {
+                writer.write_empty_struct(2, 0)?;
+            }
+            Self::List => {
+                writer.write_empty_struct(3, 0)?;
+            }
+            Self::Enum => {
+                writer.write_empty_struct(4, 0)?;
+            }
+            Self::Decimal { scale, precision } => {
+                DecimalType {
+                    scale: *scale,
+                    precision: *precision,
+                }
+                .write_thrift_field(writer, 5, 0)?;
+            }
+            Self::Date => {
+                writer.write_empty_struct(6, 0)?;
+            }
+            Self::Time {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
+                TimeType {
+                    is_adjusted_to_u_t_c: *is_adjusted_to_u_t_c,
+                    unit: *unit,
+                }
+                .write_thrift_field(writer, 7, 0)?;
+            }
+            Self::Timestamp {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
+                TimestampType {
+                    is_adjusted_to_u_t_c: *is_adjusted_to_u_t_c,
+                    unit: *unit,
+                }
+                .write_thrift_field(writer, 8, 0)?;
+            }
+            Self::Integer {
+                bit_width,
+                is_signed,
+            } => {
+                IntType {
+                    bit_width: *bit_width,
+                    is_signed: *is_signed,
+                }
+                .write_thrift_field(writer, 10, 0)?;
+            }
+            Self::Unknown => {
+                writer.write_empty_struct(11, 0)?;
+            }
+            Self::Json => {
+                writer.write_empty_struct(12, 0)?;
+            }
+            Self::Bson => {
+                writer.write_empty_struct(13, 0)?;
+            }
+            Self::Uuid => {
+                writer.write_empty_struct(14, 0)?;
+            }
+            Self::Float16 => {
+                writer.write_empty_struct(15, 0)?;
+            }
+            Self::Variant {
+                specification_version,
+            } => {
+                VariantType {
+                    specification_version: *specification_version,
+                }
+                .write_thrift_field(writer, 16, 0)?;
+            }
+            Self::Geometry { crs } => {
+                GeometryType {
+                    crs: crs.as_ref().map(|s| s.as_str()),
+                }
+                .write_thrift_field(writer, 17, 0)?;
+            }
+            Self::Geography { crs, algorithm } => {
+                GeographyType {
+                    crs: crs.as_ref().map(|s| s.as_str()),
+                    algorithm: *algorithm,
+                }
+                .write_thrift_field(writer, 18, 0)?;
+            }
+            _ => return Err(nyi_err!("logical type")),
+        }
+        writer.write_struct_end()
+    }
+}
+
+write_thrift_field!(LogicalType, FieldType::Struct);
+
+// ----------------------------------------------------------------------
+// Mirrors thrift enum `FieldRepetitionType`
+//
+
+thrift_enum!(
 /// Representation of field types in schema.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum Repetition {
-    /// Field is required (can not be null) and each record has exactly 1 value.
-    REQUIRED,
-    /// Field is optional (can be null) and each record has 0 or 1 values.
-    OPTIONAL,
-    /// Field is repeated and can contain 0 or more values.
-    REPEATED,
+enum FieldRepetitionType {
+  /// This field is required (can not be null) and each row has exactly 1 value.
+  REQUIRED = 0;
+  /// The field is optional (can be null) and each row has 0 or 1 values.
+  OPTIONAL = 1;
+  /// The field is repeated and can contain 0 or more values.
+  REPEATED = 2;
 }
+);
+
+/// Type alias for thrift `FieldRepetitionType`
+pub type Repetition = FieldRepetitionType;
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::Encoding`
+// Mirrors thrift enum `Encoding`
 
+thrift_enum!(
 /// Encodings supported by Parquet.
 ///
 /// Not all encodings are valid for all types. These enums are also used to specify the
@@ -264,80 +570,72 @@ pub enum Repetition {
 /// performance impact when evaluating these encodings.
 ///
 /// [WriterVersion]: crate::file::properties::WriterVersion
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
-#[allow(non_camel_case_types)]
-pub enum Encoding {
-    /// Default byte encoding.
-    /// - BOOLEAN - 1 bit per value, 0 is false; 1 is true.
-    /// - INT32 - 4 bytes per value, stored as little-endian.
-    /// - INT64 - 8 bytes per value, stored as little-endian.
-    /// - FLOAT - 4 bytes per value, stored as little-endian.
-    /// - DOUBLE - 8 bytes per value, stored as little-endian.
-    /// - BYTE_ARRAY - 4 byte length stored as little endian, followed by bytes.
-    /// - FIXED_LEN_BYTE_ARRAY - just the bytes are stored.
-    PLAIN,
-
-    /// **Deprecated** dictionary encoding.
-    ///
-    /// The values in the dictionary are encoded using PLAIN encoding.
-    /// Since it is deprecated, RLE_DICTIONARY encoding is used for a data page, and
-    /// PLAIN encoding is used for dictionary page.
-    PLAIN_DICTIONARY,
-
-    /// Group packed run length encoding.
-    ///
-    /// Usable for definition/repetition levels encoding and boolean values.
-    RLE,
-
-    /// **Deprecated** Bit-packed encoding.
-    ///
-    /// This can only be used if the data has a known max width.
-    /// Usable for definition/repetition levels encoding.
-    ///
-    /// There are compatibility issues with files using this encoding.
-    /// The parquet standard specifies the bits to be packed starting from the
-    /// most-significant bit, several implementations do not follow this bit order.
-    /// Several other implementations also have issues reading this encoding
-    /// because of incorrect assumptions about the length of the encoded data.
-    ///
-    /// The RLE/bit-packing hybrid is more cpu and memory efficient and should be used instead.
-    #[deprecated(
-        since = "51.0.0",
-        note = "Please see documentation for compatibility issues and use the RLE/bit-packing hybrid encoding instead"
-    )]
-    BIT_PACKED,
-
-    /// Delta encoding for integers, either INT32 or INT64.
-    ///
-    /// Works best on sorted data.
-    DELTA_BINARY_PACKED,
-
-    /// Encoding for byte arrays to separate the length values and the data.
-    ///
-    /// The lengths are encoded using DELTA_BINARY_PACKED encoding.
-    DELTA_LENGTH_BYTE_ARRAY,
-
-    /// Incremental encoding for byte arrays.
-    ///
-    /// Prefix lengths are encoded using DELTA_BINARY_PACKED encoding.
-    /// Suffixes are stored using DELTA_LENGTH_BYTE_ARRAY encoding.
-    DELTA_BYTE_ARRAY,
-
-    /// Dictionary encoding.
-    ///
-    /// The ids are encoded using the RLE encoding.
-    RLE_DICTIONARY,
-
-    /// Encoding for fixed-width data.
-    ///
-    /// K byte-streams are created where K is the size in bytes of the data type.
-    /// The individual bytes of a value are scattered to the corresponding stream and
-    /// the streams are concatenated.
-    /// This itself does not reduce the size of the data but can lead to better compression
-    /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
-    /// perform poorly for large values of N.
-    BYTE_STREAM_SPLIT,
+enum Encoding {
+  /// Default encoding.
+  /// - BOOLEAN - 1 bit per value. 0 is false; 1 is true.
+  /// - INT32 - 4 bytes per value.  Stored as little-endian.
+  /// - INT64 - 8 bytes per value.  Stored as little-endian.
+  /// - FLOAT - 4 bytes per value.  IEEE. Stored as little-endian.
+  /// - DOUBLE - 8 bytes per value.  IEEE. Stored as little-endian.
+  /// - BYTE_ARRAY - 4 byte length stored as little endian, followed by bytes.
+  /// - FIXED_LEN_BYTE_ARRAY - Just the bytes.
+  PLAIN = 0;
+  //  GROUP_VAR_INT = 1;
+  /// **Deprecated** dictionary encoding.
+  ///
+  /// The values in the dictionary are encoded using PLAIN encoding.
+  /// Since it is deprecated, RLE_DICTIONARY encoding is used for a data page, and
+  /// PLAIN encoding is used for dictionary page.
+  PLAIN_DICTIONARY = 2;
+  /// Group packed run length encoding.
+  ///
+  /// Usable for definition/repetition levels encoding and boolean values.
+  RLE = 3;
+  /// **Deprecated** Bit-packed encoding.
+  ///
+  /// This can only be used if the data has a known max width.
+  /// Usable for definition/repetition levels encoding.
+  ///
+  /// There are compatibility issues with files using this encoding.
+  /// The parquet standard specifies the bits to be packed starting from the
+  /// most-significant bit, several implementations do not follow this bit order.
+  /// Several other implementations also have issues reading this encoding
+  /// because of incorrect assumptions about the length of the encoded data.
+  ///
+  /// The RLE/bit-packing hybrid is more cpu and memory efficient and should be used instead.
+  #[deprecated(
+      since = "51.0.0",
+      note = "Please see documentation for compatibility issues and use the RLE/bit-packing hybrid encoding instead"
+  )]
+  BIT_PACKED = 4;
+  /// Delta encoding for integers, either INT32 or INT64.
+  ///
+  /// Works best on sorted data.
+  DELTA_BINARY_PACKED = 5;
+  /// Encoding for byte arrays to separate the length values and the data.
+  ///
+  /// The lengths are encoded using DELTA_BINARY_PACKED encoding.
+  DELTA_LENGTH_BYTE_ARRAY = 6;
+  /// Incremental encoding for byte arrays.
+  ///
+  /// Prefix lengths are encoded using DELTA_BINARY_PACKED encoding.
+  /// Suffixes are stored using DELTA_LENGTH_BYTE_ARRAY encoding.
+  DELTA_BYTE_ARRAY = 7;
+  /// Dictionary encoding.
+  ///
+  /// The ids are encoded using the RLE encoding.
+  RLE_DICTIONARY = 8;
+  /// Encoding for fixed-width data.
+  ///
+  /// K byte-streams are created where K is the size in bytes of the data type.
+  /// The individual bytes of a value are scattered to the corresponding stream and
+  /// the streams are concatenated.
+  /// This itself does not reduce the size of the data but can lead to better compression
+  /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
+  /// perform poorly for large values of N.
+  BYTE_STREAM_SPLIT = 9;
 }
+);
 
 impl FromStr for Encoding {
     type Err = ParquetError;
@@ -361,8 +659,144 @@ impl FromStr for Encoding {
     }
 }
 
+/// A bitmask representing the [`Encoding`]s employed while encoding a Parquet column chunk.
+///
+/// The Parquet [`ColumnMetaData`] struct contains an array that indicates what encodings were
+/// used when writing that column chunk. For memory and performance reasons, this crate reduces
+/// that array to bitmask, where each bit position represents a different [`Encoding`]. This
+/// struct contains that bitmask, and provides methods to interact with the data.
+///
+/// # Example
+/// ```no_run
+/// # use parquet::file::metadata::ParquetMetaDataReader;
+/// # use parquet::basic::Encoding;
+/// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
+/// // read parquet metadata from a file
+/// let file = open_parquet_file("some_path.parquet");
+/// let mut reader = ParquetMetaDataReader::new();
+/// reader.try_parse(&file).unwrap();
+/// let metadata = reader.finish().unwrap();
+///
+/// // find the encodings used by the first column chunk in the first row group
+/// let col_meta = metadata.row_group(0).column(0);
+/// let encodings = col_meta.encodings_mask();
+///
+/// // check to see if a particular encoding was used
+/// let used_rle = encodings.is_set(Encoding::RLE);
+///
+/// // check to see if all of a set of encodings were used
+/// let used_all = encodings.all_set([Encoding::RLE, Encoding::PLAIN].iter());
+///
+/// // convert mask to a Vec<Encoding>
+/// let encodings_vec = encodings.encodings().collect::<Vec<_>>();
+/// ```
+///
+/// [`ColumnMetaData`]: https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/src/main/thrift/parquet.thrift#L875
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EncodingMask(i32);
+
+impl EncodingMask {
+    /// Highest valued discriminant in the [`Encoding`] enum
+    const MAX_ENCODING: i32 = Encoding::MAX_DISCRIMINANT;
+    /// A mask consisting of unused bit positions, used for validation. This includes the never
+    /// used GROUP_VAR_INT encoding value of `1`.
+    const ALLOWED_MASK: u32 =
+        !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1) | 1 << 1;
+
+    /// Attempt to create a new `EncodingMask` from an integer.
+    ///
+    /// This will return an error if a bit outside the allowable range is set.
+    pub fn try_new(val: i32) -> Result<Self> {
+        if val as u32 & Self::ALLOWED_MASK != 0 {
+            return Err(general_err!("Attempt to create invalid mask: 0x{:x}", val));
+        }
+        Ok(Self(val))
+    }
+
+    /// Return an integer representation of this `EncodingMask`.
+    pub fn as_i32(&self) -> i32 {
+        self.0
+    }
+
+    /// Create a new `EncodingMask` from a collection of [`Encoding`]s.
+    pub fn new_from_encodings<'a>(encodings: impl Iterator<Item = &'a Encoding>) -> Self {
+        let mut mask = 0;
+        for &e in encodings {
+            mask |= 1 << (e as i32);
+        }
+        Self(mask)
+    }
+
+    /// Mark the given [`Encoding`] as present in this mask.
+    pub fn insert(&mut self, val: Encoding) {
+        self.0 |= 1 << (val as i32);
+    }
+
+    /// Test if a given [`Encoding`] is present in this mask.
+    pub fn is_set(&self, val: Encoding) -> bool {
+        self.0 & (1 << (val as i32)) != 0
+    }
+
+    /// Test if this mask has only the bit for the given [`Encoding`] set.
+    pub fn is_only(&self, val: Encoding) -> bool {
+        self.0 == (1 << (val as i32))
+    }
+
+    /// Test if all [`Encoding`]s in a given set are present in this mask.
+    pub fn all_set<'a>(&self, mut encodings: impl Iterator<Item = &'a Encoding>) -> bool {
+        encodings.all(|&e| self.is_set(e))
+    }
+
+    /// Return an iterator over all [`Encoding`]s present in this mask.
+    pub fn encodings(&self) -> impl Iterator<Item = Encoding> {
+        Self::mask_to_encodings_iter(self.0)
+    }
+
+    fn mask_to_encodings_iter(mask: i32) -> impl Iterator<Item = Encoding> {
+        (0..=Self::MAX_ENCODING)
+            .filter(move |i| mask & (1 << i) != 0)
+            .map(i32_to_encoding)
+    }
+}
+
+impl HeapSize for EncodingMask {
+    fn heap_size(&self) -> usize {
+        0 // no heap allocations
+    }
+}
+
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EncodingMask {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let mut mask = 0;
+
+        // This reads a Thrift `list<Encoding>` and turns it into a bitmask
+        let list_ident = prot.read_list_begin()?;
+        for _ in 0..list_ident.size {
+            let val = Encoding::read_thrift(prot)?;
+            mask |= 1 << val as i32;
+        }
+        Ok(Self(mask))
+    }
+}
+
+#[allow(deprecated)]
+fn i32_to_encoding(val: i32) -> Encoding {
+    match val {
+        0 => Encoding::PLAIN,
+        2 => Encoding::PLAIN_DICTIONARY,
+        3 => Encoding::RLE,
+        4 => Encoding::BIT_PACKED,
+        5 => Encoding::DELTA_BINARY_PACKED,
+        6 => Encoding::DELTA_LENGTH_BYTE_ARRAY,
+        7 => Encoding::DELTA_BYTE_ARRAY,
+        8 => Encoding::RLE_DICTIONARY,
+        9 => Encoding::BYTE_STREAM_SPLIT,
+        _ => panic!("Impossible encoding {val}"),
+    }
+}
+
 // ----------------------------------------------------------------------
-// Mirrors `parquet::CompressionCodec`
+// Mirrors thrift enum `CompressionCodec`
 
 /// Supported block compression algorithms.
 ///
@@ -400,11 +834,51 @@ pub enum Compression {
     LZ4_RAW,
 }
 
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for Compression {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let val = prot.read_i32()?;
+        Ok(match val {
+            0 => Self::UNCOMPRESSED,
+            1 => Self::SNAPPY,
+            2 => Self::GZIP(Default::default()),
+            3 => Self::LZO,
+            4 => Self::BROTLI(Default::default()),
+            5 => Self::LZ4,
+            6 => Self::ZSTD(Default::default()),
+            7 => Self::LZ4_RAW,
+            _ => return Err(general_err!("Unexpected CompressionCodec {}", val)),
+        })
+    }
+}
+
+// TODO(ets): explore replacing this with a thrift_enum!(ThriftCompression) for the serialization
+// and then provide `From` impls to convert back and forth. This is necessary due to the addition
+// of compression level to some variants.
+impl WriteThrift for Compression {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let id: i32 = match *self {
+            Self::UNCOMPRESSED => 0,
+            Self::SNAPPY => 1,
+            Self::GZIP(_) => 2,
+            Self::LZO => 3,
+            Self::BROTLI(_) => 4,
+            Self::LZ4 => 5,
+            Self::ZSTD(_) => 6,
+            Self::LZ4_RAW => 7,
+        };
+        writer.write_i32(id)
+    }
+}
+
+write_thrift_field!(Compression, FieldType::I32);
+
 impl Compression {
     /// Returns the codec type of this compression setting as a string, without the compression
     /// level.
     pub(crate) fn codec_to_string(self) -> String {
-        format!("{:?}", self).split('(').next().unwrap().to_owned()
+        format!("{self:?}").split('(').next().unwrap().to_owned()
     }
 }
 
@@ -416,7 +890,7 @@ fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>), Pa
             let level = &level_str[..level_str.len() - 1]
                 .parse::<u32>()
                 .map_err(|_| {
-                    ParquetError::General(format!("invalid compression level: {}", level_str))
+                    ParquetError::General(format!("invalid compression level: {level_str}"))
                 })?;
             Ok((codec, Some(*level)))
         }
@@ -436,8 +910,7 @@ fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
 
 fn require_level(codec: &str, level: Option<u32>) -> Result<u32, ParquetError> {
     level.ok_or(ParquetError::General(format!(
-        "{} requires a compression level",
-        codec
+        "{codec} requires a compression level",
     )))
 }
 
@@ -492,25 +965,182 @@ impl FromStr for Compression {
 }
 
 // ----------------------------------------------------------------------
-/// Mirrors [parquet::PageType]
-///
+// Mirrors thrift enum `PageType`
+
+thrift_enum!(
 /// Available data pages for Parquet file format.
 /// Note that some of the page types may not be supported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum PageType {
-    /// Data page Parquet 1.0
-    DATA_PAGE,
-    /// Index page
-    INDEX_PAGE,
-    /// Dictionary page
-    DICTIONARY_PAGE,
-    /// Data page Parquet 2.0
-    DATA_PAGE_V2,
+enum PageType {
+  DATA_PAGE = 0;
+  INDEX_PAGE = 1;
+  DICTIONARY_PAGE = 2;
+  DATA_PAGE_V2 = 3;
 }
+);
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::ColumnOrder`
+// Mirrors thrift enum `BoundaryOrder`
+
+thrift_enum!(
+/// Enum to annotate whether lists of min/max elements inside ColumnIndex
+/// are ordered and if so, in which direction.
+enum BoundaryOrder {
+  UNORDERED = 0;
+  ASCENDING = 1;
+  DESCENDING = 2;
+}
+);
+
+// ----------------------------------------------------------------------
+// Mirrors thrift enum `EdgeInterpolationAlgorithm`
+
+// this is hand coded to allow for the _Unknown variant (allows this to be forward compatible)
+
+/// Edge interpolation algorithm for [`LogicalType::Geography`]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(i32)]
+#[derive(Default)]
+pub enum EdgeInterpolationAlgorithm {
+    /// Edges are interpolated as geodesics on a sphere.
+    #[default]
+    SPHERICAL = 0,
+    /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
+    VINCENTY = 1,
+    /// Thomas, Paul D. Spheroidal geodesics, reference systems, & local geometry. US Naval Oceanographic Office, 1970
+    THOMAS = 2,
+    /// Thomas, Paul D. Mathematical models for navigation systems. US Naval Oceanographic Office, 1965.
+    ANDOYER = 3,
+    /// Karney, Charles FF. "Algorithms for geodesics." Journal of Geodesy 87 (2013): 43-55
+    KARNEY = 4,
+    /// Unknown algorithm
+    _Unknown(i32),
+}
+
+#[cfg(feature = "geospatial")]
+impl EdgeInterpolationAlgorithm {
+    /// Converts an [`EdgeInterpolationAlgorithm`] into its corresponding algorithm defined by
+    /// [`parquet_geospatial::WkbEdges`].
+    ///
+    /// This method will only return an Err if the [`EdgeInterpolationAlgorithm`] is the `_Unknown`
+    /// variant.
+    pub fn try_as_edges(&self) -> Result<parquet_geospatial::WkbEdges> {
+        match &self {
+            Self::SPHERICAL => Ok(parquet_geospatial::WkbEdges::Spherical),
+            Self::VINCENTY => Ok(parquet_geospatial::WkbEdges::Vincenty),
+            Self::THOMAS => Ok(parquet_geospatial::WkbEdges::Thomas),
+            Self::ANDOYER => Ok(parquet_geospatial::WkbEdges::Andoyer),
+            Self::KARNEY => Ok(parquet_geospatial::WkbEdges::Karney),
+            unknown => Err(general_err!(
+                "Unknown edge interpolation algorithm: {}",
+                unknown
+            )),
+        }
+    }
+}
+
+impl fmt::Display for EdgeInterpolationAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_fmt(format_args!("{0:?}", self))
+    }
+}
+
+#[cfg(feature = "geospatial")]
+impl From<parquet_geospatial::WkbEdges> for EdgeInterpolationAlgorithm {
+    fn from(value: parquet_geospatial::WkbEdges) -> Self {
+        match value {
+            parquet_geospatial::WkbEdges::Spherical => Self::SPHERICAL,
+            parquet_geospatial::WkbEdges::Vincenty => Self::VINCENTY,
+            parquet_geospatial::WkbEdges::Thomas => Self::THOMAS,
+            parquet_geospatial::WkbEdges::Andoyer => Self::ANDOYER,
+            parquet_geospatial::WkbEdges::Karney => Self::KARNEY,
+        }
+    }
+}
+
+impl FromStr for EdgeInterpolationAlgorithm {
+    type Err = ParquetError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_ascii_uppercase().as_str() {
+            "SPHERICAL" => Ok(EdgeInterpolationAlgorithm::SPHERICAL),
+            "VINCENTY" => Ok(EdgeInterpolationAlgorithm::VINCENTY),
+            "THOMAS" => Ok(EdgeInterpolationAlgorithm::THOMAS),
+            "ANDOYER" => Ok(EdgeInterpolationAlgorithm::ANDOYER),
+            "KARNEY" => Ok(EdgeInterpolationAlgorithm::KARNEY),
+            unknown => Err(general_err!(
+                "Unknown edge interpolation algorithm: {}",
+                unknown
+            )),
+        }
+    }
+}
+
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EdgeInterpolationAlgorithm {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let val = prot.read_i32()?;
+        match val {
+            0 => Ok(Self::SPHERICAL),
+            1 => Ok(Self::VINCENTY),
+            2 => Ok(Self::THOMAS),
+            3 => Ok(Self::ANDOYER),
+            4 => Ok(Self::KARNEY),
+            _ => Ok(Self::_Unknown(val)),
+        }
+    }
+}
+
+impl WriteThrift for EdgeInterpolationAlgorithm {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let val: i32 = match *self {
+            Self::SPHERICAL => 0,
+            Self::VINCENTY => 1,
+            Self::THOMAS => 2,
+            Self::ANDOYER => 3,
+            Self::KARNEY => 4,
+            Self::_Unknown(i) => i,
+        };
+        writer.write_i32(val)
+    }
+}
+
+write_thrift_field!(EdgeInterpolationAlgorithm, FieldType::I32);
+
+// ----------------------------------------------------------------------
+// Mirrors thrift union `BloomFilterAlgorithm`
+
+thrift_union_all_empty!(
+/// The algorithm used in Bloom filter.
+union BloomFilterAlgorithm {
+  /// Block-based Bloom filter.
+  1: SplitBlockAlgorithm BLOCK;
+}
+);
+
+// ----------------------------------------------------------------------
+// Mirrors thrift union `BloomFilterHash`
+
+thrift_union_all_empty!(
+/// The hash function used in Bloom filter. This function takes the hash of a column value
+/// using plain encoding.
+union BloomFilterHash {
+  /// xxHash Strategy.
+  1: XxHash XXHASH;
+}
+);
+
+// ----------------------------------------------------------------------
+// Mirrors thrift union `BloomFilterCompression`
+
+thrift_union_all_empty!(
+/// The compression used in the Bloom filter.
+union BloomFilterCompression {
+  1: Uncompressed UNCOMPRESSED;
+}
+);
+
+// ----------------------------------------------------------------------
+// Mirrors thrift union `ColumnOrder`
 
 /// Sort order for page and column statistics.
 ///
@@ -549,19 +1179,35 @@ pub enum ColumnOrder {
     /// Column uses the order defined by its logical or physical type
     /// (if there is no logical type), parquet-format 2.4.0+.
     TYPE_DEFINED_ORDER(SortOrder),
+    // The following are not defined in the Parquet spec and should always be last.
     /// Undefined column order, means legacy behaviour before parquet-format 2.4.0.
     /// Sort order is always SIGNED.
     UNDEFINED,
+    /// An unknown but present ColumnOrder. Statistics with an unknown `ColumnOrder`
+    /// will be ignored.
+    UNKNOWN,
 }
 
 impl ColumnOrder {
     /// Returns sort order for a physical/logical type.
+    #[deprecated(
+        since = "57.1.0",
+        note = "use `ColumnOrder::sort_order_for_type` instead"
+    )]
     pub fn get_sort_order(
         logical_type: Option<LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,
     ) -> SortOrder {
-        // TODO: Should this take converted and logical type, for compatibility?
+        Self::sort_order_for_type(logical_type.as_ref(), converted_type, physical_type)
+    }
+
+    /// Returns sort order for a physical/logical type.
+    pub fn sort_order_for_type(
+        logical_type: Option<&LogicalType>,
+        converted_type: ConvertedType,
+        physical_type: Type,
+    ) -> SortOrder {
         match logical_type {
             Some(logical) => match logical {
                 LogicalType::String | LogicalType::Enum | LogicalType::Json | LogicalType::Bson => {
@@ -579,6 +1225,10 @@ impl ColumnOrder {
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
                 LogicalType::Float16 => SortOrder::SIGNED,
+                LogicalType::Variant { .. }
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. }
+                | LogicalType::_Unknown { .. } => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -648,41 +1298,58 @@ impl ColumnOrder {
         match *self {
             ColumnOrder::TYPE_DEFINED_ORDER(order) => order,
             ColumnOrder::UNDEFINED => SortOrder::SIGNED,
+            ColumnOrder::UNKNOWN => SortOrder::UNDEFINED,
         }
     }
 }
 
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let field_ident = prot.read_field_begin(0)?;
+        if field_ident.field_type == FieldType::Stop {
+            return Err(general_err!("Received empty union from remote ColumnOrder"));
+        }
+        let ret = match field_ident.id {
+            1 => {
+                // NOTE: the sort order needs to be set correctly after parsing.
+                prot.skip_empty_struct()?;
+                Self::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
+            }
+            _ => {
+                prot.skip(field_ident.field_type)?;
+                Self::UNKNOWN
+            }
+        };
+        let field_ident = prot.read_field_begin(field_ident.id)?;
+        if field_ident.field_type != FieldType::Stop {
+            return Err(general_err!(
+                "Received multiple fields for union from remote ColumnOrder"
+            ));
+        }
+        Ok(ret)
     }
 }
 
-impl fmt::Display for ConvertedType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
+impl WriteThrift for ColumnOrder {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        match *self {
+            Self::TYPE_DEFINED_ORDER(_) => {
+                writer.write_field_begin(FieldType::Struct, 1, 0)?;
+                writer.write_struct_end()?;
+            }
+            _ => return Err(general_err!("Attempt to write undefined ColumnOrder")),
+        }
+        // write end of struct for this union
+        writer.write_struct_end()
     }
 }
 
-impl fmt::Display for Repetition {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl fmt::Display for Encoding {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
+// ----------------------------------------------------------------------
+// Display handlers
 
 impl fmt::Display for Compression {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl fmt::Display for PageType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
     }
@@ -697,192 +1364,6 @@ impl fmt::Display for SortOrder {
 impl fmt::Display for ColumnOrder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
-    }
-}
-
-// ----------------------------------------------------------------------
-// parquet::Type <=> Type conversion
-
-impl TryFrom<parquet::Type> for Type {
-    type Error = ParquetError;
-
-    fn try_from(value: parquet::Type) -> Result<Self> {
-        Ok(match value {
-            parquet::Type::BOOLEAN => Type::BOOLEAN,
-            parquet::Type::INT32 => Type::INT32,
-            parquet::Type::INT64 => Type::INT64,
-            parquet::Type::INT96 => Type::INT96,
-            parquet::Type::FLOAT => Type::FLOAT,
-            parquet::Type::DOUBLE => Type::DOUBLE,
-            parquet::Type::BYTE_ARRAY => Type::BYTE_ARRAY,
-            parquet::Type::FIXED_LEN_BYTE_ARRAY => Type::FIXED_LEN_BYTE_ARRAY,
-            _ => return Err(general_err!("unexpected parquet type: {}", value.0)),
-        })
-    }
-}
-
-impl From<Type> for parquet::Type {
-    fn from(value: Type) -> Self {
-        match value {
-            Type::BOOLEAN => parquet::Type::BOOLEAN,
-            Type::INT32 => parquet::Type::INT32,
-            Type::INT64 => parquet::Type::INT64,
-            Type::INT96 => parquet::Type::INT96,
-            Type::FLOAT => parquet::Type::FLOAT,
-            Type::DOUBLE => parquet::Type::DOUBLE,
-            Type::BYTE_ARRAY => parquet::Type::BYTE_ARRAY,
-            Type::FIXED_LEN_BYTE_ARRAY => parquet::Type::FIXED_LEN_BYTE_ARRAY,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// parquet::ConvertedType <=> ConvertedType conversion
-
-impl TryFrom<Option<parquet::ConvertedType>> for ConvertedType {
-    type Error = ParquetError;
-
-    fn try_from(option: Option<parquet::ConvertedType>) -> Result<Self> {
-        Ok(match option {
-            None => ConvertedType::NONE,
-            Some(value) => match value {
-                parquet::ConvertedType::UTF8 => ConvertedType::UTF8,
-                parquet::ConvertedType::MAP => ConvertedType::MAP,
-                parquet::ConvertedType::MAP_KEY_VALUE => ConvertedType::MAP_KEY_VALUE,
-                parquet::ConvertedType::LIST => ConvertedType::LIST,
-                parquet::ConvertedType::ENUM => ConvertedType::ENUM,
-                parquet::ConvertedType::DECIMAL => ConvertedType::DECIMAL,
-                parquet::ConvertedType::DATE => ConvertedType::DATE,
-                parquet::ConvertedType::TIME_MILLIS => ConvertedType::TIME_MILLIS,
-                parquet::ConvertedType::TIME_MICROS => ConvertedType::TIME_MICROS,
-                parquet::ConvertedType::TIMESTAMP_MILLIS => ConvertedType::TIMESTAMP_MILLIS,
-                parquet::ConvertedType::TIMESTAMP_MICROS => ConvertedType::TIMESTAMP_MICROS,
-                parquet::ConvertedType::UINT_8 => ConvertedType::UINT_8,
-                parquet::ConvertedType::UINT_16 => ConvertedType::UINT_16,
-                parquet::ConvertedType::UINT_32 => ConvertedType::UINT_32,
-                parquet::ConvertedType::UINT_64 => ConvertedType::UINT_64,
-                parquet::ConvertedType::INT_8 => ConvertedType::INT_8,
-                parquet::ConvertedType::INT_16 => ConvertedType::INT_16,
-                parquet::ConvertedType::INT_32 => ConvertedType::INT_32,
-                parquet::ConvertedType::INT_64 => ConvertedType::INT_64,
-                parquet::ConvertedType::JSON => ConvertedType::JSON,
-                parquet::ConvertedType::BSON => ConvertedType::BSON,
-                parquet::ConvertedType::INTERVAL => ConvertedType::INTERVAL,
-                _ => {
-                    return Err(general_err!(
-                        "unexpected parquet converted type: {}",
-                        value.0
-                    ))
-                }
-            },
-        })
-    }
-}
-
-impl From<ConvertedType> for Option<parquet::ConvertedType> {
-    fn from(value: ConvertedType) -> Self {
-        match value {
-            ConvertedType::NONE => None,
-            ConvertedType::UTF8 => Some(parquet::ConvertedType::UTF8),
-            ConvertedType::MAP => Some(parquet::ConvertedType::MAP),
-            ConvertedType::MAP_KEY_VALUE => Some(parquet::ConvertedType::MAP_KEY_VALUE),
-            ConvertedType::LIST => Some(parquet::ConvertedType::LIST),
-            ConvertedType::ENUM => Some(parquet::ConvertedType::ENUM),
-            ConvertedType::DECIMAL => Some(parquet::ConvertedType::DECIMAL),
-            ConvertedType::DATE => Some(parquet::ConvertedType::DATE),
-            ConvertedType::TIME_MILLIS => Some(parquet::ConvertedType::TIME_MILLIS),
-            ConvertedType::TIME_MICROS => Some(parquet::ConvertedType::TIME_MICROS),
-            ConvertedType::TIMESTAMP_MILLIS => Some(parquet::ConvertedType::TIMESTAMP_MILLIS),
-            ConvertedType::TIMESTAMP_MICROS => Some(parquet::ConvertedType::TIMESTAMP_MICROS),
-            ConvertedType::UINT_8 => Some(parquet::ConvertedType::UINT_8),
-            ConvertedType::UINT_16 => Some(parquet::ConvertedType::UINT_16),
-            ConvertedType::UINT_32 => Some(parquet::ConvertedType::UINT_32),
-            ConvertedType::UINT_64 => Some(parquet::ConvertedType::UINT_64),
-            ConvertedType::INT_8 => Some(parquet::ConvertedType::INT_8),
-            ConvertedType::INT_16 => Some(parquet::ConvertedType::INT_16),
-            ConvertedType::INT_32 => Some(parquet::ConvertedType::INT_32),
-            ConvertedType::INT_64 => Some(parquet::ConvertedType::INT_64),
-            ConvertedType::JSON => Some(parquet::ConvertedType::JSON),
-            ConvertedType::BSON => Some(parquet::ConvertedType::BSON),
-            ConvertedType::INTERVAL => Some(parquet::ConvertedType::INTERVAL),
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// parquet::LogicalType <=> LogicalType conversion
-
-impl From<parquet::LogicalType> for LogicalType {
-    fn from(value: parquet::LogicalType) -> Self {
-        match value {
-            parquet::LogicalType::STRING(_) => LogicalType::String,
-            parquet::LogicalType::MAP(_) => LogicalType::Map,
-            parquet::LogicalType::LIST(_) => LogicalType::List,
-            parquet::LogicalType::ENUM(_) => LogicalType::Enum,
-            parquet::LogicalType::DECIMAL(t) => LogicalType::Decimal {
-                scale: t.scale,
-                precision: t.precision,
-            },
-            parquet::LogicalType::DATE(_) => LogicalType::Date,
-            parquet::LogicalType::TIME(t) => LogicalType::Time {
-                is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
-                unit: t.unit,
-            },
-            parquet::LogicalType::TIMESTAMP(t) => LogicalType::Timestamp {
-                is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
-                unit: t.unit,
-            },
-            parquet::LogicalType::INTEGER(t) => LogicalType::Integer {
-                bit_width: t.bit_width,
-                is_signed: t.is_signed,
-            },
-            parquet::LogicalType::UNKNOWN(_) => LogicalType::Unknown,
-            parquet::LogicalType::JSON(_) => LogicalType::Json,
-            parquet::LogicalType::BSON(_) => LogicalType::Bson,
-            parquet::LogicalType::UUID(_) => LogicalType::Uuid,
-            parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
-        }
-    }
-}
-
-impl From<LogicalType> for parquet::LogicalType {
-    fn from(value: LogicalType) -> Self {
-        match value {
-            LogicalType::String => parquet::LogicalType::STRING(Default::default()),
-            LogicalType::Map => parquet::LogicalType::MAP(Default::default()),
-            LogicalType::List => parquet::LogicalType::LIST(Default::default()),
-            LogicalType::Enum => parquet::LogicalType::ENUM(Default::default()),
-            LogicalType::Decimal { scale, precision } => {
-                parquet::LogicalType::DECIMAL(DecimalType { scale, precision })
-            }
-            LogicalType::Date => parquet::LogicalType::DATE(Default::default()),
-            LogicalType::Time {
-                is_adjusted_to_u_t_c,
-                unit,
-            } => parquet::LogicalType::TIME(TimeType {
-                is_adjusted_to_u_t_c,
-                unit,
-            }),
-            LogicalType::Timestamp {
-                is_adjusted_to_u_t_c,
-                unit,
-            } => parquet::LogicalType::TIMESTAMP(TimestampType {
-                is_adjusted_to_u_t_c,
-                unit,
-            }),
-            LogicalType::Integer {
-                bit_width,
-                is_signed,
-            } => parquet::LogicalType::INTEGER(IntType {
-                bit_width,
-                is_signed,
-            }),
-            LogicalType::Unknown => parquet::LogicalType::UNKNOWN(Default::default()),
-            LogicalType::Json => parquet::LogicalType::JSON(Default::default()),
-            LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
-            LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
-            LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
-        }
     }
 }
 
@@ -906,14 +1387,14 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Decimal { .. } => ConvertedType::DECIMAL,
                 LogicalType::Date => ConvertedType::DATE,
                 LogicalType::Time { unit, .. } => match unit {
-                    TimeUnit::MILLIS(_) => ConvertedType::TIME_MILLIS,
-                    TimeUnit::MICROS(_) => ConvertedType::TIME_MICROS,
-                    TimeUnit::NANOS(_) => ConvertedType::NONE,
+                    TimeUnit::MILLIS => ConvertedType::TIME_MILLIS,
+                    TimeUnit::MICROS => ConvertedType::TIME_MICROS,
+                    TimeUnit::NANOS => ConvertedType::NONE,
                 },
                 LogicalType::Timestamp { unit, .. } => match unit {
-                    TimeUnit::MILLIS(_) => ConvertedType::TIMESTAMP_MILLIS,
-                    TimeUnit::MICROS(_) => ConvertedType::TIMESTAMP_MICROS,
-                    TimeUnit::NANOS(_) => ConvertedType::NONE,
+                    TimeUnit::MILLIS => ConvertedType::TIMESTAMP_MILLIS,
+                    TimeUnit::MICROS => ConvertedType::TIMESTAMP_MICROS,
+                    TimeUnit::NANOS => ConvertedType::NONE,
                 },
                 LogicalType::Integer {
                     bit_width,
@@ -927,155 +1408,21 @@ impl From<Option<LogicalType>> for ConvertedType {
                     (16, false) => ConvertedType::UINT_16,
                     (32, false) => ConvertedType::UINT_32,
                     (64, false) => ConvertedType::UINT_64,
-                    t => panic!("Integer type {t:?} is not supported"),
+                    (bit_width, is_signed) => panic!(
+                        "Integer type bit_width={bit_width}, signed={is_signed} is not supported"
+                    ),
                 },
                 LogicalType::Json => ConvertedType::JSON,
                 LogicalType::Bson => ConvertedType::BSON,
-                LogicalType::Uuid | LogicalType::Float16 | LogicalType::Unknown => {
-                    ConvertedType::NONE
-                }
+                LogicalType::Uuid
+                | LogicalType::Float16
+                | LogicalType::Variant { .. }
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. }
+                | LogicalType::_Unknown { .. }
+                | LogicalType::Unknown => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// parquet::FieldRepetitionType <=> Repetition conversion
-
-impl TryFrom<parquet::FieldRepetitionType> for Repetition {
-    type Error = ParquetError;
-
-    fn try_from(value: parquet::FieldRepetitionType) -> Result<Self> {
-        Ok(match value {
-            parquet::FieldRepetitionType::REQUIRED => Repetition::REQUIRED,
-            parquet::FieldRepetitionType::OPTIONAL => Repetition::OPTIONAL,
-            parquet::FieldRepetitionType::REPEATED => Repetition::REPEATED,
-            _ => {
-                return Err(general_err!(
-                    "unexpected parquet repetition type: {}",
-                    value.0
-                ))
-            }
-        })
-    }
-}
-
-impl From<Repetition> for parquet::FieldRepetitionType {
-    fn from(value: Repetition) -> Self {
-        match value {
-            Repetition::REQUIRED => parquet::FieldRepetitionType::REQUIRED,
-            Repetition::OPTIONAL => parquet::FieldRepetitionType::OPTIONAL,
-            Repetition::REPEATED => parquet::FieldRepetitionType::REPEATED,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// parquet::Encoding <=> Encoding conversion
-
-impl TryFrom<parquet::Encoding> for Encoding {
-    type Error = ParquetError;
-
-    fn try_from(value: parquet::Encoding) -> Result<Self> {
-        Ok(match value {
-            parquet::Encoding::PLAIN => Encoding::PLAIN,
-            parquet::Encoding::PLAIN_DICTIONARY => Encoding::PLAIN_DICTIONARY,
-            parquet::Encoding::RLE => Encoding::RLE,
-            #[allow(deprecated)]
-            parquet::Encoding::BIT_PACKED => Encoding::BIT_PACKED,
-            parquet::Encoding::DELTA_BINARY_PACKED => Encoding::DELTA_BINARY_PACKED,
-            parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY => Encoding::DELTA_LENGTH_BYTE_ARRAY,
-            parquet::Encoding::DELTA_BYTE_ARRAY => Encoding::DELTA_BYTE_ARRAY,
-            parquet::Encoding::RLE_DICTIONARY => Encoding::RLE_DICTIONARY,
-            parquet::Encoding::BYTE_STREAM_SPLIT => Encoding::BYTE_STREAM_SPLIT,
-            _ => return Err(general_err!("unexpected parquet encoding: {}", value.0)),
-        })
-    }
-}
-
-impl From<Encoding> for parquet::Encoding {
-    fn from(value: Encoding) -> Self {
-        match value {
-            Encoding::PLAIN => parquet::Encoding::PLAIN,
-            Encoding::PLAIN_DICTIONARY => parquet::Encoding::PLAIN_DICTIONARY,
-            Encoding::RLE => parquet::Encoding::RLE,
-            #[allow(deprecated)]
-            Encoding::BIT_PACKED => parquet::Encoding::BIT_PACKED,
-            Encoding::DELTA_BINARY_PACKED => parquet::Encoding::DELTA_BINARY_PACKED,
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY,
-            Encoding::DELTA_BYTE_ARRAY => parquet::Encoding::DELTA_BYTE_ARRAY,
-            Encoding::RLE_DICTIONARY => parquet::Encoding::RLE_DICTIONARY,
-            Encoding::BYTE_STREAM_SPLIT => parquet::Encoding::BYTE_STREAM_SPLIT,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// parquet::CompressionCodec <=> Compression conversion
-
-impl TryFrom<parquet::CompressionCodec> for Compression {
-    type Error = ParquetError;
-
-    fn try_from(value: parquet::CompressionCodec) -> Result<Self> {
-        Ok(match value {
-            parquet::CompressionCodec::UNCOMPRESSED => Compression::UNCOMPRESSED,
-            parquet::CompressionCodec::SNAPPY => Compression::SNAPPY,
-            parquet::CompressionCodec::GZIP => Compression::GZIP(Default::default()),
-            parquet::CompressionCodec::LZO => Compression::LZO,
-            parquet::CompressionCodec::BROTLI => Compression::BROTLI(Default::default()),
-            parquet::CompressionCodec::LZ4 => Compression::LZ4,
-            parquet::CompressionCodec::ZSTD => Compression::ZSTD(Default::default()),
-            parquet::CompressionCodec::LZ4_RAW => Compression::LZ4_RAW,
-            _ => {
-                return Err(general_err!(
-                    "unexpected parquet compression codec: {}",
-                    value.0
-                ))
-            }
-        })
-    }
-}
-
-impl From<Compression> for parquet::CompressionCodec {
-    fn from(value: Compression) -> Self {
-        match value {
-            Compression::UNCOMPRESSED => parquet::CompressionCodec::UNCOMPRESSED,
-            Compression::SNAPPY => parquet::CompressionCodec::SNAPPY,
-            Compression::GZIP(_) => parquet::CompressionCodec::GZIP,
-            Compression::LZO => parquet::CompressionCodec::LZO,
-            Compression::BROTLI(_) => parquet::CompressionCodec::BROTLI,
-            Compression::LZ4 => parquet::CompressionCodec::LZ4,
-            Compression::ZSTD(_) => parquet::CompressionCodec::ZSTD,
-            Compression::LZ4_RAW => parquet::CompressionCodec::LZ4_RAW,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// parquet::PageType <=> PageType conversion
-
-impl TryFrom<parquet::PageType> for PageType {
-    type Error = ParquetError;
-
-    fn try_from(value: parquet::PageType) -> Result<Self> {
-        Ok(match value {
-            parquet::PageType::DATA_PAGE => PageType::DATA_PAGE,
-            parquet::PageType::INDEX_PAGE => PageType::INDEX_PAGE,
-            parquet::PageType::DICTIONARY_PAGE => PageType::DICTIONARY_PAGE,
-            parquet::PageType::DATA_PAGE_V2 => PageType::DATA_PAGE_V2,
-            _ => return Err(general_err!("unexpected parquet page type: {}", value.0)),
-        })
-    }
-}
-
-impl From<PageType> for parquet::PageType {
-    fn from(value: PageType) -> Self {
-        match value {
-            PageType::DATA_PAGE => parquet::PageType::DATA_PAGE,
-            PageType::INDEX_PAGE => parquet::PageType::INDEX_PAGE,
-            PageType::DICTIONARY_PAGE => parquet::PageType::DICTIONARY_PAGE,
-            PageType::DATA_PAGE_V2 => parquet::PageType::DATA_PAGE_V2,
         }
     }
 }
@@ -1167,11 +1514,11 @@ impl str::FromStr for LogicalType {
             "DATE" => Ok(LogicalType::Date),
             "TIME" => Ok(LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
+                unit: TimeUnit::MILLIS,
             }),
             "TIMESTAMP" => Ok(LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
+                unit: TimeUnit::MILLIS,
             }),
             "STRING" => Ok(LogicalType::String),
             "JSON" => Ok(LogicalType::Json),
@@ -1182,6 +1529,11 @@ impl str::FromStr for LogicalType {
                 "Interval parquet logical type not yet supported"
             )),
             "FLOAT16" => Ok(LogicalType::Float16),
+            "GEOMETRY" => Ok(LogicalType::Geometry { crs: None }),
+            "GEOGRAPHY" => Ok(LogicalType::Geography {
+                crs: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
+            }),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
     }
@@ -1191,6 +1543,7 @@ impl str::FromStr for LogicalType {
 #[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {
     use super::*;
+    use crate::parquet_thrift::{ThriftSliceInputProtocol, tests::test_roundtrip};
 
     #[test]
     fn test_display_type() {
@@ -1204,42 +1557,6 @@ mod tests {
         assert_eq!(
             Type::FIXED_LEN_BYTE_ARRAY.to_string(),
             "FIXED_LEN_BYTE_ARRAY"
-        );
-    }
-
-    #[test]
-    fn test_from_type() {
-        assert_eq!(
-            Type::try_from(parquet::Type::BOOLEAN).unwrap(),
-            Type::BOOLEAN
-        );
-        assert_eq!(Type::try_from(parquet::Type::INT32).unwrap(), Type::INT32);
-        assert_eq!(Type::try_from(parquet::Type::INT64).unwrap(), Type::INT64);
-        assert_eq!(Type::try_from(parquet::Type::INT96).unwrap(), Type::INT96);
-        assert_eq!(Type::try_from(parquet::Type::FLOAT).unwrap(), Type::FLOAT);
-        assert_eq!(Type::try_from(parquet::Type::DOUBLE).unwrap(), Type::DOUBLE);
-        assert_eq!(
-            Type::try_from(parquet::Type::BYTE_ARRAY).unwrap(),
-            Type::BYTE_ARRAY
-        );
-        assert_eq!(
-            Type::try_from(parquet::Type::FIXED_LEN_BYTE_ARRAY).unwrap(),
-            Type::FIXED_LEN_BYTE_ARRAY
-        );
-    }
-
-    #[test]
-    fn test_into_type() {
-        assert_eq!(parquet::Type::BOOLEAN, Type::BOOLEAN.into());
-        assert_eq!(parquet::Type::INT32, Type::INT32.into());
-        assert_eq!(parquet::Type::INT64, Type::INT64.into());
-        assert_eq!(parquet::Type::INT96, Type::INT96.into());
-        assert_eq!(parquet::Type::FLOAT, Type::FLOAT.into());
-        assert_eq!(parquet::Type::DOUBLE, Type::DOUBLE.into());
-        assert_eq!(parquet::Type::BYTE_ARRAY, Type::BYTE_ARRAY.into());
-        assert_eq!(
-            parquet::Type::FIXED_LEN_BYTE_ARRAY,
-            Type::FIXED_LEN_BYTE_ARRAY.into()
         );
     }
 
@@ -1284,6 +1601,43 @@ mod tests {
     }
 
     #[test]
+    fn test_converted_type_roundtrip() {
+        test_roundtrip(ConvertedType::UTF8);
+        test_roundtrip(ConvertedType::MAP);
+        test_roundtrip(ConvertedType::MAP_KEY_VALUE);
+        test_roundtrip(ConvertedType::LIST);
+        test_roundtrip(ConvertedType::ENUM);
+        test_roundtrip(ConvertedType::DECIMAL);
+        test_roundtrip(ConvertedType::DATE);
+        test_roundtrip(ConvertedType::TIME_MILLIS);
+        test_roundtrip(ConvertedType::TIME_MICROS);
+        test_roundtrip(ConvertedType::TIMESTAMP_MILLIS);
+        test_roundtrip(ConvertedType::TIMESTAMP_MICROS);
+        test_roundtrip(ConvertedType::UINT_8);
+        test_roundtrip(ConvertedType::UINT_16);
+        test_roundtrip(ConvertedType::UINT_32);
+        test_roundtrip(ConvertedType::UINT_64);
+        test_roundtrip(ConvertedType::INT_8);
+        test_roundtrip(ConvertedType::INT_16);
+        test_roundtrip(ConvertedType::INT_32);
+        test_roundtrip(ConvertedType::INT_64);
+        test_roundtrip(ConvertedType::JSON);
+        test_roundtrip(ConvertedType::BSON);
+        test_roundtrip(ConvertedType::INTERVAL);
+    }
+
+    #[test]
+    fn test_read_invalid_converted_type() {
+        let mut prot = ThriftSliceInputProtocol::new(&[0x7eu8]);
+        let res = ConvertedType::read_thrift(&mut prot);
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Parquet error: Unexpected ConvertedType 63"
+        );
+    }
+
+    #[test]
     fn test_display_converted_type() {
         assert_eq!(ConvertedType::NONE.to_string(), "NONE");
         assert_eq!(ConvertedType::UTF8.to_string(), "UTF8");
@@ -1316,202 +1670,6 @@ mod tests {
         assert_eq!(ConvertedType::BSON.to_string(), "BSON");
         assert_eq!(ConvertedType::INTERVAL.to_string(), "INTERVAL");
         assert_eq!(ConvertedType::DECIMAL.to_string(), "DECIMAL")
-    }
-
-    #[test]
-    fn test_from_converted_type() {
-        let parquet_conv_none: Option<parquet::ConvertedType> = None;
-        assert_eq!(
-            ConvertedType::try_from(parquet_conv_none).unwrap(),
-            ConvertedType::NONE
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UTF8)).unwrap(),
-            ConvertedType::UTF8
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::MAP)).unwrap(),
-            ConvertedType::MAP
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::MAP_KEY_VALUE)).unwrap(),
-            ConvertedType::MAP_KEY_VALUE
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::LIST)).unwrap(),
-            ConvertedType::LIST
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::ENUM)).unwrap(),
-            ConvertedType::ENUM
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::DECIMAL)).unwrap(),
-            ConvertedType::DECIMAL
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::DATE)).unwrap(),
-            ConvertedType::DATE
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIME_MILLIS)).unwrap(),
-            ConvertedType::TIME_MILLIS
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIME_MICROS)).unwrap(),
-            ConvertedType::TIME_MICROS
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MILLIS)).unwrap(),
-            ConvertedType::TIMESTAMP_MILLIS
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MICROS)).unwrap(),
-            ConvertedType::TIMESTAMP_MICROS
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_8)).unwrap(),
-            ConvertedType::UINT_8
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_16)).unwrap(),
-            ConvertedType::UINT_16
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_32)).unwrap(),
-            ConvertedType::UINT_32
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_64)).unwrap(),
-            ConvertedType::UINT_64
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INT_8)).unwrap(),
-            ConvertedType::INT_8
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INT_16)).unwrap(),
-            ConvertedType::INT_16
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INT_32)).unwrap(),
-            ConvertedType::INT_32
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INT_64)).unwrap(),
-            ConvertedType::INT_64
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::JSON)).unwrap(),
-            ConvertedType::JSON
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::BSON)).unwrap(),
-            ConvertedType::BSON
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INTERVAL)).unwrap(),
-            ConvertedType::INTERVAL
-        );
-        assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::DECIMAL)).unwrap(),
-            ConvertedType::DECIMAL
-        )
-    }
-
-    #[test]
-    fn test_into_converted_type() {
-        let converted_type: Option<parquet::ConvertedType> = None;
-        assert_eq!(converted_type, ConvertedType::NONE.into());
-        assert_eq!(
-            Some(parquet::ConvertedType::UTF8),
-            ConvertedType::UTF8.into()
-        );
-        assert_eq!(Some(parquet::ConvertedType::MAP), ConvertedType::MAP.into());
-        assert_eq!(
-            Some(parquet::ConvertedType::MAP_KEY_VALUE),
-            ConvertedType::MAP_KEY_VALUE.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::LIST),
-            ConvertedType::LIST.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::ENUM),
-            ConvertedType::ENUM.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::DECIMAL),
-            ConvertedType::DECIMAL.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::DATE),
-            ConvertedType::DATE.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::TIME_MILLIS),
-            ConvertedType::TIME_MILLIS.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::TIME_MICROS),
-            ConvertedType::TIME_MICROS.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::TIMESTAMP_MILLIS),
-            ConvertedType::TIMESTAMP_MILLIS.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::TIMESTAMP_MICROS),
-            ConvertedType::TIMESTAMP_MICROS.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::UINT_8),
-            ConvertedType::UINT_8.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::UINT_16),
-            ConvertedType::UINT_16.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::UINT_32),
-            ConvertedType::UINT_32.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::UINT_64),
-            ConvertedType::UINT_64.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::INT_8),
-            ConvertedType::INT_8.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::INT_16),
-            ConvertedType::INT_16.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::INT_32),
-            ConvertedType::INT_32.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::INT_64),
-            ConvertedType::INT_64.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::JSON),
-            ConvertedType::JSON.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::BSON),
-            ConvertedType::BSON.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::INTERVAL),
-            ConvertedType::INTERVAL.into()
-        );
-        assert_eq!(
-            Some(parquet::ConvertedType::DECIMAL),
-            ConvertedType::DECIMAL.into()
-        )
     }
 
     #[test]
@@ -1715,42 +1873,42 @@ mod tests {
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Time {
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
             ConvertedType::TIME_MILLIS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Time {
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: true,
             })),
             ConvertedType::TIME_MICROS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Time {
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
             ConvertedType::NONE
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Timestamp {
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
             ConvertedType::TIMESTAMP_MILLIS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Timestamp {
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: false,
             })),
             ConvertedType::TIMESTAMP_MICROS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Timestamp {
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
             ConvertedType::NONE
@@ -1832,9 +1990,103 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
+            ConvertedType::from(Some(LogicalType::Geometry { crs: None })),
+            ConvertedType::NONE
+        );
+        assert_eq!(
+            ConvertedType::from(Some(LogicalType::Geography {
+                crs: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::default()),
+            })),
+            ConvertedType::NONE
+        );
+        assert_eq!(
             ConvertedType::from(Some(LogicalType::Unknown)),
             ConvertedType::NONE
         );
+    }
+
+    #[test]
+    fn test_logical_type_roundtrip() {
+        test_roundtrip(LogicalType::String);
+        test_roundtrip(LogicalType::Map);
+        test_roundtrip(LogicalType::List);
+        test_roundtrip(LogicalType::Enum);
+        test_roundtrip(LogicalType::Decimal {
+            scale: 0,
+            precision: 20,
+        });
+        test_roundtrip(LogicalType::Date);
+        test_roundtrip(LogicalType::Time {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::MICROS,
+        });
+        test_roundtrip(LogicalType::Time {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::MILLIS,
+        });
+        test_roundtrip(LogicalType::Time {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::NANOS,
+        });
+        test_roundtrip(LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::MICROS,
+        });
+        test_roundtrip(LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::MILLIS,
+        });
+        test_roundtrip(LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::NANOS,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 8,
+            is_signed: true,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 16,
+            is_signed: false,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 32,
+            is_signed: true,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 64,
+            is_signed: false,
+        });
+        test_roundtrip(LogicalType::Json);
+        test_roundtrip(LogicalType::Bson);
+        test_roundtrip(LogicalType::Uuid);
+        test_roundtrip(LogicalType::Float16);
+        test_roundtrip(LogicalType::Variant {
+            specification_version: Some(1),
+        });
+        test_roundtrip(LogicalType::Variant {
+            specification_version: None,
+        });
+        test_roundtrip(LogicalType::Geometry {
+            crs: Some("foo".to_owned()),
+        });
+        test_roundtrip(LogicalType::Geometry { crs: None });
+        test_roundtrip(LogicalType::Geography {
+            crs: Some("foo".to_owned()),
+            algorithm: Some(EdgeInterpolationAlgorithm::ANDOYER),
+        });
+        test_roundtrip(LogicalType::Geography {
+            crs: None,
+            algorithm: Some(EdgeInterpolationAlgorithm::KARNEY),
+        });
+        test_roundtrip(LogicalType::Geography {
+            crs: Some("foo".to_owned()),
+            algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
+        });
+        test_roundtrip(LogicalType::Geography {
+            crs: None,
+            algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
+        });
     }
 
     #[test]
@@ -1842,38 +2094,6 @@ mod tests {
         assert_eq!(Repetition::REQUIRED.to_string(), "REQUIRED");
         assert_eq!(Repetition::OPTIONAL.to_string(), "OPTIONAL");
         assert_eq!(Repetition::REPEATED.to_string(), "REPEATED");
-    }
-
-    #[test]
-    fn test_from_repetition() {
-        assert_eq!(
-            Repetition::try_from(parquet::FieldRepetitionType::REQUIRED).unwrap(),
-            Repetition::REQUIRED
-        );
-        assert_eq!(
-            Repetition::try_from(parquet::FieldRepetitionType::OPTIONAL).unwrap(),
-            Repetition::OPTIONAL
-        );
-        assert_eq!(
-            Repetition::try_from(parquet::FieldRepetitionType::REPEATED).unwrap(),
-            Repetition::REPEATED
-        );
-    }
-
-    #[test]
-    fn test_into_repetition() {
-        assert_eq!(
-            parquet::FieldRepetitionType::REQUIRED,
-            Repetition::REQUIRED.into()
-        );
-        assert_eq!(
-            parquet::FieldRepetitionType::OPTIONAL,
-            Repetition::OPTIONAL.into()
-        );
-        assert_eq!(
-            parquet::FieldRepetitionType::REPEATED,
-            Repetition::REPEATED.into()
-        );
     }
 
     #[test]
@@ -1920,61 +2140,6 @@ mod tests {
     }
 
     #[test]
-    fn test_from_encoding() {
-        assert_eq!(
-            Encoding::try_from(parquet::Encoding::PLAIN).unwrap(),
-            Encoding::PLAIN
-        );
-        assert_eq!(
-            Encoding::try_from(parquet::Encoding::PLAIN_DICTIONARY).unwrap(),
-            Encoding::PLAIN_DICTIONARY
-        );
-        assert_eq!(
-            Encoding::try_from(parquet::Encoding::RLE).unwrap(),
-            Encoding::RLE
-        );
-        assert_eq!(
-            Encoding::try_from(parquet::Encoding::BIT_PACKED).unwrap(),
-            Encoding::BIT_PACKED
-        );
-        assert_eq!(
-            Encoding::try_from(parquet::Encoding::DELTA_BINARY_PACKED).unwrap(),
-            Encoding::DELTA_BINARY_PACKED
-        );
-        assert_eq!(
-            Encoding::try_from(parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY).unwrap(),
-            Encoding::DELTA_LENGTH_BYTE_ARRAY
-        );
-        assert_eq!(
-            Encoding::try_from(parquet::Encoding::DELTA_BYTE_ARRAY).unwrap(),
-            Encoding::DELTA_BYTE_ARRAY
-        );
-    }
-
-    #[test]
-    fn test_into_encoding() {
-        assert_eq!(parquet::Encoding::PLAIN, Encoding::PLAIN.into());
-        assert_eq!(
-            parquet::Encoding::PLAIN_DICTIONARY,
-            Encoding::PLAIN_DICTIONARY.into()
-        );
-        assert_eq!(parquet::Encoding::RLE, Encoding::RLE.into());
-        assert_eq!(parquet::Encoding::BIT_PACKED, Encoding::BIT_PACKED.into());
-        assert_eq!(
-            parquet::Encoding::DELTA_BINARY_PACKED,
-            Encoding::DELTA_BINARY_PACKED.into()
-        );
-        assert_eq!(
-            parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY,
-            Encoding::DELTA_LENGTH_BYTE_ARRAY.into()
-        );
-        assert_eq!(
-            parquet::Encoding::DELTA_BYTE_ARRAY,
-            Encoding::DELTA_BYTE_ARRAY.into()
-        );
-    }
-
-    #[test]
     fn test_compression_codec_to_string() {
         assert_eq!(Compression::UNCOMPRESSED.codec_to_string(), "UNCOMPRESSED");
         assert_eq!(
@@ -2004,103 +2169,11 @@ mod tests {
     }
 
     #[test]
-    fn test_from_compression() {
-        assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::UNCOMPRESSED).unwrap(),
-            Compression::UNCOMPRESSED
-        );
-        assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::SNAPPY).unwrap(),
-            Compression::SNAPPY
-        );
-        assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::GZIP).unwrap(),
-            Compression::GZIP(Default::default())
-        );
-        assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::LZO).unwrap(),
-            Compression::LZO
-        );
-        assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::BROTLI).unwrap(),
-            Compression::BROTLI(Default::default())
-        );
-        assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::LZ4).unwrap(),
-            Compression::LZ4
-        );
-        assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::ZSTD).unwrap(),
-            Compression::ZSTD(Default::default())
-        );
-    }
-
-    #[test]
-    fn test_into_compression() {
-        assert_eq!(
-            parquet::CompressionCodec::UNCOMPRESSED,
-            Compression::UNCOMPRESSED.into()
-        );
-        assert_eq!(
-            parquet::CompressionCodec::SNAPPY,
-            Compression::SNAPPY.into()
-        );
-        assert_eq!(
-            parquet::CompressionCodec::GZIP,
-            Compression::GZIP(Default::default()).into()
-        );
-        assert_eq!(parquet::CompressionCodec::LZO, Compression::LZO.into());
-        assert_eq!(
-            parquet::CompressionCodec::BROTLI,
-            Compression::BROTLI(Default::default()).into()
-        );
-        assert_eq!(parquet::CompressionCodec::LZ4, Compression::LZ4.into());
-        assert_eq!(
-            parquet::CompressionCodec::ZSTD,
-            Compression::ZSTD(Default::default()).into()
-        );
-    }
-
-    #[test]
     fn test_display_page_type() {
         assert_eq!(PageType::DATA_PAGE.to_string(), "DATA_PAGE");
         assert_eq!(PageType::INDEX_PAGE.to_string(), "INDEX_PAGE");
         assert_eq!(PageType::DICTIONARY_PAGE.to_string(), "DICTIONARY_PAGE");
         assert_eq!(PageType::DATA_PAGE_V2.to_string(), "DATA_PAGE_V2");
-    }
-
-    #[test]
-    fn test_from_page_type() {
-        assert_eq!(
-            PageType::try_from(parquet::PageType::DATA_PAGE).unwrap(),
-            PageType::DATA_PAGE
-        );
-        assert_eq!(
-            PageType::try_from(parquet::PageType::INDEX_PAGE).unwrap(),
-            PageType::INDEX_PAGE
-        );
-        assert_eq!(
-            PageType::try_from(parquet::PageType::DICTIONARY_PAGE).unwrap(),
-            PageType::DICTIONARY_PAGE
-        );
-        assert_eq!(
-            PageType::try_from(parquet::PageType::DATA_PAGE_V2).unwrap(),
-            PageType::DATA_PAGE_V2
-        );
-    }
-
-    #[test]
-    fn test_into_page_type() {
-        assert_eq!(parquet::PageType::DATA_PAGE, PageType::DATA_PAGE.into());
-        assert_eq!(parquet::PageType::INDEX_PAGE, PageType::INDEX_PAGE.into());
-        assert_eq!(
-            parquet::PageType::DICTIONARY_PAGE,
-            PageType::DICTIONARY_PAGE.into()
-        );
-        assert_eq!(
-            parquet::PageType::DATA_PAGE_V2,
-            PageType::DATA_PAGE_V2.into()
-        );
     }
 
     #[test]
@@ -2125,6 +2198,12 @@ mod tests {
             "TYPE_DEFINED_ORDER(UNDEFINED)"
         );
         assert_eq!(ColumnOrder::UNDEFINED.to_string(), "UNDEFINED");
+    }
+
+    #[test]
+    fn test_column_order_roundtrip() {
+        // SortOrder::SIGNED is the default on read.
+        test_roundtrip(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED))
     }
 
     #[test]
@@ -2191,34 +2270,42 @@ mod tests {
             LogicalType::Date,
             LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
             },
             LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
             },
             LogicalType::Time {
                 is_adjusted_to_u_t_c: true,
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
             },
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
             },
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
             },
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: true,
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
             },
             LogicalType::Float16,
         ];
         check_sort_order(signed, SortOrder::SIGNED);
 
         // Undefined comparison
-        let undefined = vec![LogicalType::List, LogicalType::Map];
+        let undefined = vec![
+            LogicalType::List,
+            LogicalType::Map,
+            LogicalType::Geometry { crs: None },
+            LogicalType::Geography {
+                crs: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::default()),
+            },
+        ];
         check_sort_order(undefined, SortOrder::UNDEFINED);
     }
 
@@ -2359,7 +2446,7 @@ mod tests {
         // test unknown string
         match "plain_xxx".parse::<Encoding>() {
             Ok(e) => {
-                panic!("Should not be able to parse {:?}", e);
+                panic!("Should not be able to parse {e:?}");
             }
             Err(e) => {
                 assert_eq!(e.to_string(), "Parquet error: unknown encoding: plain_xxx");
@@ -2406,5 +2493,118 @@ mod tests {
             err.to_string(),
             "Parquet error: unknown encoding: gzip(-10)"
         );
+    }
+
+    #[test]
+    fn test_display_boundary_order() {
+        assert_eq!(BoundaryOrder::ASCENDING.to_string(), "ASCENDING");
+        assert_eq!(BoundaryOrder::DESCENDING.to_string(), "DESCENDING");
+        assert_eq!(BoundaryOrder::UNORDERED.to_string(), "UNORDERED");
+    }
+
+    #[test]
+    fn test_display_edge_algo() {
+        assert_eq!(
+            EdgeInterpolationAlgorithm::SPHERICAL.to_string(),
+            "SPHERICAL"
+        );
+        assert_eq!(EdgeInterpolationAlgorithm::VINCENTY.to_string(), "VINCENTY");
+        assert_eq!(EdgeInterpolationAlgorithm::THOMAS.to_string(), "THOMAS");
+        assert_eq!(EdgeInterpolationAlgorithm::ANDOYER.to_string(), "ANDOYER");
+        assert_eq!(EdgeInterpolationAlgorithm::KARNEY.to_string(), "KARNEY");
+    }
+
+    #[test]
+    fn test_from_str_edge_algo() {
+        assert_eq!(
+            "spHErical".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::SPHERICAL
+        );
+        assert_eq!(
+            "vinceNTY".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::VINCENTY
+        );
+        assert_eq!(
+            "tHOmas".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::THOMAS
+        );
+        assert_eq!(
+            "anDOYEr".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::ANDOYER
+        );
+        assert_eq!(
+            "kaRNey".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::KARNEY
+        );
+        assert!(
+            "does not exist"
+                .parse::<EdgeInterpolationAlgorithm>()
+                .is_err()
+        );
+    }
+
+    fn encodings_roundtrip(mut encodings: Vec<Encoding>) {
+        encodings.sort();
+        let mask = EncodingMask::new_from_encodings(encodings.iter());
+        assert!(mask.all_set(encodings.iter()));
+        let v = mask.encodings().collect::<Vec<_>>();
+        assert_eq!(v, encodings);
+    }
+
+    #[test]
+    fn test_encoding_roundtrip() {
+        encodings_roundtrip(
+            [
+                Encoding::RLE,
+                Encoding::PLAIN,
+                Encoding::DELTA_BINARY_PACKED,
+            ]
+            .into(),
+        );
+        encodings_roundtrip([Encoding::RLE_DICTIONARY, Encoding::PLAIN_DICTIONARY].into());
+        encodings_roundtrip([].into());
+        let encodings = [
+            Encoding::PLAIN,
+            Encoding::BIT_PACKED,
+            Encoding::RLE,
+            Encoding::DELTA_BINARY_PACKED,
+            Encoding::DELTA_BYTE_ARRAY,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::PLAIN_DICTIONARY,
+            Encoding::RLE_DICTIONARY,
+            Encoding::BYTE_STREAM_SPLIT,
+        ];
+        encodings_roundtrip(encodings.into());
+    }
+
+    #[test]
+    fn test_invalid_encoding_mask() {
+        // any set bits higher than the max should trigger an error
+        let res = EncodingMask::try_new(-1);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Attempt to create invalid mask: 0xffffffff"
+        );
+
+        // test that GROUP_VAR_INT is disallowed
+        let res = EncodingMask::try_new(2);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Attempt to create invalid mask: 0x2"
+        );
+    }
+
+    #[test]
+    fn test_encoding_mask_is_only() {
+        let mask = EncodingMask::new_from_encodings([Encoding::PLAIN].iter());
+        assert!(mask.is_only(Encoding::PLAIN));
+
+        let mask =
+            EncodingMask::new_from_encodings([Encoding::PLAIN, Encoding::PLAIN_DICTIONARY].iter());
+        assert!(!mask.is_only(Encoding::PLAIN));
     }
 }

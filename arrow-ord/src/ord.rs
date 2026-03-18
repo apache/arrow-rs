@@ -21,8 +21,30 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer};
-use arrow_schema::{ArrowError, SortOptions};
-use std::cmp::Ordering;
+use arrow_schema::{ArrowError, DataType, SortOptions};
+use std::{cmp::Ordering, collections::HashMap};
+
+fn compare_run_end_encoded<R: RunEndIndexType>(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let left = left.as_run::<R>();
+    let right = right.as_run::<R>();
+
+    let c_opts = child_opts(opts);
+    let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
+
+    let l_run_ends = left.run_ends().clone();
+    let r_run_ends = right.run_ends().clone();
+
+    let f = compare(left, right, opts, move |i, j| {
+        let l_physical = l_run_ends.get_physical_index(i);
+        let r_physical = r_run_ends.get_physical_index(j);
+        cmp(l_physical, r_physical)
+    });
+    Ok(f)
+}
 
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
@@ -233,6 +255,73 @@ fn compare_fixed_list(
     Ok(f)
 }
 
+fn compare_list_view<O: OffsetSizeTrait>(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let left = left.as_list_view::<O>();
+    let right = right.as_list_view::<O>();
+
+    let c_opts = child_opts(opts);
+    let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
+
+    let l_offsets = left.offsets().clone();
+    let l_sizes = left.sizes().clone();
+    let r_offsets = right.offsets().clone();
+    let r_sizes = right.sizes().clone();
+
+    let f = compare(left, right, opts, move |i, j| {
+        let l_start = l_offsets[i].as_usize();
+        let l_len = l_sizes[i].as_usize();
+        let l_end = l_start + l_len;
+
+        let r_start = r_offsets[j].as_usize();
+        let r_len = r_sizes[j].as_usize();
+        let r_end = r_start + r_len;
+
+        for (i, j) in (l_start..l_end).zip(r_start..r_end) {
+            match cmp(i, j) {
+                Ordering::Equal => continue,
+                r => return r,
+            }
+        }
+        l_len.cmp(&r_len)
+    });
+    Ok(f)
+}
+
+fn compare_map(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let left = left.as_map();
+    let right = right.as_map();
+
+    let c_opts = child_opts(opts);
+    let cmp = make_comparator(left.entries(), right.entries(), c_opts)?;
+
+    let l_o = left.offsets().clone();
+    let r_o = right.offsets().clone();
+    let f = compare(left, right, opts, move |i, j| {
+        let l_end = l_o[i + 1].as_usize();
+        let l_start = l_o[i].as_usize();
+
+        let r_end = r_o[j + 1].as_usize();
+        let r_start = r_o[j].as_usize();
+
+        for (i, j) in (l_start..l_end).zip(r_start..r_end) {
+            match cmp(i, j) {
+                Ordering::Equal => continue,
+                r => return r,
+            }
+        }
+        (l_end - l_start).cmp(&(r_end - r_start))
+    });
+    Ok(f)
+}
+
 fn compare_struct(
     left: &dyn Array,
     right: &dyn Array,
@@ -265,10 +354,76 @@ fn compare_struct(
     Ok(f)
 }
 
-#[deprecated(since = "52.0.0", note = "Use make_comparator")]
-#[doc(hidden)]
-pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator, ArrowError> {
-    make_comparator(left, right, SortOptions::default())
+fn compare_union(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let left = left.as_union();
+    let right = right.as_union();
+
+    let (left_fields, left_mode) = match left.data_type() {
+        DataType::Union(fields, mode) => (fields, mode),
+        _ => unreachable!(),
+    };
+    let (right_fields, right_mode) = match right.data_type() {
+        DataType::Union(fields, mode) => (fields, mode),
+        _ => unreachable!(),
+    };
+
+    if left_fields != right_fields {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot compare UnionArrays with different fields: left={:?}, right={:?}",
+            left_fields, right_fields
+        )));
+    }
+
+    if left_mode != right_mode {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot compare UnionArrays with different modes: left={:?}, right={:?}",
+            left_mode, right_mode
+        )));
+    }
+
+    let c_opts = child_opts(opts);
+
+    let mut field_comparators = HashMap::with_capacity(left_fields.len());
+
+    for (type_id, _field) in left_fields.iter() {
+        let left_child = left.child(type_id);
+        let right_child = right.child(type_id);
+        let cmp = make_comparator(left_child.as_ref(), right_child.as_ref(), c_opts)?;
+
+        field_comparators.insert(type_id, cmp);
+    }
+
+    let left_type_ids = left.type_ids().clone();
+    let right_type_ids = right.type_ids().clone();
+
+    let left_offsets = left.offsets().cloned();
+    let right_offsets = right.offsets().cloned();
+
+    let f = compare(left, right, opts, move |i, j| {
+        let left_type_id = left_type_ids[i];
+        let right_type_id = right_type_ids[j];
+
+        // first, compare by type_id
+        match left_type_id.cmp(&right_type_id) {
+            Ordering::Equal => {
+                // second, compare by values
+                let left_offset = left_offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
+                let right_offset = right_offsets.as_ref().map(|o| o[j] as usize).unwrap_or(j);
+
+                let cmp = field_comparators
+                    .get(&left_type_id)
+                    .expect("type id not found in field_comparators");
+
+                cmp(left_offset, right_offset)
+            }
+            other => other,
+        }
+    });
+    Ok(f)
 }
 
 /// Returns a comparison function that compares two values at two different positions
@@ -373,6 +528,8 @@ pub fn make_comparator(
         },
         (List(_), List(_)) => compare_list::<i32>(left, right, opts),
         (LargeList(_), LargeList(_)) => compare_list::<i64>(left, right, opts),
+        (ListView(_), ListView(_)) => compare_list_view::<i32>(left, right, opts),
+        (LargeListView(_), LargeListView(_)) => compare_list_view::<i64>(left, right, opts),
         (FixedSizeList(_, _), FixedSizeList(_, _)) => compare_fixed_list(left, right, opts),
         (Struct(_), Struct(_)) => compare_struct(left, right, opts),
         (Dictionary(l_key, _), Dictionary(r_key, _)) => {
@@ -386,6 +543,24 @@ pub fn make_comparator(
                  _ => unreachable!()
              }
         },
+        (RunEndEncoded(l_run_ends, _), RunEndEncoded(r_run_ends, _)) => {
+            macro_rules! run_end_helper {
+                ($t:ty, $left:expr, $right:expr, $opts:expr) => {
+                    compare_run_end_encoded::<$t>($left, $right, $opts)
+                };
+            }
+            downcast_run_end_index! {
+                l_run_ends.data_type(), r_run_ends.data_type() => (run_end_helper, left, right, opts),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "Cannot compare RunEndEncoded arrays with different run ends types: left={:?}, right={:?}",
+                    l_run_ends.data_type(),
+                    r_run_ends.data_type()
+                )))
+            }
+        },
+        (Map(_, _), Map(_, _)) => compare_map(left, right, opts),
+        (Null, Null) => Ok(Box::new(|_, _| Ordering::Equal)),
+        (Union(_, _), Union(_, _)) => compare_union(left, right, opts),
         (lhs, rhs) => Err(ArrowError::InvalidArgumentError(match lhs == rhs {
             true => format!("The data type type {lhs:?} has no natural order"),
             false => "Can't compare arrays of different types".to_string(),
@@ -396,9 +571,9 @@ pub fn make_comparator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::{Int32Builder, ListBuilder};
-    use arrow_buffer::{i256, IntervalDayTime, OffsetBuffer};
-    use arrow_schema::{DataType, Field, Fields};
+    use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
+    use arrow_buffer::{IntervalDayTime, NullBuffer, OffsetBuffer, ScalarBuffer, i256};
+    use arrow_schema::{DataType, Field, Fields, UnionFields};
     use half::f16;
     use std::sync::Arc;
 
@@ -549,7 +724,33 @@ mod tests {
     }
 
     #[test]
-    fn test_decimal() {
+    fn test_decimali32() {
+        let array = vec![Some(5_i32), Some(2_i32), Some(3_i32)]
+            .into_iter()
+            .collect::<Decimal32Array>()
+            .with_precision_and_scale(8, 6)
+            .unwrap();
+
+        let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
+        assert_eq!(Ordering::Less, cmp(1, 0));
+        assert_eq!(Ordering::Greater, cmp(0, 2));
+    }
+
+    #[test]
+    fn test_decimali64() {
+        let array = vec![Some(5_i64), Some(2_i64), Some(3_i64)]
+            .into_iter()
+            .collect::<Decimal64Array>()
+            .with_precision_and_scale(16, 6)
+            .unwrap();
+
+        let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
+        assert_eq!(Ordering::Less, cmp(1, 0));
+        assert_eq!(Ordering::Greater, cmp(0, 2));
+    }
+
+    #[test]
+    fn test_decimali128() {
         let array = vec![Some(5_i128), Some(2_i128), Some(3_i128)]
             .into_iter()
             .collect::<Decimal128Array>()
@@ -769,6 +970,18 @@ mod tests {
         test_bytes_impl::<LargeBinaryType>();
     }
 
+    fn assert_cmp_cases<A: Array>(
+        array1: &A,
+        array2: &A,
+        opts: SortOptions,
+        cases: &[(usize, usize, Ordering)],
+    ) {
+        let cmp = make_comparator(array1, array2, opts).unwrap();
+        for (left, right, expected) in cases {
+            assert_eq!(cmp(*left, *right), *expected);
+        }
+    }
+
     #[test]
     fn test_lists() {
         let mut a = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
@@ -796,53 +1009,180 @@ mod tests {
         ]);
         let b = b.finish();
 
-        let opts = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
-        let cmp = make_comparator(&a, &b, opts).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Equal);
-        assert_eq!(cmp(0, 1), Ordering::Less);
-        assert_eq!(cmp(0, 2), Ordering::Less);
-        assert_eq!(cmp(1, 2), Ordering::Less);
-        assert_eq!(cmp(1, 3), Ordering::Greater);
-        assert_eq!(cmp(2, 0), Ordering::Less);
+        // Ascending with nulls first.
+        assert_cmp_cases(
+            &a,
+            &b,
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            &[
+                (0, 0, Ordering::Equal),
+                (0, 1, Ordering::Less),
+                (0, 2, Ordering::Less),
+                (1, 2, Ordering::Less),
+                (1, 3, Ordering::Greater),
+                (2, 0, Ordering::Less),
+            ],
+        );
 
-        let opts = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        let cmp = make_comparator(&a, &b, opts).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Equal);
-        assert_eq!(cmp(0, 1), Ordering::Less);
-        assert_eq!(cmp(0, 2), Ordering::Less);
-        assert_eq!(cmp(1, 2), Ordering::Greater);
-        assert_eq!(cmp(1, 3), Ordering::Greater);
-        assert_eq!(cmp(2, 0), Ordering::Greater);
+        // Descending with nulls first.
+        assert_cmp_cases(
+            &a,
+            &b,
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+            &[
+                (0, 0, Ordering::Equal),
+                (0, 1, Ordering::Less),
+                (0, 2, Ordering::Less),
+                (1, 2, Ordering::Greater),
+                (1, 3, Ordering::Greater),
+                (2, 0, Ordering::Greater),
+            ],
+        );
 
-        let opts = SortOptions {
-            descending: true,
-            nulls_first: false,
-        };
-        let cmp = make_comparator(&a, &b, opts).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Equal);
-        assert_eq!(cmp(0, 1), Ordering::Greater);
-        assert_eq!(cmp(0, 2), Ordering::Greater);
-        assert_eq!(cmp(1, 2), Ordering::Greater);
-        assert_eq!(cmp(1, 3), Ordering::Less);
-        assert_eq!(cmp(2, 0), Ordering::Greater);
+        // Descending with nulls last.
+        assert_cmp_cases(
+            &a,
+            &b,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            &[
+                (0, 0, Ordering::Equal),
+                (0, 1, Ordering::Greater),
+                (0, 2, Ordering::Greater),
+                (1, 2, Ordering::Greater),
+                (1, 3, Ordering::Less),
+                (2, 0, Ordering::Greater),
+            ],
+        );
 
-        let opts = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let cmp = make_comparator(&a, &b, opts).unwrap();
-        assert_eq!(cmp(0, 0), Ordering::Equal);
-        assert_eq!(cmp(0, 1), Ordering::Greater);
-        assert_eq!(cmp(0, 2), Ordering::Greater);
-        assert_eq!(cmp(1, 2), Ordering::Less);
-        assert_eq!(cmp(1, 3), Ordering::Less);
-        assert_eq!(cmp(2, 0), Ordering::Less);
+        // Ascending with nulls last.
+        assert_cmp_cases(
+            &a,
+            &b,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            &[
+                (0, 0, Ordering::Equal),
+                (0, 1, Ordering::Greater),
+                (0, 2, Ordering::Greater),
+                (1, 2, Ordering::Less),
+                (1, 3, Ordering::Less),
+                (2, 0, Ordering::Less),
+            ],
+        );
+    }
+
+    fn list_view_array<O: OffsetSizeTrait>(
+        values: Vec<i32>,
+        offsets: &[usize],
+        sizes: &[usize],
+        valid: Option<&[bool]>,
+    ) -> GenericListViewArray<O> {
+        let offsets = offsets
+            .iter()
+            .map(|v| O::from_usize(*v).unwrap())
+            .collect::<ScalarBuffer<O>>();
+        let sizes = sizes
+            .iter()
+            .map(|v| O::from_usize(*v).unwrap())
+            .collect::<ScalarBuffer<O>>();
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let values = Int32Array::from(values);
+        let nulls = valid.map(NullBuffer::from);
+        GenericListViewArray::new(field, offsets, sizes, Arc::new(values), nulls)
+    }
+
+    fn test_list_view_comparisons<O: OffsetSizeTrait>() {
+        let array = list_view_array::<O>(
+            vec![1, 2, 3, 4, 5],
+            &[0, 2, 1, 0, 3],
+            &[2, 2, 2, 0, 2],
+            Some(&[true, true, true, true, false]),
+        );
+
+        // Ascending with nulls first (non-monotonic offsets and empty list).
+        assert_cmp_cases(
+            &array,
+            &array,
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            &[
+                (0, 2, Ordering::Less),    // [1,2] < [2,3]
+                (1, 2, Ordering::Greater), // [3,4] > [2,3]
+                (3, 0, Ordering::Less),    // [] < [1,2]
+                (4, 0, Ordering::Less),    // null < [1,2]
+            ],
+        );
+
+        // Ascending with nulls last.
+        assert_cmp_cases(
+            &array,
+            &array,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            &[
+                (0, 2, Ordering::Less),
+                (1, 2, Ordering::Greater),
+                (3, 0, Ordering::Less),
+                (4, 0, Ordering::Greater), // null last
+            ],
+        );
+
+        // Descending with nulls first.
+        assert_cmp_cases(
+            &array,
+            &array,
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+            &[
+                (0, 2, Ordering::Greater),
+                (1, 2, Ordering::Less),
+                (3, 0, Ordering::Greater),
+                (4, 0, Ordering::Less),
+            ],
+        );
+
+        // Descending with nulls last.
+        assert_cmp_cases(
+            &array,
+            &array,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            &[
+                (0, 2, Ordering::Greater),
+                (1, 2, Ordering::Less),
+                (3, 0, Ordering::Greater),
+                (4, 0, Ordering::Greater),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_list_view() {
+        test_list_view_comparisons::<i32>();
+    }
+
+    #[test]
+    fn test_large_list_view() {
+        test_list_view_comparisons::<i64>();
     }
 
     #[test]
@@ -920,5 +1260,663 @@ mod tests {
         assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, [])
         assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
         assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, None)
+    }
+
+    #[test]
+    fn test_map() {
+        // Create first map array demonstrating key priority over values:
+        // [{"a": 100, "b": 1}, {"b": 999, "c": 1}, {}, {"x": 1}]
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::new();
+        let mut map1_builder = MapBuilder::new(None, string_builder, int_builder);
+
+        // {"a": 100, "b": 1} - high value for "a", low value for "b"
+        map1_builder.keys().append_value("a");
+        map1_builder.values().append_value(100);
+        map1_builder.keys().append_value("b");
+        map1_builder.values().append_value(1);
+        map1_builder.append(true).unwrap();
+
+        // {"b": 999, "c": 1} - very high value for "b", low value for "c"
+        map1_builder.keys().append_value("b");
+        map1_builder.values().append_value(999);
+        map1_builder.keys().append_value("c");
+        map1_builder.values().append_value(1);
+        map1_builder.append(true).unwrap();
+
+        // {}
+        map1_builder.append(true).unwrap();
+
+        // {"x": 1}
+        map1_builder.keys().append_value("x");
+        map1_builder.values().append_value(1);
+        map1_builder.append(true).unwrap();
+
+        let map1 = map1_builder.finish();
+
+        // Create second map array:
+        // [{"a": 1, "c": 999}, {"b": 1, "d": 999}, {"a": 1}, None]
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::new();
+        let mut map2_builder = MapBuilder::new(None, string_builder, int_builder);
+
+        // {"a": 1, "c": 999} - low value for "a", high value for "c"
+        map2_builder.keys().append_value("a");
+        map2_builder.values().append_value(1);
+        map2_builder.keys().append_value("c");
+        map2_builder.values().append_value(999);
+        map2_builder.append(true).unwrap();
+
+        // {"b": 1, "d": 999} - low value for "b", high value for "d"
+        map2_builder.keys().append_value("b");
+        map2_builder.values().append_value(1);
+        map2_builder.keys().append_value("d");
+        map2_builder.values().append_value(999);
+        map2_builder.append(true).unwrap();
+
+        // {"a": 1}
+        map2_builder.keys().append_value("a");
+        map2_builder.values().append_value(1);
+        map2_builder.append(true).unwrap();
+
+        // None
+        map2_builder.append(false).unwrap();
+
+        let map2 = map2_builder.finish();
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let cmp = make_comparator(&map1, &map2, opts).unwrap();
+
+        // Test that keys have priority over values:
+        // {"a": 100, "b": 1} vs {"a": 1, "c": 999}
+        // First entries match (a:100 vs a:1), but 100 > 1, so Greater
+        assert_eq!(cmp(0, 0), Ordering::Greater);
+
+        // {"b": 999, "c": 1} vs {"b": 1, "d": 999}
+        // First entries match (b:999 vs b:1), but 999 > 1, so Greater
+        assert_eq!(cmp(1, 1), Ordering::Greater);
+
+        // Key comparison: "a" < "b", so {"a": 100, "b": 1} < {"b": 999, "c": 1}
+        assert_eq!(cmp(0, 1), Ordering::Less);
+
+        // Empty map vs non-empty
+        assert_eq!(cmp(2, 2), Ordering::Less); // {} < {"a": 1}
+
+        // Non-null vs null
+        assert_eq!(cmp(3, 3), Ordering::Greater); // {"x": 1} > None
+
+        // Key priority test: "x" > "a", regardless of values
+        assert_eq!(cmp(3, 0), Ordering::Greater); // {"x": 1} > {"a": 1, "c": 999}
+
+        // Empty vs non-empty
+        assert_eq!(cmp(2, 0), Ordering::Less); // {} < {"a": 1, "c": 999}
+
+        let opts = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let cmp = make_comparator(&map1, &map2, opts).unwrap();
+
+        // With descending=true, value comparison is reversed
+        assert_eq!(cmp(0, 0), Ordering::Less); // {"a": 100, "b": 1} vs {"a": 1, "c": 999} (reversed)
+        assert_eq!(cmp(1, 1), Ordering::Less); // {"b": 999, "c": 1} vs {"b": 1, "d": 999} (reversed)
+        assert_eq!(cmp(0, 1), Ordering::Greater); // {"a": 100, "b": 1} vs {"b": 999, "c": 1} (key order reversed)
+        assert_eq!(cmp(3, 3), Ordering::Greater); // {"x": 1} > None
+        assert_eq!(cmp(2, 2), Ordering::Greater); // {} > {"a": 1} (reversed)
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let cmp = make_comparator(&map1, &map2, opts).unwrap();
+
+        // Same key priority behavior with nulls_first=false
+        assert_eq!(cmp(0, 0), Ordering::Greater); // {"a": 100, "b": 1} vs {"a": 1, "c": 999}
+        assert_eq!(cmp(1, 1), Ordering::Greater); // {"b": 999, "c": 1} vs {"b": 1, "d": 999}
+        assert_eq!(cmp(3, 3), Ordering::Less); // {"x": 1} < None (nulls last)
+        assert_eq!(cmp(2, 2), Ordering::Less); // {} < {"a": 1}
+    }
+
+    #[test]
+    fn test_map_vs_list_consistency() {
+        // Create map arrays and convert them to list arrays to verify comparison consistency
+        // Map arrays: [{"a": 1, "b": 2}, {"x": 10}, {}, {"c": 3}]
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::new();
+        let mut map1_builder = MapBuilder::new(None, string_builder, int_builder);
+
+        // {"a": 1, "b": 2}
+        map1_builder.keys().append_value("a");
+        map1_builder.values().append_value(1);
+        map1_builder.keys().append_value("b");
+        map1_builder.values().append_value(2);
+        map1_builder.append(true).unwrap();
+
+        // {"x": 10}
+        map1_builder.keys().append_value("x");
+        map1_builder.values().append_value(10);
+        map1_builder.append(true).unwrap();
+
+        // {}
+        map1_builder.append(true).unwrap();
+
+        // {"c": 3}
+        map1_builder.keys().append_value("c");
+        map1_builder.values().append_value(3);
+        map1_builder.append(true).unwrap();
+
+        let map1 = map1_builder.finish();
+
+        // Second map array: [{"a": 1, "b": 2}, {"y": 20}, {"d": 4}, None]
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::new();
+        let mut map2_builder = MapBuilder::new(None, string_builder, int_builder);
+
+        // {"a": 1, "b": 2}
+        map2_builder.keys().append_value("a");
+        map2_builder.values().append_value(1);
+        map2_builder.keys().append_value("b");
+        map2_builder.values().append_value(2);
+        map2_builder.append(true).unwrap();
+
+        // {"y": 20}
+        map2_builder.keys().append_value("y");
+        map2_builder.values().append_value(20);
+        map2_builder.append(true).unwrap();
+
+        // {"d": 4}
+        map2_builder.keys().append_value("d");
+        map2_builder.values().append_value(4);
+        map2_builder.append(true).unwrap();
+
+        // None
+        map2_builder.append(false).unwrap();
+
+        let map2 = map2_builder.finish();
+
+        // Convert map arrays to list arrays (Map entries are struct arrays with key-value pairs)
+        let list1: ListArray = map1.clone().into();
+        let list2: ListArray = map2.clone().into();
+
+        let test_cases = [
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ];
+
+        for opts in test_cases {
+            let map_cmp = make_comparator(&map1, &map2, opts).unwrap();
+            let list_cmp = make_comparator(&list1, &list2, opts).unwrap();
+
+            // Test all possible index combinations
+            for i in 0..map1.len() {
+                for j in 0..map2.len() {
+                    let map_result = map_cmp(i, j);
+                    let list_result = list_cmp(i, j);
+                    assert_eq!(
+                        map_result, list_result,
+                        "Map comparison and List comparison should be equal for indices ({i}, {j}) with opts {opts:?}. Map: {map_result:?}, List: {list_result:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_dense_union() {
+        // create a dense union array with Int32 (type_id = 0) and Utf8 (type_id=1)
+        // the values are: [1, "b", 2, "a", 3]
+        //  type_ids are: [0,  1,  0,  1,  0]
+        //   offsets are: [0, 0, 1, 1, 2] from [1, 2, 3] and ["b", "a"]
+        let int_array = Int32Array::from(vec![1, 2, 3]);
+        let str_array = StringArray::from(vec!["b", "a"]);
+
+        let type_ids = [0, 1, 0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        let array1 =
+            UnionArray::try_new(union_fields.clone(), type_ids, Some(offsets), children).unwrap();
+
+        // create a second array: [2, "a", 1, "c"]
+        //          type ids are: [0,  1,  0,  1]
+        //           offsets are: [0, 0, 1, 1] from [2, 1] and ["a", "c"]
+        let int_array2 = Int32Array::from(vec![2, 1]);
+        let str_array2 = StringArray::from(vec!["a", "c"]);
+        let type_ids2 = [0, 1, 0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets2 = [0, 0, 1, 1].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let children2 = vec![Arc::new(int_array2) as ArrayRef, Arc::new(str_array2)];
+
+        let array2 =
+            UnionArray::try_new(union_fields, type_ids2, Some(offsets2), children2).unwrap();
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        // comparing
+        // [1, "b", 2, "a", 3]
+        // [2, "a", 1, "c"]
+        let cmp = make_comparator(&array1, &array2, opts).unwrap();
+
+        // array1[0] = (type_id=0, value=1)
+        // array2[0] = (type_id=0, value=2)
+        assert_eq!(cmp(0, 0), Ordering::Less); // 1 < 2
+
+        // array1[0] = (type_id=0, value=1)
+        // array2[1] = (type_id=1, value="a")
+        assert_eq!(cmp(0, 1), Ordering::Less); // type_id 0 < 1
+
+        // array1[1] = (type_id=1, value="b")
+        // array2[1] = (type_id=1, value="a")
+        assert_eq!(cmp(1, 1), Ordering::Greater); // "b" > "a"
+
+        // array1[2] = (type_id=0, value=2)
+        // array2[0] = (type_id=0, value=2)
+        assert_eq!(cmp(2, 0), Ordering::Equal); // 2 == 2
+
+        // array1[3] = (type_id=1, value="a")
+        // array2[1] = (type_id=1, value="a")
+        assert_eq!(cmp(3, 1), Ordering::Equal); // "a" == "a"
+
+        // array1[1] = (type_id=1, value="b")
+        // array2[3] = (type_id=1, value="c")
+        assert_eq!(cmp(1, 3), Ordering::Less); // "b" < "c"
+
+        let opts_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let cmp_desc = make_comparator(&array1, &array2, opts_desc).unwrap();
+
+        assert_eq!(cmp_desc(0, 0), Ordering::Greater); // 1 > 2 (reversed)
+        assert_eq!(cmp_desc(0, 1), Ordering::Greater); // type_id 0 < 1, reversed to Greater
+        assert_eq!(cmp_desc(1, 1), Ordering::Less); // "b" < "a" (reversed)
+    }
+
+    #[test]
+    fn test_sparse_union() {
+        // create a sparse union array with Int32 (type_id=0) and Utf8 (type_id=1)
+        // values: [1, "b", 3]
+        // note, in sparse unions, child arrays have the same length as the union
+        let int_array = Int32Array::from(vec![Some(1), None, Some(3)]);
+        let str_array = StringArray::from(vec![None, Some("b"), None]);
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("a", DataType::Int32, false))),
+            (1, Arc::new(Field::new("b", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        let array = UnionArray::try_new(union_fields, type_ids, None, children).unwrap();
+
+        let opts = SortOptions::default();
+        let cmp = make_comparator(&array, &array, opts).unwrap();
+
+        // array[0] = (type_id=0, value=1), array[2] = (type_id=0, value=3)
+        assert_eq!(cmp(0, 2), Ordering::Less); // 1 < 3
+        // array[0] = (type_id=0, value=1), array[1] = (type_id=1, value="b")
+        assert_eq!(cmp(0, 1), Ordering::Less); // type_id 0 < 1
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_union_out_of_bounds() {
+        // create a dense union array with 3 elements
+        let int_array = Int32Array::from(vec![1, 2]);
+        let str_array = StringArray::from(vec!["a"]);
+
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        let array = UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
+
+        let opts = SortOptions::default();
+        let cmp = make_comparator(&array, &array, opts).unwrap();
+
+        // oob
+        cmp(0, 3);
+    }
+
+    #[test]
+    fn test_union_incompatible_fields() {
+        // create first union with Int32 and Utf8
+        let int_array1 = Int32Array::from(vec![1, 2]);
+        let str_array1 = StringArray::from(vec!["a", "b"]);
+
+        let type_ids1 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets1 = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields1 = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children1 = vec![Arc::new(int_array1) as ArrayRef, Arc::new(str_array1)];
+
+        let array1 =
+            UnionArray::try_new(union_fields1, type_ids1, Some(offsets1), children1).unwrap();
+
+        // create second union with Int32 and Float64 (incompatible with first)
+        let int_array2 = Int32Array::from(vec![3, 4]);
+        let float_array2 = Float64Array::from(vec![1.0, 2.0]);
+
+        let type_ids2 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets2 = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields2 = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("C", DataType::Float64, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children2 = vec![Arc::new(int_array2) as ArrayRef, Arc::new(float_array2)];
+
+        let array2 =
+            UnionArray::try_new(union_fields2, type_ids2, Some(offsets2), children2).unwrap();
+
+        let opts = SortOptions::default();
+
+        let Result::Err(ArrowError::InvalidArgumentError(out)) =
+            make_comparator(&array1, &array2, opts)
+        else {
+            panic!("expected error when making comparator of incompatible union arrays");
+        };
+
+        assert_eq!(
+            &out,
+            "Cannot compare UnionArrays with different fields: left=[(0, Field { name: \"A\", data_type: Int32 }), (1, Field { name: \"B\", data_type: Utf8 })], right=[(0, Field { name: \"A\", data_type: Int32 }), (1, Field { name: \"C\", data_type: Float64 })]"
+        );
+    }
+
+    #[test]
+    fn test_union_incompatible_modes() {
+        // create first union as Dense with Int32 and Utf8
+        let int_array1 = Int32Array::from(vec![1, 2]);
+        let str_array1 = StringArray::from(vec!["a", "b"]);
+
+        let type_ids1 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets1 = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields1 = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children1 = vec![Arc::new(int_array1) as ArrayRef, Arc::new(str_array1)];
+
+        let array1 =
+            UnionArray::try_new(union_fields1.clone(), type_ids1, Some(offsets1), children1)
+                .unwrap();
+
+        // create second union as Sparse with same fields (Int32 and Utf8)
+        let int_array2 = Int32Array::from(vec![Some(3), None]);
+        let str_array2 = StringArray::from(vec![None, Some("c")]);
+
+        let type_ids2 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let children2 = vec![Arc::new(int_array2) as ArrayRef, Arc::new(str_array2)];
+
+        let array2 = UnionArray::try_new(union_fields1, type_ids2, None, children2).unwrap();
+
+        let opts = SortOptions::default();
+
+        let Result::Err(ArrowError::InvalidArgumentError(out)) =
+            make_comparator(&array1, &array2, opts)
+        else {
+            panic!("expected error when making comparator of union arrays with different modes");
+        };
+
+        assert_eq!(
+            &out,
+            "Cannot compare UnionArrays with different modes: left=Dense, right=Sparse"
+        );
+    }
+
+    #[test]
+    fn test_null_array_cmp() {
+        let a = NullArray::new(3);
+        let b = NullArray::new(3);
+        let cmp = make_comparator(&a, &b, SortOptions::default()).unwrap();
+
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        assert_eq!(cmp(0, 1), Ordering::Equal);
+        assert_eq!(cmp(2, 0), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_run_end_encoded_int32() {
+        // Create RunEndEncoded arrays:
+        // array1: [1, 1, 2, 2, 2, 3]
+        // run_ends1: [2, 5, 6], values1: [1, 2, 3]
+        let run_ends1 = Int32Array::from(vec![2, 5, 6]);
+        let values1 = Int32Array::from(vec![1, 2, 3]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        // array2: [1, 2, 2, 3, 3, 3]
+        // run_ends2: [1, 3, 6], values2: [1, 2, 3]
+        let run_ends2 = Int32Array::from(vec![1, 3, 6]);
+        let values2 = Int32Array::from(vec![1, 2, 3]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
+
+        // array1[0] = 1, array2[0] = 1
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        // array1[0] = 1, array2[1] = 2
+        assert_eq!(cmp(0, 1), Ordering::Less);
+        // array1[2] = 2, array2[1] = 2
+        assert_eq!(cmp(2, 1), Ordering::Equal);
+        // array1[5] = 3, array2[5] = 3
+        assert_eq!(cmp(5, 5), Ordering::Equal);
+        // array1[1] = 1, array2[2] = 2
+        assert_eq!(cmp(1, 2), Ordering::Less);
+        // array1[4] = 2, array2[4] = 3
+        assert_eq!(cmp(4, 4), Ordering::Less);
+    }
+
+    #[test]
+    fn test_run_end_encoded_with_nulls() {
+        // Create RunEndEncoded arrays with nulls:
+        // array1: [1, 1, null, null, 2]
+        // run_ends1: [2, 4, 5], values1: [1, null, 2]
+        let run_ends1 = Int32Array::from(vec![2, 4, 5]);
+        let values1 = Int32Array::from(vec![Some(1), None, Some(2)]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        // array2: [null, 1, 1, 2, null]
+        // run_ends2: [1, 3, 4, 5], values2: [null, 1, 2, null]
+        let run_ends2 = Int32Array::from(vec![1, 3, 4, 5]);
+        let values2 = Int32Array::from(vec![None, Some(1), Some(2), None]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let opts = SortOptions::default();
+        let cmp = make_comparator(&array1, &array2, opts).unwrap();
+
+        // array1[0] = 1, array2[1] = 1
+        assert_eq!(cmp(0, 1), Ordering::Equal);
+        // array1[2] = null, array2[0] = null
+        assert_eq!(cmp(2, 0), Ordering::Equal);
+        // array1[0] = 1, array2[0] = null (nulls first by default)
+        assert_eq!(cmp(0, 0), Ordering::Greater);
+        // array1[2] = null, array2[1] = 1
+        assert_eq!(cmp(2, 1), Ordering::Less);
+    }
+
+    #[test]
+    fn test_run_end_encoded_int16() {
+        // Test with Int16 run ends
+        let run_ends1 = Int16Array::from(vec![3_i16, 5, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int16Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int16Array::from(vec![2_i16, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "c"]);
+        let array2 = RunArray::<Int16Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
+
+        // array1: [a, a, a, b, b, c]
+        // array2: [a, a, b, b, c, c]
+        assert_eq!(cmp(0, 0), Ordering::Equal); // a vs a
+        assert_eq!(cmp(2, 2), Ordering::Less); // a vs b
+        assert_eq!(cmp(3, 2), Ordering::Equal); // b vs b
+        assert_eq!(cmp(5, 4), Ordering::Equal); // c vs c
+    }
+
+    #[test]
+    fn test_run_end_encoded_int64() {
+        // Test with Int64 run ends
+        let run_ends1 = Int64Array::from(vec![2_i64, 4, 6]);
+        let values1 = Int64Array::from(vec![10_i64, 20, 30]);
+        let array1 = RunArray::<Int64Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int64Array::from(vec![3_i64, 5, 6]);
+        let values2 = Int64Array::from(vec![10_i64, 20, 30]);
+        let array2 = RunArray::<Int64Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
+
+        // array1: [10, 10, 20, 20, 30, 30]
+        // array2: [10, 10, 10, 20, 20, 30]
+        assert_eq!(cmp(0, 0), Ordering::Equal); // 10 vs 10
+        assert_eq!(cmp(1, 2), Ordering::Equal); // 10 vs 10
+        assert_eq!(cmp(2, 3), Ordering::Equal); // 20 vs 20
+        assert_eq!(cmp(4, 4), Ordering::Greater); // 30 vs 20
+    }
+
+    #[test]
+    fn test_run_end_encoded_sliced() {
+        // Create a RunEndEncoded array and slice it:
+        // original: [1, 1, 2, 2, 2, 3, 3, 4]
+        // run_ends: [2, 5, 7, 8], values: [1, 2, 3, 4]
+        let run_ends = Int32Array::from(vec![2, 5, 7, 8]);
+        let values = Int32Array::from(vec![1, 2, 3, 4]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        // slice1 = array[1..5] => [1, 2, 2, 2]
+        let slice1 = array.slice(1, 4);
+        // slice2 = array[3..7] => [2, 2, 3, 3]
+        let slice2 = array.slice(3, 4);
+
+        let cmp = make_comparator(&slice1, &slice2, SortOptions::default()).unwrap();
+
+        // slice1[0]=1, slice2[0]=2
+        assert_eq!(cmp(0, 0), Ordering::Less);
+        // slice1[1]=2, slice2[0]=2
+        assert_eq!(cmp(1, 0), Ordering::Equal);
+        // slice1[3]=2, slice2[2]=3
+        assert_eq!(cmp(3, 2), Ordering::Less);
+        // slice1[1]=2, slice2[3]=3
+        assert_eq!(cmp(1, 3), Ordering::Less);
+
+        // Compare a sliced array with an unsliced array
+        let run_ends2 = Int32Array::from(vec![2, 4]);
+        let values2 = Int32Array::from(vec![1, 2]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let cmp = make_comparator(&slice1, &array2, SortOptions::default()).unwrap();
+
+        // slice1[0]=1, array2[0]=1
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        // slice1[1]=2, array2[1]=1
+        assert_eq!(cmp(1, 1), Ordering::Greater);
+        // slice1[3]=2, array2[3]=2
+        assert_eq!(cmp(3, 3), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_run_end_encoded_sliced_with_nulls() {
+        // Create a RunEndEncoded array with nulls:
+        // original: [1, 1, null, null, 2, 2, null, 3]
+        // run_ends: [2, 4, 6, 7, 8], values: [1, null, 2, null, 3]
+        let run_ends = Int32Array::from(vec![2, 4, 6, 7, 8]);
+        let values = Int32Array::from(vec![Some(1), None, Some(2), None, Some(3)]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        // slice1 = array[1..6] => [1, null, null, 2, 2]
+        let slice1 = array.slice(1, 5);
+        // slice2 = array[3..8] => [null, 2, 2, null, 3]
+        let slice2 = array.slice(3, 5);
+
+        let opts = SortOptions::default(); // nulls_first=true, descending=false
+        let cmp = make_comparator(&slice1, &slice2, opts).unwrap();
+
+        // slice1[0]=1, slice2[0]=null
+        assert_eq!(cmp(0, 0), Ordering::Greater);
+        // slice1[1]=null, slice2[0]=null
+        assert_eq!(cmp(1, 0), Ordering::Equal);
+        // slice1[1]=null, slice2[1]=2
+        assert_eq!(cmp(1, 1), Ordering::Less);
+        // slice1[3]=2, slice2[1]=2
+        assert_eq!(cmp(3, 1), Ordering::Equal);
+        // slice1[4]=2, slice2[4]=3
+        assert_eq!(cmp(4, 4), Ordering::Less);
+        // slice1[3]=2, slice2[3]=null
+        assert_eq!(cmp(3, 3), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_run_end_encoded_different_types() {
+        // Test with different run end types - should fail
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = Int32Array::from(vec![1, 2, 3]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int64Array::from(vec![2_i64, 4, 6]);
+        let values2 = Int64Array::from(vec![1_i64, 2, 3]);
+        let array2 = RunArray::<Int64Type>::try_new(&run_ends2, &values2).unwrap();
+
+        let result = make_comparator(&array1, &array2, SortOptions::default());
+        assert!(result.is_err());
+        let err = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("Expected error"),
+        };
+        assert!(err.contains("Cannot compare RunEndEncoded arrays"));
     }
 }

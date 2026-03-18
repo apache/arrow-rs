@@ -53,7 +53,7 @@ impl<'a> UnalignedBitChunk<'a> {
         let byte_offset = offset / 8;
         let offset_padding = offset % 8;
 
-        let bytes_len = (len + offset_padding + 7) / 8;
+        let bytes_len = (len + offset_padding).div_ceil(8);
         let buffer = &buffer[byte_offset..byte_offset + bytes_len];
 
         let prefix_mask = compute_prefix_mask(offset_padding);
@@ -202,11 +202,10 @@ fn compute_suffix_mask(len: usize, lead_padding: usize) -> (u64, usize) {
     (suffix_mask, trailing_padding)
 }
 
-/// Iterates over an arbitrarily aligned byte buffer
+/// Iterates over an arbitrarily aligned byte buffer 64 bits at a time
 ///
-/// Yields an iterator of u64, and a remainder. The first byte in the buffer
+/// [`Self::iter`] yields iterator of `u64`, and a remainder. The first byte in the buffer
 /// will be the least significant byte in output u64
-///
 #[derive(Debug)]
 pub struct BitChunks<'a> {
     buffer: &'a [u8],
@@ -221,7 +220,10 @@ pub struct BitChunks<'a> {
 impl<'a> BitChunks<'a> {
     /// Create a new [`BitChunks`] from a byte array, and an offset and length in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
-        assert!(ceil(offset + len, 8) <= buffer.len() * 8);
+        assert!(
+            ceil(offset + len, 8) <= buffer.len(),
+            "offset + len out of bounds"
+        );
 
         let byte_offset = offset / 8;
         let bit_offset = offset % 8;
@@ -256,7 +258,7 @@ impl<'a> BitChunks<'a> {
         self.remainder_len
     }
 
-    /// Returns the number of chunks
+    /// Returns the number of `u64` chunks
     #[inline]
     pub const fn chunk_len(&self) -> usize {
         self.chunk_len
@@ -290,7 +292,28 @@ impl<'a> BitChunks<'a> {
         }
     }
 
-    /// Returns an iterator over chunks of 64 bits represented as an u64
+    /// Return the number of `u64` that are needed to represent all bits
+    /// (including remainder).
+    ///
+    /// This is equal to `chunk_len + 1` if there is a remainder,
+    /// otherwise it is equal to `chunk_len`.
+    #[inline]
+    pub fn num_u64s(&self) -> usize {
+        if self.remainder_len == 0 {
+            self.chunk_len
+        } else {
+            self.chunk_len + 1
+        }
+    }
+
+    /// Return the number of *bytes* that are needed to represent all bits
+    /// (including remainder).
+    #[inline]
+    pub fn num_bytes(&self) -> usize {
+        ceil(self.chunk_len * 64 + self.remainder_len, 8)
+    }
+
+    /// Returns an iterator over chunks of 64 bits represented as an `u64`
     #[inline]
     pub const fn iter(&self) -> BitChunkIterator<'a> {
         BitChunkIterator::<'a> {
@@ -371,7 +394,10 @@ impl ExactSizeIterator for BitChunkIterator<'_> {
 
 #[cfg(test)]
 mod tests {
+    use rand::distr::uniform::UniformSampler;
+    use rand::distr::uniform::UniformUsize;
     use rand::prelude::*;
+    use rand::rng;
 
     use crate::buffer::Buffer;
     use crate::util::bit_chunk_iterator::UnalignedBitChunk;
@@ -471,6 +497,57 @@ mod tests {
 
         assert_eq!(u64::MAX, bitchunks.iter().last().unwrap());
         assert_eq!(0x7F, bitchunks.remainder_bits());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_out_of_bound_should_panic_length_is_more_than_buffer_length() {
+        const ALLOC_SIZE: usize = 4 * 1024;
+        let input = vec![0xFF_u8; ALLOC_SIZE];
+
+        let buffer: Buffer = Buffer::from_vec(input);
+
+        // We are reading more than exists in the buffer
+        buffer.bit_chunks(0, (ALLOC_SIZE + 1) * 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_out_of_bound_should_panic_length_is_more_than_buffer_length_but_not_when_not_using_ceil()
+     {
+        const ALLOC_SIZE: usize = 4 * 1024;
+        let input = vec![0xFF_u8; ALLOC_SIZE];
+
+        let buffer: Buffer = Buffer::from_vec(input);
+
+        // We are reading more than exists in the buffer
+        buffer.bit_chunks(0, (ALLOC_SIZE * 8) + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_out_of_bound_should_panic_when_offset_is_not_zero_and_length_is_the_entire_buffer_length()
+     {
+        const ALLOC_SIZE: usize = 4 * 1024;
+        let input = vec![0xFF_u8; ALLOC_SIZE];
+
+        let buffer: Buffer = Buffer::from_vec(input);
+
+        // We are reading more than exists in the buffer
+        buffer.bit_chunks(8, ALLOC_SIZE * 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_out_of_bound_should_panic_when_offset_is_not_zero_and_length_is_the_entire_buffer_length_with_ceil()
+     {
+        const ALLOC_SIZE: usize = 4 * 1024;
+        let input = vec![0xFF_u8; ALLOC_SIZE];
+
+        let buffer: Buffer = Buffer::from_vec(input);
+
+        // We are reading more than exists in the buffer
+        buffer.bit_chunks(1, ALLOC_SIZE * 8);
     }
 
     #[test]
@@ -624,21 +701,25 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_unaligned_bit_chunk_iterator() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
+        let uusize = UniformUsize::new(usize::MIN, usize::MAX).unwrap();
         for _ in 0..100 {
-            let mask_len = rng.gen_range(0..1024);
-            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.gen()))
+            let mask_len = rng.random_range(0..1024);
+            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.random()))
                 .take(mask_len)
                 .collect();
 
             let buffer = Buffer::from_iter(bools.iter().cloned());
 
             let max_offset = 64.min(mask_len);
-            let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
+            let offset = uusize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);
 
             let max_truncate = 128.min(mask_len - offset);
-            let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
+            let truncate = uusize
+                .sample(&mut rng)
+                .checked_rem(max_truncate)
+                .unwrap_or(0);
 
             let unaligned =
                 UnalignedBitChunk::new(buffer.as_slice(), offset, mask_len - offset - truncate);

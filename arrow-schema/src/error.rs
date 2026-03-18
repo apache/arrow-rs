@@ -46,6 +46,8 @@ pub enum ArrowError {
     CsvError(String),
     /// Error during JSON-related operations.
     JsonError(String),
+    /// Error during Avro-related operations.
+    AvroError(String),
     /// Error during IO operations.
     IoError(String, std::io::Error),
     /// Error during IPC operations in `arrow-ipc` or `arrow-flight`.
@@ -60,6 +62,8 @@ pub enum ArrowError {
     DictionaryKeyOverflowError,
     /// Error when the run end index in a REE array is bigger than the array length
     RunEndIndexOverflowError,
+    /// Error when the offset overflows.
+    OffsetOverflowError(usize),
 }
 
 impl ArrowError {
@@ -107,6 +111,7 @@ impl Display for ArrowError {
             ArrowError::ComputeError(desc) => write!(f, "Compute error: {desc}"),
             ArrowError::ArithmeticOverflow(desc) => write!(f, "Arithmetic overflow: {desc}"),
             ArrowError::DivideByZero => write!(f, "Divide by zero error"),
+            ArrowError::AvroError(desc) => write!(f, "Avro error: {desc}"),
             ArrowError::CsvError(desc) => write!(f, "Csv error: {desc}"),
             ArrowError::JsonError(desc) => write!(f, "Json error: {desc}"),
             ArrowError::IoError(desc, _) => write!(f, "Io error: {desc}"),
@@ -125,6 +130,9 @@ impl Display for ArrowError {
             }
             ArrowError::RunEndIndexOverflowError => {
                 write!(f, "Run end encoded array index overflow error")
+            }
+            ArrowError::OffsetOverflowError(offset) => {
+                write!(f, "Offset overflow error: {offset}")
             }
         }
     }

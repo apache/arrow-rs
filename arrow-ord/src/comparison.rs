@@ -26,7 +26,7 @@
 use arrow_array::cast::*;
 
 use arrow_array::*;
-use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_schema::ArrowError;
 
 /// Checks if a [`GenericListArray`] contains a value in the [`PrimitiveArray`]
@@ -119,7 +119,7 @@ mod tests {
         ListBuilder, PrimitiveDictionaryBuilder, StringBuilder, StringDictionaryBuilder,
     };
     use arrow_array::types::*;
-    use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano};
+    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, i256};
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
     use half::f16;
@@ -3059,6 +3059,120 @@ mod tests {
         );
     }
 
+    fn create_decimal_array<T: DecimalType>(data: Vec<Option<T::Native>>) -> PrimitiveArray<T> {
+        data.into_iter().collect::<PrimitiveArray<T>>()
+    }
+
+    fn test_cmp_dict_decimal<T: DecimalType>(
+        values1: Vec<Option<T::Native>>,
+        values2: Vec<Option<T::Native>>,
+    ) {
+        let values = create_decimal_array::<T>(values1);
+        let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
+
+        let values = create_decimal_array::<T>(values2);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
+
+        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_cmp_dict_decimal32() {
+        test_cmp_dict_decimal::<Decimal32Type>(
+            vec![Some(0), Some(1), Some(2), Some(3), Some(4), Some(5)],
+            vec![Some(7), Some(-3), Some(4), Some(3), Some(5)],
+        );
+    }
+
+    #[test]
+    fn test_cmp_dict_non_dict_decimal32() {
+        let array1: Decimal32Array = Decimal32Array::from_iter_values([1, 2, 5, 4, 3, 0]);
+
+        let values = Decimal32Array::from_iter_values([7, -3, 4, 3, 5]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
+
+        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_cmp_dict_decimal64() {
+        let values = Decimal64Array::from_iter_values([0, 1, 2, 3, 4, 5]);
+        let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
+        let array1 = DictionaryArray::new(keys, Arc::new(values));
+
+        let values = Decimal64Array::from_iter_values([7, -3, 4, 3, 5]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
+
+        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_cmp_dict_non_dict_decimal64() {
+        let array1: Decimal64Array = Decimal64Array::from_iter_values([1, 2, 5, 4, 3, 0]);
+
+        let values = Decimal64Array::from_iter_values([7, -3, 4, 3, 5]);
+        let keys = Int8Array::from_iter_values([0_i8, 0, 1, 2, 3, 4]);
+        let array2 = DictionaryArray::new(keys, Arc::new(values));
+
+        let expected = BooleanArray::from(vec![false, false, false, true, true, false]);
+        assert_eq!(crate::cmp::eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![true, true, false, false, false, true]);
+        assert_eq!(crate::cmp::lt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![true, true, false, true, true, true]);
+        assert_eq!(crate::cmp::lt_eq(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![false, false, true, false, false, false]);
+        assert_eq!(crate::cmp::gt(&array1, &array2).unwrap(), expected);
+
+        let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
+        assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
+    }
+
     #[test]
     fn test_cmp_dict_decimal128() {
         let values = Decimal128Array::from_iter_values([0, 1, 2, 3, 4, 5]);
@@ -3161,6 +3275,103 @@ mod tests {
 
         let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
         assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_decimal32() {
+        let a = Decimal32Array::from_iter_values([1, 2, 4, 5]);
+        let b = Decimal32Array::from_iter_values([7, -3, 4, 3]);
+        let e = BooleanArray::from(vec![false, false, true, false]);
+        let r = crate::cmp::eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![true, false, false, false]);
+        let r = crate::cmp::lt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![true, false, true, false]);
+        let r = crate::cmp::lt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![false, true, false, true]);
+        let r = crate::cmp::gt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![false, true, true, true]);
+        let r = crate::cmp::gt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+    }
+
+    #[test]
+    fn test_decimal32_scalar() {
+        let a = Decimal32Array::from(vec![Some(1), Some(2), Some(3), None, Some(4), Some(5)]);
+        let b = Decimal32Array::new_scalar(3_i32);
+        // array eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), None, Some(false), Some(false)],
+        );
+        let r = crate::cmp::eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        // array neq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), None, Some(true), Some(true)],
+        );
+        let r = crate::cmp::neq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), None, Some(false), Some(false)],
+        );
+        let r = crate::cmp::lt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        // array lt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), None, Some(false), Some(false)],
+        );
+        let r = crate::cmp::lt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), None, Some(true), Some(true)],
+        );
+        let r = crate::cmp::gt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        // array gt_eq scalar
+        let e = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), None, Some(true), Some(true)],
+        );
+        let r = crate::cmp::gt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+    }
+
+    #[test]
+    fn test_decimal64() {
+        let a = Decimal64Array::from_iter_values([1, 2, 4, 5]);
+        let b = Decimal64Array::from_iter_values([7, -3, 4, 3]);
+        let e = BooleanArray::from(vec![false, false, true, false]);
+        let r = crate::cmp::eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![true, false, false, false]);
+        let r = crate::cmp::lt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![true, false, true, false]);
+        let r = crate::cmp::lt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![false, true, false, true]);
+        let r = crate::cmp::gt(&a, &b).unwrap();
+        assert_eq!(e, r);
+
+        let e = BooleanArray::from(vec![false, true, true, true]);
+        let r = crate::cmp::gt_eq(&a, &b).unwrap();
+        assert_eq!(e, r);
     }
 
     #[test]

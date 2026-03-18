@@ -17,9 +17,9 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{builder::BooleanBufferBuilder, Array, ArrayRef, StructArray};
-use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType as ArrowType;
+use arrow_array::{Array, ArrayRef, StructArray, builder::BooleanBufferBuilder};
+use arrow_buffer::NullBuffer;
+use arrow_schema::{DataType as ArrowType, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -124,16 +124,15 @@ impl ArrayReader for StructArrayReader {
             return Err(general_err!("Not all children array length are the same!"));
         }
 
-        // Now we can build array data
-        let mut array_data_builder = ArrayDataBuilder::new(self.data_type.clone())
-            .len(children_array_len)
-            .child_data(
-                children_array
-                    .iter()
-                    .map(|x| x.to_data())
-                    .collect::<Vec<ArrayData>>(),
-            );
+        let DataType::Struct(fields) = &self.data_type else {
+            return Err(general_err!(
+                "Internal: StructArrayReader must have struct data type, got {:?}",
+                self.data_type
+            ));
+        };
+        let fields = fields.clone(); // cloning Fields is cheap (Arc internally)
 
+        let mut nulls = None;
         if self.nullable {
             // calculate struct def level data
 
@@ -159,8 +158,13 @@ impl ArrayReader for StructArrayReader {
                     }
                 }
                 None => {
-                    for def_level in def_levels {
-                        bitmap_builder.append(*def_level >= self.struct_def_level)
+                    // Safety: slice iterator has a trusted length
+                    unsafe {
+                        bitmap_builder.extend_trusted_len(
+                            def_levels
+                                .iter()
+                                .map(|level| *level >= self.struct_def_level),
+                        )
                     }
                 }
             }
@@ -168,12 +172,19 @@ impl ArrayReader for StructArrayReader {
             if bitmap_builder.len() != children_array_len {
                 return Err(general_err!("Failed to decode level data for struct array"));
             }
-
-            array_data_builder = array_data_builder.null_bit_buffer(Some(bitmap_builder.into()));
+            nulls = Some(NullBuffer::from(bitmap_builder));
         }
 
-        let array_data = unsafe { array_data_builder.build_unchecked() };
-        Ok(Arc::new(StructArray::from(array_data)))
+        // Safety: checked above that all children array data have same
+        // length and correct type
+        unsafe {
+            Ok(Arc::new(StructArray::new_unchecked_with_length(
+                fields,
+                children_array,
+                nulls,
+                children_array_len,
+            )))
+        }
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
@@ -212,8 +223,8 @@ impl ArrayReader for StructArrayReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array_reader::test_util::InMemoryArrayReader;
     use crate::arrow::array_reader::ListArrayReader;
+    use crate::arrow::array_reader::test_util::InMemoryArrayReader;
     use arrow::buffer::Buffer;
     use arrow::datatypes::Field;
     use arrow_array::cast::AsArray;

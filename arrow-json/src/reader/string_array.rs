@@ -22,7 +22,10 @@ use arrow_schema::ArrowError;
 use std::marker::PhantomData;
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::ArrayDecoder;
+use crate::reader::{ArrayDecoder, DecoderContext};
+
+use itoa;
+use ryu;
 
 const TRUE: &str = "true";
 const FALSE: &str = "false";
@@ -34,10 +37,10 @@ pub struct StringArrayDecoder<O: OffsetSizeTrait> {
 }
 
 impl<O: OffsetSizeTrait> StringArrayDecoder<O> {
-    pub fn new(coerce_primitive: bool, ignore_type_conflicts: bool) -> Self {
+    pub fn new(ctx: &DecoderContext) -> Self {
         Self {
-            coerce_primitive,
-            ignore_type_conflicts,
+            coerce_primitive: ctx.coerce_primitive(),
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             phantom: Default::default(),
         }
     }
@@ -88,6 +91,9 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
 
         let mut builder = GenericStringBuilder::<O>::with_capacity(pos.len(), data_capacity);
 
+        let mut float_formatter = ryu::Buffer::new();
+        let mut int_formatter = itoa::Buffer::new();
+
         for p in pos {
             match tape.get(*p) {
                 TapeElement::String(idx) => {
@@ -106,20 +112,20 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                 TapeElement::I64(high) if coerce_primitive => match tape.get(p + 1) {
                     TapeElement::I32(low) => {
                         let val = ((high as i64) << 32) | (low as u32) as i64;
-                        builder.append_value(val.to_string());
+                        builder.append_value(int_formatter.format(val));
                     }
                     _ => unreachable!(),
                 },
                 TapeElement::I32(n) if coerce_primitive => {
-                    builder.append_value(n.to_string());
+                    builder.append_value(int_formatter.format(n));
                 }
                 TapeElement::F32(n) if coerce_primitive => {
-                    builder.append_value(n.to_string());
+                    builder.append_value(int_formatter.format(n));
                 }
                 TapeElement::F64(high) if coerce_primitive => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
                         let val = f64::from_bits(((high as u64) << 32) | low as u64);
-                        builder.append_value(val.to_string());
+                        builder.append_value(float_formatter.format_finite(val));
                     }
                     _ => unreachable!(),
                 },

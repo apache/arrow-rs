@@ -45,13 +45,14 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
 if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <tag> <rc>"
+    echo "Usage: $0 <version> <rc>"
     echo "ex. $0 4.1.0 2"
   exit
 fi
 
-tag=$1
+version=$1
 rc=$2
+tag="${version}-rc${rc}"
 
 
 # mac tar doesn't have --delete, so use gnutar
@@ -64,9 +65,12 @@ else
     tar=tar
 fi
 
-release_hash=$(cd "${SOURCE_TOP_DIR}" && git rev-list --max-count=1 ${tag})
+if ! git -C "${SOURCE_TOP_DIR}" rev-list --max-count=1 ${tag}; then
+    echo "Cannot continue: unknown git tag: $tag"
+fi
 
-release=apache-arrow-rs-${tag}
+
+release=apache-arrow-rs-${version}
 distdir=${SOURCE_TOP_DIR}/dev/dist/${release}-rc${rc}
 tarname=${release}.tar.gz
 tarball=${distdir}/${tarname}
@@ -75,22 +79,18 @@ url="https://dist.apache.org/repos/dist/dev/arrow/${release}-rc${rc}"
 echo "Attempting to create ${tarball} from tag ${tag}"
 
 
-if [ -z "$release_hash" ]; then
-    echo "Cannot continue: unknown git tag: $tag"
-fi
-
 echo "Draft email for dev@arrow.apache.org mailing list"
 echo ""
 echo "---------------------------------------------------------"
 cat <<MAIL
 To: dev@arrow.apache.org
-Subject: [VOTE][RUST] Release Apache Arrow Rust ${tag} RC${rc}
+Subject: [VOTE][RUST] Release Apache Arrow Rust ${version} RC${rc}
 
 Hi,
 
 I would like to propose a release of Apache Arrow Rust Implementation, version ${tag}.
 
-This release candidate is based on commit: ${release_hash} [1]
+This release candidate is based on commit: ${tag} [1]
 
 The proposed release tarball and signatures are hosted at [2].
 
@@ -106,22 +106,21 @@ The vote will be open for at least 72 hours.
 [ ] +0
 [ ] -1 Do not release this as Apache Arrow Rust ${version} because...
 
-[1]: https://github.com/apache/arrow-rs/tree/${release_hash}
+[1]: https://github.com/apache/arrow-rs/tree/${tag}
 [2]: ${url}
-[3]: https://github.com/apache/arrow-rs/blob/${release_hash}/CHANGELOG.md
-[4]: https://github.com/apache/arrow-rs/blob/main/dev/release/verify-release-candidate.sh
+[3]: https://github.com/apache/arrow-rs/blob/${tag}/CHANGELOG.md
+[4]: https://github.com/apache/arrow-rs/blob/master/dev/release/verify-release-candidate.sh
 MAIL
 echo "---------------------------------------------------------"
 
 
 
-# create <tarball> containing the files in git at $release_hash
-# the files in the tarball are prefixed with {tag} (e.g. 4.0.1)
-# use --delete to filter out `object_store` files
+# create <tarball> containing the files in git at $tag
+# the files in the tarball are prefixed with {release}
+# (e.g. apache-arrow-rs-4.0.1)
 mkdir -p ${distdir}
 (cd "${SOURCE_TOP_DIR}" && \
-     git archive ${release_hash} --prefix ${release}/ \
-         | $tar --delete ${release}/'object_store' \
+     git archive ${tag} --prefix ${release}/ \
          | gzip > ${tarball})
 
 echo "Running rat license checker on ${tarball}"
@@ -138,4 +137,4 @@ gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
 echo "Uploading to apache dist/dev to ${url}"
 svn co --depth=empty https://dist.apache.org/repos/dist/dev/arrow ${SOURCE_TOP_DIR}/dev/dist
 svn add ${distdir}
-svn ci -m "Apache Arrow Rust ${tag} ${rc}" ${distdir}
+svn ci -m "Apache Arrow Rust ${version} ${rc}" ${distdir}

@@ -19,7 +19,7 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid>
 
-use crate::{extension::ExtensionType, ArrowError, DataType};
+use crate::{ArrowError, DataType, extension::ExtensionType};
 
 /// The extension type for `UUID`.
 ///
@@ -80,8 +80,8 @@ mod tests {
     #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
-        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
         Field,
+        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
     };
 
     use super::*;
@@ -100,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
+    #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
         let field = Field::new("", DataType::FixedSizeBinary(16), false);
         field.extension_type::<Uuid>();

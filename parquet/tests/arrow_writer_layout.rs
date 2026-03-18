@@ -21,12 +21,14 @@ use arrow::array::{Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use arrow_array::builder::{Int32Builder, ListBuilder};
 use bytes::Bytes;
-use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::basic::{Encoding, PageType};
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{ReaderProperties, WriterProperties};
 use parquet::file::reader::SerializedPageReader;
+use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
 
 struct Layout {
@@ -68,7 +70,8 @@ fn do_test(test: LayoutTest) {
     let b = Bytes::from(buf);
 
     // Re-read file to decode column index
-    let read_options = ArrowReaderOptions::new().with_page_index(true);
+    let read_options =
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
     let reader =
         ParquetRecordBatchReaderBuilder::try_new_with_options(b.clone(), read_options).unwrap();
 
@@ -177,6 +180,7 @@ fn test_primitive() {
         .set_dictionary_enabled(false)
         .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     // Test spill plain encoding pages
@@ -207,6 +211,7 @@ fn test_primitive() {
         .set_dictionary_page_size_limit(1000)
         .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -249,6 +254,7 @@ fn test_primitive() {
         .set_dictionary_page_size_limit(10000)
         .set_data_page_size_limit(500)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -318,6 +324,7 @@ fn test_primitive() {
         .set_dictionary_enabled(false)
         .set_data_page_row_count_limit(100)
         .set_write_batch_size(100)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -352,6 +359,7 @@ fn test_string() {
         .set_dictionary_enabled(false)
         .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     // Test spill plain encoding pages
@@ -389,6 +397,7 @@ fn test_string() {
         .set_dictionary_page_size_limit(1000)
         .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -438,6 +447,7 @@ fn test_string() {
         .set_dictionary_page_size_limit(20000)
         .set_data_page_size_limit(500)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -520,6 +530,7 @@ fn test_list() {
         .set_dictionary_enabled(false)
         .set_data_page_row_count_limit(20)
         .set_write_batch_size(3)
+        .set_write_page_header_statistics(true)
         .build();
 
     // Test rows not split across pages
@@ -543,4 +554,48 @@ fn test_list() {
             }],
         },
     });
+}
+
+#[test]
+fn test_per_column_data_page_size_limit() {
+    // Test that per-column page size limits work correctly
+    // col_a has a small page size limit (500 bytes), col_b uses the default (10000 bytes)
+    let col_a = Arc::new(Int32Array::from_iter_values(0..2000)) as _;
+    let col_b = Arc::new(Int32Array::from_iter_values(0..2000)) as _;
+    let batch = RecordBatch::try_from_iter([("col_a", col_a), ("col_b", col_b)]).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_size_limit(10000)
+        .set_column_data_page_size_limit(ColumnPath::from("col_a"), 500)
+        .set_write_batch_size(10)
+        .build();
+
+    let mut buf = Vec::with_capacity(1024);
+    let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let b = Bytes::from(buf);
+    let read_options =
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
+    let reader =
+        ParquetRecordBatchReaderBuilder::try_new_with_options(b.clone(), read_options).unwrap();
+    let metadata = reader.metadata();
+
+    // Verify we have one row group with two columns
+    assert_eq!(metadata.row_groups().len(), 1);
+    let row_group = &metadata.row_groups()[0];
+    assert_eq!(row_group.columns().len(), 2);
+
+    // Get page counts from offset index
+    let offset_index = metadata.offset_index().unwrap();
+    let col_a_page_count = offset_index[0][0].page_locations.len();
+    let col_b_page_count = offset_index[0][1].page_locations.len();
+
+    // col_a should have many more pages than col_b due to smaller page size limit
+    // col_a: 500 byte limit for 8000 bytes of data -> 16 pages
+    // col_b: 10000 byte limit for 8000 bytes of data -> 1 page
+    assert_eq!(col_a_page_count, 16);
+    assert_eq!(col_b_page_count, 1);
 }

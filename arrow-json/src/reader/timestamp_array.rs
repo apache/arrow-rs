@@ -18,15 +18,15 @@
 use chrono::{DateTime, TimeZone};
 use std::marker::PhantomData;
 
+use arrow_array::Array;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::ArrowTimestampType;
-use arrow_array::Array;
 use arrow_cast::parse::string_to_datetime;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::ArrayDecoder;
+use crate::reader::{ArrayDecoder, DecoderContext};
 
 /// A specialized [`ArrayDecoder`] for timestamps
 pub struct TimestampArrayDecoder<P: ArrowTimestampType, Tz: TimeZone> {
@@ -38,11 +38,11 @@ pub struct TimestampArrayDecoder<P: ArrowTimestampType, Tz: TimeZone> {
 }
 
 impl<P: ArrowTimestampType, Tz: TimeZone> TimestampArrayDecoder<P, Tz> {
-    pub fn new(data_type: DataType, timezone: Tz, ignore_type_conflicts: bool) -> Self {
+    pub fn new(ctx: &DecoderContext, data_type: &DataType, timezone: Tz) -> Self {
         Self {
-            data_type,
+            data_type: data_type.clone(),
             timezone,
-            ignore_type_conflicts,
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             phantom: Default::default(),
         }
     }

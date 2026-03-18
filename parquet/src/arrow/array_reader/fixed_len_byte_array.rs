@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
-use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::record_reader::GenericRecordReader;
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
@@ -27,10 +27,10 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
-    IntervalDayTimeArray, IntervalYearMonthArray,
+    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
 };
-use arrow_buffer::{i256, Buffer, IntervalDayTime};
+use arrow_buffer::{Buffer, IntervalDayTime, i256};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
@@ -59,11 +59,27 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid physical type for fixed length byte array reader - {}",
                 t
-            ))
+            ));
         }
     };
     match &data_type {
         ArrowType::FixedSizeBinary(_) => {}
+        ArrowType::Decimal32(_, _) => {
+            if byte_length > 4 {
+                return Err(general_err!(
+                    "decimal 32 type too large, must be less then 4 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
+        ArrowType::Decimal64(_, _) => {
+            if byte_length > 8 {
+                return Err(general_err!(
+                    "decimal 64 type too large, must be less then 8 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
         ArrowType::Decimal128(_, _) => {
             if byte_length > 16 {
                 return Err(general_err!(
@@ -101,7 +117,7 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid data type for fixed length byte array reader - {}",
                 data_type
-            ))
+            ));
         }
     }
 
@@ -168,6 +184,16 @@ impl ArrayReader for FixedLenByteArrayReader {
         // conversion lambdas are all infallible. This improves performance by avoiding a branch in
         // the inner loop (see docs for `PrimitiveArray::from_unary`).
         let array: ArrayRef = match &self.data_type {
+            ArrowType::Decimal32(p, s) => {
+                let f = |b: &[u8]| i32::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal32Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
+            }
+            ArrowType::Decimal64(p, s) => {
+                let f = |b: &[u8]| i64::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal64Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
+            }
             ArrowType::Decimal128(p, s) => {
                 let f = |b: &[u8]| i128::from_be_bytes(sign_extend_be(b));
                 Arc::new(Decimal128Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
@@ -355,7 +381,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 offset: 0,
             },
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Decoder::Dict {
-                decoder: DictIndexDecoder::new(data, num_levels, num_values),
+                decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
             },
             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
                 decoder: DeltaByteArrayDecoder::new(data)?,
@@ -368,7 +394,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 return Err(general_err!(
                     "unsupported encoding for fixed length byte array: {}",
                     encoding
-                ))
+                ));
             }
         });
         Ok(())
@@ -492,8 +518,8 @@ enum Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ListArray};

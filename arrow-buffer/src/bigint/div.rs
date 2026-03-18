@@ -39,8 +39,8 @@ pub fn div_rem<const N: usize>(numerator: &[u64; N], divisor: &[u64; N]) -> ([u6
         return div_rem_small(numerator, divisor[0]);
     }
 
-    let numerator_words = (numerator_bits + 63) / 64;
-    let divisor_words = (divisor_bits + 63) / 64;
+    let numerator_words = numerator_bits.div_ceil(64);
+    let divisor_words = divisor_bits.div_ceil(64);
     let n = divisor_words;
     let m = numerator_words - divisor_words;
 

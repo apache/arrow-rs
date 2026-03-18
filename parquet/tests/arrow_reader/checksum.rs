@@ -63,7 +63,7 @@ fn test_rle_dict_snappy_checksum() {
 /// The record batch data is replaced with () and errors are stringified.
 fn read_file_batch_errors(name: &str) -> Vec<Result<(), String>> {
     let path = PathBuf::from(parquet_test_data()).join(name);
-    println!("Reading file: {:?}", path);
+    println!("Reading file: {path:?}");
     let file = std::fs::File::open(&path).unwrap();
     let reader = ArrowReaderBuilder::try_new(file).unwrap().build().unwrap();
     reader

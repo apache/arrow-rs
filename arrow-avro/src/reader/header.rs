@@ -17,10 +17,38 @@
 
 //! Decoder for [`Header`]
 
-use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
+use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
+use crate::errors::AvroError;
 use crate::reader::vlq::VLQDecoder;
-use crate::schema::{Schema, SCHEMA_METADATA_KEY};
-use arrow_schema::ArrowError;
+use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY, Schema};
+use std::io::BufRead;
+use std::str;
+use std::sync::Arc;
+
+/// Read the Avro file header (magic, metadata, sync marker) from `reader`.
+///
+/// On success, returns the parsed [`Header`] and the number of bytes read from `reader`.
+pub(crate) fn read_header<R: BufRead>(mut reader: R) -> Result<(Header, u64), AvroError> {
+    let mut decoder = HeaderDecoder::default();
+    let mut position = 0;
+    loop {
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
+            break;
+        }
+        let read = buf.len();
+        let decoded = decoder.decode(buf)?;
+        reader.consume(decoded);
+        position += decoded as u64;
+        if decoded != read {
+            break;
+        }
+    }
+    decoder
+        .flush()
+        .map(|header| (header, position))
+        .ok_or_else(|| AvroError::EOF("Unexpected EOF while reading Avro header".to_string()))
+}
 
 #[derive(Debug)]
 enum HeaderDecoderState {
@@ -75,30 +103,85 @@ impl Header {
     }
 
     /// Returns the [`CompressionCodec`] if any
-    pub fn compression(&self) -> Result<Option<CompressionCodec>, ArrowError> {
+    pub fn compression(&self) -> Result<Option<CompressionCodec>, AvroError> {
         let v = self.get(CODEC_METADATA_KEY);
-
         match v {
             None | Some(b"null") => Ok(None),
             Some(b"deflate") => Ok(Some(CompressionCodec::Deflate)),
             Some(b"snappy") => Ok(Some(CompressionCodec::Snappy)),
             Some(b"zstandard") => Ok(Some(CompressionCodec::ZStandard)),
-            Some(v) => Err(ArrowError::ParseError(format!(
+            Some(b"bzip2") => Ok(Some(CompressionCodec::Bzip2)),
+            Some(b"xz") => Ok(Some(CompressionCodec::Xz)),
+            Some(v) => Err(AvroError::ParseError(format!(
                 "Unrecognized compression codec \'{}\'",
                 String::from_utf8_lossy(v)
             ))),
         }
     }
 
-    /// Returns the [`Schema`] if any
-    pub fn schema(&self) -> Result<Option<Schema<'_>>, ArrowError> {
+    /// Returns the `Schema` if any
+    pub(crate) fn schema(&self) -> Result<Option<Schema<'_>>, AvroError> {
         self.get(SCHEMA_METADATA_KEY)
             .map(|x| {
                 serde_json::from_slice(x).map_err(|e| {
-                    ArrowError::ParseError(format!("Failed to parse Avro schema JSON: {e}"))
+                    AvroError::ParseError(format!("Failed to parse Avro schema JSON: {e}"))
                 })
             })
             .transpose()
+    }
+}
+
+/// Header information for an Avro OCF file.
+///
+/// The header can be parsed once and shared to construct multiple readers
+/// for the same file, and so this struct is designed to be cheaply clonable.
+#[derive(Clone)]
+pub struct HeaderInfo(Arc<HeaderInfoInner>);
+
+struct HeaderInfoInner {
+    header: Header,
+    header_len: u64,
+}
+
+/// Reads the Avro file header (magic, metadata, sync marker) from `reader`.
+///
+/// On success, returns the parsed [`HeaderInfo`] containing the header and its length in bytes.
+pub fn read_header_info<R: BufRead>(reader: R) -> Result<HeaderInfo, AvroError> {
+    let (header, header_len) = read_header(reader)?;
+    Ok(HeaderInfo::new(header, header_len))
+}
+
+impl HeaderInfo {
+    pub(crate) fn new(header: Header, header_len: u64) -> Self {
+        Self(Arc::new(HeaderInfoInner { header, header_len }))
+    }
+
+    /// Returns the writer schema for this file.
+    pub fn writer_schema(&self) -> Result<AvroSchema, AvroError> {
+        let raw = self.0.header.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
+            AvroError::ParseError("No Avro schema present in file header".to_string())
+        })?;
+        let json_string = str::from_utf8(raw)
+            .map_err(|e| {
+                AvroError::ParseError(format!("Invalid UTF-8 in Avro schema header: {e}"))
+            })?
+            .to_string();
+        Ok(AvroSchema::new(json_string))
+    }
+
+    /// Returns the [`CompressionCodec`] if any
+    pub fn compression(&self) -> Result<Option<CompressionCodec>, AvroError> {
+        self.0.header.compression()
+    }
+
+    /// Returns the length of the header in bytes.
+    pub fn header_len(&self) -> u64 {
+        self.0.header_len
+    }
+
+    /// Returns the sync token for this file.
+    pub fn sync(&self) -> [u8; 16] {
+        self.0.header.sync()
     }
 }
 
@@ -153,7 +236,7 @@ impl HeaderDecoder {
     /// input bytes, and the header can be obtained with [`Self::flush`]
     ///
     /// [`BufRead::fill_buf`]: std::io::BufRead::fill_buf
-    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, ArrowError> {
+    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, AvroError> {
         let max_read = buf.len();
         while !buf.is_empty() {
             match self.state {
@@ -161,7 +244,7 @@ impl HeaderDecoder {
                     let remaining = &MAGIC[MAGIC.len() - self.bytes_remaining..];
                     let to_decode = buf.len().min(remaining.len());
                     if !buf.starts_with(&remaining[..to_decode]) {
-                        return Err(ArrowError::ParseError("Incorrect avro magic".to_string()));
+                        return Err(AvroError::ParseError("Incorrect avro magic".to_string()));
                     }
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
@@ -264,13 +347,16 @@ impl HeaderDecoder {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::codec::{AvroDataType, AvroField};
+    use crate::codec::AvroField;
     use crate::reader::read_header;
-    use crate::schema::SCHEMA_METADATA_KEY;
+    use crate::schema::{
+        AVRO_NAME_METADATA_KEY, AVRO_ROOT_RECORD_DEFAULT_NAME, SCHEMA_METADATA_KEY,
+    };
     use crate::test_util::arrow_test_data;
     use arrow_schema::{DataType, Field, Fields, TimeUnit};
+    use std::collections::HashMap;
     use std::fs::File;
-    use std::io::{BufRead, BufReader};
+    use std::io::BufReader;
 
     #[test]
     fn test_header_decode() {
@@ -290,7 +376,7 @@ mod test {
 
     fn decode_file(file: &str) -> Header {
         let file = File::open(file).unwrap();
-        read_header(BufReader::with_capacity(100, file)).unwrap()
+        read_header(BufReader::with_capacity(1000, file)).unwrap().0
     }
 
     #[test]
@@ -325,6 +411,10 @@ mod test {
                 ])),
                 false
             )
+            .with_metadata(HashMap::from([(
+                AVRO_NAME_METADATA_KEY.to_string(),
+                AVRO_ROOT_RECORD_DEFAULT_NAME.to_string()
+            )]))
         );
 
         assert_eq!(

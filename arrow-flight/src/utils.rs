@@ -24,6 +24,7 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::fb_to_schema;
+use arrow_ipc::writer::CompressionContext;
 use arrow_ipc::{reader, root_as_message, writer, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 
@@ -90,13 +91,16 @@ pub fn batches_to_flight_data(
     let mut flight_data = vec![];
 
     let data_gen = writer::IpcDataGenerator::default();
-    #[allow(deprecated)]
-    let mut dictionary_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+    let mut dictionary_tracker = writer::DictionaryTracker::new(false);
+    let mut compression_context = CompressionContext::default();
 
     for batch in batches.iter() {
-        let (encoded_dictionaries, encoded_batch) =
-            data_gen.encoded_batch(batch, &mut dictionary_tracker, &options)?;
+        let (encoded_dictionaries, encoded_batch) = data_gen.encode(
+            batch,
+            &mut dictionary_tracker,
+            &options,
+            &mut compression_context,
+        )?;
 
         dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
         flight_data.push(encoded_batch.into());

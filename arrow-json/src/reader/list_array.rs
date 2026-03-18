@@ -16,10 +16,9 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, ArrayDecoder};
-use crate::StructMode;
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_array::OffsetSizeTrait;
+use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -35,32 +34,22 @@ pub struct ListArrayDecoder<O> {
 
 impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
     pub fn new(
-        data_type: DataType,
-        coerce_primitive: bool,
-        strict_mode: bool,
-        ignore_type_conflicts: bool,
+        ctx: &DecoderContext,
+        data_type: &DataType,
         is_nullable: bool,
-        struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
-        let field = match &data_type {
+        let field = match data_type {
             DataType::List(f) if !O::IS_LARGE => f,
             DataType::LargeList(f) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
-        let decoder = make_decoder(
-            field.data_type().clone(),
-            coerce_primitive,
-            strict_mode,
-            ignore_type_conflicts,
-            field.is_nullable(),
-            struct_mode,
-        )?;
+        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
 
         Ok(Self {
-            data_type,
+            data_type: data_type.clone(),
             decoder,
             phantom: Default::default(),
-            ignore_type_conflicts,
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             is_nullable,
         })
     }

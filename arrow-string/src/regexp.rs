@@ -25,29 +25,13 @@ use arrow_array::builder::{
 };
 use arrow_array::cast::AsArray;
 use arrow_array::*;
-use arrow_buffer::NullBuffer;
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, Field};
 use regex::Regex;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-
-/// Perform SQL `array ~ regex_array` operation on [`StringArray`] / [`LargeStringArray`].
-/// If `regex_array` element has an empty value, the corresponding result value is always true.
-///
-/// `flags_array` are optional [`StringArray`] / [`LargeStringArray`] flag, which allow
-/// special search modes, such as case insensitive and multi-line mode.
-/// See the documentation [here](https://docs.rs/regex/1.5.4/regex/#grouping-and-flags)
-/// for more information.
-#[deprecated(since = "54.0.0", note = "please use `regex_is_match` instead")]
-pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    regex_array: &GenericStringArray<OffsetSize>,
-    flags_array: Option<&GenericStringArray<OffsetSize>>,
-) -> Result<BooleanArray, ArrowError> {
-    regexp_is_match(array, regex_array, flags_array)
-}
 
 /// Return BooleanArray indicating which strings in an array match an array of
 /// regular expressions.
@@ -164,19 +148,6 @@ where
     Ok(BooleanArray::from(data))
 }
 
-/// Perform SQL `array ~ regex_array` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-///
-/// See the documentation on [`regexp_is_match_utf8`] for more details.
-#[deprecated(since = "54.0.0", note = "please use `regex_is_match_scalar` instead")]
-pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    regex: &str,
-    flag: Option<&str>,
-) -> Result<BooleanArray, ArrowError> {
-    regexp_is_match_scalar(array, regex, flag)
-}
-
 /// Return BooleanArray indicating which strings in an array match a single regular expression.
 ///
 /// This is equivalent to the SQL `array ~ regex_array`, supporting
@@ -209,7 +180,6 @@ pub fn regexp_is_match_scalar<'a, S>(
 where
     &'a S: StringArrayType<'a>,
 {
-    let null_bit_buffer = array.nulls().map(|x| x.inner().sliced());
     let mut result = BooleanBufferBuilder::new(array.len());
 
     let pattern = match flag {
@@ -229,20 +199,12 @@ where
         }
     }
 
-    let buffer = result.into();
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![buffer],
-            vec![],
-        )
-    };
-
-    Ok(BooleanArray::from(data))
+    let values = BooleanBuffer::from(result);
+    let nulls = array
+        .nulls()
+        .map(|n| n.inner().sliced())
+        .and_then(|b| NullBuffer::from_unsliced_buffer(b, array.len()));
+    Ok(BooleanArray::new(values, nulls))
 }
 
 macro_rules! process_regexp_array_match {

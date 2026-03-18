@@ -198,7 +198,7 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
 
 #[cfg(any(feature = "snap", test))]
 mod snappy_codec {
-    use snap::raw::{decompress_len, max_compress_len, Decoder, Encoder};
+    use snap::raw::{Decoder, Encoder, decompress_len, max_compress_len};
 
     use crate::compression::Codec;
     use crate::errors::Result;
@@ -257,7 +257,7 @@ mod gzip_codec {
 
     use std::io::{Read, Write};
 
-    use flate2::{read, write, Compression};
+    use flate2::{Compression, read, write};
 
     use crate::compression::Codec;
     use crate::errors::Result;
@@ -340,7 +340,7 @@ impl Default for GzipLevel {
 
 impl CompressionLevel<u32> for GzipLevel {
     const MINIMUM_LEVEL: u32 = 0;
-    const MAXIMUM_LEVEL: u32 = 10;
+    const MAXIMUM_LEVEL: u32 = 9;
 }
 
 impl GzipLevel {
@@ -503,20 +503,27 @@ pub use lz4_codec::*;
 
 #[cfg(any(feature = "zstd", test))]
 mod zstd_codec {
-    use std::io::{self, Write};
-
     use crate::compression::{Codec, ZstdLevel};
     use crate::errors::Result;
 
     /// Codec for Zstandard compression algorithm.
+    ///
+    /// Uses `zstd::bulk` API with reusable compressor/decompressor contexts
+    /// to avoid the overhead of reinitializing contexts for each operation.
     pub struct ZSTDCodec {
-        level: ZstdLevel,
+        compressor: zstd::bulk::Compressor<'static>,
+        decompressor: zstd::bulk::Decompressor<'static>,
     }
 
     impl ZSTDCodec {
         /// Creates new Zstandard compression codec.
         pub(crate) fn new(level: ZstdLevel) -> Self {
-            Self { level }
+            Self {
+                compressor: zstd::bulk::Compressor::new(level.compression_level())
+                    .expect("valid zstd compression level"),
+                decompressor: zstd::bulk::Decompressor::new()
+                    .expect("can create zstd decompressor"),
+            }
         }
     }
 
@@ -525,22 +532,25 @@ mod zstd_codec {
             &mut self,
             input_buf: &[u8],
             output_buf: &mut Vec<u8>,
-            _uncompress_size: Option<usize>,
+            uncompress_size: Option<usize>,
         ) -> Result<usize> {
-            let mut decoder = zstd::Decoder::new(input_buf)?;
-            match io::copy(&mut decoder, output_buf) {
-                Ok(n) => Ok(n as usize),
-                Err(e) => Err(e.into()),
-            }
+            let capacity = uncompress_size.unwrap_or_else(|| {
+                // Get the decompressed size from the zstd frame header
+                zstd::zstd_safe::get_frame_content_size(input_buf)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(input_buf.len() as u64 * 4) as usize
+            });
+            let decompressed = self.decompressor.decompress(input_buf, capacity)?;
+            let len = decompressed.len();
+            output_buf.extend_from_slice(&decompressed);
+            Ok(len)
         }
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
-            let mut encoder = zstd::Encoder::new(output_buf, self.level.0)?;
-            encoder.write_all(input_buf)?;
-            match encoder.finish() {
-                Ok(_) => Ok(()),
-                Err(e) => Err(e.into()),
-            }
+            let compressed = self.compressor.compress(input_buf)?;
+            output_buf.extend_from_slice(&compressed);
+            Ok(())
         }
     }
 }
@@ -607,7 +617,7 @@ mod lz4_raw_codec {
                 None => {
                     return Err(ParquetError::General(
                         "LZ4RawCodec unsupported without uncompress_size".into(),
-                    ))
+                    ));
                 }
             };
             output_buf.resize(offset + required_len, 0);
@@ -643,9 +653,9 @@ pub use lz4_raw_codec::*;
 
 #[cfg(any(feature = "lz4", test))]
 mod lz4_hadoop_codec {
+    use crate::compression::Codec;
     use crate::compression::lz4_codec::LZ4Codec;
     use crate::compression::lz4_raw_codec::LZ4RawCodec;
-    use crate::compression::Codec;
     use crate::errors::{ParquetError, Result};
     use std::io;
 
@@ -702,15 +712,11 @@ mod lz4_hadoop_codec {
             input_len -= PREFIX_LEN;
 
             if input_len < expected_compressed_size as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Not enough bytes for Hadoop frame",
-                ));
+                return Err(io::Error::other("Not enough bytes for Hadoop frame"));
             }
 
             if output_len < expected_decompressed_size as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(io::Error::other(
                     "Not enough bytes to hold advertised output",
                 ));
             }
@@ -718,10 +724,7 @@ mod lz4_hadoop_codec {
                 lz4_flex::decompress_into(&input[..expected_compressed_size as usize], output)
                     .map_err(|e| ParquetError::External(Box::new(e)))?;
             if decompressed_size != expected_decompressed_size as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Unexpected decompressed size",
-                ));
+                return Err(io::Error::other("Unexpected decompressed size"));
             }
             input_len -= expected_compressed_size as usize;
             output_len -= expected_decompressed_size as usize;
@@ -736,10 +739,7 @@ mod lz4_hadoop_codec {
         if input_len == 0 {
             Ok(read_bytes)
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Not all input are consumed",
-            ))
+            Err(io::Error::other("Not all input are consumed"))
         }
     }
 
@@ -756,7 +756,7 @@ mod lz4_hadoop_codec {
                 None => {
                     return Err(ParquetError::General(
                         "LZ4HadoopCodec unsupported without uncompress_size".into(),
-                    ))
+                    ));
                 }
             };
             output_buf.resize(output_len + required_len, 0);

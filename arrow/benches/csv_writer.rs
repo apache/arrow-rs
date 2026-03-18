@@ -25,6 +25,7 @@ use arrow::csv;
 use arrow::datatypes::*;
 use std::env;
 use std::fs::File;
+use std::hint;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -57,7 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("record_batches_to_csv", |b| {
         b.iter(|| {
             #[allow(clippy::unit_arg)]
-            criterion::black_box(for batch in &batches {
+            hint::black_box(for batch in &batches {
                 writer.write(batch).unwrap()
             });
         });

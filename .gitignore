@@ -25,6 +25,9 @@ __blobstorage__
 *.bak2
 # OS-specific .gitignores
 
+# cargo insta temp files
+*.pending-snap
+
 # Mac .gitignore
 # General
 .DS_Store
@@ -97,3 +100,6 @@ $RECYCLE.BIN/
 # Python virtual env in parquet crate
 parquet/pytest/venv/
 __pycache__/
+
+# Parquet file from arrow_reader_clickbench
+hits_1.parquet

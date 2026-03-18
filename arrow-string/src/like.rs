@@ -727,7 +727,9 @@ mod tests {
             "arrow",
             "arrow"
         ],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
+        vec![
+            "arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"
+        ],
         like,
         vec![true, true, true, false, false, true, false, false]
     );
@@ -817,7 +819,9 @@ mod tests {
             "arrow",
             "arrow"
         ],
-        vec!["arrow", "ar%", "row", "foo", "arr", "arrow_", "arrow_", ".*"],
+        vec![
+            "arrow", "ar%", "row", "foo", "arr", "arrow_", "arrow_", ".*"
+        ],
         starts_with,
         vec![true, false, false, false, true, false, false, false]
     );
@@ -864,7 +868,9 @@ mod tests {
             "arrow",
             "arrow"
         ],
-        vec!["arrow", "ar%", "row", "foo", "arr", "arrow_", "arrow_", ".*"],
+        vec![
+            "arrow", "ar%", "row", "foo", "arr", "arrow_", "arrow_", ".*"
+        ],
         ends_with,
         vec![true, false, true, false, false, false, false, false]
     );
@@ -1155,7 +1161,9 @@ mod tests {
         ],
         "FFkoSS%",
         ilike,
-        vec![false, true, true, false, false, false, false, true, true, false]
+        vec![
+            false, true, true, false, false, false, false, true, true, false
+        ]
     );
 
     test_utf8_scalar!(
@@ -1174,7 +1182,9 @@ mod tests {
         ],
         "%FFkoSS",
         ilike,
-        vec![false, true, true, false, false, false, false, true, true, true]
+        vec![
+            false, true, true, false, false, false, false, true, true, true
+        ]
     );
 
     test_utf8_scalar!(
@@ -1194,7 +1204,9 @@ mod tests {
         ],
         "%FFkoSS%",
         ilike,
-        vec![false, true, true, false, false, false, false, true, true, true, true]
+        vec![
+            false, true, true, false, false, false, false, true, true, true, true
+        ]
     );
 
     // Replicates `test_utf8_array_ilike_unicode_contains` and
@@ -1219,7 +1231,9 @@ mod tests {
         ],
         "FFkoSS",
         contains,
-        vec![false, true, true, false, false, false, false, true, true, true, false]
+        vec![
+            false, true, true, false, false, false, false, true, true, true, false
+        ]
     );
 
     test_utf8_scalar!(
@@ -1239,7 +1253,9 @@ mod tests {
         ],
         "%FF__SS%",
         ilike,
-        vec![false, true, true, false, false, false, false, true, true, true, true]
+        vec![
+            false, true, true, false, false, false, false, true, true, true, true
+        ]
     );
 
     // 😈 is four bytes long.
@@ -1260,7 +1276,9 @@ mod tests {
         ],
         "%Ssh😈klF",
         like,
-        vec![false, false, false, false, false, false, false, true, true, false, false]
+        vec![
+            false, false, false, false, false, false, false, true, true, false, false
+        ]
     );
 
     test_utf8_scalar!(

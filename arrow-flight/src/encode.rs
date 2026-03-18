@@ -17,14 +17,14 @@
 
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
-use crate::{error::Result, FlightData, FlightDescriptor, SchemaAsIpc};
+use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
-use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+use arrow_ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
-use futures::{ready, stream::BoxStream, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready, stream::BoxStream};
 
 /// Creates a [`Stream`] of [`FlightData`]s from a
 /// `Stream` of [`Result`]<[`RecordBatch`], [`FlightError`]>.
@@ -535,15 +535,13 @@ fn prepare_field_for_flight(
                 )
                 .with_metadata(field.metadata().clone())
             } else {
-                #[allow(deprecated)]
-                let dict_id = dictionary_tracker.set_dict_id(field.as_ref());
-
+                dictionary_tracker.next_dict_id();
                 #[allow(deprecated)]
                 Field::new_dict(
                     field.name(),
                     field.data_type().clone(),
                     field.is_nullable(),
-                    dict_id,
+                    0,
                     field.dict_is_ordered().unwrap_or_default(),
                 )
                 .with_metadata(field.metadata().clone())
@@ -585,14 +583,13 @@ fn prepare_schema_for_flight(
                     )
                     .with_metadata(field.metadata().clone())
                 } else {
-                    #[allow(deprecated)]
-                    let dict_id = dictionary_tracker.set_dict_id(field.as_ref());
+                    dictionary_tracker.next_dict_id();
                     #[allow(deprecated)]
                     Field::new_dict(
                         field.name(),
                         field.data_type().clone(),
                         field.is_nullable(),
-                        dict_id,
+                        0,
                         field.dict_is_ordered().unwrap_or_default(),
                     )
                     .with_metadata(field.metadata().clone())
@@ -650,20 +647,16 @@ struct FlightIpcEncoder {
     options: IpcWriteOptions,
     data_gen: IpcDataGenerator,
     dictionary_tracker: DictionaryTracker,
+    compression_context: CompressionContext,
 }
 
 impl FlightIpcEncoder {
     fn new(options: IpcWriteOptions, error_on_replacement: bool) -> Self {
-        #[allow(deprecated)]
-        let preserve_dict_id = options.preserve_dict_id();
         Self {
             options,
             data_gen: IpcDataGenerator::default(),
-            #[allow(deprecated)]
-            dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
-                error_on_replacement,
-                preserve_dict_id,
-            ),
+            dictionary_tracker: DictionaryTracker::new(error_on_replacement),
+            compression_context: CompressionContext::default(),
         }
     }
 
@@ -675,9 +668,12 @@ impl FlightIpcEncoder {
     /// Convert a `RecordBatch` to a Vec of `FlightData` representing
     /// dictionaries and a `FlightData` representing the batch
     fn encode_batch(&mut self, batch: &RecordBatch) -> Result<(Vec<FlightData>, FlightData)> {
-        let (encoded_dictionaries, encoded_batch) =
-            self.data_gen
-                .encoded_batch(batch, &mut self.dictionary_tracker, &self.options)?;
+        let (encoded_dictionaries, encoded_batch) = self.data_gen.encode(
+            batch,
+            &mut self.dictionary_tracker,
+            &self.options,
+            &mut self.compression_context,
+        )?;
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
         let flight_batch = encoded_batch.into();
@@ -1547,9 +1543,8 @@ mod tests {
     async fn verify_flight_round_trip(mut batches: Vec<RecordBatch>) {
         let expected_schema = batches.first().unwrap().schema();
 
-        #[allow(deprecated)]
         let encoder = FlightDataEncoderBuilder::default()
-            .with_options(IpcWriteOptions::default().with_preserve_dict_id(false))
+            .with_options(IpcWriteOptions::default())
             .with_dictionary_handling(DictionaryHandling::Resend)
             .build(futures::stream::iter(batches.clone().into_iter().map(Ok)));
 
@@ -1575,8 +1570,7 @@ mod tests {
             HashMap::from([("some_key".to_owned(), "some_value".to_owned())]),
         );
 
-        #[allow(deprecated)]
-        let mut dictionary_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
+        let mut dictionary_tracker = DictionaryTracker::new(false);
 
         let got = prepare_schema_for_flight(&schema, &mut dictionary_tracker, false);
         assert!(got.metadata().contains_key("some_key"));
@@ -1606,12 +1600,16 @@ mod tests {
         options: &IpcWriteOptions,
     ) -> (Vec<FlightData>, FlightData) {
         let data_gen = IpcDataGenerator::default();
-        #[allow(deprecated)]
-        let mut dictionary_tracker =
-            DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+        let mut dictionary_tracker = DictionaryTracker::new(false);
+        let mut compression_context = CompressionContext::default();
 
         let (encoded_dictionaries, encoded_batch) = data_gen
-            .encoded_batch(batch, &mut dictionary_tracker, options)
+            .encode(
+                batch,
+                &mut dictionary_tracker,
+                options,
+                &mut compression_context,
+            )
             .expect("DictionaryTracker configured above to not error on replacement");
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
@@ -1695,9 +1693,9 @@ mod tests {
 
     #[tokio::test]
     async fn flight_data_size_even() {
-        let s1 = StringArray::from_iter_values(std::iter::repeat(".10 bytes.").take(1024));
+        let s1 = StringArray::from_iter_values(std::iter::repeat_n(".10 bytes.", 1024));
         let i1 = Int16Array::from_iter_values(0..1024);
-        let s2 = StringArray::from_iter_values(std::iter::repeat("6bytes").take(1024));
+        let s2 = StringArray::from_iter_values(std::iter::repeat_n("6bytes", 1024));
         let i2 = Int64Array::from_iter_values(0..1024);
 
         let batch = RecordBatch::try_from_iter(vec![

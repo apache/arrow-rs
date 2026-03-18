@@ -19,9 +19,9 @@
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
-use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_buffer::MutableBuffer;
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
@@ -124,13 +124,13 @@ where
 
     let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
 
-    let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
-    // JUSTIFICATION
-    //  Benefit
-    //      ~60% speedup
-    //  Soundness
-    //      `values` is an iterator with a known size from a PrimitiveArray
-    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+    let values = a
+        .values()
+        .into_iter()
+        .zip(b.values())
+        .map(|(l, r)| op(*l, *r));
+
+    let buffer: Vec<_> = values.collect();
     Ok(PrimitiveArray::new(buffer.into(), nulls))
 }
 
