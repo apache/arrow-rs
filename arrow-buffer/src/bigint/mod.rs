@@ -843,8 +843,8 @@ macro_rules! define_standard_shift {
     };
 }
 
-define_standard_shift!(Shl, shl, [u16, u32, u64, usize, i16, i32, i64, isize]);
-define_standard_shift!(Shr, shr, [u16, u32, u64, usize, i16, i32, i64, isize]);
+define_standard_shift!(Shl, shl, [u16, u32, u64, u128, usize, i16, i32, i64, i128, isize]);
+define_standard_shift!(Shr, shr, [u16, u32, u64, u128, usize, i16, i32, i64, i128, isize]);
 
 macro_rules! define_as_primitive {
     ($native_ty:ty) => {
