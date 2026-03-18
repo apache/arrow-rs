@@ -23,7 +23,7 @@ use crate::{
     buffer_bin_xor,
 };
 
-use std::ops::{BitAnd, BitOr, BitXor, Not};
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 ///
@@ -66,6 +66,27 @@ use std::ops::{BitAnd, BitOr, BitXor, Not};
 ///
 /// Note that the bits marked `?` are not logically part of the mask and may
 /// contain either `0` or `1`
+///
+/// # Bitwise Operations
+///
+/// `BooleanBuffer` implements the standard bitwise traits for creating a new
+/// buffer ([`BitAnd`], [`BitOr`], [`BitXor`], [`Not`]) as well as the assign variants
+/// for updating an existing buffer in place when possible ([`BitAndAssign`],
+/// [`BitOrAssign`], [`BitXorAssign`]).
+///
+/// ```
+/// # use arrow_buffer::BooleanBuffer;
+/// let mut left = BooleanBuffer::from(&[true, false, true, true] as &[bool]);
+/// let right = BooleanBuffer::from(&[true, true, false, true] as &[bool]);
+///
+/// // Create a new buffer by applying bitwise AND
+/// let anded = &left & &right;
+/// assert_eq!(anded, BooleanBuffer::from(&[true, false, false, true] as &[bool]));
+///
+/// // Update `left` in place by applying bitwise AND in place
+/// left &= &right;
+/// assert_eq!(left, BooleanBuffer::from(&[true, false, false, true] as &[bool]));
+/// ```
 ///
 /// # See Also
 /// * [`BooleanBufferBuilder`] for building [`BooleanBuffer`] instances
@@ -534,6 +555,57 @@ impl BooleanBuffer {
         self.buffer
     }
 
+    /// Claim memory used by this buffer in the provided memory pool.
+    ///
+    /// See [`Buffer::claim`] for details.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        self.buffer.claim(pool);
+    }
+
+    /// Apply a bitwise binary operation to `self`.
+    ///
+    /// If the underlying buffer is uniquely owned, reuses the allocation
+    /// and updates the bytes in place. If the underlying buffer is shared,
+    /// returns a newly allocated buffer.
+    ///
+    /// # API Notes
+    ///
+    /// If the buffer is reused, the result preserves the existing offset, which
+    /// may be non-zero.
+    fn bitwise_bin_op_assign<F>(&mut self, rhs: &BooleanBuffer, op: F)
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        assert_eq!(self.bit_len, rhs.bit_len);
+        // Try to mutate in place if the buffer is uniquely owned
+        let buffer = std::mem::take(&mut self.buffer);
+        match buffer.into_mutable() {
+            Ok(mut buf) => {
+                bit_util::apply_bitwise_binary_op(
+                    &mut buf,
+                    self.bit_offset,
+                    &rhs.buffer,
+                    rhs.bit_offset,
+                    self.bit_len,
+                    op,
+                );
+                self.buffer = buf.into();
+            }
+            Err(buf) => {
+                self.buffer = buf;
+                *self = BooleanBuffer::from_bitwise_binary_op(
+                    self.values(),
+                    self.bit_offset,
+                    rhs.values(),
+                    rhs.bit_offset,
+                    self.bit_len,
+                    op,
+                );
+            }
+        }
+    }
+
     /// Returns an iterator over the bits in this [`BooleanBuffer`]
     pub fn iter(&self) -> BitIterator<'_> {
         self.into_iter()
@@ -617,6 +689,24 @@ impl BitXor<&BooleanBuffer> for &BooleanBuffer {
             bit_offset: 0,
             bit_len: self.bit_len,
         }
+    }
+}
+
+impl BitAndAssign<&BooleanBuffer> for BooleanBuffer {
+    fn bitand_assign(&mut self, rhs: &BooleanBuffer) {
+        self.bitwise_bin_op_assign(rhs, |a, b| a & b);
+    }
+}
+
+impl BitOrAssign<&BooleanBuffer> for BooleanBuffer {
+    fn bitor_assign(&mut self, rhs: &BooleanBuffer) {
+        self.bitwise_bin_op_assign(rhs, |a, b| a | b);
+    }
+}
+
+impl BitXorAssign<&BooleanBuffer> for BooleanBuffer {
+    fn bitxor_assign(&mut self, rhs: &BooleanBuffer) {
+        self.bitwise_bin_op_assign(rhs, |a, b| a ^ b);
     }
 }
 
@@ -764,6 +854,47 @@ mod tests {
 
         let expected = BooleanBuffer::new(Buffer::from(&[0, 0, 0, 1, 0]), offset, len);
         assert_eq!(boolean_buf1 ^ boolean_buf2, expected);
+    }
+
+    #[test]
+    fn test_boolean_bitand_assign_shared_and_unshared() {
+        let rhs = BooleanBuffer::from(&[true, true, false, true, false, true][..]);
+        let original = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+
+        let mut unshared = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+        unshared &= &rhs;
+
+        let mut shared = original.clone();
+        let _shared_owner = shared.clone();
+        shared &= &rhs;
+
+        let expected = &original & &rhs;
+        assert_eq!(unshared, expected);
+        assert_eq!(shared, expected);
+    }
+
+    #[test]
+    fn test_boolean_bitor_assign() {
+        let rhs = BooleanBuffer::from(&[true, true, false, true, false, true][..]);
+        let original = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+
+        let mut actual = original.clone();
+        actual |= &rhs;
+
+        let expected = &original | &rhs;
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_boolean_bitxor_assign() {
+        let rhs = BooleanBuffer::from(&[true, true, false, true, false, true][..]);
+        let original = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+
+        let mut actual = original.clone();
+        actual ^= &rhs;
+
+        let expected = &original ^ &rhs;
+        assert_eq!(actual, expected);
     }
 
     #[test]

@@ -168,7 +168,7 @@ fn cast_string_to_timestamp_impl<
         let iter = iter.map(|v| {
             v.and_then(|v| {
                 let naive = string_to_datetime(tz, v).ok()?.naive_utc();
-                T::make_value(naive)
+                T::from_naive_datetime(naive, None)
             })
         });
         // Benefit:
@@ -182,7 +182,7 @@ fn cast_string_to_timestamp_impl<
             .map(|v| {
                 v.map(|v| {
                     let naive = string_to_datetime(tz, v)?.naive_utc();
-                    T::make_value(naive).ok_or_else(|| match T::UNIT {
+                    T::from_naive_datetime(naive, None).ok_or_else(|| match T::UNIT {
                         TimeUnit::Nanosecond => ArrowError::CastError(format!(
                             "Overflow converting {naive} to Nanosecond. The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804"
                         )),

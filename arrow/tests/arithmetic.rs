@@ -76,7 +76,7 @@ fn test_timestamp_with_timezone_impl<T: ArrowTimestampType>(tz_str: &str) {
             .naive_utc(),
     ]
     .into_iter()
-    .map(|x| T::make_value(x).unwrap())
+    .map(|x| T::from_naive_datetime(x, None).unwrap())
     .collect();
 
     let a = PrimitiveArray::<T>::new(values, None).with_timezone(tz_str);

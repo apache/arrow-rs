@@ -91,14 +91,10 @@ Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
 | ---------------- | ---------- | --------------------------------------- |
-| December 2025    | [`57.2.0`] | Minor, NO breaking API changes          |
-| January 2026     | [`58.0.0`] | Major, potentially breaking API changes |
-| February 2026    | [`58.1.0`] | Minor, NO breaking API changes          |
-| March 2026       | [`58.2.0`] | Minor, NO breaking API changes          |
-| April 2026       | [`59.0.0`] | Major, potentially breaking API changes |
+| March 2026       | [`58.1.0`] | Minor, NO breaking API changes          |
+| April 2026       | [`58.2.0`] | Minor, NO breaking API changes          |
+| May 2026         | [`59.0.0`] | Major, potentially breaking API changes |
 
-[`57.2.0`]: https://github.com/apache/arrow-rs/milestone/5
-[`58.0.0`]: https://github.com/apache/arrow-rs/milestone/6
 [`58.1.0`]: https://github.com/apache/arrow-rs/issues/9108
 [`58.2.0`]: https://github.com/apache/arrow-rs/issues/9109
 [`59.0.0`]: https://github.com/apache/arrow-rs/issues/9110
@@ -154,7 +150,7 @@ There are several related crates in different repositories
 
 | Crate               | Description                                                  | Documentation                      |
 | ------------------- | ------------------------------------------------------------ | ---------------------------------- |
-| [`object_store`]    | Object Storage (aws, azure, gcp, local, in-memory) interface | [(README)](object_store-readme)    |
+| [`object_store`]    | Object Storage (aws, azure, gcp, local, in-memory) interface | [(README)][object_store-readme]    |
 | [`datafusion`]      | In-memory query engine with SQL support                      | [(README)][datafusion-readme]      |
 | [`ballista`]        | Distributed query execution                                  | [(README)][ballista-readme]        |
 | [`parquet_opendal`] | Use [`opendal`] for [`parquet`] Arrow IO                     | [(README)][parquet_opendal-readme] |

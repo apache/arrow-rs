@@ -25,9 +25,7 @@ use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder, ScalarBuffer, i256,
-};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, NullBufferBuilder, ScalarBuffer, i256};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -1248,6 +1246,14 @@ unsafe impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>() + self.get_buffer_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.values.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+    }
 }
 
 impl<T: ArrowPrimitiveType> ArrayAccessor for &PrimitiveArray<T> {
@@ -1490,8 +1496,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         let (null, buffer) = unsafe { trusted_len_unzip(iterator) };
 
-        let nulls =
-            Some(NullBuffer::new(BooleanBuffer::new(null, 0, len))).filter(|n| n.null_count() > 0);
+        let nulls = NullBuffer::from_unsliced_buffer(null, len);
         PrimitiveArray::new(ScalarBuffer::from(buffer), nulls)
     }
 }

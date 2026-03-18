@@ -147,8 +147,10 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         | DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, _)
         | DataType::Binary
         | DataType::BinaryView
+        | DataType::LargeBinary
         | DataType::Utf8
         | DataType::Utf8View
+        | DataType::LargeUtf8
         | DataType::FixedSizeBinary(16) // UUID
         => {
             let builder =
@@ -652,10 +654,10 @@ impl VariantSchemaNode {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use crate::arrow_to_variant::ListLikeArray;
     use arrow::array::{
         Array, BinaryViewArray, FixedSizeBinaryArray, Float64Array, GenericListArray,
-        GenericListViewArray, Int64Array, ListArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+        GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray, ListArray,
+        ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray,
     };
     use arrow::datatypes::{
         ArrowPrimitiveType, DataType, Field, Fields, Int64Type, TimeUnit, UnionFields, UnionMode,
@@ -1145,6 +1147,120 @@ mod tests {
     }
 
     #[test]
+    // TODO(#9518): Drop this once variant_get tests build shredded fixtures via shred_variant.
+    fn test_largeutf8_shredding() {
+        let input = VariantArray::from_iter(vec![
+            Some(Variant::from("hello")),
+            Some(Variant::from(42i64)),
+            None,
+            Some(Variant::Null),
+            Some(Variant::from("world")),
+        ]);
+
+        let result = shred_variant(&input, &DataType::LargeUtf8).unwrap();
+        let metadata = result.metadata_field();
+        let value = result.value_field().unwrap();
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap();
+
+        assert_eq!(result.len(), 5);
+
+        // Row 0: string shreds to typed_value
+        assert!(result.is_valid(0));
+        assert!(value.is_null(0));
+        assert_eq!(typed_value.value(0), "hello");
+
+        // Row 1: integer falls back to value
+        assert!(result.is_valid(1));
+        assert!(value.is_valid(1));
+        assert!(typed_value.is_null(1));
+        assert_eq!(
+            Variant::new(metadata.value(1), value.value(1)),
+            Variant::from(42i64)
+        );
+
+        // Row 2: top-level null
+        assert!(result.is_null(2));
+        assert!(value.is_null(2));
+        assert!(typed_value.is_null(2));
+
+        // Row 3: variant null falls back to value
+        assert!(result.is_valid(3));
+        assert!(value.is_valid(3));
+        assert!(typed_value.is_null(3));
+        assert_eq!(
+            Variant::new(metadata.value(3), value.value(3)),
+            Variant::Null
+        );
+
+        // Row 4: string shreds to typed_value
+        assert!(result.is_valid(4));
+        assert!(value.is_null(4));
+        assert_eq!(typed_value.value(4), "world");
+    }
+
+    #[test]
+    // TODO(#9518): Drop this once variant_get tests build shredded fixtures via shred_variant.
+    fn test_largebinary_shredding() {
+        let input = VariantArray::from_iter(vec![
+            Some(Variant::from(&b"\x00\x01\x02"[..])),
+            Some(Variant::from("not_binary")),
+            None,
+            Some(Variant::Null),
+            Some(Variant::from(&b"\xff\xaa"[..])),
+        ]);
+
+        let result = shred_variant(&input, &DataType::LargeBinary).unwrap();
+        let metadata = result.metadata_field();
+        let value = result.value_field().unwrap();
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .unwrap();
+
+        assert_eq!(result.len(), 5);
+
+        // Row 0: binary shreds to typed_value
+        assert!(result.is_valid(0));
+        assert!(value.is_null(0));
+        assert_eq!(typed_value.value(0), &[0x00, 0x01, 0x02]);
+
+        // Row 1: string falls back to value
+        assert!(result.is_valid(1));
+        assert!(value.is_valid(1));
+        assert!(typed_value.is_null(1));
+        assert_eq!(
+            Variant::new(metadata.value(1), value.value(1)),
+            Variant::from("not_binary")
+        );
+
+        // Row 2: top-level null
+        assert!(result.is_null(2));
+        assert!(value.is_null(2));
+        assert!(typed_value.is_null(2));
+
+        // Row 3: variant null falls back to value
+        assert!(result.is_valid(3));
+        assert!(value.is_valid(3));
+        assert!(typed_value.is_null(3));
+        assert_eq!(
+            Variant::new(metadata.value(3), value.value(3)),
+            Variant::Null
+        );
+
+        // Row 4: binary shreds to typed_value
+        assert!(result.is_valid(4));
+        assert!(value.is_null(4));
+        assert_eq!(typed_value.value(4), &[0xff, 0xaa]);
+    }
+
+    #[test]
     fn test_invalid_shredded_types_rejected() {
         let input = VariantArray::from_iter([Variant::from(42)]);
 
@@ -1156,8 +1272,6 @@ mod tests {
             DataType::Time32(TimeUnit::Second),
             DataType::Time64(TimeUnit::Nanosecond),
             DataType::Timestamp(TimeUnit::Millisecond, None),
-            DataType::LargeBinary,
-            DataType::LargeUtf8,
             DataType::FixedSizeBinary(17),
             DataType::Union(
                 UnionFields::from_fields(vec![

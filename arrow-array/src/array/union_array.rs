@@ -946,6 +946,17 @@ unsafe impl Array for UnionArray {
                 .sum::<usize>()
             + sum
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.type_ids.claim(pool);
+        if let Some(offsets) = &self.offsets {
+            offsets.claim(pool);
+        }
+        for field in self.fields.iter().flatten() {
+            field.claim(pool);
+        }
+    }
 }
 
 impl std::fmt::Debug for UnionArray {
