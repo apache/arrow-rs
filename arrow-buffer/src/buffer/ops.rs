@@ -269,18 +269,7 @@ mod tests {
     #[test]
     fn test_buffer_bin_ops_return_zero_offset_buffers() {
         let left = Buffer::from(vec![0b1010_1100, 0b0110_1001]);
-        let right = Buffer::from(vec![
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0b1110_0101,
-            0b0101_1000,
-        ]);
+        let right = Buffer::from(vec![0, 0, 0, 0, 0, 0, 0, 0, 0b1110_0101, 0b0101_1000]);
 
         let left_offset = 1;
         let right_offset = 65; // same mod 64 as left_offset, so from_bitwise_binary_op returns non-zero offset
@@ -298,8 +287,14 @@ mod tests {
             (((|a, b| a ^ b) as fn(u64, u64) -> u64), buffer_bin_xor),
             (((|a, b| a & !b) as fn(u64, u64) -> u64), buffer_bin_and_not),
         ] {
-            let unsliced =
-                BooleanBuffer::from_bitwise_binary_op(&left, left_offset, &right, right_offset, len, op);
+            let unsliced = BooleanBuffer::from_bitwise_binary_op(
+                &left,
+                left_offset,
+                &right,
+                right_offset,
+                len,
+                op,
+            );
             assert_eq!(unsliced.offset(), 1);
 
             let result = wrapper(&left, left_offset, &right, right_offset, len);
