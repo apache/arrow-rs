@@ -810,14 +810,16 @@ impl Shr<u8> for i256 {
 impl WrappingShl for i256 {
     #[inline]
     fn wrapping_shl(&self, rhs: u32) -> i256 {
-        (*self).shl(rhs)
+        // Mask the higher-order bits
+        (*self).shl(rhs as u8)
     }
 }
 
 impl WrappingShr for i256 {
     #[inline]
     fn wrapping_shr(&self, rhs: u32) -> i256 {
-        (*self).shr(rhs)
+        // Masks the higher-order bits
+        (*self).shr(rhs as u8)
     }
 }
 
