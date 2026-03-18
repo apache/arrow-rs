@@ -100,70 +100,51 @@ where
             PrimitiveBuilder::<P>::with_capacity(pos.len()).with_data_type(self.data_type.clone());
         let d = &self.data_type;
 
-        // Factor out this logic to simplify call sites below; the compiler will inline it,
-        // producing a highly predictable branch whose cost should be trivial compared to the
-        // expensive and unpredictably branchy string parse that immediately precedes each call.
-        let append = |builder: &mut PrimitiveBuilder<P>, value| {
-            match value {
-                Ok(value) => builder.append_value(value),
-                Err(_) if self.ignore_type_conflicts => builder.append_null(),
-                Err(e) => return Err(e),
-            };
-            Ok(())
-        };
-
         for p in pos {
-            match tape.get(*p) {
-                TapeElement::Null => builder.append_null(),
-                TapeElement::String(idx) => {
-                    let s = tape.get_string(idx);
-                    let value = P::parse(s).ok_or_else(|| {
-                        ArrowError::JsonError(format!("failed to parse \"{s}\" as {d}",))
-                    });
-                    append(&mut builder, value)?
+            let value = match tape.get(*p) {
+                TapeElement::Null => {
+                    builder.append_null();
+                    continue;
                 }
-                TapeElement::Number(idx) => {
+                TapeElement::String(idx) | TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
-                    let value = ParseJsonNumber::parse(s.as_bytes()).ok_or_else(|| {
+                    ParseJsonNumber::parse(s.as_bytes()).ok_or_else(|| {
                         ArrowError::JsonError(format!("failed to parse {s} as {d}",))
-                    });
-                    append(&mut builder, value)?
+                    })
                 }
                 TapeElement::F32(v) => {
                     let v = f32::from_bits(v);
-                    let value = NumCast::from(v).ok_or_else(|| {
+                    NumCast::from(v).ok_or_else(|| {
                         ArrowError::JsonError(format!("failed to parse {v} as {d}",))
-                    });
-                    append(&mut builder, value)?
+                    })
                 }
-                TapeElement::I32(v) => {
-                    let value = NumCast::from(v).ok_or_else(|| {
-                        ArrowError::JsonError(format!("failed to parse {v} as {d}",))
-                    });
-                    append(&mut builder, value)?
-                }
+                TapeElement::I32(v) => NumCast::from(v)
+                    .ok_or_else(|| ArrowError::JsonError(format!("failed to parse {v} as {d}",))),
                 TapeElement::F64(high) => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
                         let v = f64::from_bits(((high as u64) << 32) | low as u64);
-                        let value = NumCast::from(v).ok_or_else(|| {
+                        NumCast::from(v).ok_or_else(|| {
                             ArrowError::JsonError(format!("failed to parse {v} as {d}",))
-                        });
-                        append(&mut builder, value)?
+                        })
                     }
                     _ => unreachable!(),
                 },
                 TapeElement::I64(high) => match tape.get(p + 1) {
                     TapeElement::I32(low) => {
                         let v = ((high as i64) << 32) | (low as u32) as i64;
-                        let value = NumCast::from(v).ok_or_else(|| {
+                        NumCast::from(v).ok_or_else(|| {
                             ArrowError::JsonError(format!("failed to parse {v} as {d}",))
-                        });
-                        append(&mut builder, value)?
+                        })
                     }
                     _ => unreachable!(),
                 },
-                _ if self.ignore_type_conflicts => builder.append_null(),
-                _ => return Err(tape.error(*p, "primitive")),
+                _ => Err(tape.error(*p, "primitive")),
+            };
+
+            match value {
+                Ok(value) => builder.append_value(value),
+                Err(_) if self.ignore_type_conflicts => builder.append_null(),
+                Err(e) => return Err(e),
             }
         }
 

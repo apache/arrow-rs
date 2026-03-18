@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use chrono::{DateTime, TimeZone};
+use chrono::TimeZone;
 use std::marker::PhantomData;
 
 use arrow_array::Array;
@@ -56,22 +56,12 @@ where
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut builder =
             PrimitiveBuilder::<P>::with_capacity(pos.len()).with_data_type(self.data_type.clone());
-
-        // Factor out this logic to simplify call sites below; the compiler will inline it,
-        // producing a highly predictable branch whose cost should be trivial compared to the
-        // expensive and unpredictably branchy string parse that immediately precedes each call.
-        let append = |builder: &mut PrimitiveBuilder<P>, value| {
-            match value {
-                Ok(value) => builder.append_value(value),
-                Err(_) if self.ignore_type_conflicts => builder.append_null(),
-                Err(e) => return Err(e),
-            };
-            Ok(())
-        };
-
         for p in pos {
-            match tape.get(*p) {
-                TapeElement::Null => builder.append_null(),
+            let value = match tape.get(*p) {
+                TapeElement::Null => {
+                    builder.append_null();
+                    continue;
+                }
                 TapeElement::String(idx) => {
                     let s = tape.get_string(idx);
                     let date = string_to_datetime(&self.timezone, s).map_err(|e| {
@@ -81,7 +71,7 @@ where
                         ))
                     });
 
-                    let date_to_value = |date: DateTime<Tz>| match P::UNIT {
+                    date.and_then(|date| match P::UNIT {
                         TimeUnit::Second => Ok(date.timestamp()),
                         TimeUnit::Millisecond => Ok(date.timestamp_millis()),
                         TimeUnit::Microsecond => Ok(date.timestamp_micros()),
@@ -91,31 +81,32 @@ where
                                 date.to_rfc3339(),
                             ))
                         }),
-                    };
-                    append(&mut builder, date.and_then(date_to_value))?
+                    })
                 }
                 TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
                     let b = s.as_bytes();
-                    let value = lexical_core::parse::<i64>(b)
+                    lexical_core::parse::<i64>(b)
                         .or_else(|_| lexical_core::parse::<f64>(b).map(|x| x as i64))
                         .map_err(|_| {
                             ArrowError::JsonError(format!(
                                 "failed to parse {s} as {}",
                                 self.data_type
                             ))
-                        });
-                    append(&mut builder, value)?
+                        })
                 }
-                TapeElement::I32(v) => builder.append_value(v as i64),
+                TapeElement::I32(v) => Ok(v as i64),
                 TapeElement::I64(high) => match tape.get(p + 1) {
-                    TapeElement::I32(low) => {
-                        builder.append_value(((high as i64) << 32) | (low as u32) as i64)
-                    }
+                    TapeElement::I32(low) => Ok(((high as i64) << 32) | (low as u32) as i64),
                     _ => unreachable!(),
                 },
-                _ if self.ignore_type_conflicts => builder.append_null(),
-                _ => return Err(tape.error(*p, "primitive")),
+                _ => Err(tape.error(*p, "primitive")),
+            };
+
+            match value {
+                Ok(value) => builder.append_value(value),
+                Err(_) if self.ignore_type_conflicts => builder.append_null(),
+                Err(e) => return Err(e),
             }
         }
 

@@ -53,41 +53,48 @@ where
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut builder = PrimitiveBuilder::<D>::with_capacity(pos.len());
 
-        // Factor out this logic to simplify call sites below; the compiler will inline it,
-        // producing a highly predictable branch whose cost should be trivial compared to the
-        // expensive and unpredictably branchy string parse that immediately precedes each call.
-        let append = |builder: &mut PrimitiveBuilder<D>, value: &str| {
+        #[allow(unused)] // initial value overwritten without ever being read
+        let mut anchor = String::default();
+        for p in pos {
+            let value = match tape.get(*p) {
+                TapeElement::Null => {
+                    builder.append_null();
+                    continue;
+                }
+                TapeElement::String(idx) | TapeElement::Number(idx) => tape.get_string(idx),
+                TapeElement::I64(high) => match tape.get(*p + 1) {
+                    TapeElement::I32(low) => {
+                        anchor = (((high as i64) << 32) | (low as u32) as i64).to_string();
+                        anchor.as_str()
+                    }
+                    _ => unreachable!(),
+                },
+                TapeElement::I32(val) => {
+                    anchor = val.to_string();
+                    anchor.as_str()
+                }
+                TapeElement::F64(high) => match tape.get(*p + 1) {
+                    TapeElement::F32(low) => {
+                        anchor = f64::from_bits(((high as u64) << 32) | low as u64).to_string();
+                        anchor.as_str()
+                    }
+                    _ => unreachable!(),
+                },
+                TapeElement::F32(val) => {
+                    anchor = f32::from_bits(val).to_string();
+                    anchor.as_str()
+                }
+                _ if self.ignore_type_conflicts => {
+                    builder.append_null();
+                    continue;
+                }
+                _ => return Err(tape.error(*p, "decimal")),
+            };
+
             match parse_decimal::<D>(value, self.precision, self.scale) {
                 Ok(value) => builder.append_value(value),
                 Err(_) if self.ignore_type_conflicts => builder.append_null(),
                 Err(e) => return Err(e),
-            }
-            Ok(())
-        };
-
-        for p in pos {
-            match tape.get(*p) {
-                TapeElement::Null => builder.append_null(),
-                TapeElement::String(idx) => append(&mut builder, tape.get_string(idx))?,
-                TapeElement::Number(idx) => append(&mut builder, tape.get_string(idx))?,
-                TapeElement::I64(high) => match tape.get(*p + 1) {
-                    TapeElement::I32(low) => {
-                        let val = (((high as i64) << 32) | (low as u32) as i64).to_string();
-                        append(&mut builder, &val)?
-                    }
-                    _ => unreachable!(),
-                },
-                TapeElement::I32(val) => append(&mut builder, &val.to_string())?,
-                TapeElement::F64(high) => match tape.get(*p + 1) {
-                    TapeElement::F32(low) => {
-                        let val = f64::from_bits(((high as u64) << 32) | low as u64).to_string();
-                        append(&mut builder, &val)?
-                    }
-                    _ => unreachable!(),
-                },
-                TapeElement::F32(val) => append(&mut builder, &f32::from_bits(val).to_string())?,
-                _ if self.ignore_type_conflicts => builder.append_null(),
-                _ => return Err(tape.error(*p, "decimal")),
             }
         }
 
