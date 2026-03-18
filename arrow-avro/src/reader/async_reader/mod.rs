@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Asynchronous implementation of Avro file reader.
+//!
+//! This module provides [`AsyncAvroFileReader`], which supports reading and decoding
+//! the Avro OCF format from any source that implements [`AsyncFileReader`].
+
 use crate::compression::CompressionCodec;
 use crate::reader::Decoder;
 use crate::reader::block::{BlockDecoder, BlockDecoderState};
@@ -32,7 +37,7 @@ mod async_file_reader;
 mod builder;
 
 pub use async_file_reader::AsyncFileReader;
-pub use builder::ReaderBuilder;
+pub use builder::{ReaderBuilder, read_header_info};
 
 #[cfg(feature = "object_store")]
 mod store;
@@ -1284,6 +1289,44 @@ mod tests {
 
         // Should clamp to file size
         assert_eq!(batch.num_rows(), 8);
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_header_info() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let mut file_reader = AvroObjectReader::new(store, location);
+
+        let header_info = read_header_info(&mut file_reader, file_size, None)
+            .await
+            .unwrap();
+
+        assert_eq!(header_info.header_len(), 675);
+
+        let writer_schema = header_info.writer_schema().unwrap();
+        let expected_avro_json: serde_json::Value = serde_json::from_str(
+            get_alltypes_schema()
+                .metadata()
+                .get(SCHEMA_METADATA_KEY)
+                .unwrap(),
+        )
+        .unwrap();
+        let actual_avro_json: serde_json::Value =
+            serde_json::from_str(&writer_schema.json_string).unwrap();
+        assert_eq!(actual_avro_json, expected_avro_json);
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .build_with_header(header_info)
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 8)
     }
 
     #[tokio::test]
