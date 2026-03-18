@@ -582,6 +582,7 @@ mod tests {
     use arrow_array::Int32RunArray;
     use arrow_array::builder::{GenericListBuilder, Int32Builder, PrimitiveRunBuilder};
     use arrow_array::types::Int8Type;
+    use arrow_buffer::ScalarBuffer;
     use arrow_schema::Field;
 
     #[test]
@@ -1488,5 +1489,59 @@ mod tests {
             interleave(&[&list], &indices),
             Err(ArrowError::OffsetOverflowError(_))
         ));
+    }
+
+    #[test]
+    fn test_interleave_list_view() {
+        // `interleave` for ListView falls through to `interleave_fallback`, which uses
+        // `MutableArrayData`. `list_view::build_extend` copies offsets/sizes but never
+        // extends the child array, so the result contains offsets/sizes that reference
+        // positions in the now-absent original child arrays while the child is empty.
+        //
+        // lv_a: [[1, 2], [3]]   (values=[1,2,3], offsets=[0,2], sizes=[2,1])
+        // lv_b: [[4, 5, 6]]     (values=[4,5,6], offsets=[0],   sizes=[3])
+        // interleave at [(0,0), (1,0), (0,1)] should produce [[1, 2], [4, 5, 6], [3]]
+        let field = Arc::new(Field::new_list_field(DataType::Int64, false));
+
+        let lv_a = ListViewArray::new(
+            Arc::clone(&field),
+            ScalarBuffer::from(vec![0i32, 2]),
+            ScalarBuffer::from(vec![2i32, 1]),
+            Arc::new(Int64Array::from(vec![1_i64, 2, 3])),
+            None,
+        );
+        let lv_b = ListViewArray::new(
+            field,
+            ScalarBuffer::from(vec![0i32]),
+            ScalarBuffer::from(vec![3i32]),
+            Arc::new(Int64Array::from(vec![4_i64, 5, 6])),
+            None,
+        );
+
+        let result = interleave(
+            &[&lv_a as &dyn Array, &lv_b as &dyn Array],
+            &[(0, 0), (1, 0), (0, 1)],
+        )
+        .unwrap();
+
+        result
+            .to_data()
+            .validate_full()
+            .expect("interleaved ListViewArray must be internally consistent");
+
+        let result_lv = result.as_list_view::<i32>();
+        assert_eq!(result_lv.len(), 3);
+        assert_eq!(
+            result_lv.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2]
+        );
+        assert_eq!(
+            result_lv.value(1).as_primitive::<Int64Type>().values(),
+            &[4, 5, 6]
+        );
+        assert_eq!(
+            result_lv.value(2).as_primitive::<Int64Type>().values(),
+            &[3]
+        );
     }
 }
