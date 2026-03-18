@@ -478,7 +478,7 @@
 //!   descriptive error. Populate the store up front to avoid this.
 //!
 //! ---
-use crate::codec::AvroFieldBuilder;
+use crate::codec::{AvroFieldBuilder, Tz};
 use crate::errors::AvroError;
 use crate::reader::header::read_header;
 use crate::schema::{
@@ -500,7 +500,9 @@ mod record;
 mod vlq;
 
 #[cfg(feature = "async")]
-mod async_reader;
+pub mod async_reader;
+
+pub use header::{HeaderInfo, read_header_info};
 
 #[cfg(feature = "object_store")]
 pub use async_reader::AvroObjectReader;
@@ -967,6 +969,7 @@ pub struct ReaderBuilder {
     batch_size: usize,
     strict_mode: bool,
     utf8_view: bool,
+    tz: Tz,
     reader_schema: Option<AvroSchema>,
     projection: Option<Vec<usize>>,
     writer_schema_store: Option<SchemaStore>,
@@ -979,6 +982,7 @@ impl Default for ReaderBuilder {
             batch_size: 1024,
             strict_mode: false,
             utf8_view: false,
+            tz: Default::default(),
             reader_schema: None,
             projection: None,
             writer_schema_store: None,
@@ -993,6 +997,7 @@ impl ReaderBuilder {
     /// * `batch_size = 1024`
     /// * `strict_mode = false`
     /// * `utf8_view = false`
+    /// * `tz = Tz::OffsetZero`
     /// * `reader_schema = None`
     /// * `projection = None`
     /// * `writer_schema_store = None`
@@ -1013,6 +1018,7 @@ impl ReaderBuilder {
         let root = builder
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
+            .with_tz(self.tz)
             .build()?;
         RecordDecoder::try_new_with_options(root.data_type())
     }
@@ -1173,6 +1179,14 @@ impl ReaderBuilder {
         self
     }
 
+    /// Sets the timezone representation for Avro timestamp fields.
+    ///
+    /// The default is `Tz::OffsetZero`, meaning the "+00:00" time zone ID.
+    pub fn with_tz(mut self, tz: Tz) -> Self {
+        self.tz = tz;
+        self
+    }
+
     /// Sets the **reader schema** used during decoding.
     ///
     /// If not provided, the writer schema from the OCF header (for `Reader`) or the
@@ -1273,7 +1287,7 @@ impl ReaderBuilder {
     /// the discovered writer (and optional reader) schema, and prepares to iterate blocks,
     /// decompressing if necessary.
     pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
-        let header = read_header(&mut reader)?;
+        let (header, _) = read_header(&mut reader)?;
         let decoder = self.make_decoder(Some(&header), self.reader_schema.as_ref())?;
         Ok(Reader {
             reader,
@@ -1400,7 +1414,7 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 
 #[cfg(test)]
 mod test {
-    use crate::codec::AvroFieldBuilder;
+    use crate::codec::{AvroFieldBuilder, Tz};
     use crate::reader::header::HeaderDecoder;
     use crate::reader::record::RecordDecoder;
     use crate::reader::{Decoder, Reader, ReaderBuilder};
@@ -1632,7 +1646,7 @@ mod test {
 
     fn load_writer_schema_json(path: &str) -> Value {
         let file = File::open(path).unwrap();
-        let header = super::read_header(BufReader::new(file)).unwrap();
+        let (header, _) = super::read_header(BufReader::new(file)).unwrap();
         let schema = header.schema().unwrap().unwrap();
         serde_json::to_value(&schema).unwrap()
     }
@@ -3127,6 +3141,43 @@ mod test {
                     || lower_msg.contains("does not match")),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn test_timestamp_with_utc_tz() {
+        let path = arrow_test_data("avro/alltypes_plain.avro");
+        let reader_schema =
+            make_reader_schema_with_selected_fields_in_order(&path, &["timestamp_col"]);
+        let file = File::open(path).unwrap();
+        let reader = ReaderBuilder::new()
+            .with_batch_size(1024)
+            .with_utf8_view(false)
+            .with_reader_schema(reader_schema)
+            .with_tz(Tz::Utc)
+            .build(BufReader::new(file))
+            .unwrap();
+        let schema = reader.schema();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let batch = arrow::compute::concat_batches(&schema, &batches).unwrap();
+        let expected = RecordBatch::try_from_iter_with_nullable([(
+            "timestamp_col",
+            Arc::new(
+                TimestampMicrosecondArray::from_iter_values([
+                    1235865600000000, // 2009-03-01T00:00:00.000
+                    1235865660000000, // 2009-03-01T00:01:00.000
+                    1238544000000000, // 2009-04-01T00:00:00.000
+                    1238544060000000, // 2009-04-01T00:01:00.000
+                    1233446400000000, // 2009-02-01T00:00:00.000
+                    1233446460000000, // 2009-02-01T00:01:00.000
+                    1230768000000000, // 2009-01-01T00:00:00.000
+                    1230768060000000, // 2009-01-01T00:01:00.000
+                ])
+                .with_timezone("UTC"),
+            ) as _,
+            true,
+        )])
+        .unwrap();
+        assert_eq!(batch, expected);
     }
 
     #[test]

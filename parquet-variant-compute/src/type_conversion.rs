@@ -94,7 +94,7 @@ impl_primitive_from_variant!(datatypes::Time32MillisecondType, as_time_utc, |v| 
     }
 });
 impl_primitive_from_variant!(datatypes::Time64MicrosecondType, as_time_utc, |v| {
-    Some((v.num_seconds_from_midnight() * 1_000_000 + v.nanosecond() / 1_000) as i64)
+    Some(v.num_seconds_from_midnight() as i64 * 1_000_000 + v.nanosecond() as i64 / 1_000)
 });
 impl_primitive_from_variant!(datatypes::Time64NanosecondType, as_time_utc, |v| {
     // convert micro to nano seconds
