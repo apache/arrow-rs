@@ -823,11 +823,12 @@ impl WrappingShr for i256 {
     }
 }
 
-// Define Shr<T> and Shl<T> for specified integer types
-macro_rules! define_wrapping_shift {
+// Define Shl<T> and Shr<T> for specified integer types using
+// an existing Shl<u8> and Shr<u8> implementation
+macro_rules! define_standard_shift {
     // Handle multiple types
     ($trait_name:ident, $method:ident, [$($t:ty),+]) => {
-        $(define_wrapping_shift!($trait_name, $method, $t);)+
+        $(define_standard_shift!($trait_name, $method, $t);)+
     };
     // Handle single type
     ($trait_name:ident, $method:ident, $t:ty) => {
@@ -836,18 +837,14 @@ macro_rules! define_wrapping_shift {
 
             #[inline]
             fn $method(self, rhs: $t) -> Self::Output {
-                // Take modulo 256
-                #[allow(clippy::suspicious_arithmetic_impl)]
-                let shift: u8 = (rhs % (256 as $t)) as u8;
-                // Use existing Shl<u8> / Shr<u8> implementation
-                <Self as $trait_name<u8>>::$method(self, shift)
+                self.$method(rhs as u8)
             }
         }
     };
 }
 
-define_wrapping_shift!(Shl, shl, [u16, u32, u64, usize, i16, i32, i64, isize]);
-define_wrapping_shift!(Shr, shr, [u16, u32, u64, usize, i16, i32, i64, isize]);
+define_standard_shift!(Shl, shl, [u16, u32, u64, usize, i16, i32, i64, isize]);
+define_standard_shift!(Shr, shr, [u16, u32, u64, usize, i16, i32, i64, isize]);
 
 macro_rules! define_as_primitive {
     ($native_ty:ty) => {
