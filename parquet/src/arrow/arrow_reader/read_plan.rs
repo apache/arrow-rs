@@ -92,6 +92,12 @@ impl ReadPlanBuilder {
             .unwrap_or(true)
     }
 
+    /// Deselect all rows (e.g. when dictionary pruning determines no rows match)
+    pub fn deselect_all(mut self) -> Self {
+        self.selection = Some(RowSelection::from(vec![]));
+        self
+    }
+
     /// Returns the number of rows selected, or `None` if all rows are selected.
     pub fn num_rows_selected(&self) -> Option<usize> {
         self.selection.as_ref().map(|s| s.row_count())

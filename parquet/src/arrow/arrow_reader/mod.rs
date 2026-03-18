@@ -21,7 +21,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
-pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use filter::{ArrowPredicate, ArrowPredicateFn, DictionaryPredicateResult, RowFilter};
 pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -51,6 +51,7 @@ use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 // Exposed so integration tests and benchmarks can temporarily override the threshold.
 pub use read_plan::{ReadPlan, ReadPlanBuilder};
 
+pub(crate) mod dictionary_pruning;
 mod filter;
 pub mod metrics;
 mod read_plan;
