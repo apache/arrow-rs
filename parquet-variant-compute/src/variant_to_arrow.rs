@@ -557,10 +557,9 @@ impl<'a> StructVariantToArrowRowBuilder<'a> {
         };
 
         for (index, field) in self.fields.iter().enumerate() {
-            if let Some(field_value) = obj.get(field.name()) {
-                self.field_builders[index].append_value(field_value)?;
-            } else {
-                self.field_builders[index].append_null()?;
+            match obj.get(field.name()) {
+                Some(field_value) => self.field_builders[index].append_value(field_value)?,
+                None => self.field_builders[index].append_null()?,
             }
         }
 
