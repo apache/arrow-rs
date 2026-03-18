@@ -292,10 +292,17 @@ impl ReaderBuilder {
     }
 
     /// Sets whether the decoder should produce NULL instead of returning an error if it encounters
-    /// a type conflict on a nullable column (effectively treating it as a non-existent column).
+    /// value that can not be parsed into the specified column type.
     ///
-    /// NOTE: The inferred NULL on type conflict will still produce errors for non-nullable columns,
-    /// the same as any other NULL or missing value.
+    /// For example, if the type is declared to be a nullable array of `DataType::Int32` but the
+    /// reader encounters a string value `"foo"` and the value `ignore_type_conflicts` is:
+    ///
+    /// * `false` (the default): The reader will return an error.
+    ///
+    /// * `true`: The reader will fill in NULL value for that array element.
+    ///
+    /// NOTE: An inferred NULL due to a type conflict will still produce parsing errors for
+    /// non-nullable fields, the same as any other NULL or missing value.
     pub fn with_ignore_type_conflicts(self, ignore_type_conflicts: bool) -> Self {
         Self {
             ignore_type_conflicts,
