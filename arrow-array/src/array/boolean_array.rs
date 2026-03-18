@@ -158,9 +158,9 @@ impl BooleanArray {
     }
 
     /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
-    /// Folding this many u64 chunks at a time allows the compiler to autovectorize
-    /// the inner loop while still enabling short-circuit exits.
-    const CHUNK_FOLD_BLOCK_SIZE: usize = 64;
+    /// Using `chunks_exact` with this size lets the compiler fully unroll the inner
+    /// fold (no inner branch/loop), enabling short-circuit exits every N chunks.
+    const CHUNK_FOLD_BLOCK_SIZE: usize = 16;
 
     /// Returns an [`UnalignedBitChunk`] over this array's values.
     fn unaligned_bit_chunks(&self) -> UnalignedBitChunk<'_> {
@@ -204,11 +204,12 @@ impl BooleanArray {
             }
             None => {
                 let bit_chunks = self.unaligned_bit_chunks();
-                bit_chunks.prefix().unwrap_or(0) != 0
-                    || bit_chunks
-                        .chunks()
-                        .chunks(Self::CHUNK_FOLD_BLOCK_SIZE)
-                        .any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0)
+                let chunks = bit_chunks.chunks();
+                let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
+                let found = bit_chunks.prefix().unwrap_or(0) != 0
+                    || exact.any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0);
+                found
+                    || exact.remainder().iter().any(|&c| c != 0)
                     || bit_chunks.suffix().unwrap_or(0) != 0
             }
         }
@@ -243,13 +244,15 @@ impl BooleanArray {
                     (None, Some(_)) => (0, !trail_mask),
                     (None, None) => (0, 0),
                 };
-                bit_chunks
+                let chunks = bit_chunks.chunks();
+                let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
+                let found = bit_chunks
                     .prefix()
                     .is_some_and(|v| (v | prefix_fill) != u64::MAX)
-                    || bit_chunks
-                        .chunks()
-                        .chunks(Self::CHUNK_FOLD_BLOCK_SIZE)
-                        .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX)
+                    || exact
+                        .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX);
+                found
+                    || exact.remainder().iter().any(|&c| c != u64::MAX)
                     || bit_chunks
                         .suffix()
                         .is_some_and(|v| (v | suffix_fill) != u64::MAX)
