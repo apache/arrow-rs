@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Asyncronous implementation of Avro file reader.
+//! Asynchronous implementation of Avro file reader.
 //!
 //! This module provides [`AsyncAvroFileReader`], which supports reading and decoding
 //! the Avro OCF format from any source that implements [`AsyncFileReader`].

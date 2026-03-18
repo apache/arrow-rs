@@ -192,6 +192,9 @@ impl<R: AsyncFileReader> ReaderBuilder<R> {
     ///
     /// This allows initializing the reader with pre-parsed header information.
     /// Note that this method is not async because it does not need to perform any I/O operations.
+    ///
+    /// Note: Any `header_size_hint` set via [`Self::with_header_size_hint`] is not used
+    /// when building with a pre-parsed header, since no header fetching occurs.
     pub fn build_with_header(
         self,
         header_info: HeaderInfo,
