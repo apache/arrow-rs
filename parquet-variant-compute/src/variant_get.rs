@@ -3165,7 +3165,7 @@ mod test {
         let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
         let variant_array = json_to_variant(&string_array).unwrap();
 
-        // Request nested struct - now supported by the row builder.
+        // Request nested struct
         let inner_fields = Fields::from(vec![Field::new("inner", DataType::Int32, true)]);
         let inner_struct_type = DataType::Struct(inner_fields);
         let outer_fields = Fields::from(vec![Field::new("outer", inner_struct_type, true)]);
