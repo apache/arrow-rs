@@ -1040,6 +1040,127 @@ mod tests {
     }
 
     #[test]
+    fn test_from_bitwise_binary_op_same_mod_64_unaligned_fallback() {
+        // Exercise the shared-alignment fast path when both inputs are misaligned in memory,
+        // forcing the chunks_exact fallback instead of align_to::<u64>().
+        let left_bytes = [
+            0,           // dropped so `&left_bytes[1..]` is not u64-aligned in memory
+            0b1101_0010, // logical left bits start at bit 3 of this byte
+            0b0110_1101,
+            0b1010_0111,
+            0b0001_1110,
+            0b1110_0001,
+            0b0101_1010,
+            0b1001_0110,
+            0b0011_1100,
+            0b1011_0001,
+            0b0100_1110,
+            0b1100_0011,
+            0b0111_1000,
+        ];
+        let right_bytes = [
+            0,           // dropped so `&right_bytes[1..]` is not u64-aligned in memory
+            0b1010_1100, // logical right bits start at bit 67 == bit 3 of the second 64-bit block
+            0b0101_0011,
+            0b1111_0000,
+            0b0011_1010,
+            0b1000_1111,
+            0b0110_0101,
+            0b1101_1000,
+            0b0001_0111,
+            0b1110_0100,
+            0b0010_1101,
+            0b1001_1010,
+            0b0111_0001,
+        ];
+
+        let left = &left_bytes[1..];
+        let right = &right_bytes[1..];
+
+        let left_offset = 3;
+        let right_offset = 67; // same mod 64 as left_offset, so this takes the shared-alignment path
+        let len = 24; // leaves a partial trailing chunk, so this covers the non-empty remainder branch
+
+        let result = BooleanBuffer::from_bitwise_binary_op(
+            left,
+            left_offset,
+            right,
+            right_offset,
+            len,
+            |a, b| a & b,
+        );
+        let expected = (0..len)
+            .map(|i| {
+                bit_util::get_bit(left, left_offset + i)
+                    & bit_util::get_bit(right, right_offset + i)
+            })
+            .collect::<BooleanBuffer>();
+
+        assert_eq!(result, expected);
+        assert_eq!(result.offset(), left_offset % 64);
+    }
+
+    #[test]
+    fn test_from_bitwise_binary_op_same_mod_64_unaligned_fallback_no_remainder() {
+        // Force the chunks_exact fallback with an exact 8-byte chunk so both remainders are empty.
+        let left_bytes = [
+            0,           // dropped so `&left_bytes[1..]` is not u64-aligned in memory
+            0b1010_1100, // logical left bits start at bit 3 of this byte
+            0b0110_1001,
+            0b1101_0011,
+            0b0001_1110,
+            0b1110_0101,
+            0b0101_1000,
+            0b1001_0111,
+            0b0011_1101,
+        ];
+        let right_bytes = [
+            0,           // dropped so `&right_bytes[1..]` is not u64-aligned in memory
+            0b0111_0010, // logical right bits start at bit 67 == bit 3 of the second 64-bit block
+            0b1010_1001,
+            0b0101_1110,
+            0b1100_0011,
+            0b0011_1011,
+            0b1000_1110,
+            0b1111_0001,
+            0b0100_1101,
+            0b1011_0110,
+            0b0001_1011,
+            0b1101_0100,
+            0b0110_0011,
+            0b1001_1110,
+            0b0010_1001,
+            0b1110_0110,
+            0b0101_0001,
+        ];
+
+        let left = &left_bytes[1..];
+        let right = &right_bytes[1..];
+
+        let left_offset = 3;
+        let right_offset = 67; // same mod 64 as left_offset, so this takes the shared-alignment path
+        let len = 61; // 3 + 61 = 64, so the aligned slices are exactly one 8-byte chunk with empty remainders
+
+        let result = BooleanBuffer::from_bitwise_binary_op(
+            left,
+            left_offset,
+            right,
+            right_offset,
+            len,
+            |a, b| a | b,
+        );
+        let expected = (0..len)
+            .map(|i| {
+                bit_util::get_bit(left, left_offset + i)
+                    | bit_util::get_bit(right, right_offset + i)
+            })
+            .collect::<BooleanBuffer>();
+
+        assert_eq!(result, expected);
+        assert_eq!(result.offset(), left_offset % 64);
+    }
+
+    #[test]
     fn test_extend_trusted_len_sets_byte_len() {
         // Ensures extend_trusted_len keeps the underlying byte length in sync with bit length.
         let mut builder = BooleanBufferBuilder::new(0);
