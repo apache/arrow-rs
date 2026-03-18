@@ -3155,10 +3155,8 @@ mod test {
         assert!(struct_result.is_null(3));
     }
 
-    /// Test that demonstrates the actual struct row builder gap
-    /// This test should fail because it hits unshredded nested structs
     #[test]
-    fn test_struct_row_builder_gap_demonstration() {
+    fn test_struct_row_builder_handles_unshredded_nested_structs() {
         // Create completely unshredded JSON variant (no typed_value at all)
         let json_strings = vec![
             r#"{"outer": {"inner": 42}}"#,
@@ -3167,7 +3165,7 @@ mod test {
         let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
         let variant_array = json_to_variant(&string_array).unwrap();
 
-        // Request nested struct - this should fail at the row builder level
+        // Request nested struct - now supported by the row builder.
         let inner_fields = Fields::from(vec![Field::new("inner", DataType::Int32, true)]);
         let inner_struct_type = DataType::Struct(inner_fields);
         let outer_fields = Fields::from(vec![Field::new("outer", inner_struct_type, true)]);
@@ -3180,12 +3178,22 @@ mod test {
         };
 
         let variant_array_ref = ArrayRef::from(variant_array);
-        let result = variant_get(&variant_array_ref, options);
+        let result = variant_get(&variant_array_ref, options).unwrap();
 
-        // Should fail with NotYetImplemented when the row builder tries to handle struct type
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert!(error.to_string().contains("Not yet implemented"));
+        let outer_struct = result.as_struct();
+        assert_eq!(outer_struct.len(), 2);
+        assert_eq!(outer_struct.num_columns(), 1);
+
+        let inner_struct = outer_struct.column(0).as_struct();
+        assert_eq!(inner_struct.num_columns(), 1);
+
+        let inner_values = inner_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(inner_values.value(0), 42);
+        assert_eq!(inner_values.value(1), 100);
     }
 
     /// Create comprehensive shredded variant with diverse null patterns and empty objects
