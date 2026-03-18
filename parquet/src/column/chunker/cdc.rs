@@ -657,13 +657,14 @@ mod tests {
 }
 
 /// Integration tests that exercise CDC through the Arrow writer/reader roundtrip.
+/// Ported from the C++ test suite in `chunker_internal_test.cc`.
 #[cfg(all(test, feature = "arrow"))]
 mod arrow_tests {
     use std::borrow::Borrow;
     use std::sync::Arc;
 
-    use arrow_array::builder::ListBuilder;
-    use arrow_array::{ArrayRef, Float64Array, Int32Array, RecordBatch, StringArray};
+    use arrow_array::cast::AsArray;
+    use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
 
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -671,12 +672,13 @@ mod arrow_tests {
     use crate::file::properties::{CdcOptions, WriterProperties};
     use crate::file::reader::{FileReader, SerializedFileReader};
 
-    // --- Constants ---
+    // --- Constants matching C++ TestCDCSingleRowGroup ---
 
     const CDC_MIN_CHUNK_SIZE: usize = 4 * 1024;
     const CDC_MAX_CHUNK_SIZE: usize = 16 * 1024;
     const CDC_PART_SIZE: usize = 128 * 1024;
     const CDC_EDIT_SIZE: usize = 128;
+    const CDC_ROW_GROUP_LENGTH: usize = 1024 * 1024;
 
     // --- Helpers ---
 
@@ -691,50 +693,359 @@ mod arrow_tests {
         h
     }
 
-    fn generate_i32_array(length: usize, seed: u64) -> Int32Array {
-        (0..length)
-            .map(|i| test_hash(seed, i as u64) as i32)
-            .collect()
-    }
-
-    fn generate_nullable_i32_array(length: usize, seed: u64) -> Int32Array {
-        (0..length)
-            .map(|i| {
-                let val = test_hash(seed, i as u64);
-                if val % 10 == 0 {
-                    None
+    /// Generate a deterministic array for any supported data type, matching C++ `GenerateArray`.
+    fn generate_array(dtype: &DataType, nullable: bool, length: usize, seed: u64) -> ArrayRef {
+        macro_rules! gen_primitive {
+            ($array_type:ty, $cast:expr) => {{
+                if nullable {
+                    let arr: $array_type = (0..length)
+                        .map(|i| {
+                            let val = test_hash(seed, i as u64);
+                            if val % 10 == 0 {
+                                None
+                            } else {
+                                Some($cast(val))
+                            }
+                        })
+                        .collect();
+                    Arc::new(arr) as ArrayRef
                 } else {
-                    Some(val as i32)
+                    let arr: $array_type = (0..length)
+                        .map(|i| Some($cast(test_hash(seed, i as u64))))
+                        .collect();
+                    Arc::new(arr) as ArrayRef
                 }
+            }};
+        }
+
+        match dtype {
+            DataType::Boolean => {
+                if nullable {
+                    let arr: BooleanArray = (0..length)
+                        .map(|i| {
+                            let val = test_hash(seed, i as u64);
+                            if val % 10 == 0 {
+                                None
+                            } else {
+                                Some(val % 2 == 0)
+                            }
+                        })
+                        .collect();
+                    Arc::new(arr)
+                } else {
+                    let arr: BooleanArray = (0..length)
+                        .map(|i| Some(test_hash(seed, i as u64) % 2 == 0))
+                        .collect();
+                    Arc::new(arr)
+                }
+            }
+            DataType::Int32 => gen_primitive!(Int32Array, |v: u64| v as i32),
+            DataType::Int64 => {
+                gen_primitive!(arrow_array::Int64Array, |v: u64| v as i64)
+            }
+            DataType::Float64 => {
+                gen_primitive!(arrow_array::Float64Array, |v: u64| (v % 100000) as f64
+                    / 1000.0)
+            }
+            DataType::Utf8 => {
+                let arr: arrow_array::StringArray = if nullable {
+                    (0..length)
+                        .map(|i| {
+                            let val = test_hash(seed, i as u64);
+                            if val % 10 == 0 {
+                                None
+                            } else {
+                                Some(format!("str_{val}"))
+                            }
+                        })
+                        .collect()
+                } else {
+                    (0..length)
+                        .map(|i| Some(format!("str_{}", test_hash(seed, i as u64))))
+                        .collect()
+                };
+                Arc::new(arr)
+            }
+            DataType::Binary => {
+                let arr: arrow_array::BinaryArray = if nullable {
+                    (0..length)
+                        .map(|i| {
+                            let val = test_hash(seed, i as u64);
+                            if val % 10 == 0 {
+                                None
+                            } else {
+                                Some(format!("bin_{val}").into_bytes())
+                            }
+                        })
+                        .collect()
+                } else {
+                    (0..length)
+                        .map(|i| Some(format!("bin_{}", test_hash(seed, i as u64)).into_bytes()))
+                        .collect()
+                };
+                Arc::new(arr)
+            }
+            DataType::FixedSizeBinary(size) => {
+                let size = *size;
+                let mut builder = arrow_array::builder::FixedSizeBinaryBuilder::new(size);
+                for i in 0..length {
+                    let val = test_hash(seed, i as u64);
+                    if nullable && val % 10 == 0 {
+                        builder.append_null();
+                    } else {
+                        let s = format!("bin_{val}");
+                        let bytes = s.as_bytes();
+                        let mut buf = vec![0u8; size as usize];
+                        let copy_len = bytes.len().min(size as usize);
+                        buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+                        builder.append_value(&buf).unwrap();
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::Date32 => {
+                gen_primitive!(arrow_array::Date32Array, |v: u64| v as i32)
+            }
+            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
+                gen_primitive!(arrow_array::TimestampNanosecondArray, |v: u64| v as i64)
+            }
+            _ => panic!("Unsupported test data type: {dtype:?}"),
+        }
+    }
+
+    /// Generate a RecordBatch with the given schema, matching C++ `GenerateTable`.
+    fn generate_table(schema: &Arc<Schema>, length: usize, seed: u64) -> RecordBatch {
+        let arrays: Vec<ArrayRef> = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                generate_array(
+                    field.data_type(),
+                    field.is_nullable(),
+                    length,
+                    seed + i as u64 * 10,
+                )
             })
-            .collect()
+            .collect();
+        RecordBatch::try_new(schema.clone(), arrays).unwrap()
     }
 
-    fn generate_string_array(length: usize, seed: u64) -> StringArray {
-        (0..length)
-            .map(|i| {
-                let val = test_hash(seed, i as u64);
-                Some(format!("str_{val}"))
-            })
-            .collect()
+    /// Compute the CDC byte width for a data type, matching C++ `bytes_per_record`.
+    /// Returns 0 for variable-length types.
+    fn cdc_byte_width(dtype: &DataType) -> usize {
+        match dtype {
+            DataType::Boolean => 1,
+            DataType::Int8 | DataType::UInt8 => 1,
+            DataType::Int16 | DataType::UInt16 | DataType::Float16 => 2,
+            DataType::Int32
+            | DataType::UInt32
+            | DataType::Float32
+            | DataType::Date32
+            | DataType::Time32(_) => 4,
+            DataType::Int64
+            | DataType::UInt64
+            | DataType::Float64
+            | DataType::Date64
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
+            | DataType::Duration(_) => 8,
+            DataType::Decimal128(_, _) => 16,
+            DataType::Decimal256(_, _) => 32,
+            DataType::FixedSizeBinary(n) => *n as usize,
+            _ => 0, // variable-length
+        }
     }
 
-    fn write_batch_with_cdc(batch: &RecordBatch) -> Vec<u8> {
-        let props = WriterProperties::builder()
-            .set_content_defined_chunking(Some(CdcOptions::default()))
-            .build();
+    /// Compute bytes_per_record for determining part/edit lengths, matching C++.
+    fn bytes_per_record(dtype: &DataType, nullable: bool) -> usize {
+        let bw = cdc_byte_width(dtype);
+        if bw > 0 {
+            if nullable { bw + 2 } else { bw }
+        } else {
+            16 // variable-length fallback, matching C++
+        }
+    }
+
+    /// Compute the CDC chunk size for an array slice, matching C++ `CalculateCdcSize`.
+    fn calculate_cdc_size(array: &dyn Array, nullable: bool) -> i64 {
+        let dtype = array.data_type();
+        let bw = cdc_byte_width(dtype);
+        let result = if bw > 0 {
+            // Fixed-width: count only non-null values
+            let valid_count = array.len() - array.null_count();
+            (valid_count * bw) as i64
+        } else {
+            // Variable-length: sum of actual byte lengths
+            match dtype {
+                DataType::Utf8 => {
+                    let a = array.as_string::<i32>();
+                    (0..a.len())
+                        .filter(|&i| a.is_valid(i))
+                        .map(|i| a.value(i).len() as i64)
+                        .sum()
+                }
+                DataType::Binary => {
+                    let a = array.as_binary::<i32>();
+                    (0..a.len())
+                        .filter(|&i| a.is_valid(i))
+                        .map(|i| a.value(i).len() as i64)
+                        .sum()
+                }
+                DataType::LargeBinary => {
+                    let a = array.as_binary::<i64>();
+                    (0..a.len())
+                        .filter(|&i| a.is_valid(i))
+                        .map(|i| a.value(i).len() as i64)
+                        .sum()
+                }
+                _ => panic!("CDC size calculation not implemented for {dtype:?}"),
+            }
+        };
+
+        if nullable {
+            // Add 2 bytes per element for definition levels
+            result + array.len() as i64 * 2
+        } else {
+            result
+        }
+    }
+
+    /// Page-level metadata for a single column within a row group.
+    struct ColumnInfo {
+        page_lengths: Vec<i64>,
+        has_dictionary_page: bool,
+    }
+
+    /// Extract per-row-group column info from Parquet data.
+    fn get_column_info(data: &[u8], column_index: usize) -> Vec<ColumnInfo> {
+        let reader = SerializedFileReader::new(bytes::Bytes::from(data.to_vec())).unwrap();
+        let metadata = reader.metadata();
+        let mut result = Vec::new();
+        for rg in 0..metadata.num_row_groups() {
+            let rg_reader = reader.get_row_group(rg).unwrap();
+            let col_reader = rg_reader.get_column_page_reader(column_index).unwrap();
+            let mut info = ColumnInfo {
+                page_lengths: Vec::new(),
+                has_dictionary_page: false,
+            };
+            for page in col_reader {
+                let page = page.unwrap();
+                match page.page_type() {
+                    crate::basic::PageType::DATA_PAGE | crate::basic::PageType::DATA_PAGE_V2 => {
+                        info.page_lengths.push(page.num_values() as i64);
+                    }
+                    crate::basic::PageType::DICTIONARY_PAGE => {
+                        info.has_dictionary_page = true;
+                    }
+                    _ => {}
+                }
+            }
+            result.push(info);
+        }
+        result
+    }
+
+    /// Assert that CDC chunk sizes are within the expected range.
+    /// Equivalent to C++ `AssertContentDefinedChunkSizes`.
+    fn assert_cdc_chunk_sizes(
+        array: &ArrayRef,
+        info: &ColumnInfo,
+        nullable: bool,
+        min_chunk_size: usize,
+        max_chunk_size: usize,
+        expect_dictionary_page: bool,
+    ) {
+        // Boolean and FixedSizeBinary never produce dictionary pages (matching C++)
+        let expect_dict = match array.data_type() {
+            DataType::Boolean | DataType::FixedSizeBinary(_) => false,
+            _ => expect_dictionary_page,
+        };
+        assert_eq!(
+            info.has_dictionary_page,
+            expect_dict,
+            "dictionary page mismatch for {:?}",
+            array.data_type()
+        );
+
+        let page_lengths = &info.page_lengths;
+        assert!(
+            page_lengths.len() > 1,
+            "CDC should produce multiple pages, got {page_lengths:?}"
+        );
+
+        let bw = cdc_byte_width(array.data_type());
+        // Only do exact CDC size validation for fixed-width and base binary-like types
+        if bw > 0
+            || matches!(
+                array.data_type(),
+                DataType::Utf8 | DataType::Binary | DataType::LargeBinary
+            )
+        {
+            let mut offset = 0i64;
+            for (i, &page_len) in page_lengths.iter().enumerate() {
+                let slice = array.slice(offset as usize, page_len as usize);
+                let cdc_size = calculate_cdc_size(slice.as_ref(), nullable);
+                if i < page_lengths.len() - 1 {
+                    assert!(
+                        cdc_size >= min_chunk_size as i64,
+                        "Page {i}: CDC size {cdc_size} < min {min_chunk_size}, pages={page_lengths:?}"
+                    );
+                }
+                assert!(
+                    cdc_size <= max_chunk_size as i64,
+                    "Page {i}: CDC size {cdc_size} > max {max_chunk_size}, pages={page_lengths:?}"
+                );
+                offset += page_len;
+            }
+            assert_eq!(
+                offset,
+                array.len() as i64,
+                "page lengths must sum to array length"
+            );
+        }
+    }
+
+    /// Write batches with CDC options and validate roundtrip.
+    /// Matches C++ `WriteTableToBuffer`.
+    fn write_with_cdc_options(
+        batches: &[&RecordBatch],
+        min_chunk_size: usize,
+        max_chunk_size: usize,
+        max_row_group_rows: Option<usize>,
+        enable_dictionary: bool,
+    ) -> Vec<u8> {
+        assert!(!batches.is_empty());
+        let schema = batches[0].schema();
+        let mut builder = WriterProperties::builder()
+            .set_dictionary_enabled(enable_dictionary)
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size,
+                max_chunk_size,
+                norm_level: 0,
+            }));
+        if let Some(max_rows) = max_row_group_rows {
+            builder = builder.set_max_row_group_row_count(Some(max_rows));
+        }
+        let props = builder.build();
         let mut buf = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
-        writer.write(batch).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), Some(props)).unwrap();
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
         writer.close().unwrap();
-        buf
-    }
 
-    fn write_batch_without_cdc(batch: &RecordBatch) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), None).unwrap();
-        writer.write(batch).unwrap();
-        writer.close().unwrap();
+        // Roundtrip validation (matching C++ WriteTableToBuffer)
+        let readback = read_batches(&buf);
+        let original_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let readback_rows: usize = readback.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(original_rows, readback_rows, "Roundtrip row count mismatch");
+        if original_rows > 0 {
+            let original = concat_batches(batches.iter().copied());
+            let roundtrip = concat_batches(&readback);
+            assert_eq!(original, roundtrip, "Roundtrip validation failed");
+        }
+
         buf
     }
 
@@ -746,74 +1057,15 @@ mod arrow_tests {
         reader.collect::<std::result::Result<Vec<_>, _>>().unwrap()
     }
 
-    fn get_data_page_bytes(data: &[u8]) -> Vec<Vec<u8>> {
-        let reader = SerializedFileReader::new(bytes::Bytes::from(data.to_vec())).unwrap();
-        let metadata = reader.metadata();
-        let mut pages = Vec::new();
-        for rg in 0..metadata.num_row_groups() {
-            let rg_reader = reader.get_row_group(rg).unwrap();
-            for col in 0..metadata.row_group(rg).num_columns() {
-                let col_reader = rg_reader.get_column_page_reader(col).unwrap();
-                for page in col_reader {
-                    let page = page.unwrap();
-                    pages.push(page.buffer().to_vec());
-                }
-            }
-        }
-        pages
-    }
-
-    fn write_with_cdc_options(
-        batches: &[&RecordBatch],
-        min_chunk_size: usize,
-        max_chunk_size: usize,
-        max_row_group_rows: Option<usize>,
-    ) -> Vec<u8> {
-        assert!(!batches.is_empty());
-        let schema = batches[0].schema();
-        let mut builder = WriterProperties::builder()
-            .set_dictionary_enabled(false)
-            .set_content_defined_chunking(Some(CdcOptions {
-                min_chunk_size,
-                max_chunk_size,
-                norm_level: 0,
-            }));
-        if let Some(max_rows) = max_row_group_rows {
-            builder = builder.set_max_row_group_row_count(Some(max_rows));
-        }
-        let props = builder.build();
-        let mut buf = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
-        for batch in batches {
-            writer.write(batch).unwrap();
-        }
-        writer.close().unwrap();
-        buf
-    }
-
-    fn get_page_lengths(data: &[u8], column_index: usize) -> Vec<Vec<i64>> {
-        let reader = SerializedFileReader::new(bytes::Bytes::from(data.to_vec())).unwrap();
-        let metadata = reader.metadata();
-        let mut result = Vec::new();
-        for rg in 0..metadata.num_row_groups() {
-            let rg_reader = reader.get_row_group(rg).unwrap();
-            let col_reader = rg_reader.get_column_page_reader(column_index).unwrap();
-            let mut lengths = Vec::new();
-            for page in col_reader {
-                let page = page.unwrap();
-                if matches!(
-                    page.page_type(),
-                    crate::basic::PageType::DATA_PAGE | crate::basic::PageType::DATA_PAGE_V2
-                ) {
-                    lengths.push(page.num_values() as i64);
-                }
-            }
-            result.push(lengths);
-        }
-        result
+    fn concat_batches(batches: impl IntoIterator<Item = impl Borrow<RecordBatch>>) -> RecordBatch {
+        let batches: Vec<_> = batches.into_iter().collect();
+        let schema = batches[0].borrow().schema();
+        let batches = batches.iter().map(|b| b.borrow());
+        arrow_select::concat::concat_batches(&schema, batches).unwrap()
     }
 
     /// LCS-based diff between two sequences of page lengths (ported from C++).
+    /// Includes the merge-adjacent-diffs post-processing from C++.
     fn find_differences(first: &[i64], second: &[i64]) -> Vec<(Vec<i64>, Vec<i64>)> {
         let n = first.len();
         let m = second.len();
@@ -827,7 +1079,6 @@ mod arrow_tests {
                 }
             }
         }
-        // Backtrack to find common elements
         let mut common = Vec::new();
         let (mut i, mut j) = (n, m);
         while i > 0 && j > 0 {
@@ -855,840 +1106,1009 @@ mod arrow_tests {
         if last_i < n || last_j < m {
             result.push((first[last_i..].to_vec(), second[last_j..].to_vec()));
         }
-        result
-    }
 
-    fn make_i32_batch(length: usize, seed: u64) -> RecordBatch {
-        let col: ArrayRef = Arc::new(generate_i32_array(length, seed));
-        RecordBatch::try_from_iter(vec![("col", col)]).unwrap()
-    }
-
-    fn concat_batches(batches: impl IntoIterator<Item = impl Borrow<RecordBatch>>) -> RecordBatch {
-        let batches: Vec<_> = batches.into_iter().collect();
-        let schema = batches[0].borrow().schema();
-        let batches = batches.iter().map(|b| b.borrow());
-        arrow_select::concat::concat_batches(&schema, batches).unwrap()
-    }
-
-    fn i32_part_length() -> usize {
-        CDC_PART_SIZE / 4
-    }
-
-    fn i32_edit_length() -> usize {
-        CDC_EDIT_SIZE / 4
-    }
-
-    // --- Roundtrip tests ---
-
-    #[test]
-    fn test_cdc_roundtrip_i32() {
-        let array: ArrayRef = Arc::new(Int32Array::from_iter(0..10_000));
-        let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
-
-        let data = write_batch_with_cdc(&batch);
-        let batches = read_batches(&data);
-        let result = concat_batches(&batches);
-        assert_eq!(batch, result);
-    }
-
-    #[test]
-    fn test_cdc_roundtrip_string() {
-        let values = (0..5_000).map(|i| Some(format!("value_{i}")));
-        let array: ArrayRef = Arc::new(StringArray::from_iter(values));
-        let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
-
-        let data = write_batch_with_cdc(&batch);
-        let batches = read_batches(&data);
-        let result = concat_batches(&batches);
-        assert_eq!(batch, result);
-    }
-
-    #[test]
-    fn test_cdc_roundtrip_large_binary() {
-        let mut builder = arrow_array::builder::LargeBinaryBuilder::new();
-        for i in 0..5_000u32 {
-            builder.append_value(format!("value_{i}"));
-        }
-        let array: ArrayRef = Arc::new(builder.finish());
-        let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
-
-        let data = write_batch_with_cdc(&batch);
-        let batches = read_batches(&data);
-        let result = concat_batches(&batches);
-        assert_eq!(batch, result);
-    }
-
-    #[test]
-    fn test_cdc_roundtrip_nullable() {
-        let values = (0..10_000).map(|i| if i % 7 == 0 { None } else { Some(i) });
-        let array: ArrayRef = Arc::new(Int32Array::from_iter(values));
-        let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
-
-        let data = write_batch_with_cdc(&batch);
-        let batches = read_batches(&data);
-        let result = concat_batches(&batches);
-        assert_eq!(batch, result);
-    }
-
-    #[test]
-    fn test_cdc_deterministic() {
-        let values = 0..10_000;
-        let array: ArrayRef = Arc::new(Int32Array::from_iter(values));
-        let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
-
-        let data1 = write_batch_with_cdc(&batch);
-        let data2 = write_batch_with_cdc(&batch);
-        assert_eq!(data1, data2, "CDC output must be deterministic");
-    }
-
-    #[test]
-    fn test_cdc_produces_multiple_pages() {
-        let values = 0..500_000;
-        let array: ArrayRef = Arc::new(Int32Array::from_iter(values));
-        let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
-
-        let cdc_data = write_batch_with_cdc(&batch);
-        let no_cdc_data = write_batch_without_cdc(&batch);
-
-        let cdc_pages = get_data_page_bytes(&cdc_data);
-        let no_cdc_pages = get_data_page_bytes(&no_cdc_data);
-
-        assert!(
-            cdc_pages.len() > 1,
-            "CDC should produce multiple pages, got {}",
-            cdc_pages.len()
-        );
-        assert!(
-            cdc_pages.len() >= no_cdc_pages.len(),
-            "CDC pages {} should be >= non-CDC pages {}",
-            cdc_pages.len(),
-            no_cdc_pages.len()
-        );
-    }
-
-    #[test]
-    fn test_cdc_page_reuse_on_append() {
-        let n = 500_000;
-        let original_values = 0..n;
-        let appended_values = 0..n + 100;
-        let original: ArrayRef = Arc::new(Int32Array::from_iter(original_values));
-        let appended: ArrayRef = Arc::new(Int32Array::from_iter(appended_values));
-
-        let batch1 = RecordBatch::try_from_iter(vec![("col", original)]).unwrap();
-        let batch2 = RecordBatch::try_from_iter(vec![("col", appended)]).unwrap();
-
-        let pages1 = get_data_page_bytes(&write_batch_with_cdc(&batch1));
-        let pages2 = get_data_page_bytes(&write_batch_with_cdc(&batch2));
-
-        let reused = pages1.iter().filter(|p| pages2.contains(p)).count();
-        assert!(
-            reused > 0,
-            "At least some pages should be reused after append, pages1={}, pages2={}",
-            pages1.len(),
-            pages2.len()
-        );
-    }
-
-    #[test]
-    fn test_cdc_state_persists_across_row_groups() {
-        let n = 500_000i32;
-        let all_data: ArrayRef = Arc::new(Int32Array::from_iter(0..n));
-        let batch_all = RecordBatch::try_from_iter(vec![("col", all_data)]).unwrap();
-        let schema = batch_all.schema();
-        let data_one_rg = write_batch_with_cdc(&batch_all);
-
-        let props = WriterProperties::builder()
-            .set_content_defined_chunking(Some(CdcOptions::default()))
-            .set_max_row_group_row_count(Some(n as usize / 2))
-            .build();
-        let mut buf = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), Some(props)).unwrap();
-        writer.write(&batch_all).unwrap();
-        writer.close().unwrap();
-        let data_two_rg = buf;
-
-        let result1 = read_batches(&data_one_rg);
-        let result2 = read_batches(&data_two_rg);
-        let concat1 = concat_batches(&result1);
-        let concat2 = concat_batches(&result2);
-        assert_eq!(concat1, concat2);
-    }
-
-    #[test]
-    fn test_cdc_roundtrip_dictionary() {
-        let values = StringArray::from_iter_values((0..10_000).map(|i| format!("val_{}", i % 100)));
-        let array: ArrayRef = Arc::new(
-            arrow_cast::cast::cast(
-                &values,
-                &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            )
-            .unwrap(),
-        );
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            array.data_type().clone(),
-            false,
-        )]));
-        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
-
-        let data = write_batch_with_cdc(&batch);
-        let batches = read_batches(&data);
-        let result = concat_batches(&batches);
-        assert_eq!(batch.num_rows(), result.num_rows());
-    }
-
-    #[test]
-    fn test_cdc_roundtrip_list() {
-        let mut builder = ListBuilder::new(arrow_array::builder::Int32Builder::new());
-        for i in 0..5_000 {
-            for j in 0..(i % 5) {
-                builder.values().append_value(i * 10 + j);
+        // Merge adjacent diffs (matching C++ post-processing)
+        let mut merged: Vec<(Vec<i64>, Vec<i64>)> = Vec::new();
+        for diff in result {
+            if let Some(prev) = merged.last_mut() {
+                if prev.0.is_empty() && diff.1.is_empty() {
+                    prev.0 = diff.0;
+                    continue;
+                } else if prev.1.is_empty() && diff.0.is_empty() {
+                    prev.1 = diff.1;
+                    continue;
+                }
             }
-            builder.append(true);
+            merged.push(diff);
         }
-        let list_array: ArrayRef = Arc::new(builder.finish());
-
-        let batch = RecordBatch::try_from_iter(vec![("col", list_array)]).unwrap();
-
-        let data = write_batch_with_cdc(&batch);
-        let batches = read_batches(&data);
-        let result = concat_batches(&batches);
-        assert_eq!(batch, result);
+        merged
     }
 
-    #[test]
-    fn test_cdc_roundtrip_multiple_columns() {
-        let i32_array: ArrayRef = Arc::new(Int32Array::from_iter(0..10_000));
-        let str_array: ArrayRef = Arc::new(StringArray::from_iter(
-            (0..10_000).map(|i| Some(format!("s{i}"))),
-        ));
-        let f64_array: ArrayRef =
-            Arc::new(Float64Array::from_iter((0..10_000).map(|i| i as f64 * 0.1)));
+    /// Assert exact page length differences between original and modified files.
+    /// Matches C++ `AssertPageLengthDifferences` (full version).
+    fn assert_page_length_differences(
+        original: &ColumnInfo,
+        modified: &ColumnInfo,
+        exact_equal_diffs: usize,
+        exact_larger_diffs: usize,
+        exact_smaller_diffs: usize,
+        edit_length: i64,
+    ) {
+        let diffs = find_differences(&original.page_lengths, &modified.page_lengths);
+        let expected = exact_equal_diffs + exact_larger_diffs + exact_smaller_diffs;
 
-        let batch = RecordBatch::try_from_iter(vec![
-            ("ints", i32_array),
-            ("strings", str_array),
-            ("floats", f64_array),
-        ])
-        .unwrap();
+        if diffs.len() != expected {
+            eprintln!("Original: {:?}", original.page_lengths);
+            eprintln!("Modified: {:?}", modified.page_lengths);
+            for d in &diffs {
+                eprintln!("  Diff: {:?} vs {:?}", d.0, d.1);
+            }
+        }
+        assert_eq!(
+            diffs.len(),
+            expected,
+            "Expected {expected} diffs, got {}",
+            diffs.len()
+        );
 
-        let data = write_batch_with_cdc(&batch);
-        let batches = read_batches(&data);
-        let result = concat_batches(&batches);
-        assert_eq!(batch, result);
+        let (mut eq, mut larger, mut smaller) = (0usize, 0usize, 0usize);
+        for (left, right) in &diffs {
+            let left_sum: i64 = left.iter().sum();
+            let right_sum: i64 = right.iter().sum();
+            if left_sum == right_sum {
+                eq += 1;
+            } else if left_sum < right_sum {
+                larger += 1;
+                assert_eq!(
+                    left_sum + edit_length,
+                    right_sum,
+                    "Larger diff mismatch: {left_sum} + {edit_length} != {right_sum}"
+                );
+            } else {
+                smaller += 1;
+                assert_eq!(
+                    left_sum,
+                    right_sum + edit_length,
+                    "Smaller diff mismatch: {left_sum} != {right_sum} + {edit_length}"
+                );
+            }
+        }
+
+        assert_eq!(eq, exact_equal_diffs, "equal diffs count");
+        assert_eq!(larger, exact_larger_diffs, "larger diffs count");
+        assert_eq!(smaller, exact_smaller_diffs, "smaller diffs count");
     }
 
-    // --- Page-level CDC tests ported from C++ chunker_internal_test.cc ---
+    /// Assert page length differences for update cases (simplified version).
+    /// Matches C++ `AssertPageLengthDifferences` (max_equal_diffs overload).
+    fn assert_page_length_differences_update(
+        original: &ColumnInfo,
+        modified: &ColumnInfo,
+        max_equal_diffs: usize,
+    ) {
+        let diffs = find_differences(&original.page_lengths, &modified.page_lengths);
+        assert!(
+            diffs.len() <= max_equal_diffs,
+            "Expected at most {max_equal_diffs} diffs, got {}",
+            diffs.len()
+        );
+        for (left, right) in &diffs {
+            let left_sum: i64 = left.iter().sum();
+            let right_sum: i64 = right.iter().sum();
+            assert_eq!(
+                left_sum, right_sum,
+                "Update diff should not change total row count"
+            );
+        }
+    }
+
+    // --- FindDifferences tests (ported from C++) ---
 
     #[test]
-    fn test_cdc_find_differences() {
+    fn test_find_differences_basic() {
         let diffs = find_differences(&[1, 2, 3, 4, 5], &[1, 7, 8, 4, 5]);
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].0, vec![2, 3]);
         assert_eq!(diffs[0].1, vec![7, 8]);
+    }
 
+    #[test]
+    fn test_find_differences_multiple() {
+        let diffs = find_differences(&[1, 2, 3, 4, 5, 6, 7], &[1, 8, 9, 4, 10, 6, 11]);
+        assert_eq!(diffs.len(), 3);
+        assert_eq!(diffs[0].0, vec![2, 3]);
+        assert_eq!(diffs[0].1, vec![8, 9]);
+        assert_eq!(diffs[1].0, vec![5]);
+        assert_eq!(diffs[1].1, vec![10]);
+        assert_eq!(diffs[2].0, vec![7]);
+        assert_eq!(diffs[2].1, vec![11]);
+    }
+
+    #[test]
+    fn test_find_differences_different_lengths() {
         let diffs = find_differences(&[1, 2, 3], &[1, 2, 3, 4, 5]);
         assert_eq!(diffs.len(), 1);
         assert!(diffs[0].0.is_empty());
         assert_eq!(diffs[0].1, vec![4, 5]);
+    }
 
+    #[test]
+    fn test_find_differences_empty() {
         let diffs = find_differences(&[], &[]);
         assert!(diffs.is_empty());
     }
 
     #[test]
-    fn test_cdc_delete_once() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
+    fn test_find_differences_changes_at_both_ends() {
+        let diffs = find_differences(&[1, 2, 3, 4, 5, 6, 7, 8, 9], &[0, 0, 2, 3, 4, 5, 7, 7, 8]);
+        assert_eq!(diffs.len(), 3);
+        assert_eq!(diffs[0].0, vec![1]);
+        assert_eq!(diffs[0].1, vec![0, 0]);
+        assert_eq!(diffs[1].0, vec![6]);
+        assert_eq!(diffs[1].1, vec![7]);
+        assert_eq!(diffs[2].0, vec![9]);
+        assert!(diffs[2].1.is_empty());
+    }
 
-        let part1 = make_i32_batch(part_len, 0);
-        let edit = make_i32_batch(edit_len, 1);
-        let part2 = make_i32_batch(part_len, 100);
-
-        let base = concat_batches([&part1, &edit, &part2]);
-        let modified = concat_batches([&part1, &part2]);
-
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-
-        // Verify roundtrip
-        let base_result = read_batches(&base_data);
-        let mod_result = read_batches(&mod_data);
-        assert_eq!(concat_batches(&base_result), base);
-        assert_eq!(concat_batches(&mod_result), modified);
-
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-        assert_eq!(base_pages.len(), 1);
-        assert_eq!(mod_pages.len(), 1);
-
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert_eq!(diffs.len(), 1, "Expected 1 diff, got {diffs:?}");
-        let base_sum: i64 = diffs[0].0.iter().sum();
-        let mod_sum: i64 = diffs[0].1.iter().sum();
-        assert_eq!(
-            base_sum - mod_sum,
-            edit_len as i64,
-            "Diff should account for deleted rows"
+    #[test]
+    fn test_find_differences_additional() {
+        let diffs = find_differences(
+            &[445, 312, 393, 401, 410, 138, 558, 457],
+            &[445, 312, 393, 393, 410, 138, 558, 457],
         );
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].0, vec![401]);
+        assert_eq!(diffs[0].1, vec![393]);
     }
 
-    #[test]
-    fn test_cdc_insert_once() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
+    // --- Parameterized single-row-group tests via macro ---
 
-        let part1 = make_i32_batch(part_len, 0);
-        let edit = make_i32_batch(edit_len, 1);
-        let part2 = make_i32_batch(part_len, 100);
+    macro_rules! cdc_single_rg_tests {
+        ($mod_name:ident, $dtype:expr, $nullable:expr) => {
+            mod $mod_name {
+                use super::*;
 
-        let base = concat_batches([&part1, &part2]);
-        let modified = concat_batches([&part1, &edit, &part2]);
+                fn config() -> (DataType, bool, usize, usize) {
+                    let dtype: DataType = $dtype;
+                    let nullable: bool = $nullable;
+                    let bpr = bytes_per_record(&dtype, nullable);
+                    let part_length = CDC_PART_SIZE / bpr;
+                    let edit_length = CDC_EDIT_SIZE / bpr;
+                    (dtype, nullable, part_length, edit_length)
+                }
 
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
+                fn make_schema(dtype: &DataType, nullable: bool) -> Arc<Schema> {
+                    Arc::new(Schema::new(vec![Field::new("f0", dtype.clone(), nullable)]))
+                }
 
-        let mod_result = read_batches(&mod_data);
-        assert_eq!(concat_batches(&mod_result), modified);
+                #[test]
+                fn delete_once() {
+                    let (dtype, nullable, part_length, edit_length) = config();
+                    let schema = make_schema(&dtype, nullable);
 
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-        assert_eq!(base_pages.len(), 1);
-        assert_eq!(mod_pages.len(), 1);
+                    let part1 = generate_table(&schema, part_length, 0);
+                    let part2 = generate_table(&schema, edit_length, 1);
+                    let part3 = generate_table(&schema, part_length, part_length as u64);
 
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert_eq!(diffs.len(), 1, "Expected 1 diff, got {diffs:?}");
-        let base_sum: i64 = diffs[0].0.iter().sum();
-        let mod_sum: i64 = diffs[0].1.iter().sum();
-        assert_eq!(
-            mod_sum - base_sum,
-            edit_len as i64,
-            "Diff should account for inserted rows"
-        );
-    }
+                    let base = concat_batches([&part1, &part2, &part3]);
+                    let modified = concat_batches([&part1, &part3]);
 
-    #[test]
-    fn test_cdc_update_once() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
+                    for enable_dictionary in [false, true] {
+                        let base_data = write_with_cdc_options(
+                            &[&base],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+                        let mod_data = write_with_cdc_options(
+                            &[&modified],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
 
-        let part1 = make_i32_batch(part_len, 0);
-        let edit1 = make_i32_batch(edit_len, 1);
-        let edit2 = make_i32_batch(edit_len, 2);
-        let part2 = make_i32_batch(part_len, 100);
+                        let base_info = get_column_info(&base_data, 0);
+                        let mod_info = get_column_info(&mod_data, 0);
+                        assert_eq!(base_info.len(), 1);
+                        assert_eq!(mod_info.len(), 1);
 
-        let base = concat_batches([&part1, &edit1, &part2]);
-        let modified = concat_batches([&part1, &edit2, &part2]);
+                        assert_cdc_chunk_sizes(
+                            &base.column(0).clone(),
+                            &base_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+                        assert_cdc_chunk_sizes(
+                            &modified.column(0).clone(),
+                            &mod_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
 
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
+                        assert_page_length_differences(
+                            &base_info[0],
+                            &mod_info[0],
+                            0,
+                            0,
+                            1,
+                            edit_length as i64,
+                        );
+                    }
+                }
 
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-        assert_eq!(base_pages.len(), 1);
-        assert_eq!(mod_pages.len(), 1);
+                #[test]
+                fn delete_twice() {
+                    let (dtype, nullable, part_length, edit_length) = config();
+                    let schema = make_schema(&dtype, nullable);
 
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert!(diffs.len() <= 1, "Expected at most 1 diff, got {diffs:?}");
-        for (left, right) in &diffs {
-            let left_sum: i64 = left.iter().sum();
-            let right_sum: i64 = right.iter().sum();
-            assert_eq!(
-                left_sum, right_sum,
-                "Update should not change total row count"
-            );
-        }
-    }
+                    let part1 = generate_table(&schema, part_length, 0);
+                    let part2 = generate_table(&schema, edit_length, 1);
+                    let part3 = generate_table(&schema, part_length, part_length as u64);
+                    let part4 = generate_table(&schema, edit_length, 2);
+                    let part5 = generate_table(&schema, part_length, 2 * part_length as u64);
 
-    #[test]
-    fn test_cdc_update_twice() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
+                    let base = concat_batches([&part1, &part2, &part3, &part4, &part5]);
+                    let modified = concat_batches([&part1, &part3, &part5]);
 
-        let part1 = make_i32_batch(part_len, 0);
-        let edit1_old = make_i32_batch(edit_len, 1);
-        let edit1_new = make_i32_batch(edit_len, 2);
-        let part2 = make_i32_batch(part_len, 100);
-        let edit2_old = make_i32_batch(edit_len, 3);
-        let edit2_new = make_i32_batch(edit_len, 4);
-        let part3 = make_i32_batch(part_len, 200);
+                    for enable_dictionary in [false, true] {
+                        let base_data = write_with_cdc_options(
+                            &[&base],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+                        let mod_data = write_with_cdc_options(
+                            &[&modified],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
 
-        let base = concat_batches([&part1, &edit1_old, &part2, &edit2_old, &part3]);
-        let modified = concat_batches([&part1, &edit1_new, &part2, &edit2_new, &part3]);
+                        let base_info = get_column_info(&base_data, 0);
+                        let mod_info = get_column_info(&mod_data, 0);
+                        assert_eq!(base_info.len(), 1);
+                        assert_eq!(mod_info.len(), 1);
 
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
+                        assert_cdc_chunk_sizes(
+                            &base.column(0).clone(),
+                            &base_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+                        assert_cdc_chunk_sizes(
+                            &modified.column(0).clone(),
+                            &mod_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
 
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
+                        assert_page_length_differences(
+                            &base_info[0],
+                            &mod_info[0],
+                            0,
+                            0,
+                            2,
+                            edit_length as i64,
+                        );
+                    }
+                }
 
-        // A double update may produce 0, 1, or 2 diffs depending on whether the
-        // edits shift CDC boundaries. What must always hold is that the total row
-        // count within each diff region is unchanged (updates are row-count-neutral).
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert!(diffs.len() <= 2, "Expected at most 2 diffs, got {diffs:?}");
-        for (left, right) in &diffs {
-            let left_sum: i64 = left.iter().sum();
-            let right_sum: i64 = right.iter().sum();
-            assert_eq!(
-                left_sum, right_sum,
-                "Each update diff should not change total row count"
-            );
-        }
-    }
+                #[test]
+                fn insert_once() {
+                    let (dtype, nullable, part_length, edit_length) = config();
+                    let schema = make_schema(&dtype, nullable);
 
-    /// Verifies that the `primitive_width` fallback in `get_cdc_chunks` (used for
-    /// f64 and other fixed-width non-integer types) produces correct CDC boundaries.
-    #[test]
-    fn test_cdc_f64_column() {
-        let part_len = CDC_PART_SIZE / 8; // 8 bytes per f64
-        let edit_len = CDC_EDIT_SIZE / 8;
+                    let part1 = generate_table(&schema, part_length, 0);
+                    let part2 = generate_table(&schema, edit_length, 1);
+                    let part3 = generate_table(&schema, part_length, part_length as u64);
 
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::Float64,
-            false,
-        )]));
+                    let base = concat_batches([&part1, &part3]);
+                    let modified = concat_batches([&part1, &part2, &part3]);
 
-        let make_batch = |len: usize, seed: u64| {
-            let array: ArrayRef = Arc::new(
-                (0..len)
-                    .map(|i| test_hash(seed, i as u64) as f64)
-                    .collect::<arrow_array::Float64Array>(),
-            );
-            RecordBatch::try_new(schema.clone(), vec![array]).unwrap()
+                    for enable_dictionary in [false, true] {
+                        let base_data = write_with_cdc_options(
+                            &[&base],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+                        let mod_data = write_with_cdc_options(
+                            &[&modified],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+
+                        let base_info = get_column_info(&base_data, 0);
+                        let mod_info = get_column_info(&mod_data, 0);
+                        assert_eq!(base_info.len(), 1);
+                        assert_eq!(mod_info.len(), 1);
+
+                        assert_cdc_chunk_sizes(
+                            &base.column(0).clone(),
+                            &base_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+                        assert_cdc_chunk_sizes(
+                            &modified.column(0).clone(),
+                            &mod_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+
+                        assert_page_length_differences(
+                            &base_info[0],
+                            &mod_info[0],
+                            0,
+                            1,
+                            0,
+                            edit_length as i64,
+                        );
+                    }
+                }
+
+                #[test]
+                fn insert_twice() {
+                    let (dtype, nullable, part_length, edit_length) = config();
+                    let schema = make_schema(&dtype, nullable);
+
+                    let part1 = generate_table(&schema, part_length, 0);
+                    let part2 = generate_table(&schema, edit_length, 1);
+                    let part3 = generate_table(&schema, part_length, part_length as u64);
+                    let part4 = generate_table(&schema, edit_length, 2);
+                    let part5 = generate_table(&schema, part_length, 2 * part_length as u64);
+
+                    let base = concat_batches([&part1, &part3, &part5]);
+                    let modified = concat_batches([&part1, &part2, &part3, &part4, &part5]);
+
+                    for enable_dictionary in [false, true] {
+                        let base_data = write_with_cdc_options(
+                            &[&base],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+                        let mod_data = write_with_cdc_options(
+                            &[&modified],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+
+                        let base_info = get_column_info(&base_data, 0);
+                        let mod_info = get_column_info(&mod_data, 0);
+                        assert_eq!(base_info.len(), 1);
+                        assert_eq!(mod_info.len(), 1);
+
+                        assert_cdc_chunk_sizes(
+                            &base.column(0).clone(),
+                            &base_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+                        assert_cdc_chunk_sizes(
+                            &modified.column(0).clone(),
+                            &mod_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+
+                        assert_page_length_differences(
+                            &base_info[0],
+                            &mod_info[0],
+                            0,
+                            2,
+                            0,
+                            edit_length as i64,
+                        );
+                    }
+                }
+
+                #[test]
+                fn update_once() {
+                    let (dtype, nullable, part_length, edit_length) = config();
+                    let schema = make_schema(&dtype, nullable);
+
+                    let part1 = generate_table(&schema, part_length, 0);
+                    let part2 = generate_table(&schema, edit_length, 1);
+                    let part3 = generate_table(&schema, part_length, part_length as u64);
+                    let part4 = generate_table(&schema, edit_length, 2);
+
+                    let base = concat_batches([&part1, &part2, &part3]);
+                    let modified = concat_batches([&part1, &part4, &part3]);
+
+                    for enable_dictionary in [false, true] {
+                        let base_data = write_with_cdc_options(
+                            &[&base],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+                        let mod_data = write_with_cdc_options(
+                            &[&modified],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+
+                        let base_info = get_column_info(&base_data, 0);
+                        let mod_info = get_column_info(&mod_data, 0);
+                        assert_eq!(base_info.len(), 1);
+                        assert_eq!(mod_info.len(), 1);
+
+                        assert_cdc_chunk_sizes(
+                            &base.column(0).clone(),
+                            &base_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+                        assert_cdc_chunk_sizes(
+                            &modified.column(0).clone(),
+                            &mod_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+
+                        assert_page_length_differences_update(&base_info[0], &mod_info[0], 1);
+                    }
+                }
+
+                #[test]
+                fn update_twice() {
+                    let (dtype, nullable, part_length, edit_length) = config();
+                    let schema = make_schema(&dtype, nullable);
+
+                    let part1 = generate_table(&schema, part_length, 0);
+                    let part2 = generate_table(&schema, edit_length, 1);
+                    let part3 = generate_table(&schema, part_length, part_length as u64);
+                    let part4 = generate_table(&schema, edit_length, 2);
+                    let part5 = generate_table(&schema, part_length, 2 * part_length as u64);
+                    let part6 = generate_table(&schema, edit_length, 3);
+                    let part7 = generate_table(&schema, edit_length, 4);
+
+                    let base = concat_batches([&part1, &part2, &part3, &part4, &part5]);
+                    let modified = concat_batches([&part1, &part6, &part3, &part7, &part5]);
+
+                    for enable_dictionary in [false, true] {
+                        let base_data = write_with_cdc_options(
+                            &[&base],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+                        let mod_data = write_with_cdc_options(
+                            &[&modified],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+
+                        let base_info = get_column_info(&base_data, 0);
+                        let mod_info = get_column_info(&mod_data, 0);
+                        assert_eq!(base_info.len(), 1);
+                        assert_eq!(mod_info.len(), 1);
+
+                        assert_cdc_chunk_sizes(
+                            &base.column(0).clone(),
+                            &base_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+                        assert_cdc_chunk_sizes(
+                            &modified.column(0).clone(),
+                            &mod_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+
+                        assert_page_length_differences_update(&base_info[0], &mod_info[0], 2);
+                    }
+                }
+
+                #[test]
+                fn prepend() {
+                    let (dtype, nullable, part_length, edit_length) = config();
+                    let schema = make_schema(&dtype, nullable);
+
+                    let part1 = generate_table(&schema, part_length, 0);
+                    let part2 = generate_table(&schema, edit_length, 1);
+                    let part3 = generate_table(&schema, part_length, part_length as u64);
+                    let part4 = generate_table(&schema, edit_length, 2);
+
+                    let base = concat_batches([&part1, &part2, &part3]);
+                    let modified = concat_batches([&part4, &part1, &part2, &part3]);
+
+                    for enable_dictionary in [false, true] {
+                        let base_data = write_with_cdc_options(
+                            &[&base],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+                        let mod_data = write_with_cdc_options(
+                            &[&modified],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+
+                        let base_info = get_column_info(&base_data, 0);
+                        let mod_info = get_column_info(&mod_data, 0);
+                        assert_eq!(base_info.len(), 1);
+                        assert_eq!(mod_info.len(), 1);
+
+                        assert_cdc_chunk_sizes(
+                            &base.column(0).clone(),
+                            &base_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+                        assert_cdc_chunk_sizes(
+                            &modified.column(0).clone(),
+                            &mod_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+
+                        assert!(
+                            mod_info[0].page_lengths.len() >= base_info[0].page_lengths.len(),
+                            "Modified should have same or more pages"
+                        );
+
+                        assert_page_length_differences(
+                            &base_info[0],
+                            &mod_info[0],
+                            0,
+                            1,
+                            0,
+                            edit_length as i64,
+                        );
+                    }
+                }
+
+                #[test]
+                fn append() {
+                    let (dtype, nullable, part_length, edit_length) = config();
+                    let schema = make_schema(&dtype, nullable);
+
+                    let part1 = generate_table(&schema, part_length, 0);
+                    let part2 = generate_table(&schema, edit_length, 1);
+                    let part3 = generate_table(&schema, part_length, part_length as u64);
+                    let part4 = generate_table(&schema, edit_length, 2);
+
+                    let base = concat_batches([&part1, &part2, &part3]);
+                    let modified = concat_batches([&part1, &part2, &part3, &part4]);
+
+                    for enable_dictionary in [false, true] {
+                        let base_data = write_with_cdc_options(
+                            &[&base],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+                        let mod_data = write_with_cdc_options(
+                            &[&modified],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+
+                        let base_info = get_column_info(&base_data, 0);
+                        let mod_info = get_column_info(&mod_data, 0);
+                        assert_eq!(base_info.len(), 1);
+                        assert_eq!(mod_info.len(), 1);
+
+                        assert_cdc_chunk_sizes(
+                            &base.column(0).clone(),
+                            &base_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+                        assert_cdc_chunk_sizes(
+                            &modified.column(0).clone(),
+                            &mod_info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            enable_dictionary,
+                        );
+
+                        let bp = &base_info[0].page_lengths;
+                        let mp = &mod_info[0].page_lengths;
+                        assert!(mp.len() >= bp.len());
+                        for i in 0..bp.len() - 1 {
+                            assert_eq!(bp[i], mp[i], "Page {i} should be identical");
+                        }
+                        assert!(mp[bp.len() - 1] >= bp[bp.len() - 1]);
+                    }
+                }
+
+                #[test]
+                fn empty_table() {
+                    let (dtype, nullable, _, _) = config();
+                    let schema = make_schema(&dtype, nullable);
+
+                    let empty = RecordBatch::new_empty(schema);
+                    for enable_dictionary in [false, true] {
+                        let data = write_with_cdc_options(
+                            &[&empty],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            enable_dictionary,
+                        );
+                        let info = get_column_info(&data, 0);
+                        // Empty table: either no row groups or one with no data pages
+                        if !info.is_empty() {
+                            assert!(info[0].page_lengths.is_empty());
+                        }
+                    }
+                }
+
+                #[test]
+                fn array_offsets() {
+                    let (dtype, nullable, part_length, edit_length) = config();
+                    let schema = make_schema(&dtype, nullable);
+
+                    let table = concat_batches([
+                        &generate_table(&schema, part_length, 0),
+                        &generate_table(&schema, edit_length, 1),
+                        &generate_table(&schema, part_length, part_length as u64),
+                    ]);
+
+                    for offset in [0usize, 512, 1024] {
+                        if offset >= table.num_rows() {
+                            continue;
+                        }
+                        let sliced = table.slice(offset, table.num_rows() - offset);
+                        let data = write_with_cdc_options(
+                            &[&sliced],
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            Some(CDC_ROW_GROUP_LENGTH),
+                            true,
+                        );
+                        let info = get_column_info(&data, 0);
+                        assert_eq!(info.len(), 1);
+
+                        // Verify CDC actually produced content-defined chunks
+                        assert_cdc_chunk_sizes(
+                            &sliced.column(0).clone(),
+                            &info[0],
+                            nullable,
+                            CDC_MIN_CHUNK_SIZE,
+                            CDC_MAX_CHUNK_SIZE,
+                            true,
+                        );
+                    }
+                }
+            }
         };
-
-        let part1 = make_batch(part_len, 0);
-        let edit = make_batch(edit_len, 1);
-        let part2 = make_batch(part_len, 100);
-
-        let base = concat_batches([&part1, &part2]);
-        let modified = concat_batches([&part1, &edit, &part2]);
-
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-
-        let mod_result = read_batches(&mod_data);
-        assert_eq!(concat_batches(&mod_result), modified);
-
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert_eq!(
-            diffs.len(),
-            1,
-            "Expected 1 diff for f64 insert, got {diffs:?}"
-        );
-        let mod_sum: i64 = diffs[0].1.iter().sum();
-        let base_sum: i64 = diffs[0].0.iter().sum();
-        assert_eq!(mod_sum - base_sum, edit_len as i64);
     }
 
-    #[test]
-    fn test_cdc_append() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
+    // Instantiate for representative types matching C++ categories
+    cdc_single_rg_tests!(cdc_bool_non_null, DataType::Boolean, false);
+    cdc_single_rg_tests!(cdc_i32_non_null, DataType::Int32, false);
+    cdc_single_rg_tests!(cdc_i64_nullable, DataType::Int64, true);
+    cdc_single_rg_tests!(cdc_f64_nullable, DataType::Float64, true);
+    cdc_single_rg_tests!(cdc_utf8_non_null, DataType::Utf8, false);
+    cdc_single_rg_tests!(cdc_binary_nullable, DataType::Binary, true);
+    cdc_single_rg_tests!(cdc_fsb16_nullable, DataType::FixedSizeBinary(16), true);
+    cdc_single_rg_tests!(cdc_date32_non_null, DataType::Date32, false);
+    cdc_single_rg_tests!(
+        cdc_timestamp_nullable,
+        DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+        true
+    );
 
-        let part1 = make_i32_batch(part_len, 0);
-        let part2 = make_i32_batch(part_len, 100);
-        let edit = make_i32_batch(edit_len, 1);
+    // --- Multiple row group tests matching C++ TestCDCMultipleRowGroups ---
 
-        let base = concat_batches([&part1, &part2]);
-        let modified = concat_batches([&part1, &part2, &edit]);
+    mod cdc_multiple_row_groups {
+        use super::*;
 
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
+        const PART_LENGTH: usize = 128 * 1024;
+        const EDIT_LENGTH: usize = 128;
+        const ROW_GROUP_LENGTH: usize = 64 * 1024;
 
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-        assert_eq!(base_pages.len(), 1);
-        assert_eq!(mod_pages.len(), 1);
-
-        let bp = &base_pages[0];
-        let mp = &mod_pages[0];
-
-        assert!(mp.len() >= bp.len());
-        for i in 0..bp.len() - 1 {
-            assert_eq!(bp[i], mp[i], "Page {i} should be identical");
+        fn schema() -> Arc<Schema> {
+            Arc::new(Schema::new(vec![
+                Field::new("int32", DataType::Int32, true),
+                Field::new("float64", DataType::Float64, true),
+                Field::new("bool", DataType::Boolean, false),
+            ]))
         }
-        assert!(
-            mp[bp.len() - 1] >= bp[bp.len() - 1],
-            "Last original page should be same or larger in modified"
-        );
-    }
 
-    #[test]
-    fn test_cdc_prepend() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
+        #[test]
+        fn insert_once() {
+            let s = schema();
+            let part1 = generate_table(&s, PART_LENGTH, 0);
+            let part2 = generate_table(&s, PART_LENGTH, 2);
+            let part3 = generate_table(&s, PART_LENGTH, 4);
+            let edit1 = generate_table(&s, EDIT_LENGTH, 1);
+            let edit2 = generate_table(&s, EDIT_LENGTH, 3);
 
-        let part1 = make_i32_batch(part_len, 0);
-        let part2 = make_i32_batch(part_len, 100);
-        let edit = make_i32_batch(edit_len, 1);
+            let base = concat_batches([&part1, &edit1, &part2, &part3]);
+            let modified = concat_batches([&part1, &edit1, &edit2, &part2, &part3]);
+            assert_eq!(modified.num_rows(), base.num_rows() + EDIT_LENGTH);
 
-        let base = concat_batches([&part1, &part2]);
-        let modified = concat_batches([&edit, &part1, &part2]);
-
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-        assert_eq!(base_pages.len(), 1);
-        assert_eq!(mod_pages.len(), 1);
-
-        assert!(mod_pages[0].len() >= base_pages[0].len());
-
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert_eq!(diffs.len(), 1, "Expected 1 diff, got {diffs:?}");
-        let base_sum: i64 = diffs[0].0.iter().sum();
-        let mod_sum: i64 = diffs[0].1.iter().sum();
-        assert_eq!(
-            mod_sum - base_sum,
-            edit_len as i64,
-            "Diff should account for prepended rows"
-        );
-    }
-
-    #[test]
-    fn test_cdc_empty_table() {
-        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
-        let empty = RecordBatch::new_empty(schema.clone());
-        let data = write_with_cdc_options(&[&empty], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-
-        let pages = get_page_lengths(&data, 0);
-        assert!(pages.is_empty(), "Empty table should produce no row groups");
-
-        let result = read_batches(&data);
-        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(total_rows, 0);
-    }
-
-    #[test]
-    fn test_cdc_multiple_row_groups_insert() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
-        let rg_rows = part_len / 2;
-
-        let part1 = make_i32_batch(part_len, 0);
-        let edit1 = make_i32_batch(edit_len, 1);
-        let edit2 = make_i32_batch(edit_len, 3);
-        let part2 = make_i32_batch(part_len, 100);
-        let part3 = make_i32_batch(part_len, 200);
-
-        let base = concat_batches([&part1, &edit1, &part2, &part3]);
-        let modified = concat_batches([&part1, &edit1, &edit2, &part2, &part3]);
-
-        let base_data = write_with_cdc_options(
-            &[&base],
-            CDC_MIN_CHUNK_SIZE,
-            CDC_MAX_CHUNK_SIZE,
-            Some(rg_rows),
-        );
-        let mod_data = write_with_cdc_options(
-            &[&modified],
-            CDC_MIN_CHUNK_SIZE,
-            CDC_MAX_CHUNK_SIZE,
-            Some(rg_rows),
-        );
-
-        let base_result = read_batches(&base_data);
-        let mod_result = read_batches(&mod_data);
-        assert_eq!(concat_batches(&base_result), base);
-        assert_eq!(concat_batches(&mod_result), modified);
-
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-
-        assert!(base_pages.len() > 1);
-        assert_eq!(base_pages.len(), mod_pages.len());
-
-        assert_eq!(base_pages[0], mod_pages[0]);
-        assert_eq!(base_pages[1], mod_pages[1]);
-    }
-
-    #[test]
-    fn test_cdc_multiple_row_groups_append() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
-        let rg_rows = part_len / 2;
-
-        let part1 = make_i32_batch(part_len, 0);
-        let edit1 = make_i32_batch(edit_len, 1);
-        let part2 = make_i32_batch(part_len, 100);
-        let part3 = make_i32_batch(part_len, 200);
-        let edit2 = make_i32_batch(edit_len, 3);
-
-        let base = concat_batches([&part1, &edit1, &part2, &part3]);
-        let modified = concat_batches([&part1, &edit1, &part2, &part3, &edit2]);
-
-        let base_data = write_with_cdc_options(
-            &[&base],
-            CDC_MIN_CHUNK_SIZE,
-            CDC_MAX_CHUNK_SIZE,
-            Some(rg_rows),
-        );
-        let mod_data = write_with_cdc_options(
-            &[&modified],
-            CDC_MIN_CHUNK_SIZE,
-            CDC_MAX_CHUNK_SIZE,
-            Some(rg_rows),
-        );
-
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-        assert!(base_pages.len() > 1);
-        assert_eq!(base_pages.len(), mod_pages.len());
-
-        for i in 0..base_pages.len() - 1 {
-            assert_eq!(
-                base_pages[i], mod_pages[i],
-                "Row group {i} pages should be identical"
+            let base_data = write_with_cdc_options(
+                &[&base],
+                CDC_MIN_CHUNK_SIZE,
+                CDC_MAX_CHUNK_SIZE,
+                Some(ROW_GROUP_LENGTH),
+                false,
             );
-        }
-    }
-
-    #[test]
-    fn test_cdc_nullable_column() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
-
-        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, true)]));
-
-        let make_batch = |len, seed| {
-            RecordBatch::try_new(
-                schema.clone(),
-                vec![Arc::new(generate_nullable_i32_array(len, seed)) as _],
-            )
-            .unwrap()
-        };
-
-        let part1 = make_batch(part_len, 0);
-        let edit = make_batch(edit_len, 1);
-        let part2 = make_batch(part_len, 100);
-
-        let base = concat_batches([&part1, &part2]);
-        let modified = concat_batches([&part1, &edit, &part2]);
-
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-
-        let mod_result = read_batches(&mod_data);
-        assert_eq!(concat_batches(&mod_result), modified);
-
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert_eq!(diffs.len(), 1, "Expected 1 diff, got {diffs:?}");
-        let mod_sum: i64 = diffs[0].1.iter().sum();
-        let base_sum: i64 = diffs[0].0.iter().sum();
-        assert_eq!(mod_sum - base_sum, edit_len as i64);
-    }
-
-    #[test]
-    fn test_cdc_string_column() {
-        let part_len = CDC_PART_SIZE / 16;
-        let edit_len = CDC_EDIT_SIZE / 16;
-
-        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-
-        let make_batch = |len, seed| {
-            RecordBatch::try_new(
-                schema.clone(),
-                vec![Arc::new(generate_string_array(len, seed)) as _],
-            )
-            .unwrap()
-        };
-
-        let part1 = make_batch(part_len, 0);
-        let edit = make_batch(edit_len, 1);
-        let part2 = make_batch(part_len, 100);
-
-        let base = concat_batches([&part1, &part2]);
-        let modified = concat_batches([&part1, &edit, &part2]);
-
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-
-        let mod_result = read_batches(&mod_data);
-        assert_eq!(concat_batches(&mod_result), modified);
-
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert_eq!(
-            diffs.len(),
-            1,
-            "Expected 1 diff for string insert, got {diffs:?}"
-        );
-        let mod_sum: i64 = diffs[0].1.iter().sum();
-        let base_sum: i64 = diffs[0].0.iter().sum();
-        assert_eq!(mod_sum - base_sum, edit_len as i64);
-    }
-
-    #[test]
-    fn test_cdc_delete_twice() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
-
-        let part1 = make_i32_batch(part_len, 0);
-        let edit1 = make_i32_batch(edit_len, 1);
-        let part2 = make_i32_batch(part_len, 100);
-        let edit2 = make_i32_batch(edit_len, 2);
-        let part3 = make_i32_batch(part_len, 200);
-
-        let base = concat_batches([&part1, &edit1, &part2, &edit2, &part3]);
-        let modified = concat_batches([&part1, &part2, &part3]);
-
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert_eq!(
-            diffs.len(),
-            2,
-            "Expected 2 diffs for double delete, got {diffs:?}"
-        );
-        for (left, right) in &diffs {
-            let left_sum: i64 = left.iter().sum();
-            let right_sum: i64 = right.iter().sum();
-            assert_eq!(
-                left_sum - right_sum,
-                edit_len as i64,
-                "Each diff should account for one deletion"
+            let mod_data = write_with_cdc_options(
+                &[&modified],
+                CDC_MIN_CHUNK_SIZE,
+                CDC_MAX_CHUNK_SIZE,
+                Some(ROW_GROUP_LENGTH),
+                false,
             );
+
+            for col in 0..s.fields().len() {
+                let base_info = get_column_info(&base_data, col);
+                let mod_info = get_column_info(&mod_data, col);
+
+                assert_eq!(base_info.len(), 7, "expected 7 row groups for col {col}");
+                assert_eq!(mod_info.len(), 7);
+
+                // First two row groups should be identical
+                assert_eq!(base_info[0].page_lengths, mod_info[0].page_lengths);
+                assert_eq!(base_info[1].page_lengths, mod_info[1].page_lengths);
+
+                // Middle row groups: 1 larger + 1 smaller diff
+                for i in 2..mod_info.len() - 1 {
+                    assert_page_length_differences(
+                        &base_info[i],
+                        &mod_info[i],
+                        0,
+                        1,
+                        1,
+                        EDIT_LENGTH as i64,
+                    );
+                }
+                // Last row group: just larger
+                assert_page_length_differences(
+                    base_info.last().unwrap(),
+                    mod_info.last().unwrap(),
+                    0,
+                    1,
+                    0,
+                    EDIT_LENGTH as i64,
+                );
+            }
         }
-    }
 
-    #[test]
-    fn test_cdc_insert_twice() {
-        let part_len = i32_part_length();
-        let edit_len = i32_edit_length();
+        #[test]
+        fn delete_once() {
+            let s = schema();
+            let part1 = generate_table(&s, PART_LENGTH, 0);
+            let part2 = generate_table(&s, PART_LENGTH, 2);
+            let part3 = generate_table(&s, PART_LENGTH, 4);
+            let edit1 = generate_table(&s, EDIT_LENGTH, 1);
+            let edit2 = generate_table(&s, EDIT_LENGTH, 3);
 
-        let part1 = make_i32_batch(part_len, 0);
-        let edit1 = make_i32_batch(edit_len, 1);
-        let part2 = make_i32_batch(part_len, 100);
-        let edit2 = make_i32_batch(edit_len, 2);
-        let part3 = make_i32_batch(part_len, 200);
+            let base = concat_batches([&part1, &edit1, &part2, &part3, &edit2]);
+            let modified = concat_batches([&part1, &part2, &part3, &edit2]);
 
-        let base = concat_batches([&part1, &part2, &part3]);
-        let modified = concat_batches([&part1, &edit1, &part2, &edit2, &part3]);
-
-        let base_data =
-            write_with_cdc_options(&[&base], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let mod_data =
-            write_with_cdc_options(&[&modified], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-
-        let base_pages = get_page_lengths(&base_data, 0);
-        let mod_pages = get_page_lengths(&mod_data, 0);
-
-        let diffs = find_differences(&base_pages[0], &mod_pages[0]);
-        assert_eq!(
-            diffs.len(),
-            2,
-            "Expected 2 diffs for double insert, got {diffs:?}"
-        );
-        for (left, right) in &diffs {
-            let left_sum: i64 = left.iter().sum();
-            let right_sum: i64 = right.iter().sum();
-            assert_eq!(
-                right_sum - left_sum,
-                edit_len as i64,
-                "Each diff should account for one insertion"
+            let base_data = write_with_cdc_options(
+                &[&base],
+                CDC_MIN_CHUNK_SIZE,
+                CDC_MAX_CHUNK_SIZE,
+                Some(ROW_GROUP_LENGTH),
+                false,
             );
+            let mod_data = write_with_cdc_options(
+                &[&modified],
+                CDC_MIN_CHUNK_SIZE,
+                CDC_MAX_CHUNK_SIZE,
+                Some(ROW_GROUP_LENGTH),
+                false,
+            );
+
+            for col in 0..s.fields().len() {
+                let base_info = get_column_info(&base_data, col);
+                let mod_info = get_column_info(&mod_data, col);
+
+                assert_eq!(base_info.len(), 7);
+                assert_eq!(mod_info.len(), 7);
+
+                assert_eq!(base_info[0].page_lengths, mod_info[0].page_lengths);
+                assert_eq!(base_info[1].page_lengths, mod_info[1].page_lengths);
+
+                for i in 2..mod_info.len() - 1 {
+                    assert_page_length_differences(
+                        &base_info[i],
+                        &mod_info[i],
+                        0,
+                        1,
+                        1,
+                        EDIT_LENGTH as i64,
+                    );
+                }
+                assert_page_length_differences(
+                    base_info.last().unwrap(),
+                    mod_info.last().unwrap(),
+                    0,
+                    0,
+                    1,
+                    EDIT_LENGTH as i64,
+                );
+            }
+        }
+
+        #[test]
+        fn update_once() {
+            let s = schema();
+            let part1 = generate_table(&s, PART_LENGTH, 0);
+            let part2 = generate_table(&s, PART_LENGTH, 2);
+            let part3 = generate_table(&s, PART_LENGTH, 4);
+            let edit1 = generate_table(&s, EDIT_LENGTH, 1);
+            let edit2 = generate_table(&s, EDIT_LENGTH, 3);
+            let edit3 = generate_table(&s, EDIT_LENGTH, 5);
+
+            let base = concat_batches([&part1, &edit1, &part2, &part3, &edit2]);
+            let modified = concat_batches([&part1, &edit3, &part2, &part3, &edit2]);
+
+            let base_data = write_with_cdc_options(
+                &[&base],
+                CDC_MIN_CHUNK_SIZE,
+                CDC_MAX_CHUNK_SIZE,
+                Some(ROW_GROUP_LENGTH),
+                false,
+            );
+            let mod_data = write_with_cdc_options(
+                &[&modified],
+                CDC_MIN_CHUNK_SIZE,
+                CDC_MAX_CHUNK_SIZE,
+                Some(ROW_GROUP_LENGTH),
+                false,
+            );
+
+            for col in 0..s.fields().len() {
+                let nullable = s.field(col).is_nullable();
+                let base_info = get_column_info(&base_data, col);
+                let mod_info = get_column_info(&mod_data, col);
+
+                assert_eq!(base_info.len(), 7);
+                assert_eq!(mod_info.len(), 7);
+
+                // Validate CDC chunk sizes on at least the first row group
+                assert_cdc_chunk_sizes(
+                    &base.column(col).slice(0, ROW_GROUP_LENGTH),
+                    &base_info[0],
+                    nullable,
+                    CDC_MIN_CHUNK_SIZE,
+                    CDC_MAX_CHUNK_SIZE,
+                    false,
+                );
+
+                assert_eq!(base_info[0].page_lengths, mod_info[0].page_lengths);
+                assert_eq!(base_info[1].page_lengths, mod_info[1].page_lengths);
+
+                // Row group containing the edit
+                assert_page_length_differences_update(&base_info[2], &mod_info[2], 1);
+
+                // Remaining row groups should be identical
+                for i in 3..mod_info.len() {
+                    assert_eq!(base_info[i].page_lengths, mod_info[i].page_lengths);
+                }
+            }
+        }
+
+        #[test]
+        fn append() {
+            let s = schema();
+            let part1 = generate_table(&s, PART_LENGTH, 0);
+            let part2 = generate_table(&s, PART_LENGTH, 2);
+            let part3 = generate_table(&s, PART_LENGTH, 4);
+            let edit1 = generate_table(&s, EDIT_LENGTH, 1);
+            let edit2 = generate_table(&s, EDIT_LENGTH, 3);
+
+            let base = concat_batches([&part1, &edit1, &part2, &part3]);
+            let modified = concat_batches([&part1, &edit1, &part2, &part3, &edit2]);
+
+            let base_data = write_with_cdc_options(
+                &[&base],
+                CDC_MIN_CHUNK_SIZE,
+                CDC_MAX_CHUNK_SIZE,
+                Some(ROW_GROUP_LENGTH),
+                false,
+            );
+            let mod_data = write_with_cdc_options(
+                &[&modified],
+                CDC_MIN_CHUNK_SIZE,
+                CDC_MAX_CHUNK_SIZE,
+                Some(ROW_GROUP_LENGTH),
+                false,
+            );
+
+            for col in 0..s.fields().len() {
+                let nullable = s.field(col).is_nullable();
+                let base_info = get_column_info(&base_data, col);
+                let mod_info = get_column_info(&mod_data, col);
+
+                assert_eq!(base_info.len(), 7);
+                assert_eq!(mod_info.len(), 7);
+
+                // Validate CDC chunk sizes on the first row group
+                assert_cdc_chunk_sizes(
+                    &base.column(col).slice(0, ROW_GROUP_LENGTH),
+                    &base_info[0],
+                    nullable,
+                    CDC_MIN_CHUNK_SIZE,
+                    CDC_MAX_CHUNK_SIZE,
+                    false,
+                );
+
+                // All row groups except last should be identical
+                for i in 0..base_info.len() - 1 {
+                    assert_eq!(base_info[i].page_lengths, mod_info[i].page_lengths);
+                }
+
+                // Last row group: pages should be identical except last
+                let bp = &base_info.last().unwrap().page_lengths;
+                let mp = &mod_info.last().unwrap().page_lengths;
+                assert!(mp.len() >= bp.len());
+                for i in 0..bp.len() - 1 {
+                    assert_eq!(bp[i], mp[i]);
+                }
+            }
         }
     }
 
-    #[test]
-    fn test_cdc_array_offsets() {
-        // CDC boundaries are content-defined: once the gear hash converges (within
-        // a few dozen bytes), both the full and the sliced stream find boundaries
-        // at the same absolute content positions.  Slicing at offset=10 therefore
-        // produces page lengths of the form:
-        //
-        //   non-offsetted: [n,    a, b, c, ...]
-        //   offsetted:     [n-10, a, b, c, ...]
-        //
-        // Only the first page is shorter by `offset`; every subsequent page,
-        // including the last, is identical.
-        let n = i32_part_length(); // large enough to span many CDC pages
-        let offset = 10usize;
-        let full = make_i32_batch(n, 0);
-        let sliced = full.slice(offset, n - offset);
-
-        let full_data =
-            write_with_cdc_options(&[&full], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-        let sliced_data =
-            write_with_cdc_options(&[&sliced], CDC_MIN_CHUNK_SIZE, CDC_MAX_CHUNK_SIZE, None);
-
-        // Roundtrip correctness.
-        let read = read_batches(&sliced_data);
-        assert_eq!(sliced, concat_batches(&read));
-
-        let full_pages = get_page_lengths(&full_data, 0);
-        let sliced_pages = get_page_lengths(&sliced_data, 0);
-
-        assert_eq!(full_pages.len(), 1, "expected single row group");
-        assert_eq!(sliced_pages.len(), 1, "expected single row group");
-
-        let fp = &full_pages[0];
-        let sp = &sliced_pages[0];
-
-        assert!(fp.len() > 1, "expected multiple CDC pages, got {fp:?}");
-        assert_eq!(fp.len(), sp.len(), "page count must match");
-
-        // First page is shorter by exactly `offset`.
-        assert_eq!(
-            fp[0] - sp[0],
-            offset as i64,
-            "sliced first page should be {offset} values shorter: full={fp:?} sliced={sp:?}"
-        );
-
-        // All remaining pages — including the last — are identical.
-        assert_eq!(
-            &fp[1..],
-            &sp[1..],
-            "pages after the first must be identical: full={fp:?} sliced={sp:?}"
-        );
-    }
+    // --- Direct chunker test (kept from original) ---
 
     #[test]
     fn test_cdc_array_offsets_direct() {
-        // Call get_arrow_chunks directly on the low-level chunker, bypassing the
-        // Arrow writer pipeline.  The same self-synchronisation property holds:
-        //
-        //   non-offsetted chunks: [n,    a, b, c, ...]
-        //   offsetted chunks:     [n-10, a, b, c, ...]
-        //
-        // Only the first chunk is shorter by `offset`; all subsequent chunks have
-        // identical num_values.
         use crate::basic::Type as PhysicalType;
         use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 
@@ -1704,15 +2124,14 @@ mod arrow_tests {
             ColumnDescriptor::new(Arc::new(tp), 0, 0, ColumnPath::new(vec![]))
         };
 
-        let n = i32_part_length(); // large enough for multiple CDC chunks
+        let bpr = bytes_per_record(&DataType::Int32, false);
+        let n = CDC_PART_SIZE / bpr;
         let offset = 10usize;
 
-        // Non-offsetted: plain fresh array of n values.
-        let array = generate_i32_array(n, 0);
+        let array: Int32Array = (0..n).map(|i| test_hash(0, i as u64) as i32).collect();
         let mut chunker = super::ContentDefinedChunker::new(&desc, &options).unwrap();
         let chunks = chunker.get_arrow_chunks(None, None, &array).unwrap();
 
-        // Offsetted: same backing buffer sliced by `offset` elements.
         let sliced = array.slice(offset, n - offset);
         let mut chunker2 = super::ContentDefinedChunker::new(&desc, &options).unwrap();
         let chunks2 = chunker2.get_arrow_chunks(None, None, &sliced).unwrap();
@@ -1726,12 +2145,12 @@ mod arrow_tests {
         assert_eq!(
             values[0] - values2[0],
             offset,
-            "offsetted first chunk should be {offset} values shorter: {values:?} vs {values2:?}"
+            "offsetted first chunk should be {offset} values shorter"
         );
         assert_eq!(
             &values[1..],
             &values2[1..],
-            "all chunks after the first must be identical: {values:?} vs {values2:?}"
+            "all chunks after the first must be identical"
         );
     }
 }

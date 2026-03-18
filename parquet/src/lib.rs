@@ -77,7 +77,7 @@
 //!
 //! Enable CDC via [`WriterProperties`]:
 //!
-//! ```no_run
+//! ```rust
 //! # use parquet::file::properties::{WriterProperties, CdcOptions};
 //! let props = WriterProperties::builder()
 //!     .set_content_defined_chunking(Some(CdcOptions::default()))
