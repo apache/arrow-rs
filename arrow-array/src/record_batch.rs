@@ -135,6 +135,18 @@ macro_rules! create_array {
     ($ty: tt, [$($values: expr),*]) => {
         std::sync::Arc::new(<$crate::create_array!(@from $ty)>::from(vec![$($values),*]))
     };
+
+    (Binary, $values: expr) => {
+        std::sync::Arc::new($crate::BinaryArray::from_vec($values))
+    };
+
+    (LargeBinary, $values: expr) => {
+        std::sync::Arc::new($crate::LargeBinaryArray::from_vec($values))
+    };
+
+    ($ty: tt, $values: expr) => {
+        std::sync::Arc::new(<$crate::create_array!(@from $ty)>::from($values))
+    };
 }
 
 /// Creates a record batch from literal slice of values, suitable for rapid
@@ -152,10 +164,22 @@ macro_rules! create_array {
 ///     ("c", Utf8, ["alpha", "beta", "gamma"])
 /// );
 /// ```
+///
+/// Variables and expressions are also supported:
+///
+/// ```rust
+/// use arrow_array::record_batch;
+///
+/// let values = vec![1, 2, 3];
+/// let batch = record_batch!(
+///     ("a", Int32, values),
+///     ("b", Float64, vec![Some(4.0), None, Some(5.0)])
+/// );
+/// ```
 /// Due to limitation of [`create_array!`] macro, support for limited data types is available.
 #[macro_export]
 macro_rules! record_batch {
-    ($(($name: expr, $type: ident, [$($values: expr),*])),*) => {
+    ($(($name: expr, $type: ident, $($values: tt)+)),*) => {
         {
             let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
                 $(
@@ -163,16 +187,14 @@ macro_rules! record_batch {
                 )*
             ]));
 
-            let batch = $crate::RecordBatch::try_new(
+            $crate::RecordBatch::try_new(
                 schema,
                 vec![$(
-                    $crate::create_array!($type, [$($values),*]),
+                    $crate::create_array!($type, $($values)+),
                 )*]
-            );
-
-            batch
+            )
         }
-    }
+    };
 }
 
 /// A two-dimensional batch of column-oriented data with a defined
@@ -979,6 +1001,35 @@ mod tests {
         );
         assert_eq!(5, record_batch.column(0).len());
         assert_eq!(5, record_batch.column(1).len());
+    }
+
+    #[test]
+    fn create_binary_record_batch_from_variables() {
+        let binary_values = vec![b"a".as_slice()];
+        let large_binary_values = vec![b"xxx".as_slice()];
+
+        let record_batch = record_batch!(
+            ("a", Binary, binary_values),
+            ("b", LargeBinary, large_binary_values)
+        )
+        .unwrap();
+
+        assert_eq!(1, record_batch.num_rows());
+        assert_eq!(2, record_batch.num_columns());
+        assert_eq!(
+            &DataType::Binary,
+            record_batch.schema().field(0).data_type()
+        );
+        assert_eq!(
+            &DataType::LargeBinary,
+            record_batch.schema().field(1).data_type()
+        );
+
+        let binary = record_batch.column(0).as_binary::<i32>();
+        assert_eq!(b"a", binary.value(0));
+
+        let large_binary = record_batch.column(1).as_binary::<i64>();
+        assert_eq!(b"xxx", large_binary.value(0));
     }
 
     #[test]
