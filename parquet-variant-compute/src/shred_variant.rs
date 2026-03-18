@@ -1147,7 +1147,6 @@ mod tests {
     }
 
     #[test]
-    // TODO(#9518): Drop this once variant_get tests build shredded fixtures via shred_variant.
     fn test_largeutf8_shredding() {
         let input = VariantArray::from_iter(vec![
             Some(Variant::from("hello")),
@@ -1204,7 +1203,6 @@ mod tests {
     }
 
     #[test]
-    // TODO(#9518): Drop this once variant_get tests build shredded fixtures via shred_variant.
     fn test_largebinary_shredding() {
         let input = VariantArray::from_iter(vec![
             Some(Variant::from(&b"\x00\x01\x02"[..])),
