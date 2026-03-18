@@ -524,7 +524,7 @@ impl BooleanBuffer {
         }
     }
 
-    /// Returns a [`Buffer`] containing the sliced contents of this [`BooleanBuffer`]
+    /// Returns a new [`Buffer`] containing the sliced contents of this [`BooleanBuffer`]
     ///
     /// Equivalent to `self.buffer.bit_slice(self.offset, self.len)`
     pub fn sliced(&self) -> Buffer {
