@@ -154,13 +154,54 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
     data_type: &DataType,
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, PrimitiveArray<T>>::new(values, indices);
+    let arrays = &interleaved.arrays;
+    let len = indices.len();
 
-    let values = indices
-        .iter()
-        .map(|(a, b)| interleaved.arrays[*a].value(*b))
-        .collect::<Vec<_>>();
+    let mut output = Vec::with_capacity(len);
+    let dst: *mut T::Native = output.as_mut_ptr();
+    let mut base = 0;
 
-    let array = PrimitiveArray::<T>::try_new(values.into(), interleaved.nulls)?;
+    // Process 8 elements at a time to issue multiple independent loads
+    // and increase memory-level parallelism for random access patterns.
+    let chunks = indices.chunks_exact(8);
+    let remainder = chunks.remainder();
+    for chunk in chunks {
+        let v0 = arrays[chunk[0].0].value(chunk[0].1);
+        let v1 = arrays[chunk[1].0].value(chunk[1].1);
+        let v2 = arrays[chunk[2].0].value(chunk[2].1);
+        let v3 = arrays[chunk[3].0].value(chunk[3].1);
+        let v4 = arrays[chunk[4].0].value(chunk[4].1);
+        let v5 = arrays[chunk[5].0].value(chunk[5].1);
+        let v6 = arrays[chunk[6].0].value(chunk[6].1);
+        let v7 = arrays[chunk[7].0].value(chunk[7].1);
+
+        // SAFETY: base+7 < len == output capacity
+        debug_assert!(base + 7 < len);
+        unsafe {
+            dst.add(base).write(v0);
+            dst.add(base + 1).write(v1);
+            dst.add(base + 2).write(v2);
+            dst.add(base + 3).write(v3);
+            dst.add(base + 4).write(v4);
+            dst.add(base + 5).write(v5);
+            dst.add(base + 6).write(v6);
+            dst.add(base + 7).write(v7);
+        }
+        base += 8;
+    }
+
+    for idx in remainder {
+        // SAFETY: base < len == output capacity
+        debug_assert!(base < len);
+        unsafe { dst.add(base).write(arrays[idx.0].value(idx.1)) };
+        base += 1;
+    }
+
+    // SAFETY: all `len` elements have been initialized
+    debug_assert!(base == len);
+    unsafe { output.set_len(len) };
+
+    let array = PrimitiveArray::<T>::try_new(output.into(), interleaved.nulls)?;
     Ok(Arc::new(array.with_data_type(data_type.clone())))
 }
 
@@ -173,12 +214,15 @@ fn interleave_bytes<T: ByteArrayType>(
     let mut capacity = 0;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(T::Offset::from_usize(0).unwrap());
-    offsets.extend(indices.iter().map(|(a, b)| {
+    for (a, b) in indices {
         let o = interleaved.arrays[*a].value_offsets();
         let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
         capacity += element_len;
-        T::Offset::from_usize(capacity).expect("overflow")
-    }));
+        offsets.push(
+            T::Offset::from_usize(capacity)
+                .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+        );
+    }
 
     let mut values = Vec::with_capacity(capacity);
     for (a, b) in indices {
@@ -331,12 +375,14 @@ fn interleave_list<O: OffsetSizeTrait>(
     let mut capacity = 0usize;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(O::from_usize(0).unwrap());
-    offsets.extend(indices.iter().map(|(array, row)| {
+    for (array, row) in indices {
         let o = interleaved.arrays[*array].value_offsets();
         let element_len = o[*row + 1].as_usize() - o[*row].as_usize();
         capacity += element_len;
-        O::from_usize(capacity).expect("offset overflow")
-    }));
+        offsets.push(
+            O::from_usize(capacity).ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+        );
+    }
 
     let mut child_indices = Vec::with_capacity(capacity);
     for (array, row) in indices {
@@ -1413,5 +1459,34 @@ mod tests {
                 Some("qux")
             ]
         );
+    }
+
+    #[test]
+    fn test_interleave_bytes_offset_overflow() {
+        let indices: Vec<(usize, usize)> = vec![(0, 0); (i32::MAX >> 4) as usize];
+        let text = ('a'..='z').collect::<String>();
+        let values = StringArray::from(vec![Some(text)]);
+        assert!(matches!(
+            interleave(&[&values], &indices),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
+    }
+
+    #[test]
+    fn test_interleave_list_offset_overflow() {
+        // Build a ListArray<i32> with a single row containing many elements
+        let mut builder = GenericListBuilder::<i32, _>::new(Int32Builder::new());
+        for i in 0..32 {
+            builder.values().append_value(i);
+        }
+        builder.append(true);
+        let list = builder.finish();
+
+        // Interleave enough copies to overflow i32 offsets
+        let indices: Vec<(usize, usize)> = vec![(0, 0); (i32::MAX as usize / 32) + 1];
+        assert!(matches!(
+            interleave(&[&list], &indices),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
     }
 }

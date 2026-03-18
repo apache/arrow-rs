@@ -19,7 +19,7 @@ use crate::compression::CompressionCodec;
 use crate::reader::Decoder;
 use crate::reader::block::{BlockDecoder, BlockDecoderState};
 use arrow_array::RecordBatch;
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, SchemaRef};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, Stream};
@@ -171,6 +171,13 @@ impl<R> AsyncAvroFileReader<R> {
             reader_state,
             finishing_partial_block: false,
         }
+    }
+
+    /// Returns the Arrow schema for batches produced by this reader.
+    ///
+    /// The schema is determined by the writer schema in the file and the reader schema provided to the builder.
+    pub fn schema(&self) -> SchemaRef {
+        self.decoder.schema()
     }
 
     /// Calculate the byte range needed to complete the current block.
@@ -534,7 +541,10 @@ impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
 #[cfg(all(test, feature = "object_store"))]
 mod tests {
     use super::*;
-    use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
+    use crate::codec::Tz;
+    use crate::schema::{
+        AVRO_NAME_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AvroSchema, SCHEMA_METADATA_KEY,
+    };
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::*;
@@ -553,6 +563,10 @@ mod tests {
     }
 
     fn get_alltypes_schema() -> SchemaRef {
+        get_alltypes_schema_with_tz("+00:00")
+    }
+
+    fn get_alltypes_schema_with_tz(tz_id: &str) -> SchemaRef {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, true),
             Field::new("bool_col", DataType::Boolean, true),
@@ -566,7 +580,7 @@ mod tests {
             Field::new("string_col", DataType::Binary, true),
             Field::new(
                 "timestamp_col",
-                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                DataType::Timestamp(TimeUnit::Microsecond, Some(tz_id.into())),
                 true,
             ),
         ])
@@ -758,39 +772,63 @@ mod tests {
                                 vec![Field::new("f1_3_1", DataType::Float64, false)].into(),
                             ),
                             false,
-                        ),
+                        )
+                        .with_metadata(HashMap::from([
+                            (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns3".to_owned()),
+                            (AVRO_NAME_METADATA_KEY.to_owned(), "record3".to_owned()),
+                        ])),
                     ]
                     .into(),
                 ),
                 false,
-            ),
+            )
+            .with_metadata(HashMap::from([
+                (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns2".to_owned()),
+                (AVRO_NAME_METADATA_KEY.to_owned(), "record2".to_owned()),
+            ])),
             Field::new(
                 "f2",
-                DataType::List(Arc::new(Field::new(
-                    "item",
-                    DataType::Struct(
-                        vec![
-                            Field::new("f2_1", DataType::Boolean, false),
-                            Field::new("f2_2", DataType::Float32, false),
-                        ]
-                        .into(),
-                    ),
-                    false,
-                ))),
+                DataType::List(Arc::new(
+                    Field::new(
+                        "item",
+                        DataType::Struct(
+                            vec![
+                                Field::new("f2_1", DataType::Boolean, false),
+                                Field::new("f2_2", DataType::Float32, false),
+                            ]
+                            .into(),
+                        ),
+                        false,
+                    )
+                    .with_metadata(HashMap::from([
+                        (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns4".to_owned()),
+                        (AVRO_NAME_METADATA_KEY.to_owned(), "record4".to_owned()),
+                    ])),
+                )),
                 false,
             ),
             Field::new(
                 "f3",
                 DataType::Struct(vec![Field::new("f3_1", DataType::Utf8, false)].into()),
                 true,
-            ),
+            )
+            .with_metadata(HashMap::from([
+                (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns5".to_owned()),
+                (AVRO_NAME_METADATA_KEY.to_owned(), "record5".to_owned()),
+            ])),
             Field::new(
                 "f4",
-                DataType::List(Arc::new(Field::new(
-                    "item",
-                    DataType::Struct(vec![Field::new("f4_1", DataType::Int64, false)].into()),
-                    true,
-                ))),
+                DataType::List(Arc::new(
+                    Field::new(
+                        "item",
+                        DataType::Struct(vec![Field::new("f4_1", DataType::Int64, false)].into()),
+                        true,
+                    )
+                    .with_metadata(HashMap::from([
+                        (AVRO_NAMESPACE_METADATA_KEY.to_owned(), "ns6".to_owned()),
+                        (AVRO_NAME_METADATA_KEY.to_owned(), "record6".to_owned()),
+                    ])),
+                )),
                 false,
             ),
         ])
@@ -1539,6 +1577,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_arrow_schema_from_reader_no_reader_schema() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let expected_schema = get_alltypes_schema()
+            .as_ref()
+            .clone()
+            .with_metadata(Default::default());
+
+        // Build reader without providing reader schema - should use writer schema from file
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .try_build()
+            .await
+            .unwrap();
+
+        assert_eq!(reader.schema().as_ref(), &expected_schema);
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+    }
+
+    #[tokio::test]
+    async fn test_arrow_schema_from_reader_with_reader_schema() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let schema = get_alltypes_schema()
+            .project(&[0, 1, 7])
+            .unwrap()
+            .with_metadata(Default::default());
+        let reader_schema = AvroSchema::try_from(&schema).unwrap();
+        let expected_schema = schema.clone();
+
+        // Build reader with provided reader schema - must apply the projection
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_reader_schema(reader_schema)
+            .try_build()
+            .await
+            .unwrap();
+
+        assert_eq!(reader.schema().as_ref(), &expected_schema);
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+    }
+
+    #[tokio::test]
+    async fn test_arrow_schema_from_reader_nested_records() {
+        let file = arrow_test_data("avro/nested_records.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+
+        // The schema produced by the reader should match the expected schema,
+        // attaching Avro type name metadata to fields of record and list types.
+        let expected_schema = get_nested_records_schema()
+            .as_ref()
+            .clone()
+            .with_metadata(Default::default());
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .try_build()
+            .await
+            .unwrap();
+
+        assert_eq!(reader.schema().as_ref(), &expected_schema);
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+    }
+
+    #[tokio::test]
     async fn test_with_header_size_hint_small() {
         // Use a very small header size hint to force multiple fetches
         let file = arrow_test_data("avro/alltypes_plain.avro");
@@ -1590,6 +1714,42 @@ mod tests {
 
         assert_eq!(batch.num_rows(), 8);
         assert_eq!(batch.num_columns(), 11);
+    }
+
+    #[tokio::test]
+    async fn test_with_tz_utc() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let schema = get_alltypes_schema_with_tz("UTC");
+        let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
+
+        // Specify the time zone ID of "UTC" for timestamp fields with time zone.
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_reader_schema(reader_schema)
+            .with_tz(Tz::Utc)
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_columns(), 11);
+
+        let schema = batch.schema();
+        let ts_field = schema.field_with_name("timestamp_col").unwrap();
+        assert!(
+            matches!(
+                ts_field.data_type(),
+                DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) if tz.as_ref() == "UTC"
+            ),
+            "expected Timestamp(Microsecond, Some(\"UTC\")), got {:?}",
+            ts_field.data_type()
+        );
     }
 
     #[tokio::test]
