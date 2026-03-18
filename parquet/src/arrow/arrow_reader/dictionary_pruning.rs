@@ -21,11 +21,11 @@
 //! predicate against the dictionary values before decoding any data pages.
 //! If no dictionary values match, the entire column chunk can be skipped.
 
-use crate::arrow::arrow_reader::filter::DictionaryPredicateResult;
-use crate::arrow::arrow_reader::ArrowPredicate;
-use crate::arrow::array_reader::RowGroups;
-use crate::arrow::in_memory_row_group::InMemoryRowGroup;
 use crate::arrow::ProjectionMask;
+use crate::arrow::array_reader::RowGroups;
+use crate::arrow::arrow_reader::ArrowPredicate;
+use crate::arrow::arrow_reader::filter::DictionaryPredicateResult;
+use crate::arrow::in_memory_row_group::InMemoryRowGroup;
 use crate::basic::{Encoding, Type as PhysicalType};
 use crate::errors::Result;
 use crate::file::metadata::ParquetMetaData;
@@ -77,15 +77,12 @@ pub(crate) fn try_dictionary_prune_in_memory(
         return Ok(None);
     }
 
-    // Get the arrow type for this column from the ParquetField tree
-    let arrow_type = fields
-        .and_then(|f| find_leaf_arrow_type(f, col_idx))
-        .unwrap_or_else(|| match physical_type {
-            PhysicalType::BYTE_ARRAY => DataType::Utf8View,
-            PhysicalType::INT32 => DataType::Int32,
-            PhysicalType::INT64 => DataType::Int64,
-            _ => unreachable!(),
-        });
+    // Get the arrow type for this column from the ParquetField tree.
+    // Only supports top-level primitive columns (not nested in structs/lists).
+    let Some(arrow_type) = fields.and_then(|f| find_top_level_leaf_arrow_type(f, col_idx))
+    else {
+        return Ok(None);
+    };
 
     // Create a page reader for this column
     let mut page_iter = row_group.column_chunks(col_idx)?;
@@ -115,14 +112,10 @@ pub(crate) fn try_dictionary_prune_in_memory(
     // then cast to the target arrow type if needed
     let array: ArrayRef = match physical_type {
         PhysicalType::BYTE_ARRAY => {
-            decode_plain_byte_array_to_string_view(&buf, num_values as usize)?
+            decode_plain_byte_array(&buf, num_values as usize, &arrow_type)?
         }
-        PhysicalType::INT32 => {
-            decode_plain_int32_as(&buf, num_values as usize, &arrow_type)?
-        }
-        PhysicalType::INT64 => {
-            decode_plain_int64_as(&buf, num_values as usize, &arrow_type)?
-        }
+        PhysicalType::INT32 => decode_plain_int32_as(&buf, num_values as usize, &arrow_type)?,
+        PhysicalType::INT64 => decode_plain_int64_as(&buf, num_values as usize, &arrow_type)?,
         _ => return Ok(None),
     };
 
@@ -131,32 +124,29 @@ pub(crate) fn try_dictionary_prune_in_memory(
     let field = Field::new(&col_name, arrow_type, true);
     let schema = Arc::new(Schema::new(vec![field]));
     let batch = RecordBatch::try_new(schema, vec![array]).map_err(|e| {
+        crate::errors::ParquetError::General(format!("Failed to create dictionary batch: {}", e))
+    })?;
+
+    // Evaluate the predicate against dictionary values
+    let result = predicate.evaluate_dictionary(batch).map_err(|e| {
         crate::errors::ParquetError::General(format!(
-            "Failed to create dictionary batch: {}",
+            "Failed to evaluate dictionary predicate: {}",
             e
         ))
     })?;
 
-    // Evaluate the predicate against dictionary values
-    let result = predicate
-        .evaluate_dictionary(batch)
-        .map_err(|e| {
-            crate::errors::ParquetError::General(format!(
-                "Failed to evaluate dictionary predicate: {}",
-                e
-            ))
-        })?;
-
     Ok(Some(result))
 }
 
-/// Decode PLAIN-encoded BYTE_ARRAY values into a StringViewArray
-fn decode_plain_byte_array_to_string_view(
+/// Decode PLAIN-encoded BYTE_ARRAY values into a string/binary array
+/// matching the target arrow type.
+fn decode_plain_byte_array(
     buf: &[u8],
     num_values: usize,
+    arrow_type: &DataType,
 ) -> Result<ArrayRef> {
-    let mut builder = arrow_array::builder::StringViewBuilder::with_capacity(num_values);
-
+    // Parse all byte array values
+    let mut values: Vec<&[u8]> = Vec::with_capacity(num_values);
     let mut offset = 0;
     for _ in 0..num_values {
         if offset + 4 > buf.len() {
@@ -166,21 +156,46 @@ fn decode_plain_byte_array_to_string_view(
         }
         let len = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
-
         if offset + len > buf.len() {
             return Err(crate::errors::ParquetError::EOF(
                 "eof decoding dictionary byte array".into(),
             ));
         }
-
-        let value = &buf[offset..offset + len];
-        // SAFETY: parquet BYTE_ARRAY dictionary values for string columns are valid UTF-8
-        let s = unsafe { std::str::from_utf8_unchecked(value) };
-        builder.append_value(s);
+        values.push(&buf[offset..offset + len]);
         offset += len;
     }
 
-    Ok(Arc::new(builder.finish()))
+    match arrow_type {
+        DataType::Utf8View => {
+            let mut builder = arrow_array::builder::StringViewBuilder::with_capacity(num_values);
+            for v in &values {
+                // SAFETY: parquet BYTE_ARRAY dictionary values for string columns are valid UTF-8
+                let s = unsafe { std::str::from_utf8_unchecked(v) };
+                builder.append_value(s);
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            let strs: Vec<&str> = values
+                .iter()
+                // SAFETY: parquet BYTE_ARRAY dictionary values for string columns are valid UTF-8
+                .map(|v| unsafe { std::str::from_utf8_unchecked(v) })
+                .collect();
+            Ok(Arc::new(arrow_array::StringArray::from(strs)))
+        }
+        DataType::BinaryView => {
+            let mut builder = arrow_array::builder::BinaryViewBuilder::with_capacity(num_values);
+            for v in &values {
+                builder.append_value(v);
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        _ => {
+            // Default to BinaryArray for unknown types
+            let binary_values: Vec<&[u8]> = values;
+            Ok(Arc::new(arrow_array::BinaryArray::from(binary_values)))
+        }
+    }
 }
 
 /// Check if all data pages in a column chunk are dictionary-encoded.
@@ -195,8 +210,7 @@ fn is_all_dictionary_encoded(col_meta: &crate::file::metadata::ColumnChunkMetaDa
 
     // Method 1: Use page encoding stats mask if available (most reliable)
     if let Some(mask) = col_meta.page_encoding_stats_mask() {
-        return mask.is_only(Encoding::PLAIN_DICTIONARY)
-            || mask.is_only(Encoding::RLE_DICTIONARY);
+        return mask.is_only(Encoding::PLAIN_DICTIONARY) || mask.is_only(Encoding::RLE_DICTIONARY);
     }
 
     // Method 2: Check column-level encodings.
@@ -277,34 +291,54 @@ fn decode_plain_int64_as(buf: &[u8], num_values: usize, arrow_type: &DataType) -
         DataType::Int32 => Ok(Arc::new(arrow_array::Int32Array::from(
             values.into_iter().map(|v| v as i32).collect::<Vec<_>>(),
         ))),
+        DataType::Timestamp(unit, tz) => {
+            use arrow_array::TimestampSecondArray;
+            use arrow_array::TimestampMillisecondArray;
+            use arrow_array::TimestampMicrosecondArray;
+            use arrow_array::TimestampNanosecondArray;
+            use arrow_schema::TimeUnit;
+            match unit {
+                TimeUnit::Second => Ok(Arc::new(
+                    TimestampSecondArray::from(values).with_timezone_opt(tz.clone()),
+                )),
+                TimeUnit::Millisecond => Ok(Arc::new(
+                    TimestampMillisecondArray::from(values).with_timezone_opt(tz.clone()),
+                )),
+                TimeUnit::Microsecond => Ok(Arc::new(
+                    TimestampMicrosecondArray::from(values).with_timezone_opt(tz.clone()),
+                )),
+                TimeUnit::Nanosecond => Ok(Arc::new(
+                    TimestampNanosecondArray::from(values).with_timezone_opt(tz.clone()),
+                )),
+            }
+        }
         _ => Ok(Arc::new(arrow_array::Int64Array::from(values))),
     }
 }
 
-/// Find the arrow DataType for a specific leaf column index in the ParquetField tree.
-fn find_leaf_arrow_type(
-    field: &crate::arrow::schema::ParquetField,
+/// Find the arrow DataType for a specific leaf column index, but only if it's
+/// a direct child of the root (not nested inside a struct/list/map).
+/// Returns None for nested columns to avoid applying dictionary pruning to them.
+fn find_top_level_leaf_arrow_type(
+    root: &crate::arrow::schema::ParquetField,
     target_col_idx: usize,
 ) -> Option<DataType> {
     use crate::arrow::schema::ParquetFieldType;
-    match &field.field_type {
-        ParquetFieldType::Primitive { col_idx, .. } => {
+    // root must be a group (the schema root)
+    let ParquetFieldType::Group { children } = &root.field_type else {
+        return None;
+    };
+    // Only check direct children — skip nested fields
+    for child in children {
+        if let ParquetFieldType::Primitive { col_idx, .. } = &child.field_type {
             if *col_idx == target_col_idx {
-                Some(field.arrow_type.clone())
-            } else {
-                None
+                return Some(child.arrow_type.clone());
             }
         }
-        ParquetFieldType::Group { children } => {
-            for child in children {
-                if let Some(dt) = find_leaf_arrow_type(child, target_col_idx) {
-                    return Some(dt);
-                }
-            }
-            None
-        }
-        ParquetFieldType::Virtual(_) => None,
+        // If the child is a Group (struct/list), don't recurse —
+        // we only support top-level primitives for dictionary pruning
     }
+    None
 }
 
 /// Returns the single leaf column index if the projection mask selects exactly one leaf.
