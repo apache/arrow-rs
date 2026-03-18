@@ -2830,6 +2830,16 @@ mod tests {
         // Whitespace-only strings should return None
         assert_eq!(Int32Type::parse("  "), None);
         assert_eq!(Float32Type::parse("  "), None);
+
+        // only leading
+        assert_eq!(Int8Type::parse("    63"), Some(63_i8));
+        assert_eq!(Int16Type::parse(" 87"), Some(87_i16));
+        assert_eq!(Int32Type::parse("     765"), Some(765_i32));
+
+        // only trailing
+        assert_eq!(Int8Type::parse("34 "), Some(34_i8));
+        assert_eq!(Int16Type::parse("87   "), Some(87_i16));
+        assert_eq!(Int32Type::parse("765     "), Some(765_i32));
     }
 
     #[test]
