@@ -1585,6 +1585,20 @@ mod tests {
     }
 
     #[test]
+    fn test_shl_panic() {
+        let value = i256::from(123);
+        let rhs = std::hint::black_box(10);
+        let _ = value << rhs;
+    }
+
+    #[test]
+    fn test_shr_panic() {
+        let value = i256::from(123);
+        let rhs = std::hint::black_box(10);
+        let _ = value >> rhs;
+    }
+
+    #[test]
     fn test_numtraits_from_str_radix() {
         assert_eq!(
             i256::from_str_radix("123456789", 10).expect("parsed"),
