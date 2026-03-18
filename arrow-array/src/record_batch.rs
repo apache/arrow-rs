@@ -1004,6 +1004,35 @@ mod tests {
     }
 
     #[test]
+    fn create_binary_record_batch_from_variables() {
+        let binary_values = vec![b"a".as_slice()];
+        let large_binary_values = vec![b"xxx".as_slice()];
+
+        let record_batch = record_batch!(
+            ("a", Binary, binary_values),
+            ("b", LargeBinary, large_binary_values)
+        )
+        .unwrap();
+
+        assert_eq!(1, record_batch.num_rows());
+        assert_eq!(2, record_batch.num_columns());
+        assert_eq!(
+            &DataType::Binary,
+            record_batch.schema().field(0).data_type()
+        );
+        assert_eq!(
+            &DataType::LargeBinary,
+            record_batch.schema().field(1).data_type()
+        );
+
+        let binary = record_batch.column(0).as_binary::<i32>();
+        assert_eq!(b"a", binary.value(0));
+
+        let large_binary = record_batch.column(1).as_binary::<i64>();
+        assert_eq!(b"xxx", large_binary.value(0));
+    }
+
+    #[test]
     fn byte_size_should_not_regress() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
