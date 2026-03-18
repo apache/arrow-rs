@@ -95,11 +95,10 @@ fn make_typed_variant_to_arrow_row_builder<'a>(
     use VariantToArrowRowBuilder::*;
 
     match data_type {
-        DataType::Struct(fields) => Ok(Struct(StructVariantToArrowRowBuilder::try_new(
-            fields,
-            cast_options,
-            capacity,
-        )?)),
+        DataType::Struct(fields) => {
+            let builder = StructVariantToArrowRowBuilder::try_new(fields, cast_options, capacity)?;
+            Ok(Struct(builder))
+        }
         data_type @ (DataType::List(_)
         | DataType::LargeList(_)
         | DataType::ListView(_)
