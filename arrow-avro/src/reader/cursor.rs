@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::errors::AvroError;
-use crate::reader::vlq::read_varint;
+use crate::reader::vlq;
 
 /// A wrapper around a byte slice, providing low-level decoding for Avro
 ///
@@ -59,8 +59,8 @@ impl<'a> AvroCursor<'a> {
     }
 
     pub(crate) fn read_vlq(&mut self) -> Result<u64, AvroError> {
-        let (val, offset) =
-            read_varint(self.buf).ok_or_else(|| AvroError::ParseError("bad varint".to_string()))?;
+        let (val, offset) = vlq::read_varint(self.buf)
+            .ok_or_else(|| AvroError::ParseError("bad varint".to_string()))?;
         self.buf = &self.buf[offset..];
         Ok(val)
     }
@@ -122,5 +122,28 @@ impl<'a> AvroCursor<'a> {
         let ret = &self.buf[..n];
         self.buf = &self.buf[n..];
         Ok(ret)
+    }
+
+    pub(crate) fn skip_int(&mut self) -> Result<(), AvroError> {
+        let offset = vlq::skip_varint(self.buf)
+            .ok_or_else(|| AvroError::ParseError("bad varint".to_string()))?;
+        // Check if the skipped encoded value would fail a conversion to i32;
+        // skip_varint only cares about fitting in a 64-bit value.
+        match offset {
+            ..5 => {}
+            5 if self.buf[4] < 0x10 => {}
+            _ => return Err(AvroError::ParseError("varint overflow".to_owned())),
+        }
+        self.buf = &self.buf[offset..];
+        Ok(())
+    }
+
+    pub(crate) fn skip_long(&mut self) -> Result<(), AvroError> {
+        let offset = vlq::skip_varint(self.buf)
+            .ok_or_else(|| AvroError::ParseError("bad varint".to_string()))?;
+        // skip_varint invalidates encodings that are out of range for i64,
+        // so we are good.
+        self.buf = &self.buf[offset..];
+        Ok(())
     }
 }

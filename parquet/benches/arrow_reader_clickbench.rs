@@ -598,27 +598,38 @@ impl Display for Query {
 /// FULL path to the ClickBench hits_1.parquet file
 static HITS_1_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Finds the paths to the ClickBench file, or panics with a useful message
-/// explaining how to download if it is not found
+/// Finds the paths to the ClickBench file, downloading it if not found
 fn hits_1() -> &'static Path {
     HITS_1_PATH.get_or_init(|| {
-
-    let current_dir = std::env::current_dir().expect("Failed to get current directory");
-    println!(
-        "Looking for ClickBench files starting in current_dir and all parent directories: {current_dir:?}"
-
-    );
-
-    let Some(hits_1_path) = find_file_if_exists(current_dir.clone(), "hits_1.parquet") else {
-        eprintln!(
-            "Could not find hits_1.parquet in directory or parents: {current_dir:?}. Download it via",
+        let current_dir = std::env::current_dir().expect("Failed to get current directory");
+        println!(
+            "Looking for ClickBench files starting in current_dir and all parent directories: {current_dir:?}"
         );
-        eprintln!();
-        eprintln!("wget --continue https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet");
-        panic!("Stopping");
-    };
 
-    hits_1_path
+        if let Some(hits_1_path) = find_file_if_exists(current_dir.clone(), "hits_1.parquet") {
+            return hits_1_path;
+        }
+
+        // File not found, download it
+        let download_path = current_dir.join("hits_1.parquet");
+        let url = "https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet";
+        println!("hits_1.parquet not found, downloading from {url}...");
+
+        let status = std::process::Command::new("wget")
+            .args(["--continue", "-O"])
+            .arg(&download_path)
+            .arg(url)
+            .status()
+            .expect("Failed to execute wget. Please install wget or download manually.");
+
+        assert!(
+            status.success(),
+            "Failed to download hits_1.parquet. You can download it manually via:\n\
+             wget --continue {url}"
+        );
+
+        println!("Downloaded hits_1.parquet to {download_path:?}");
+        download_path
     })
 }
 

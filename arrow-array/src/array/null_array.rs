@@ -133,6 +133,11 @@ unsafe impl Array for NullArray {
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, _pool: &dyn arrow_buffer::MemoryPool) {
+        // NullArray has no buffers to claim
+    }
 }
 
 impl From<ArrayData> for NullArray {

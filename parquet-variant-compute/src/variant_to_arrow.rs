@@ -28,12 +28,13 @@ use arrow::array::{
     BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, GenericListArray,
     GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder,
     OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
+    StructArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{CastOptions, DecimalCast};
 use arrow::datatypes::{self, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
-use arrow_schema::{FieldRef, TimeUnit};
+use arrow_schema::{FieldRef, Fields, TimeUnit};
 use parquet_variant::{Variant, VariantPath};
 use std::sync::Arc;
 
@@ -44,6 +45,7 @@ use std::sync::Arc;
 pub(crate) enum VariantToArrowRowBuilder<'a> {
     Primitive(PrimitiveVariantToArrowRowBuilder<'a>),
     Array(ArrayVariantToArrowRowBuilder<'a>),
+    Struct(StructVariantToArrowRowBuilder<'a>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
 
     // Path extraction wrapper - contains a boxed enum for any of the above
@@ -56,6 +58,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         match self {
             Primitive(b) => b.append_null(),
             Array(b) => b.append_null(),
+            Struct(b) => b.append_null(),
             BinaryVariant(b) => b.append_null(),
             WithPath(path_builder) => path_builder.append_null(),
         }
@@ -66,6 +69,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         match self {
             Primitive(b) => b.append_value(&value),
             Array(b) => b.append_value(&value),
+            Struct(b) => b.append_value(&value),
             BinaryVariant(b) => b.append_value(value),
             WithPath(path_builder) => path_builder.append_value(value),
         }
@@ -76,8 +80,38 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         match self {
             Primitive(b) => b.finish(),
             Array(b) => b.finish(),
+            Struct(b) => b.finish(),
             BinaryVariant(b) => b.finish(),
             WithPath(path_builder) => path_builder.finish(),
+        }
+    }
+}
+
+fn make_typed_variant_to_arrow_row_builder<'a>(
+    data_type: &'a DataType,
+    cast_options: &'a CastOptions,
+    capacity: usize,
+) -> Result<VariantToArrowRowBuilder<'a>> {
+    use VariantToArrowRowBuilder::*;
+
+    match data_type {
+        DataType::Struct(fields) => {
+            let builder = StructVariantToArrowRowBuilder::try_new(fields, cast_options, capacity)?;
+            Ok(Struct(builder))
+        }
+        data_type @ (DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_)
+        | DataType::FixedSizeList(..)) => {
+            let builder =
+                ArrayVariantToArrowRowBuilder::try_new(data_type, cast_options, capacity)?;
+            Ok(Array(builder))
+        }
+        data_type => {
+            let builder =
+                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
+            Ok(Primitive(builder))
         }
     }
 }
@@ -97,26 +131,8 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
             metadata.clone(),
             capacity,
         )),
-        Some(DataType::Struct(_)) => {
-            return Err(ArrowError::NotYetImplemented(
-                "Converting unshredded variant objects to arrow structs".to_string(),
-            ));
-        }
-        Some(
-            data_type @ (DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)
-            | DataType::FixedSizeList(..)),
-        ) => {
-            let builder =
-                ArrayVariantToArrowRowBuilder::try_new(data_type, cast_options, capacity)?;
-            Array(builder)
-        }
         Some(data_type) => {
-            let builder =
-                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
-            Primitive(builder)
+            make_typed_variant_to_arrow_row_builder(data_type, cast_options, capacity)?
         }
     };
 
@@ -489,6 +505,83 @@ pub(crate) enum ArrayVariantToArrowRowBuilder<'a> {
     LargeList(VariantToListArrowRowBuilder<'a, i64, false>),
     ListView(VariantToListArrowRowBuilder<'a, i32, true>),
     LargeListView(VariantToListArrowRowBuilder<'a, i64, true>),
+}
+
+pub(crate) struct StructVariantToArrowRowBuilder<'a> {
+    fields: &'a Fields,
+    field_builders: Vec<VariantToArrowRowBuilder<'a>>,
+    nulls: NullBufferBuilder,
+    cast_options: &'a CastOptions<'a>,
+}
+
+impl<'a> StructVariantToArrowRowBuilder<'a> {
+    fn try_new(
+        fields: &'a Fields,
+        cast_options: &'a CastOptions<'a>,
+        capacity: usize,
+    ) -> Result<Self> {
+        let mut field_builders = Vec::with_capacity(fields.len());
+        for field in fields.iter() {
+            field_builders.push(make_typed_variant_to_arrow_row_builder(
+                field.data_type(),
+                cast_options,
+                capacity,
+            )?);
+        }
+        Ok(Self {
+            fields,
+            field_builders,
+            nulls: NullBufferBuilder::new(capacity),
+            cast_options,
+        })
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        for builder in &mut self.field_builders {
+            builder.append_null()?;
+        }
+        self.nulls.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        let Variant::Object(obj) = value else {
+            if self.cast_options.safe {
+                self.append_null()?;
+                return Ok(false);
+            }
+            return Err(ArrowError::CastError(format!(
+                "Failed to extract struct from variant {:?}",
+                value
+            )));
+        };
+
+        for (index, field) in self.fields.iter().enumerate() {
+            match obj.get(field.name()) {
+                Some(field_value) => {
+                    self.field_builders[index].append_value(field_value)?;
+                }
+                None => {
+                    self.field_builders[index].append_null()?;
+                }
+            }
+        }
+
+        self.nulls.append_non_null();
+        Ok(true)
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        let mut children = Vec::with_capacity(self.field_builders.len());
+        for builder in self.field_builders {
+            children.push(builder.finish()?);
+        }
+        Ok(Arc::new(StructArray::try_new(
+            self.fields.clone(),
+            children,
+            self.nulls.finish(),
+        )?))
+    }
 }
 
 impl<'a> ArrayVariantToArrowRowBuilder<'a> {

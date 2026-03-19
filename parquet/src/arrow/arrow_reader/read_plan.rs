@@ -203,6 +203,13 @@ impl ReadPlanBuilder {
             };
         }
 
+        // If the predicate selected all rows and there is no prior selection,
+        // skip creating a RowSelection entirely — this avoids the allocation
+        // and keeps selection as None which enables coalesced page fetches.
+        let all_selected = filters.iter().all(|f| f.true_count() == f.len());
+        if all_selected && self.selection.is_none() {
+            return Ok(self);
+        }
         let raw = RowSelection::from_filters(&filters);
 
         // Check if this predicate should be deferred due to high selectivity
