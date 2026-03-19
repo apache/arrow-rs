@@ -178,12 +178,16 @@ impl ReadPlanBuilder {
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
     ) -> Result<Self> {
-        // Build a ReadPlan from only self.selection (not deferred) so the
-        // reader sees the same rows that self.selection describes. Deferred
-        // selections must not be merged here because the raw filter result
-        // produced below is relative to self.selection.
-        let mut plan_for_reader = self.clone();
-        plan_for_reader.deferred_selection = None;
+        // Build a ReadPlan for the predicate reader using only the current
+        // selection (not deferred). We avoid cloning the entire builder by
+        // constructing a minimal ReadPlanBuilder with just what build() needs.
+        let plan_for_reader = ReadPlanBuilder {
+            batch_size: self.batch_size,
+            selection: self.selection.clone(),
+            row_selection_policy: self.row_selection_policy,
+            selectivity_threshold: None,
+            deferred_selection: None,
+        };
         let reader = ParquetRecordBatchReader::new(array_reader, plan_for_reader.build());
         let mut filters = vec![];
         for maybe_batch in reader {
@@ -212,18 +216,21 @@ impl ReadPlanBuilder {
         }
         let raw = RowSelection::from_filters(&filters);
 
-        // Check if this predicate should be deferred due to high selectivity
-        let should_defer = self.selectivity_threshold.is_some_and(|threshold| {
-            let selected = raw.row_count();
-            let total = selected + raw.skipped_row_count();
-            total > 0 && (selected as f64 / total as f64) > threshold
-        });
-
         // Compute the absolute-position result
         let absolute = match self.selection.as_ref() {
             Some(selection) => selection.and_then(&raw),
             None => raw,
         };
+
+        // Check if this predicate should be deferred due to high selectivity.
+        // Selectivity is measured in absolute terms (fraction of total row
+        // group rows) so that predicates remain comparable regardless of how
+        // much prior filtering has been applied.
+        let should_defer = self.selectivity_threshold.is_some_and(|threshold| {
+            let selected = absolute.row_count();
+            let total = selected + absolute.skipped_row_count();
+            total > 0 && (selected as f64 / total as f64) > threshold
+        });
 
         if should_defer {
             // Defer: accumulate into deferred_selection, leave self.selection unchanged
