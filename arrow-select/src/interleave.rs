@@ -420,8 +420,7 @@ fn interleave_list_view<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, GenericListViewArray<O>>::new(values, indices);
 
-    // Collect child indices for each referenced list element and build
-    // new offsets/sizes that point into the interleaved child array
+    // Build new offsets/sizes and compute total child capacity
     let mut capacity = 0usize;
     let mut offsets = Vec::with_capacity(indices.len());
     let mut sizes = Vec::with_capacity(indices.len());
@@ -431,27 +430,28 @@ fn interleave_list_view<O: OffsetSizeTrait>(
         offsets.push(
             O::from_usize(capacity).ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
         );
-        sizes.push(O::from_usize(size).ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?);
+        sizes.push(O::from_usize(size).ok_or_else(|| ArrowError::OffsetOverflowError(size))?);
         capacity += size;
     }
 
-    // Build child indices for recursive interleave of child values
-    let mut child_indices = Vec::with_capacity(capacity);
+    // Bulk-copy child value ranges into a single flat child array
+    let child_data: Vec<_> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().to_data())
+        .collect();
+    let child_data_refs: Vec<_> = child_data.iter().collect();
+    let mut mutable_child = MutableArrayData::new(child_data_refs, false, capacity);
     for &(array_idx, row_idx) in indices {
         let list = interleaved.arrays[array_idx];
         let start = list.offsets()[row_idx].as_usize();
         let size = list.sizes()[row_idx].as_usize();
-        child_indices.extend((start..start + size).map(|i| (array_idx, i)));
+        if size > 0 {
+            mutable_child.extend(array_idx, start, start + size);
+        }
     }
 
-    let child_arrays: Vec<&dyn Array> = interleaved
-        .arrays
-        .iter()
-        .map(|list| list.values().as_ref())
-        .collect();
-
-    let interleaved_values = interleave(&child_arrays, &child_indices)?;
-
+    let interleaved_values = make_array(mutable_child.freeze());
     let list_view_array = GenericListViewArray::<O>::new(
         field.clone(),
         offsets.into(),
