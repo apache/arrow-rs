@@ -683,7 +683,9 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
 #[cfg(test)]
 mod tests {
     use crate::VariantArray;
-    use arrow::array::{BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringViewArray};
+    use arrow::array::{
+        BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringViewArray,
+    };
     use parquet_variant::Variant;
 
     #[test]
