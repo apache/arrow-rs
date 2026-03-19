@@ -513,6 +513,9 @@ impl ByteViewArrayDecoderDictionary {
         // If bit_width guarantees all indices are valid, skip per-element bounds checks
         let all_indices_valid = self.decoder.all_indices_valid_for(dict_views.len());
 
+        // Pre-reserve output capacity to avoid per-chunk reallocation in extend
+        output.views.reserve(len);
+
         let mut error = None;
         let read = self.decoder.read(len, |keys| {
             if all_indices_valid {
