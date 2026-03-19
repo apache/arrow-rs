@@ -117,24 +117,24 @@ impl DictIndexDecoder {
         }
 
         if values_read < to_read {
-            let read = self.decoder.get_batch_direct(to_read - values_read, |batch| {
-                match batch {
-                    RleDecodedBatch::Rle { index, count } => {
-                        let view = dict_views[index as usize];
-                        let view = if base_buffer_idx == 0 || (view as u32) <= 12 {
-                            view
-                        } else {
-                            let mut bv = arrow_data::ByteView::from(view);
-                            bv.buffer_index += base_buffer_idx;
-                            bv.into()
-                        };
-                        output.extend(std::iter::repeat_n(view, count));
-                    }
-                    RleDecodedBatch::BitPacked(keys) => {
-                        Self::gather_views(keys, dict_views, output, base_buffer_idx);
-                    }
-                }
-            })?;
+            let read =
+                self.decoder
+                    .get_batch_direct(to_read - values_read, |batch| match batch {
+                        RleDecodedBatch::Rle { index, count } => {
+                            let view = dict_views[index as usize];
+                            let view = if base_buffer_idx == 0 || (view as u32) <= 12 {
+                                view
+                            } else {
+                                let mut bv = arrow_data::ByteView::from(view);
+                                bv.buffer_index += base_buffer_idx;
+                                bv.into()
+                            };
+                            output.extend(std::iter::repeat_n(view, count));
+                        }
+                        RleDecodedBatch::BitPacked(keys) => {
+                            Self::gather_views(keys, dict_views, output, base_buffer_idx);
+                        }
+                    })?;
             self.max_remaining_values -= read;
             values_read += read;
         }
@@ -152,9 +152,10 @@ impl DictIndexDecoder {
         // This is branchless (cmp+csel on ARM) and avoids bounds checks in the hot loop.
         let max_idx = dict_views.len() - 1;
         if base_buffer_idx == 0 {
-            output.extend(keys.iter().map(|k| unsafe {
-                *dict_views.get_unchecked((*k as usize).min(max_idx))
-            }));
+            output.extend(
+                keys.iter()
+                    .map(|k| unsafe { *dict_views.get_unchecked((*k as usize).min(max_idx)) }),
+            );
         } else {
             output.extend(keys.iter().map(|k| {
                 let view = unsafe { *dict_views.get_unchecked((*k as usize).min(max_idx)) };
