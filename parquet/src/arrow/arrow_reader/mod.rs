@@ -5750,21 +5750,13 @@ pub(crate) mod tests {
         }
 
         let filter = use_filter.then(|| {
-            let filter = (0..metadata.file_metadata().num_rows())
-                .map(|_| rng.random_bool(0.99))
-                .collect::<Vec<_>>();
-            let mut filter_offset = 0;
+            // Stateless value-based filter: keep rows where value is odd.
             RowFilter::new(vec![Box::new(ArrowPredicateFn::new(
                 ProjectionMask::all(),
-                move |b| {
-                    let array = BooleanArray::from_iter(
-                        filter
-                            .iter()
-                            .skip(filter_offset)
-                            .take(b.num_rows())
-                            .map(|x| Some(*x)),
-                    );
-                    filter_offset += b.num_rows();
+                |b| {
+                    let values = b.column(0).as_primitive::<types::Int64Type>();
+                    let array: BooleanArray =
+                        values.iter().map(|v| v.map(|v| v % 2 != 0)).collect();
                     Ok(array)
                 },
             ))])
