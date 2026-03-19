@@ -288,6 +288,7 @@ impl RleEncoder {
 const RLE_DECODER_INDEX_BUFFER_SIZE: usize = 1024;
 
 /// A decoded batch from [`RleDecoder::get_batch_direct`].
+#[cfg(feature = "arrow")]
 pub enum RleDecodedBatch<'a> {
     /// An RLE run: all values are the same index, repeated `count` times
     Rle { index: i32, count: usize },
@@ -426,6 +427,7 @@ impl RleDecoder {
     ///
     /// For RLE runs, provides [`RleDecodedBatch::Rle`] so callers can fill output directly.
     /// For bit-packed runs, provides [`RleDecodedBatch::BitPacked`] with decoded indices.
+    #[cfg(feature = "arrow")]
     pub fn get_batch_direct<F>(
         &mut self,
         max_values: usize,
