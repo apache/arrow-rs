@@ -512,10 +512,12 @@ impl RleDecoder {
     {
         assert!(buffer.len() >= max_values);
 
-        // If all possible bit_width-bit values are valid dict indices,
-        // we can skip per-element bounds checks in the hot loop.
-        let all_indices_valid = self.bit_width < 64
-            && dict.len() >= (1usize << self.bit_width);
+        if dict.is_empty() {
+            return Ok(0);
+        }
+        // Clamp index to valid range to prevent UB on corrupt data.
+        // This is branchless (cmp+csel on ARM) and avoids bounds checks in the hot loop.
+        let max_idx = dict.len() - 1;
 
         let mut values_read = 0;
         while values_read < max_values {
@@ -553,20 +555,12 @@ impl RleDecoder {
                         self.bit_packed_left = 0;
                         break;
                     }
-                    if all_indices_valid {
-                        // SAFETY: bit_width guarantees all decoded indices are < dict.len()
-                        buffer[values_read..values_read + num_values]
-                            .iter_mut()
-                            .zip(index_buf[..num_values].iter())
-                            .for_each(|(b, i)| unsafe {
-                                b.clone_from(dict.get_unchecked(*i as usize));
-                            });
-                    } else {
-                        buffer[values_read..values_read + num_values]
-                            .iter_mut()
-                            .zip(index_buf[..num_values].iter())
-                            .for_each(|(b, i)| b.clone_from(&dict[*i as usize]));
-                    }
+                    buffer[values_read..values_read + num_values]
+                        .iter_mut()
+                        .zip(index_buf[..num_values].iter())
+                        .for_each(|(b, i)| unsafe {
+                            b.clone_from(dict.get_unchecked((*i as usize).min(max_idx)));
+                        });
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {
