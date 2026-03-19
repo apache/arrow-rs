@@ -837,6 +837,8 @@ macro_rules! define_standard_shift {
 
             #[inline]
             fn $method(self, rhs: $t) -> Self::Output {
+                let rhs = u8::try_from(rhs).expect("rhs overflow for shift {rhs}");
+                // Other possible overflows are handled by Shl<u8> implementation
                 self.$method(rhs as u8)
             }
         }
@@ -1592,18 +1594,12 @@ mod tests {
         assert_eq!(<i256 as Bounded>::max_value(), i256::MAX);
     }
 
+    #[should_panic]
     #[test]
-    fn test_shl_panic() {
+    fn test_shl_panic_on_arg_overflow() {
         let value = i256::from(123);
-        let rhs = std::hint::black_box(10);
+        let rhs = std::hint::black_box(500);
         let _ = value << rhs;
-    }
-
-    #[test]
-    fn test_shr_panic() {
-        let value = i256::from(123);
-        let rhs = std::hint::black_box(10);
-        let _ = value >> rhs;
     }
 
     #[test]
