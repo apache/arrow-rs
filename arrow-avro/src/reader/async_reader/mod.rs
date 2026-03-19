@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Asynchronous implementation of Avro file reader.
+//!
+//! This module provides [`AsyncAvroFileReader`], which supports reading and decoding
+//! the Avro OCF format from any source that implements [`AsyncFileReader`].
+
 use crate::compression::CompressionCodec;
 use crate::reader::Decoder;
 use crate::reader::block::{BlockDecoder, BlockDecoderState};
@@ -32,7 +37,7 @@ mod async_file_reader;
 mod builder;
 
 pub use async_file_reader::AsyncFileReader;
-pub use builder::ReaderBuilder;
+pub use builder::{ReaderBuilder, read_header_info};
 
 #[cfg(feature = "object_store")]
 mod store;
@@ -541,6 +546,7 @@ impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
 #[cfg(all(test, feature = "object_store"))]
 mod tests {
     use super::*;
+    use crate::codec::Tz;
     use crate::schema::{
         AVRO_NAME_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AvroSchema, SCHEMA_METADATA_KEY,
     };
@@ -562,6 +568,10 @@ mod tests {
     }
 
     fn get_alltypes_schema() -> SchemaRef {
+        get_alltypes_schema_with_tz("+00:00")
+    }
+
+    fn get_alltypes_schema_with_tz(tz_id: &str) -> SchemaRef {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, true),
             Field::new("bool_col", DataType::Boolean, true),
@@ -575,7 +585,7 @@ mod tests {
             Field::new("string_col", DataType::Binary, true),
             Field::new(
                 "timestamp_col",
-                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                DataType::Timestamp(TimeUnit::Microsecond, Some(tz_id.into())),
                 true,
             ),
         ])
@@ -1282,6 +1292,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_builder_with_header_info() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let mut file_reader = AvroObjectReader::new(store, location);
+
+        let header_info = read_header_info(&mut file_reader, file_size, None)
+            .await
+            .unwrap();
+
+        assert_eq!(header_info.header_len(), 675);
+
+        let writer_schema = header_info.writer_schema().unwrap();
+        let expected_avro_json: serde_json::Value = serde_json::from_str(
+            get_alltypes_schema()
+                .metadata()
+                .get(SCHEMA_METADATA_KEY)
+                .unwrap(),
+        )
+        .unwrap();
+        let actual_avro_json: serde_json::Value =
+            serde_json::from_str(&writer_schema.json_string).unwrap();
+        assert_eq!(actual_avro_json, expected_avro_json);
+
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .build_with_header(header_info)
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 8)
+    }
+
+    #[tokio::test]
     async fn test_roundtrip_write_then_async_read() {
         use crate::writer::AvroWriter;
         use arrow_array::{Float64Array, StringArray};
@@ -1709,6 +1757,42 @@ mod tests {
 
         assert_eq!(batch.num_rows(), 8);
         assert_eq!(batch.num_columns(), 11);
+    }
+
+    #[tokio::test]
+    async fn test_with_tz_utc() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let schema = get_alltypes_schema_with_tz("UTC");
+        let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
+
+        // Specify the time zone ID of "UTC" for timestamp fields with time zone.
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
+            .with_reader_schema(reader_schema)
+            .with_tz(Tz::Utc)
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+        let batch = &batches[0];
+
+        assert_eq!(batch.num_columns(), 11);
+
+        let schema = batch.schema();
+        let ts_field = schema.field_with_name("timestamp_col").unwrap();
+        assert!(
+            matches!(
+                ts_field.data_type(),
+                DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) if tz.as_ref() == "UTC"
+            ),
+            "expected Timestamp(Microsecond, Some(\"UTC\")), got {:?}",
+            ts_field.data_type()
+        );
     }
 
     #[tokio::test]
