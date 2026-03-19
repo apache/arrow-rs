@@ -1692,16 +1692,21 @@ mod tests {
             .unwrap()
             .to_string();
 
-        assert!(table.contains("| hello"));
-        assert!(table.contains("| world"));
-        assert!(table.contains("|  ") || table.contains("| |"));
-        assert!(table.contains("| tab\there"));
-        // Literal newline causes table to wrap across lines
-        assert!(table.contains("| newline"));
-        assert!(table.contains("| test"));
-        assert!(table.contains("| quote\"test"));
-        assert!(table.contains("| backslash\\test"));
-        assert!(table.contains("| NULL"));
+        insta::assert_snapshot!(table, @"
+        +----------------+
+        | strings        |
+        +----------------+
+        | hello          |
+        | world          |
+        |                |
+        | tab	here       |
+        | newline        |
+        | test           |
+        | quote\"test     |
+        | backslash\\test |
+        | NULL           |
+        +----------------+
+        ");
 
         let options_quoted = FormatOptions::new()
             .with_null("NULL")
@@ -1711,14 +1716,20 @@ mod tests {
             .unwrap()
             .to_string();
 
-        assert!(table.contains("| \"hello\""));
-        assert!(table.contains("| \"world\""));
-        assert!(table.contains("| \"\""));
-        assert!(table.contains("| \"tab\\there\""));
-        assert!(table.contains("| \"newline\\ntest\""));
-        assert!(table.contains("| \"quote\\\"test\""));
-        assert!(table.contains("| \"backslash\\\\test\""));
-        assert!(table.contains("| NULL"));
+        insta::assert_snapshot!(table, @r#"
+        +-------------------+
+        | strings           |
+        +-------------------+
+        | "hello"           |
+        | "world"           |
+        | ""                |
+        | "tab\there"       |
+        | "newline\ntest"   |
+        | "quote\"test"     |
+        | "backslash\\test" |
+        | NULL              |
+        +-------------------+
+        "#);
     }
 
     #[test]
@@ -1743,8 +1754,15 @@ mod tests {
             .unwrap()
             .to_string();
 
-        assert!(table.contains("| \"hello\""));
-        assert!(table.contains("| \"quote\\\"test\""));
+        insta::assert_snapshot!(table, @"
+        +---------------+
+        | view_strings  |
+        +---------------+
+        | \"hello\"       |
+        |               |
+        | \"quote\\\"test\" |
+        +---------------+
+        ");
     }
 
     #[test]
@@ -1776,17 +1794,29 @@ mod tests {
             .unwrap()
             .to_string();
 
-        assert!(table.contains("| {name: Alice}"));
-        assert!(table.contains("| {name: }"));
-        assert!(table.contains("| {name: Bob}"));
+        insta::assert_snapshot!(table, @"
+        +---------------+
+        | person        |
+        +---------------+
+        | {name: Alice} |
+        | {name: }      |
+        | {name: Bob}   |
+        +---------------+
+        ");
 
         let options_quoted = FormatOptions::new().with_quoted_strings(true);
         let table = pretty_format_batches_with_options(&[batch], &options_quoted)
             .unwrap()
             .to_string();
 
-        assert!(table.contains("| {name: \"Alice\"}"));
-        assert!(table.contains("| {name: \"\"}"));
-        assert!(table.contains("| {name: \"Bob\"}"));
+        insta::assert_snapshot!(table, @"
+        +-----------------+
+        | person          |
+        +-----------------+
+        | {name: \"Alice\"} |
+        | {name: \"\"}      |
+        | {name: \"Bob\"}   |
+        +-----------------+
+        ");
     }
 }
