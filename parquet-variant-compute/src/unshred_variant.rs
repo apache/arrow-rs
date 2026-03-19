@@ -419,7 +419,9 @@ impl_append_to_variant_builder!(BooleanArray);
 impl_append_to_variant_builder!(StringArray);
 impl_append_to_variant_builder!(StringViewArray);
 impl_append_to_variant_builder!(LargeStringArray);
+impl_append_to_variant_builder!(BinaryArray);
 impl_append_to_variant_builder!(BinaryViewArray);
+impl_append_to_variant_builder!(LargeBinaryArray);
 impl_append_to_variant_builder!(PrimitiveArray<Int8Type>);
 impl_append_to_variant_builder!(PrimitiveArray<Int16Type>);
 impl_append_to_variant_builder!(PrimitiveArray<Int32Type>);
@@ -681,7 +683,7 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
 #[cfg(test)]
 mod tests {
     use crate::VariantArray;
-    use arrow::array::{BinaryViewArray, LargeStringArray, StringViewArray};
+    use arrow::array::{BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringViewArray};
     use parquet_variant::Variant;
 
     #[test]
@@ -725,5 +727,49 @@ mod tests {
         assert_eq!(result.value(0), Variant::from("hello"));
         assert_eq!(result.value(1), Variant::from("middle"));
         assert_eq!(result.value(2), Variant::from("world"));
+    }
+
+    #[test]
+    fn test_unshred_binary_typed_value() {
+        let metadata_bytes: &[u8] = &[0x01, 0x00, 0x00];
+        let metadata = BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]);
+
+        let typed_value: arrow::array::ArrayRef =
+            std::sync::Arc::new(BinaryArray::from_iter_values(vec![
+                &b"\x00\x01\x02"[..],
+                &b"\xff\xaa"[..],
+                &b"\xde\xad\xbe\xef"[..],
+            ]));
+
+        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
+
+        let result = crate::unshred_variant(&variant_array).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.value(0), Variant::from(&b"\x00\x01\x02"[..]));
+        assert_eq!(result.value(1), Variant::from(&b"\xff\xaa"[..]));
+        assert_eq!(result.value(2), Variant::from(&b"\xde\xad\xbe\xef"[..]));
+    }
+
+    #[test]
+    fn test_unshred_largebinary_typed_value() {
+        let metadata_bytes: &[u8] = &[0x01, 0x00, 0x00];
+        let metadata = BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]);
+
+        let typed_value: arrow::array::ArrayRef =
+            std::sync::Arc::new(LargeBinaryArray::from_iter_values(vec![
+                &b"\x00\x01\x02"[..],
+                &b"\xff\xaa"[..],
+                &b"\xde\xad\xbe\xef"[..],
+            ]));
+
+        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
+
+        let result = crate::unshred_variant(&variant_array).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.value(0), Variant::from(&b"\x00\x01\x02"[..]));
+        assert_eq!(result.value(1), Variant::from(&b"\xff\xaa"[..]));
+        assert_eq!(result.value(2), Variant::from(&b"\xde\xad\xbe\xef"[..]));
     }
 }
