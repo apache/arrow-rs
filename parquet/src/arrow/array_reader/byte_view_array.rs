@@ -475,38 +475,70 @@ impl ByteViewArrayDecoderDictionary {
             return Ok(0);
         }
 
-        // Check if the last few buffer of `output`` are the same as the `dict` buffer
-        // This is to avoid creating a new buffers if the same dictionary is used for multiple `read`
-        let need_to_create_new_buffer = {
-            if output.buffers.len() >= dict.buffers.len() {
-                let offset = output.buffers.len() - dict.buffers.len();
-                output.buffers[offset..]
-                    .iter()
-                    .zip(dict.buffers.iter())
-                    .any(|(a, b)| !a.ptr_eq(b))
-            } else {
-                true
-            }
-        };
+        // Check if all dictionary views are inlined (len <= 12).
+        // If so, we can skip buffer management entirely since inline views
+        // don't reference any buffers.
+        let all_views_inlined = dict.views.iter().all(|&v| (v as u32) <= 12);
 
-        if need_to_create_new_buffer {
-            for b in dict.buffers.iter() {
-                output.buffers.push(b.clone());
+        if !all_views_inlined {
+            // Check if the last few buffer of `output`` are the same as the `dict` buffer
+            // This is to avoid creating a new buffers if the same dictionary is used for multiple `read`
+            let need_to_create_new_buffer = {
+                if output.buffers.len() >= dict.buffers.len() {
+                    let offset = output.buffers.len() - dict.buffers.len();
+                    output.buffers[offset..]
+                        .iter()
+                        .zip(dict.buffers.iter())
+                        .any(|(a, b)| !a.ptr_eq(b))
+                } else {
+                    true
+                }
+            };
+
+            if need_to_create_new_buffer {
+                for b in dict.buffers.iter() {
+                    output.buffers.push(b.clone());
+                }
             }
         }
 
         // Calculate the offset of the dictionary buffers in the output buffers
-        // For example if the 2nd buffer in the dictionary is the 5th buffer in the output buffers,
-        // then the base_buffer_idx is 5 - 2 = 3
-        let base_buffer_idx = output.buffers.len() as u32 - dict.buffers.len() as u32;
+        let base_buffer_idx = if all_views_inlined {
+            0
+        } else {
+            output.buffers.len() as u32 - dict.buffers.len() as u32
+        };
+
+        let dict_views = &dict.views;
+        // If bit_width guarantees all indices are valid, skip per-element bounds checks
+        let all_indices_valid = self.decoder.all_indices_valid_for(dict_views.len());
 
         let mut error = None;
         let read = self.decoder.read(len, |keys| {
-            if base_buffer_idx == 0 {
-                // the dictionary buffers are the last buffers in output, we can directly use the views
+            if all_indices_valid {
+                if base_buffer_idx == 0 {
+                    // SAFETY: bit_width guarantees all decoded indices < dict_views.len()
+                    output.views.extend(keys.iter().map(|k| unsafe {
+                        *dict_views.get_unchecked(*k as usize)
+                    }));
+                } else {
+                    // SAFETY: bit_width guarantees all decoded indices < dict_views.len()
+                    output.views.extend(keys.iter().map(|k| {
+                        let view = unsafe { *dict_views.get_unchecked(*k as usize) };
+                        let len = view as u32;
+                        if len <= 12 {
+                            view
+                        } else {
+                            let mut view = ByteView::from(view);
+                            view.buffer_index += base_buffer_idx;
+                            view.into()
+                        }
+                    }));
+                }
+            } else if base_buffer_idx == 0 {
                 output
                     .views
-                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
+                    .extend(keys.iter().map(|k| match dict_views.get(*k as usize) {
                         Some(&view) => view,
                         None => {
                             if error.is_none() {
@@ -515,11 +547,10 @@ impl ByteViewArrayDecoderDictionary {
                             0
                         }
                     }));
-                Ok(())
             } else {
                 output
                     .views
-                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
+                    .extend(keys.iter().map(|k| match dict_views.get(*k as usize) {
                         Some(&view) => {
                             let len = view as u32;
                             if len <= 12 {
@@ -537,8 +568,8 @@ impl ByteViewArrayDecoderDictionary {
                             0
                         }
                     }));
-                Ok(())
             }
+            Ok(())
         })?;
         if let Some(e) = error {
             return Err(e);
