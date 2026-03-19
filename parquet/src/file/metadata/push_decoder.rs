@@ -308,7 +308,7 @@ impl ParquetMetaDataPushDecoder {
 
     #[cfg(feature = "encryption")]
     /// Provide decryption properties for decoding encrypted Parquet files
-    pub(crate) fn with_file_decryption_properties(
+    pub fn with_file_decryption_properties(
         mut self,
         file_decryption_properties: Option<std::sync::Arc<FileDecryptionProperties>>,
     ) -> Self {
@@ -653,7 +653,7 @@ mod tests {
         let mut output = Vec::new();
 
         let writer_options = WriterProperties::builder()
-            .set_max_row_group_size(200)
+            .set_max_row_group_row_count(Some(200))
             .set_data_page_row_count_limit(100)
             .build();
         let mut writer =

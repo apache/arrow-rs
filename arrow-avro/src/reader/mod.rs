@@ -119,14 +119,13 @@
 //! use futures::{Stream, StreamExt};
 //! use std::task::{Poll, ready};
 //! use arrow_array::RecordBatch;
-//! use arrow_schema::ArrowError;
-//! use arrow_avro::reader::Decoder;
+//! use arrow_avro::{reader::Decoder, errors::AvroError};
 //!
 //! /// Decode a stream of Avro-framed bytes into RecordBatch values.
 //! fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
 //!     mut decoder: Decoder,
 //!     mut input: S,
-//! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
+//! ) -> impl Stream<Item = Result<RecordBatch, AvroError>> {
 //!     let mut buffered = Bytes::new();
 //!     futures::stream::poll_fn(move |cx| {
 //!         loop {
@@ -479,7 +478,8 @@
 //!   descriptive error. Populate the store up front to avoid this.
 //!
 //! ---
-use crate::codec::AvroFieldBuilder;
+use crate::codec::{AvroFieldBuilder, Tz};
+use crate::errors::AvroError;
 use crate::reader::header::read_header;
 use crate::schema::{
     AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY,
@@ -499,11 +499,20 @@ mod header;
 mod record;
 mod vlq;
 
-fn is_incomplete_data(err: &ArrowError) -> bool {
+#[cfg(feature = "async")]
+pub mod async_reader;
+
+pub use header::{HeaderInfo, read_header_info};
+
+#[cfg(feature = "object_store")]
+pub use async_reader::AvroObjectReader;
+#[cfg(feature = "async")]
+pub use async_reader::{AsyncAvroFileReader, AsyncFileReader};
+
+fn is_incomplete_data(err: &AvroError) -> bool {
     matches!(
         err,
-        ArrowError::ParseError(msg)
-            if msg.contains("Unexpected EOF")
+        AvroError::EOF(_) | AvroError::NeedMoreData(_) | AvroError::NeedMoreDataRange(_)
     )
 }
 
@@ -642,6 +651,25 @@ pub struct Decoder {
 }
 
 impl Decoder {
+    pub(crate) fn from_parts(
+        batch_size: usize,
+        active_decoder: RecordDecoder,
+        active_fingerprint: Option<Fingerprint>,
+        cache: IndexMap<Fingerprint, RecordDecoder>,
+        fingerprint_algorithm: FingerprintAlgorithm,
+    ) -> Self {
+        Self {
+            batch_size,
+            remaining_capacity: batch_size,
+            active_fingerprint,
+            active_decoder,
+            cache,
+            fingerprint_algorithm,
+            pending_schema: None,
+            awaiting_body: false,
+        }
+    }
+
     /// Returns the Arrow schema for the rows decoded by this decoder.
     ///
     /// **Note:** With single‑object or Confluent framing, the schema may change
@@ -675,7 +703,7 @@ impl Decoder {
     ///   `SchemaStore`;
     /// * The Avro body is malformed;
     /// * A strict‑mode union rule is violated (see `ReaderBuilder::with_strict_mode`).
-    pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
+    pub fn decode(&mut self, data: &[u8]) -> Result<usize, AvroError> {
         let mut total_consumed = 0usize;
         while total_consumed < data.len() && self.remaining_capacity > 0 {
             if self.awaiting_body {
@@ -687,7 +715,7 @@ impl Decoder {
                         continue;
                     }
                     Err(ref e) if is_incomplete_data(e) => break,
-                    err => return err,
+                    Err(e) => return Err(e),
                 };
             }
             match self.handle_prefix(&data[total_consumed..])? {
@@ -698,7 +726,7 @@ impl Decoder {
                     self.awaiting_body = true;
                 }
                 None => {
-                    return Err(ArrowError::ParseError(
+                    return Err(AvroError::ParseError(
                         "Missing magic bytes and fingerprint".to_string(),
                     ));
                 }
@@ -711,7 +739,7 @@ impl Decoder {
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
-    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
+    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, AvroError> {
         match self.fingerprint_algorithm {
             FingerprintAlgorithm::Rabin => {
                 self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
@@ -749,7 +777,7 @@ impl Decoder {
         buf: &[u8],
         magic: &[u8; MAGIC_LEN],
         fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
-    ) -> Result<Option<usize>, ArrowError> {
+    ) -> Result<Option<usize>, AvroError> {
         // Need at least the magic bytes to decide
         // 2 bytes for Avro Spec and 1 byte for Confluent Wire Protocol.
         if buf.len() < MAGIC_LEN {
@@ -774,7 +802,7 @@ impl Decoder {
         &mut self,
         buf: &[u8],
         fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
-    ) -> Result<Option<usize>, ArrowError> {
+    ) -> Result<Option<usize>, AvroError> {
         // Need enough bytes to get fingerprint (next N bytes)
         let Some(fingerprint_bytes) = buf.get(..N) else {
             return Ok(None); // insufficient bytes
@@ -784,7 +812,7 @@ impl Decoder {
         // If the fingerprint indicates a schema change, prepare to switch decoders.
         if self.active_fingerprint != Some(new_fingerprint) {
             let Some(new_decoder) = self.cache.shift_remove(&new_fingerprint) else {
-                return Err(ArrowError::ParseError(format!(
+                return Err(AvroError::ParseError(format!(
                     "Unknown fingerprint: {new_fingerprint:?}"
                 )));
             };
@@ -816,7 +844,7 @@ impl Decoder {
         }
     }
 
-    fn flush_and_reset(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    fn flush_and_reset(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         if self.batch_is_empty() {
             return Ok(None);
         }
@@ -831,7 +859,7 @@ impl Decoder {
     /// If a schema change was detected while decoding rows for the current batch, the
     /// schema switch is applied **after** flushing this batch, so the **next** batch
     /// (if any) may have a different schema.
-    pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    pub fn flush(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         // We must flush the active decoder before switching to the pending one.
         let batch = self.flush_and_reset();
         self.apply_pending_schema();
@@ -856,7 +884,7 @@ impl Decoder {
     // Decode either the block count or remaining capacity from `data` (an OCF block payload).
     //
     // Returns the number of bytes consumed from `data` along with the number of records decoded.
-    fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize), ArrowError> {
+    fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize), AvroError> {
         // OCF decoding never interleaves records across blocks, so no chunking.
         let to_decode = std::cmp::min(count, self.remaining_capacity);
         if to_decode == 0 {
@@ -869,7 +897,7 @@ impl Decoder {
 
     // Produce a `RecordBatch` if at least one row is fully decoded, returning
     // `Ok(None)` if no new rows are available.
-    fn flush_block(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    fn flush_block(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         self.flush_and_reset()
     }
 }
@@ -941,6 +969,7 @@ pub struct ReaderBuilder {
     batch_size: usize,
     strict_mode: bool,
     utf8_view: bool,
+    tz: Tz,
     reader_schema: Option<AvroSchema>,
     projection: Option<Vec<usize>>,
     writer_schema_store: Option<SchemaStore>,
@@ -953,6 +982,7 @@ impl Default for ReaderBuilder {
             batch_size: 1024,
             strict_mode: false,
             utf8_view: false,
+            tz: Default::default(),
             reader_schema: None,
             projection: None,
             writer_schema_store: None,
@@ -967,6 +997,7 @@ impl ReaderBuilder {
     /// * `batch_size = 1024`
     /// * `strict_mode = false`
     /// * `utf8_view = false`
+    /// * `tz = Tz::OffsetZero`
     /// * `reader_schema = None`
     /// * `projection = None`
     /// * `writer_schema_store = None`
@@ -979,7 +1010,7 @@ impl ReaderBuilder {
         &self,
         writer_schema: &Schema,
         reader_schema: Option<&Schema>,
-    ) -> Result<RecordDecoder, ArrowError> {
+    ) -> Result<RecordDecoder, AvroError> {
         let mut builder = AvroFieldBuilder::new(writer_schema);
         if let Some(reader_schema) = reader_schema {
             builder = builder.with_reader_schema(reader_schema);
@@ -987,6 +1018,7 @@ impl ReaderBuilder {
         let root = builder
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
+            .with_tz(self.tz)
             .build()?;
         RecordDecoder::try_new_with_options(root.data_type())
     }
@@ -995,42 +1027,20 @@ impl ReaderBuilder {
         &self,
         writer_schema: &Schema,
         reader_schema: Option<&AvroSchema>,
-    ) -> Result<RecordDecoder, ArrowError> {
+    ) -> Result<RecordDecoder, AvroError> {
         let reader_schema_raw = reader_schema.map(|s| s.schema()).transpose()?;
         self.make_record_decoder(writer_schema, reader_schema_raw.as_ref())
-    }
-
-    fn make_decoder_with_parts(
-        &self,
-        active_decoder: RecordDecoder,
-        active_fingerprint: Option<Fingerprint>,
-        cache: IndexMap<Fingerprint, RecordDecoder>,
-        fingerprint_algorithm: FingerprintAlgorithm,
-    ) -> Decoder {
-        Decoder {
-            batch_size: self.batch_size,
-            remaining_capacity: self.batch_size,
-            active_fingerprint,
-            active_decoder,
-            cache,
-            fingerprint_algorithm,
-            pending_schema: None,
-            awaiting_body: false,
-        }
     }
 
     fn make_decoder(
         &self,
         header: Option<&Header>,
         reader_schema: Option<&AvroSchema>,
-    ) -> Result<Decoder, ArrowError> {
+    ) -> Result<Decoder, AvroError> {
         if let Some(hdr) = header {
-            let writer_schema = hdr
-                .schema()
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?
-                .ok_or_else(|| {
-                    ArrowError::ParseError("No Avro schema present in file header".into())
-                })?;
+            let writer_schema = hdr.schema()?.ok_or_else(|| {
+                AvroError::ParseError("No Avro schema present in file header".into())
+            })?;
             let projected_reader_schema = self
                 .projection
                 .as_deref()
@@ -1039,13 +1049,13 @@ impl ReaderBuilder {
                         reader_schema.clone()
                     } else {
                         let raw = hdr.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
-                            ArrowError::ParseError(
+                            AvroError::ParseError(
                                 "No Avro schema present in file header".to_string(),
                             )
                         })?;
                         let json_string = std::str::from_utf8(raw)
                             .map_err(|e| {
-                                ArrowError::ParseError(format!(
+                                AvroError::ParseError(format!(
                                     "Invalid UTF-8 in Avro schema header: {e}"
                                 ))
                             })?
@@ -1058,7 +1068,8 @@ impl ReaderBuilder {
             let effective_reader_schema = projected_reader_schema.as_ref().or(reader_schema);
             let record_decoder =
                 self.make_record_decoder_from_schemas(&writer_schema, effective_reader_schema)?;
-            return Ok(self.make_decoder_with_parts(
+            return Ok(Decoder::from_parts(
+                self.batch_size,
                 record_decoder,
                 None,
                 IndexMap::new(),
@@ -1066,11 +1077,11 @@ impl ReaderBuilder {
             ));
         }
         let store = self.writer_schema_store.as_ref().ok_or_else(|| {
-            ArrowError::ParseError("Writer schema store required for raw Avro".into())
+            AvroError::ParseError("Writer schema store required for raw Avro".into())
         })?;
         let fingerprints = store.fingerprints();
         if fingerprints.is_empty() {
-            return Err(ArrowError::ParseError(
+            return Err(AvroError::ParseError(
                 "Writer schema store must contain at least one schema".into(),
             ));
         }
@@ -1078,7 +1089,7 @@ impl ReaderBuilder {
             .active_fingerprint
             .or_else(|| fingerprints.first().copied())
             .ok_or_else(|| {
-                ArrowError::ParseError("Could not determine initial schema fingerprint".into())
+                AvroError::ParseError("Could not determine initial schema fingerprint".into())
             })?;
         let projection = self.projection.as_deref();
         let projected_reader_schema = match (projection, reader_schema) {
@@ -1091,7 +1102,7 @@ impl ReaderBuilder {
             let avro_schema = match store.lookup(&fingerprint) {
                 Some(schema) => schema,
                 None => {
-                    return Err(ArrowError::ComputeError(format!(
+                    return Err(AvroError::General(format!(
                         "Fingerprint {fingerprint:?} not found in schema store",
                     )));
                 }
@@ -1121,11 +1132,12 @@ impl ReaderBuilder {
             }
         }
         let active_decoder = active_decoder.ok_or_else(|| {
-            ArrowError::ComputeError(format!(
+            AvroError::General(format!(
                 "Initial fingerprint {start_fingerprint:?} not found in schema store"
             ))
         })?;
-        Ok(self.make_decoder_with_parts(
+        Ok(Decoder::from_parts(
+            self.batch_size,
             active_decoder,
             Some(start_fingerprint),
             cache,
@@ -1164,6 +1176,14 @@ impl ReaderBuilder {
     /// produce a descriptive error. Use this to catch schema issues early during ingestion.
     pub fn with_strict_mode(mut self, strict_mode: bool) -> Self {
         self.strict_mode = strict_mode;
+        self
+    }
+
+    /// Sets the timezone representation for Avro timestamp fields.
+    ///
+    /// The default is `Tz::OffsetZero`, meaning the "+00:00" time zone ID.
+    pub fn with_tz(mut self, tz: Tz) -> Self {
+        self.tz = tz;
         self
     }
 
@@ -1267,7 +1287,7 @@ impl ReaderBuilder {
     /// the discovered writer (and optional reader) schema, and prepares to iterate blocks,
     /// decompressing if necessary.
     pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
-        let header = read_header(&mut reader)?;
+        let (header, _) = read_header(&mut reader)?;
         let decoder = self.make_decoder(Some(&header), self.reader_schema.as_ref())?;
         Ok(Reader {
             reader,
@@ -1296,6 +1316,7 @@ impl ReaderBuilder {
             ));
         }
         self.make_decoder(None, self.reader_schema.as_ref())
+            .map_err(ArrowError::from)
     }
 }
 
@@ -1336,7 +1357,7 @@ impl<R: BufRead> Reader<R> {
     ///
     /// Batches are bounded by `batch_size`; a single OCF block may yield multiple batches,
     /// and a batch may also span multiple blocks.
-    fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    fn read(&mut self) -> Result<Option<RecordBatch>, AvroError> {
         'outer: while !self.finished && !self.decoder.batch_is_full() {
             while self.block_cursor == self.block_data.len() {
                 let buf = self.reader.fill_buf()?;
@@ -1350,7 +1371,8 @@ impl<R: BufRead> Reader<R> {
                 if let Some(block) = self.block_decoder.flush() {
                     // Successfully decoded a block.
                     self.block_data = if let Some(ref codec) = self.header.compression()? {
-                        codec.decompress(&block.data)?
+                        let decompressed: Vec<u8> = codec.decompress(&block.data)?;
+                        decompressed
                     } else {
                         block.data
                     };
@@ -1358,7 +1380,7 @@ impl<R: BufRead> Reader<R> {
                     self.block_cursor = 0;
                 } else if consumed == 0 {
                     // The block decoder made no progress on a non-empty buffer.
-                    return Err(ArrowError::ParseError(
+                    return Err(AvroError::ParseError(
                         "Could not decode next Avro block from partial data".to_string(),
                     ));
                 }
@@ -1380,7 +1402,7 @@ impl<R: BufRead> Iterator for Reader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.read().transpose()
+        self.read().map_err(ArrowError::from).transpose()
     }
 }
 
@@ -1392,7 +1414,8 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 
 #[cfg(test)]
 mod test {
-    use crate::codec::AvroFieldBuilder;
+    use crate::codec::{AvroFieldBuilder, Tz};
+    use crate::reader::header::HeaderDecoder;
     use crate::reader::record::RecordDecoder;
     use crate::reader::{Decoder, Reader, ReaderBuilder};
     use crate::schema::{
@@ -1623,7 +1646,7 @@ mod test {
 
     fn load_writer_schema_json(path: &str) -> Value {
         let file = File::open(path).unwrap();
-        let header = super::read_header(BufReader::new(file)).unwrap();
+        let (header, _) = super::read_header(BufReader::new(file)).unwrap();
         let schema = header.schema().unwrap().unwrap();
         serde_json::to_value(&schema).unwrap()
     }
@@ -3118,6 +3141,43 @@ mod test {
                     || lower_msg.contains("does not match")),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn test_timestamp_with_utc_tz() {
+        let path = arrow_test_data("avro/alltypes_plain.avro");
+        let reader_schema =
+            make_reader_schema_with_selected_fields_in_order(&path, &["timestamp_col"]);
+        let file = File::open(path).unwrap();
+        let reader = ReaderBuilder::new()
+            .with_batch_size(1024)
+            .with_utf8_view(false)
+            .with_reader_schema(reader_schema)
+            .with_tz(Tz::Utc)
+            .build(BufReader::new(file))
+            .unwrap();
+        let schema = reader.schema();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let batch = arrow::compute::concat_batches(&schema, &batches).unwrap();
+        let expected = RecordBatch::try_from_iter_with_nullable([(
+            "timestamp_col",
+            Arc::new(
+                TimestampMicrosecondArray::from_iter_values([
+                    1235865600000000, // 2009-03-01T00:00:00.000
+                    1235865660000000, // 2009-03-01T00:01:00.000
+                    1238544000000000, // 2009-04-01T00:00:00.000
+                    1238544060000000, // 2009-04-01T00:01:00.000
+                    1233446400000000, // 2009-02-01T00:00:00.000
+                    1233446460000000, // 2009-02-01T00:01:00.000
+                    1230768000000000, // 2009-01-01T00:00:00.000
+                    1230768060000000, // 2009-01-01T00:01:00.000
+                ])
+                .with_timezone("UTC"),
+            ) as _,
+            true,
+        )])
+        .unwrap();
+        assert_eq!(batch, expected);
     }
 
     #[test]
@@ -6816,6 +6876,412 @@ mod test {
     }
 
     #[test]
+    fn test_bad_varint_bug_nullable_array_items() {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let gz_path = format!("{manifest_dir}/test/data/bad-varint-bug.avro.gz");
+        let gz_file = File::open(&gz_path).expect("test file should exist");
+        let mut decoder = GzDecoder::new(gz_file);
+        let mut avro_bytes = Vec::new();
+        decoder
+            .read_to_end(&mut avro_bytes)
+            .expect("should decompress");
+        let reader_arrow_schema = Schema::new(vec![Field::new(
+            "int_array",
+            DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+            true,
+        )])
+        .with_metadata(HashMap::from([("avro.name".into(), "table".into())]));
+        let reader_schema = AvroSchema::try_from(&reader_arrow_schema)
+            .expect("should convert Arrow schema to Avro");
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(avro_bytes))
+            .expect("should build reader");
+        let batch = reader
+            .next()
+            .expect("should have one batch")
+            .expect("reading should succeed without bad varint error");
+        assert_eq!(batch.num_rows(), 1);
+        let list_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("should be ListArray");
+        assert_eq!(list_col.len(), 1);
+        let values = list_col.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 2);
+        assert_eq!(int_values.value(0), 1);
+        assert_eq!(int_values.value(1), 2);
+    }
+
+    #[test]
+    fn test_nested_record_field_addition() {
+        let file = arrow_test_data("avro/nested_records.avro");
+
+        // Adds fields to the writer schema:
+        // * "ns2.record2" / "f1_4"
+        //   - nullable
+        //   - added last
+        //   - the containing "f1" field is made nullable in the reader
+        // * "ns4.record4" / "f2_3"
+        //   - non-nullable with an integer default value
+        //   - resolution of a record nested in an array
+        // * "ns5.record5" / "f3_0"
+        //   - non-nullable with a string default value
+        //   - prepended before existing fields in the schema order
+        let reader_schema = AvroSchema::new(
+            r#"
+            {
+                "type": "record",
+                "name": "record1",
+                "namespace": "ns1",
+                "fields": [
+                    {
+                        "name": "f1",
+                        "type": [
+                            "null",
+                            {
+                                "type": "record",
+                                "name": "record2",
+                                "namespace": "ns2",
+                                "fields": [
+                                    {
+                                        "name": "f1_1",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "name": "f1_2",
+                                        "type": "int"
+                                    },
+                                    {
+                                        "name": "f1_3",
+                                        "type": {
+                                            "type": "record",
+                                            "name": "record3",
+                                            "namespace": "ns3",
+                                            "fields": [
+                                                {
+                                                    "name": "f1_3_1",
+                                                    "type": "double"
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "name": "f1_4",
+                                        "type": ["null", "int"],
+                                        "default": null
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "name": "f2",
+                        "type": {
+                            "type": "array",
+                            "items": {
+                                "type": "record",
+                                "name": "record4",
+                                "namespace": "ns4",
+                                "fields": [
+                                    {
+                                        "name": "f2_1",
+                                        "type": "boolean"
+                                    },
+                                    {
+                                        "name": "f2_2",
+                                        "type": "float"
+                                    },
+                                    {
+                                        "name": "f2_3",
+                                        "type": ["null", "int"],
+                                        "default": 42
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        "name": "f3",
+                        "type": [
+                            "null",
+                            {
+                                "type": "record",
+                                "name": "record5",
+                                "namespace": "ns5",
+                                "fields": [
+                                    {
+                                        "name": "f3_0",
+                                        "type": "string",
+                                        "default": "lorem ipsum"
+                                    },
+                                    {
+                                        "name": "f3_1",
+                                        "type": "string"
+                                    }
+                                ]
+                            }
+                        ],
+                        "default": null
+                    },
+                    {
+                        "name": "f4",
+                        "type": {
+                            "type": "array",
+                            "items": [
+                                "null",
+                                {
+                                    "type": "record",
+                                    "name": "record6",
+                                    "namespace": "ns6",
+                                    "fields": [
+                                        {
+                                            "name": "f4_1",
+                                            "type": "long"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+            "#
+            .to_string(),
+        );
+
+        let file = File::open(&file).unwrap();
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(BufReader::new(file))
+            .expect("reader with evolved reader schema should be built successfully");
+
+        let batch = reader
+            .next()
+            .expect("should have at least one batch")
+            .expect("reading should succeed");
+
+        assert!(batch.num_rows() > 0);
+
+        let schema = batch.schema();
+
+        let f1_field = schema.field_with_name("f1").expect("f1 field should exist");
+        if let DataType::Struct(f1_fields) = f1_field.data_type() {
+            let (_, f1_4) = f1_fields
+                .find("f1_4")
+                .expect("f1_4 field should be present in record2");
+            assert!(f1_4.is_nullable(), "f1_4 should be nullable");
+            assert_eq!(f1_4.data_type(), &DataType::Int32, "f1_4 should be Int32");
+            assert_eq!(
+                f1_4.metadata().get("avro.field.default"),
+                Some(&"null".to_string()),
+                "f1_4 should have null default value in metadata"
+            );
+        } else {
+            panic!("f1 should be a struct");
+        }
+
+        let f2_field = schema.field_with_name("f2").expect("f2 field should exist");
+        if let DataType::List(f2_items_field) = f2_field.data_type() {
+            if let DataType::Struct(f2_items_fields) = f2_items_field.data_type() {
+                let (_, f2_3) = f2_items_fields
+                    .find("f2_3")
+                    .expect("f2_3 field should be present in record4");
+                assert!(f2_3.is_nullable(), "f2_3 should be nullable");
+                assert_eq!(f2_3.data_type(), &DataType::Int32, "f2_3 should be Int32");
+                assert_eq!(
+                    f2_3.metadata().get("avro.field.default"),
+                    Some(&"42".to_string()),
+                    "f2_3 should have 42 default value in metadata"
+                );
+            } else {
+                panic!("f2 array items should be a struct");
+            }
+        } else {
+            panic!("f2 should be a list");
+        }
+
+        let f3_field = schema.field_with_name("f3").expect("f3 field should exist");
+        assert!(f3_field.is_nullable(), "f3 should be nullable");
+        if let DataType::Struct(f3_fields) = f3_field.data_type() {
+            let (_, f3_0) = f3_fields
+                .find("f3_0")
+                .expect("f3_0 field should be present in record5");
+            assert!(!f3_0.is_nullable(), "f3_0 should be non-nullable");
+            assert_eq!(f3_0.data_type(), &DataType::Utf8, "f3_0 should be a string");
+            assert_eq!(
+                f3_0.metadata().get("avro.field.default"),
+                Some(&"\"lorem ipsum\"".to_string()),
+                "f3_0 should have \"lorem ipsum\" default value in metadata"
+            );
+        } else {
+            panic!("f3 should be a struct");
+        }
+
+        // Verify the actual values in the columns match the expected defaults
+        let num_rows = batch.num_rows();
+
+        // Check f1_4 values (should all be null since default is null)
+        let f1_array = batch
+            .column_by_name("f1")
+            .expect("f1 column should exist")
+            .as_struct();
+        let f1_4_array = f1_array
+            .column_by_name("f1_4")
+            .expect("f1_4 column should exist in f1 struct")
+            .as_primitive::<Int32Type>();
+
+        assert_eq!(f1_4_array.null_count(), num_rows);
+
+        let f2_array = batch
+            .column_by_name("f2")
+            .expect("f2 column should exist")
+            .as_list::<i32>();
+
+        for i in 0..num_rows {
+            assert!(!f2_array.is_null(i));
+            let f2_value = f2_array.value(i);
+            let f2_record_array = f2_value.as_struct();
+            let f2_3_array = f2_record_array
+                .column_by_name("f2_3")
+                .expect("f2_3 column should exist in f2 array items")
+                .as_primitive::<Int32Type>();
+
+            for j in 0..f2_3_array.len() {
+                assert!(!f2_3_array.is_null(j));
+                assert_eq!(f2_3_array.value(j), 42);
+            }
+        }
+
+        let f3_array = batch
+            .column_by_name("f3")
+            .expect("f3 column should exist")
+            .as_struct();
+        let f3_0_array = f3_array
+            .column_by_name("f3_0")
+            .expect("f3_0 column should exist in f3 struct")
+            .as_string::<i32>();
+
+        for i in 0..num_rows {
+            // Only check f3_0 when the parent f3 struct is not null
+            if !f3_array.is_null(i) {
+                assert!(!f3_0_array.is_null(i));
+                assert_eq!(f3_0_array.value(i), "lorem ipsum");
+            }
+        }
+    }
+
+    fn corrupt_first_block_payload_byte(
+        mut bytes: Vec<u8>,
+        field_offset: usize,
+        expected_original: u8,
+        replacement: u8,
+    ) -> Vec<u8> {
+        let mut header_decoder = HeaderDecoder::default();
+        let header_len = header_decoder.decode(&bytes).expect("decode header");
+        assert!(header_decoder.flush().is_some(), "decode complete header");
+
+        let mut cursor = &bytes[header_len..];
+        let (_, count_len) = crate::reader::vlq::read_varint(cursor).expect("decode block count");
+        cursor = &cursor[count_len..];
+        let (_, size_len) = crate::reader::vlq::read_varint(cursor).expect("decode block size");
+        let data_start = header_len + count_len + size_len;
+        let target = data_start + field_offset;
+
+        assert!(
+            target < bytes.len(),
+            "target byte offset {target} out of bounds for input length {}",
+            bytes.len()
+        );
+        assert_eq!(
+            bytes[target], expected_original,
+            "unexpected original byte at payload offset {field_offset}"
+        );
+        bytes[target] = replacement;
+        bytes
+    }
+
+    #[test]
+    fn ocf_projection_rejects_overflowing_varint_in_skipped_long_field() {
+        // Writer row payload is [bad_long=i64::MIN][keep=7]. The first field is encoded as
+        // 10-byte VLQ ending in 0x01. Flipping that terminator to 0x02 creates an overflow
+        // varint that must fail.
+        let writer_schema = Schema::new(vec![
+            Field::new("bad_long", DataType::Int64, false),
+            Field::new("keep", DataType::Int32, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![
+                Arc::new(Int64Array::from(vec![i64::MIN])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![7])) as ArrayRef,
+            ],
+        )
+        .expect("build writer batch");
+        let bytes = write_ocf(&writer_schema, &[batch]);
+        let mutated = corrupt_first_block_payload_byte(bytes, 9, 0x01, 0x02);
+
+        let err = ReaderBuilder::new()
+            .build(Cursor::new(mutated.clone()))
+            .expect("build full reader")
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("full decode should reject malformed varint");
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("bad varint"));
+
+        let err = ReaderBuilder::new()
+            .with_projection(vec![1])
+            .build(Cursor::new(mutated))
+            .expect("build projected reader")
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("projection must also reject malformed skipped varint");
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("bad varint"));
+    }
+
+    #[test]
+    fn ocf_projection_rejects_i32_overflow_in_skipped_int_field() {
+        // Writer row payload is [bad_int=i32::MIN][keep=11]. The first field encodes to
+        // ff ff ff ff 0f. Flipping 0x0f -> 0x10 keeps a syntactically valid varint, but now
+        // its value exceeds u32::MAX and must fail Int32 validation even when projected out.
+        let writer_schema = Schema::new(vec![
+            Field::new("bad_int", DataType::Int32, false),
+            Field::new("keep", DataType::Int64, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(writer_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![i32::MIN])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![11])) as ArrayRef,
+            ],
+        )
+        .expect("build writer batch");
+        let bytes = write_ocf(&writer_schema, &[batch]);
+        let mutated = corrupt_first_block_payload_byte(bytes, 4, 0x0f, 0x10);
+
+        let err = ReaderBuilder::new()
+            .build(Cursor::new(mutated.clone()))
+            .expect("build full reader")
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("full decode should reject int overflow");
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("varint overflow"));
+
+        let err = ReaderBuilder::new()
+            .with_projection(vec![1])
+            .build(Cursor::new(mutated))
+            .expect("build projected reader")
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("projection must also reject skipped int overflow");
+        assert!(matches!(err, ArrowError::AvroError(_)));
+        assert!(err.to_string().contains("varint overflow"));
+    }
+
+    #[test]
     fn comprehensive_e2e_test() {
         let path = "test/data/comprehensive_e2e.avro";
         let batch = read_file(path, 1024, false);
@@ -8284,6 +8750,33 @@ mod test {
             ])),
             false,
         ));
+        let person_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Person".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "com.example".to_string(),
+            );
+            m
+        };
+        let maybe_auth_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "MaybeAuth".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        let address_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Address".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
         let rec_a_md = {
             let mut m = HashMap::<String, String>::new();
             m.insert(AVRO_NAME_METADATA_KEY.to_string(), "RecA".to_string());
@@ -8419,11 +8912,18 @@ mod test {
                 true,
             ),
         ]);
-        let kv_item_field = Arc::new(Field::new(
-            item_name,
-            DataType::Struct(kv_fields.clone()),
-            false,
-        ));
+        let kv_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "KV".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        let kv_item_field = Arc::new(
+            Field::new(item_name, DataType::Struct(kv_fields.clone()), false).with_metadata(kv_md),
+        );
         let map_int_entries = Arc::new(Field::new(
             "entries",
             DataType::Struct(Fields::from(vec![
@@ -8495,14 +8995,17 @@ mod test {
         #[cfg(not(feature = "small_decimals"))]
         let dec10_dt = DataType::Decimal128(10, 2);
         let fields: Vec<FieldRef> = vec![
-            Arc::new(Field::new(
-                "person",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("age", DataType::Int32, false),
-                ])),
-                false,
-            )),
+            Arc::new(
+                Field::new(
+                    "person",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("name", DataType::Utf8, false),
+                        Field::new("age", DataType::Int32, false),
+                    ])),
+                    false,
+                )
+                .with_metadata(person_md),
+            ),
             Arc::new(Field::new("old_count", DataType::Int32, false)),
             Arc::new(Field::new(
                 "union_map_or_array_int",
@@ -8534,23 +9037,29 @@ mod test {
                 DataType::Union(uf_union_big.clone(), UnionMode::Dense),
                 false,
             )),
-            Arc::new(Field::new(
-                "maybe_auth",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("user", DataType::Utf8, false),
-                    Field::new("token", DataType::Binary, true), // [bytes,null] -> nullable bytes
-                ])),
-                false,
-            )),
-            Arc::new(Field::new(
-                "address",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("street_name", DataType::Utf8, false),
-                    Field::new("zip", DataType::Int32, false),
-                    Field::new("country", DataType::Utf8, false),
-                ])),
-                false,
-            )),
+            Arc::new(
+                Field::new(
+                    "maybe_auth",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("user", DataType::Utf8, false),
+                        Field::new("token", DataType::Binary, true), // [bytes,null] -> nullable bytes
+                    ])),
+                    false,
+                )
+                .with_metadata(maybe_auth_md),
+            ),
+            Arc::new(
+                Field::new(
+                    "address",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("street_name", DataType::Utf8, false),
+                        Field::new("zip", DataType::Int32, false),
+                        Field::new("country", DataType::Utf8, false),
+                    ])),
+                    false,
+                )
+                .with_metadata(address_md),
+            ),
             Arc::new(Field::new(
                 "map_union",
                 DataType::Map(map_entries_field.clone(), false),

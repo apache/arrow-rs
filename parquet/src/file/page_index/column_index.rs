@@ -195,6 +195,7 @@ impl<T> PrimitiveColumnIndex<T> {
     /// Returns the min value for the page indexed by `idx`
     ///
     /// It is `None` when all values are null
+    #[inline]
     pub fn min_value(&self, idx: usize) -> Option<&T> {
         if self.null_pages[idx] {
             None
@@ -206,6 +207,7 @@ impl<T> PrimitiveColumnIndex<T> {
     /// Returns the max value for the page indexed by `idx`
     ///
     /// It is `None` when all values are null
+    #[inline]
     pub fn max_value(&self, idx: usize) -> Option<&T> {
         if self.null_pages[idx] {
             None
@@ -383,26 +385,14 @@ impl ByteArrayColumnIndex {
     ///
     /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
     pub fn min_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
-        (0..self.num_pages() as usize).map(|i| {
-            if self.is_null_page(i) {
-                None
-            } else {
-                self.min_value(i)
-            }
-        })
+        (0..self.num_pages() as usize).map(|i| self.min_value(i))
     }
 
     /// Returns an iterator over the max values.
     ///
     /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
     pub fn max_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
-        (0..self.num_pages() as usize).map(|i| {
-            if self.is_null_page(i) {
-                None
-            } else {
-                self.max_value(i)
-            }
-        })
+        (0..self.num_pages() as usize).map(|i| self.max_value(i))
     }
 }
 
@@ -596,6 +586,7 @@ impl ColumnIndexMetaData {
     }
 
     /// Returns whether the page indexed by `idx` consists of all null values
+    #[inline]
     pub fn is_null_page(&self, idx: usize) -> bool {
         colidx_enum_func!(self, is_null_page, idx)
     }

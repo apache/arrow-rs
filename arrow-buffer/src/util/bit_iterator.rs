@@ -305,12 +305,12 @@ impl<'a> BitIndexIterator<'a> {
 impl Iterator for BitIndexIterator<'_> {
     type Item = usize;
 
-    #[inline]
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.current_chunk != 0 {
                 let bit_pos = self.current_chunk.trailing_zeros();
-                self.current_chunk ^= 1 << bit_pos;
+                self.current_chunk &= self.current_chunk - 1;
                 return Some((self.chunk_offset + bit_pos as i64) as usize);
             }
 

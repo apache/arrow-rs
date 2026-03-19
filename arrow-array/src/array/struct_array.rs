@@ -402,9 +402,8 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
     }
 }
 
-impl super::private::Sealed for StructArray {}
-
-impl Array for StructArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for StructArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -468,6 +467,16 @@ impl Array for StructArray {
             size += n.buffer().capacity();
         }
         size
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        for field in &self.fields {
+            field.claim(pool);
+        }
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
     }
 }
 

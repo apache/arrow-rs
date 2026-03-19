@@ -415,9 +415,8 @@ impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListViewArray<Offset
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> super::private::Sealed for GenericListViewArray<OffsetSize> {}
-
-impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -486,6 +485,28 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
             size += n.buffer().capacity();
         }
         size
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_offsets.claim(pool);
+        self.value_sizes.claim(pool);
+        self.values.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> super::ListLikeArray for GenericListViewArray<OffsetSize> {
+    fn values(&self) -> &ArrayRef {
+        self.values()
+    }
+
+    fn element_range(&self, index: usize) -> std::ops::Range<usize> {
+        let offset = self.value_offsets()[index].as_usize();
+        let size = self.value_sizes()[index].as_usize();
+        offset..(offset + size)
     }
 }
 

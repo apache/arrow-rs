@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
@@ -123,6 +123,70 @@ impl<R: RunEndIndexType> RunArray<R> {
         Ok(array_data.into())
     }
 
+    /// Create a new [`RunArray`] from the provided parts, without validation
+    ///
+    /// # Safety
+    ///
+    /// Safe if [`Self::try_new`] would not error
+    pub unsafe fn new_unchecked(
+        data_type: DataType,
+        run_ends: RunEndBuffer<R::Native>,
+        values: ArrayRef,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            match &data_type {
+                DataType::RunEndEncoded(run_ends, values_field) => {
+                    assert!(!run_ends.is_nullable(), "run_ends should not be nullable");
+                    assert_eq!(
+                        run_ends.data_type(),
+                        &R::DATA_TYPE,
+                        "Incorrect run ends type"
+                    );
+                    assert_eq!(
+                        values_field.data_type(),
+                        values.data_type(),
+                        "Incorrect values type"
+                    );
+                }
+                _ => {
+                    panic!(
+                        "Invalid data type {data_type:?} for RunArray. Should be DataType::RunEndEncoded"
+                    );
+                }
+            }
+
+            let run_array = Self {
+                data_type,
+                run_ends,
+                values,
+            };
+
+            // Safety: `validate_data` checks below
+            //    1. The given array data has exactly two child arrays.
+            //    2. The first child array (run_ends) has valid data type.
+            //    3. run_ends array does not have null values
+            //    4. run_ends array has non-zero and strictly increasing values.
+            //    5. The length of run_ends array and values array are the same.
+            run_array
+                .to_data()
+                .validate_data()
+                .expect("RunArray data should be valid");
+
+            return run_array;
+        }
+
+        Self {
+            data_type,
+            run_ends,
+            values,
+        }
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (DataType, RunEndBuffer<R::Native>, ArrayRef) {
+        (self.data_type, self.run_ends, self.values)
+    }
+
     /// Returns a reference to the [`RunEndBuffer`].
     pub fn run_ends(&self) -> &RunEndBuffer<R::Native> {
         &self.run_ends
@@ -141,6 +205,9 @@ impl<R: RunEndIndexType> RunArray<R> {
     ///
     /// [`values`]: Self::values
     pub fn values_slice(&self) -> ArrayRef {
+        if self.is_empty() {
+            return self.values.slice(0, 0);
+        }
         let start = self.get_start_physical_index();
         let end = self.get_end_physical_index();
         self.values.slice(start, end - start + 1)
@@ -223,27 +290,41 @@ impl<R: RunEndIndexType> RunArray<R> {
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
     // The method assumes the caller already validated the data using `ArrayData::validate_data()`
     fn from(data: ArrayData) -> Self {
-        match data.data_type() {
+        let (data_type, len, _nulls, offset, _buffers, child_data) = data.into_parts();
+
+        match &data_type {
             DataType::RunEndEncoded(_, _) => {}
             _ => {
                 panic!(
-                    "Invalid data type for RunArray. The data type should be DataType::RunEndEncoded"
+                    "Invalid data type {data_type:?} for RunArray. Should be DataType::RunEndEncoded"
                 );
             }
         }
 
-        // Safety
-        // ArrayData is valid
-        let child = &data.child_data()[0];
-        assert_eq!(child.data_type(), &R::DATA_TYPE, "Incorrect run ends type");
-        let run_ends = unsafe {
-            let scalar = child.buffers()[0].clone().into();
-            RunEndBuffer::new_unchecked(scalar, data.offset(), data.len())
-        };
+        let [run_end_child, values_child]: [ArrayData; 2] = child_data
+            .try_into()
+            .expect("RunArray data should have exactly two child arrays");
 
-        let values = make_array(data.child_data()[1].clone());
+        // deconstruct the run ends child array
+        let (
+            run_end_data_type,
+            _run_end_len,
+            _run_end_nulls,
+            _run_end_offset,
+            run_end_buffers,
+            _run_end_child_data,
+        ) = run_end_child.into_parts();
+        assert_eq!(run_end_data_type, R::DATA_TYPE, "Incorrect run ends type");
+        let [run_end_buffer]: [arrow_buffer::Buffer; 1] = run_end_buffers
+            .try_into()
+            .expect("Run ends should have exactly one buffer");
+        let scalar = ScalarBuffer::from(run_end_buffer);
+        let run_ends = unsafe { RunEndBuffer::new_unchecked(scalar, offset, len) };
+
+        let values = make_array(values_child);
+
         Self {
-            data_type: data.data_type().clone(),
+            data_type,
             run_ends,
             values,
         }
@@ -270,9 +351,8 @@ impl<R: RunEndIndexType> From<RunArray<R>> for ArrayData {
     }
 }
 
-impl<T: RunEndIndexType> super::private::Sealed for RunArray<T> {}
-
-impl<T: RunEndIndexType> Array for RunArray<T> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<T: RunEndIndexType> Array for RunArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -359,6 +439,12 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         std::mem::size_of::<Self>()
             + self.run_ends.inner().inner().capacity()
             + self.values.get_array_memory_size()
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.run_ends.claim(pool);
+        self.values.claim(pool);
     }
 }
 
@@ -531,9 +617,8 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
     }
 }
 
-impl<R: RunEndIndexType, V: Sync> super::private::Sealed for TypedRunArray<'_, R, V> {}
-
-impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn as_any(&self) -> &dyn Any {
         self.run_array
     }
@@ -589,6 +674,11 @@ impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn get_array_memory_size(&self) -> usize {
         self.run_array.get_array_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.run_array.claim(pool);
+    }
 }
 
 // Array accessor converts the index of logical array to the index of the physical array
@@ -642,6 +732,7 @@ mod tests {
     use super::*;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
+    use crate::new_empty_array;
     use crate::types::{Int8Type, UInt32Type};
     use crate::{Int16Array, Int32Array, StringArray};
 
@@ -737,6 +828,26 @@ mod tests {
 
         let run_ends = ree_array.run_ends();
         assert_eq!(run_ends.values(), &run_ends_values);
+    }
+
+    #[test]
+    fn test_run_array_empty() {
+        let runs = new_empty_array(&DataType::Int16);
+        let runs = runs.as_primitive::<Int16Type>();
+        let values = new_empty_array(&DataType::Int64);
+        let array = RunArray::try_new(runs, &values).unwrap();
+
+        fn assertions(array: &RunArray<Int16Type>) {
+            assert!(array.is_empty());
+            assert_eq!(array.get_start_physical_index(), 0);
+            assert_eq!(array.get_end_physical_index(), 0);
+            assert!(array.get_physical_indices::<i16>(&[]).unwrap().is_empty());
+            assert!(array.run_ends().is_empty());
+            assert_eq!(array.run_ends().sliced_values().count(), 0);
+        }
+
+        assertions(&array);
+        assertions(&array.slice(0, 0));
     }
 
     #[test]
@@ -1172,5 +1283,132 @@ mod tests {
         let values_slice2 = slice2.values_slice();
         let values_slice2 = values_slice2.as_primitive::<Int32Type>();
         assert_eq!(values_slice2.values(), &[1]);
+    }
+
+    #[test]
+    fn test_run_array_values_slice_empty() {
+        let run_ends = Int32Array::from(vec![2, 5, 10]);
+        let values = StringArray::from(vec!["a", "b", "c"]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let slice = array.slice(0, 0);
+        assert_eq!(slice.len(), 0);
+
+        let values_slice = slice.values_slice();
+        assert_eq!(values_slice.len(), 0);
+        assert_eq!(values_slice.data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn test_run_array_eq_empty() {
+        let run_ends = Int32Array::from(vec![2, 5, 10]);
+        let values = StringArray::from(vec!["a", "b", "c"]);
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let slice1 = array.slice(0, 0);
+        let slice2 = array.slice(1, 0);
+        let slice3 = array.slice(10, 0);
+
+        assert_eq!(slice1, slice2);
+        assert_eq!(slice2, slice3);
+
+        let empty_array = new_empty_array(array.data_type());
+        let empty_array = crate::cast::as_run_array::<Int32Type>(empty_array.as_ref());
+
+        assert_eq!(&slice1, empty_array);
+    }
+
+    #[test]
+    fn test_run_array_eq_diff_physical_same_logical() {
+        let run_ends1 = Int32Array::from(vec![1, 3, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "b", "c", "c", "c"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_eq!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_eq_sliced() {
+        let run_ends1 = Int32Array::from(vec![2, 5, 10]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+        // Logical: a, a, b, b, b, c, c, c, c, c
+
+        let slice1 = array1.slice(1, 6);
+        // Logical: a, b, b, b, c, c
+
+        let run_ends2 = Int32Array::from(vec![1, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "c"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+        // Logical: a, b, b, b, c, c
+
+        assert_eq!(slice1, array2);
+
+        let slice2 = array1.slice(2, 3);
+        // Logical: b, b, b
+        let run_ends3 = Int32Array::from(vec![3]);
+        let values3 = StringArray::from(vec!["b"]);
+        let array3 = RunArray::<Int32Type>::try_new(&run_ends3, &values3).unwrap();
+        assert_eq!(slice2, array3);
+    }
+
+    #[test]
+    fn test_run_array_eq_sliced_different_offsets() {
+        let run_ends1 = Int32Array::from(vec![2, 5, 10]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+        let array2 = array1.clone();
+        assert_eq!(array1, array2);
+
+        let slice1 = array1.slice(1, 4); // a, b, b, b
+        let slice2 = array1.slice(1, 4);
+        assert_eq!(slice1, slice2);
+
+        let slice3 = array1.slice(0, 4); // a, a, b, b
+        assert_ne!(slice1, slice3);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn allow_to_create_invalid_array_using_new_unchecked() {
+        let valid = RunArray::<Int32Type>::from_iter(["32"]);
+        let (_, buffer, values) = valid.into_parts();
+
+        let _ = unsafe {
+            // mismatch data type
+            RunArray::<Int32Type>::new_unchecked(DataType::Int64, buffer, values)
+        };
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Invalid data type Int64 for RunArray. Should be DataType::RunEndEncoded"
+    )]
+    #[cfg(feature = "force_validate")]
+    fn should_not_be_able_to_create_invalid_array_using_new_unchecked_when_force_validate_is_enabled()
+     {
+        let valid = RunArray::<Int32Type>::from_iter(["32"]);
+        let (_, buffer, values) = valid.into_parts();
+
+        let _ = unsafe {
+            // mismatch data type
+            RunArray::<Int32Type>::new_unchecked(DataType::Int64, buffer, values)
+        };
+    }
+
+    #[test]
+    fn test_run_array_roundtrip() {
+        let run = Int32Array::from(vec![3, 6, 9, 12]);
+        let values = Int32Array::from(vec![Some(0), None, Some(1), None]);
+        let array = RunArray::try_new(&run, &values).unwrap();
+
+        let (dt, buffer, values) = array.clone().into_parts();
+        let created_from_parts =
+            unsafe { RunArray::<Int32Type>::new_unchecked(dt, buffer, values) };
+        assert_eq!(array, created_from_parts);
     }
 }

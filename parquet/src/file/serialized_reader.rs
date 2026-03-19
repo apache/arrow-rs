@@ -1158,7 +1158,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
     fn at_record_boundary(&mut self) -> Result<bool> {
         match &mut self.state {
-            SerializedPageReaderState::Values { .. } => Ok(self.peek_next_page()?.is_none()),
+            SerializedPageReaderState::Values { .. } => match self.peek_next_page()? {
+                None => Ok(true),
+                // V2 data pages must start at record boundaries per the parquet
+                // spec, so the current page ends at one.
+                Some(metadata) => Ok(metadata.num_rows.is_some()),
+            },
             SerializedPageReaderState::Pages { .. } => Ok(true),
         }
     }

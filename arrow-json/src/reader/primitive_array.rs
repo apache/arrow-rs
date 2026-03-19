@@ -80,9 +80,9 @@ pub struct PrimitiveArrayDecoder<P: ArrowPrimitiveType> {
 }
 
 impl<P: ArrowPrimitiveType> PrimitiveArrayDecoder<P> {
-    pub fn new(data_type: DataType) -> Self {
+    pub fn new(data_type: &DataType) -> Self {
         Self {
-            data_type,
+            data_type: data_type.clone(),
             phantom: Default::default(),
         }
     }

@@ -78,18 +78,26 @@ pub use list_view_array::*;
 
 use crate::iterator::ArrayIter;
 
-mod private {
-    /// Private marker trait to ensure [`super::Array`] can not be implemented outside this crate
-    pub trait Sealed {}
-
-    impl<T: Sealed> Sealed for &T {}
-}
-
-/// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
+/// An array in the [Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html)
 ///
-/// This trait is sealed as it is not intended for custom array types, rather only
-/// those defined in this crate.
-pub trait Array: std::fmt::Debug + Send + Sync + private::Sealed {
+/// # Safety
+///
+/// Implementations of this trait must ensure that all methods implementations comply with
+/// the Arrow specification. No safety guards are placed and failing to comply with it can
+/// translate into panics or undefined behavior. For example, a value computed based on `len`
+/// may be used as a direct index into memory regions without checks.
+///
+/// Note that it is likely impossible to correctly implement the trait for a
+/// third party type, as substantial arrow-rs functionality is based on the
+/// return values of [`Array::data_type`] and third party types cannot extend
+/// the [`DataType`] enum. So any code that attempts casting based on data type
+/// (including internal arrow library code) risks a panic or undefined behavior.
+/// See [this discussion] for more details.
+///
+/// This trait might be sealed in the future. Use at your own risk.
+///
+/// [this discussion]: https://github.com/apache/arrow-rs/pull/9234#pullrequestreview-3708950936
+pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
@@ -346,15 +354,82 @@ pub trait Array: std::fmt::Debug + Send + Sync + private::Sealed {
     /// This value will always be greater than returned by `get_buffer_memory_size()` and
     /// includes the overhead of the data structures that contain the pointers to the various buffers.
     fn get_array_memory_size(&self) -> usize;
+
+    /// Claim memory used by this array in the provided memory pool.
+    ///
+    /// This recursively claims memory for:
+    /// - All data buffers in this array
+    /// - All child arrays (for nested types like List, Struct, etc.)
+    /// - The null bitmap buffer if present
+    ///
+    /// This method guarantees that the memory pool will only compute occupied memory
+    /// exactly once. For example, if this array is derived from operations like `slice`,
+    /// calling `claim` on it would not change the memory pool's usage if the underlying buffers
+    /// are already counted before.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{Int32Array, Array};
+    /// # use arrow_buffer::TrackingMemoryPool;
+    /// # use arrow_buffer::MemoryPool;
+    ///
+    /// let pool = TrackingMemoryPool::default();
+    ///
+    /// let small_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let small_array_size = small_array.get_buffer_memory_size();
+    ///
+    /// // Claim the array's memory in the pool
+    /// small_array.claim(&pool);
+    ///
+    /// // Create and claim slices of `small_array`; should not increase memory usage
+    /// let slice1 = small_array.slice(0, 2);
+    /// let slice2 = small_array.slice(2, 2);
+    /// slice1.claim(&pool);
+    /// slice2.claim(&pool);
+    ///
+    /// assert_eq!(pool.used(), small_array_size);
+    ///
+    /// // Create a `large_array` which does not derive from the original `small_array`
+    ///
+    /// let large_array = Int32Array::from((0..1000).collect::<Vec<i32>>());
+    /// let large_array_size = large_array.get_buffer_memory_size();
+    ///
+    /// large_array.claim(&pool);
+    ///
+    /// // Trying to claim more than once is a no-op
+    /// large_array.claim(&pool);
+    /// large_array.claim(&pool);
+    ///
+    /// assert_eq!(pool.used(), small_array_size + large_array_size);
+    ///
+    /// let sum_of_all_sizes = small_array_size + large_array_size + slice1.get_buffer_memory_size() + slice2.get_buffer_memory_size();
+    ///
+    /// // `get_buffer_memory_size` works independently of the memory pool, so a sum of all the
+    /// // arrays in scope will always be >= the memory used reported by the memory pool.
+    /// assert_ne!(pool.used(), sum_of_all_sizes);
+    ///
+    /// // Until the final claim is dropped the buffer size remains accounted for
+    /// drop(small_array);
+    /// drop(slice1);
+    ///
+    /// assert_eq!(pool.used(), small_array_size + large_array_size);
+    ///
+    /// // Dropping this finally releases the buffer that was backing `small_array`
+    /// drop(slice2);
+    ///
+    /// assert_eq!(pool.used(), large_array_size);
+    /// ```
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.to_data().claim(pool)
+    }
 }
 
 /// A reference-counted reference to a generic `Array`
 pub type ArrayRef = Arc<dyn Array>;
 
-impl private::Sealed for ArrayRef {}
-
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
-impl Array for ArrayRef {
+unsafe impl Array for ArrayRef {
     fn as_any(&self) -> &dyn Any {
         self.as_ref().as_any()
     }
@@ -431,9 +506,14 @@ impl Array for ArrayRef {
     fn get_array_memory_size(&self) -> usize {
         self.as_ref().get_array_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.as_ref().claim(pool)
+    }
 }
 
-impl<T: Array> Array for &T {
+unsafe impl<T: Array> Array for &T {
     fn as_any(&self) -> &dyn Any {
         T::as_any(self)
     }
@@ -500,6 +580,11 @@ impl<T: Array> Array for &T {
 
     fn get_array_memory_size(&self) -> usize {
         T::get_array_memory_size(self)
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        T::claim(self, pool)
     }
 }
 
@@ -659,6 +744,21 @@ impl<'a> BinaryArrayType<'a> for &'a FixedSizeBinaryArray {
     fn iter(&self) -> ArrayIter<Self> {
         FixedSizeBinaryArray::iter(self)
     }
+}
+
+/// A trait for Arrow list-like arrays, abstracting over
+/// [`GenericListArray`], [`GenericListViewArray`], and [`FixedSizeListArray`].
+///
+/// This trait provides a uniform interface for accessing the child values and
+/// computing the element range for a given index, regardless of the underlying
+/// list layout (offsets, offsets+sizes, or fixed-size).
+pub trait ListLikeArray: Array {
+    /// Returns the child values array.
+    fn values(&self) -> &ArrayRef;
+
+    /// Returns the start and end indices into the values array for the list
+    /// element at `index`.
+    fn element_range(&self, index: usize) -> std::ops::Range<usize>;
 }
 
 impl PartialEq for dyn Array + '_ {

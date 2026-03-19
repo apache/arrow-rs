@@ -147,8 +147,10 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         | DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, _)
         | DataType::Binary
         | DataType::BinaryView
+        | DataType::LargeBinary
         | DataType::Utf8
         | DataType::Utf8View
+        | DataType::LargeUtf8
         | DataType::FixedSizeBinary(16) // UUID
         => {
             let builder =
@@ -493,24 +495,26 @@ impl IntoShreddingField for (DataType, bool) {
 /// use parquet_variant::{VariantPath, VariantPathElement};
 /// use parquet_variant_compute::ShreddedSchemaBuilder;
 ///
-/// // Define the shredding schema using the builder
-/// let shredding_type = ShreddedSchemaBuilder::default()
+/// fn main() -> Result<(), arrow::error::ArrowError> {
+///     // Define the shredding schema using the builder
+///     let shredding_type = ShreddedSchemaBuilder::default()
 ///     // store the "time" field as a separate UTC timestamp
-///     .with_path("time", (&DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())), true))
+///     .with_path("time", (&DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())), true))?
 ///     // store hostname as non-nullable Utf8
-///     .with_path("hostname", (&DataType::Utf8, false))
+///     .with_path("hostname", (&DataType::Utf8, false))?
 ///     // pass a FieldRef directly
 ///     .with_path(
 ///         "metadata.trace_id",
 ///         Arc::new(Field::new("trace_id", DataType::FixedSizeBinary(16), false)),
-///     )
+///     )?
 ///     // field name with a dot: use VariantPath to avoid splitting
 ///     .with_path(
 ///         VariantPath::from_iter([VariantPathElement::from("metrics.cpu")]),
 ///         &DataType::Float64,
-///     )
+///     )?
 ///     .build();
-///
+///    Ok(())
+/// }
 /// // The shredding_type can now be passed to shred_variant:
 /// // let shredded = shred_variant(&input, &shredding_type)?;
 /// ```
@@ -536,14 +540,17 @@ impl ShreddedSchemaBuilder {
     /// * `path` - Anything convertible to [`VariantPath`] (e.g., a `&str`)
     /// * `field` - Anything convertible via [`IntoShreddingField`] (e.g. `FieldRef`,
     ///   `&DataType`, or `(&DataType, bool)` to control nullability)
-    pub fn with_path<'a, P, F>(mut self, path: P, field: F) -> Self
+    pub fn with_path<'a, P, F>(mut self, path: P, field: F) -> Result<Self>
     where
-        P: Into<VariantPath<'a>>,
+        P: TryInto<VariantPath<'a>>,
+        P::Error: std::fmt::Debug,
         F: IntoShreddingField,
     {
-        let path: VariantPath<'a> = path.into();
+        let path: VariantPath<'a> = path
+            .try_into()
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("{:?}", e)))?;
         self.root.insert_path(&path, field.into_shredding_field());
-        self
+        Ok(self)
     }
 
     /// Build the final [`DataType`].
@@ -647,10 +654,10 @@ impl VariantSchemaNode {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use crate::arrow_to_variant::ListLikeArray;
     use arrow::array::{
         Array, BinaryViewArray, FixedSizeBinaryArray, Float64Array, GenericListArray,
-        GenericListViewArray, Int64Array, ListArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+        GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray, ListArray,
+        ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray,
     };
     use arrow::datatypes::{
         ArrowPrimitiveType, DataType, Field, Fields, Int64Type, TimeUnit, UnionFields, UnionMode,
@@ -1140,6 +1147,118 @@ mod tests {
     }
 
     #[test]
+    fn test_largeutf8_shredding() {
+        let input = VariantArray::from_iter(vec![
+            Some(Variant::from("hello")),
+            Some(Variant::from(42i64)),
+            None,
+            Some(Variant::Null),
+            Some(Variant::from("world")),
+        ]);
+
+        let result = shred_variant(&input, &DataType::LargeUtf8).unwrap();
+        let metadata = result.metadata_field();
+        let value = result.value_field().unwrap();
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap();
+
+        assert_eq!(result.len(), 5);
+
+        // Row 0: string shreds to typed_value
+        assert!(result.is_valid(0));
+        assert!(value.is_null(0));
+        assert_eq!(typed_value.value(0), "hello");
+
+        // Row 1: integer falls back to value
+        assert!(result.is_valid(1));
+        assert!(value.is_valid(1));
+        assert!(typed_value.is_null(1));
+        assert_eq!(
+            Variant::new(metadata.value(1), value.value(1)),
+            Variant::from(42i64)
+        );
+
+        // Row 2: top-level null
+        assert!(result.is_null(2));
+        assert!(value.is_null(2));
+        assert!(typed_value.is_null(2));
+
+        // Row 3: variant null falls back to value
+        assert!(result.is_valid(3));
+        assert!(value.is_valid(3));
+        assert!(typed_value.is_null(3));
+        assert_eq!(
+            Variant::new(metadata.value(3), value.value(3)),
+            Variant::Null
+        );
+
+        // Row 4: string shreds to typed_value
+        assert!(result.is_valid(4));
+        assert!(value.is_null(4));
+        assert_eq!(typed_value.value(4), "world");
+    }
+
+    #[test]
+    fn test_largebinary_shredding() {
+        let input = VariantArray::from_iter(vec![
+            Some(Variant::from(&b"\x00\x01\x02"[..])),
+            Some(Variant::from("not_binary")),
+            None,
+            Some(Variant::Null),
+            Some(Variant::from(&b"\xff\xaa"[..])),
+        ]);
+
+        let result = shred_variant(&input, &DataType::LargeBinary).unwrap();
+        let metadata = result.metadata_field();
+        let value = result.value_field().unwrap();
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .unwrap();
+
+        assert_eq!(result.len(), 5);
+
+        // Row 0: binary shreds to typed_value
+        assert!(result.is_valid(0));
+        assert!(value.is_null(0));
+        assert_eq!(typed_value.value(0), &[0x00, 0x01, 0x02]);
+
+        // Row 1: string falls back to value
+        assert!(result.is_valid(1));
+        assert!(value.is_valid(1));
+        assert!(typed_value.is_null(1));
+        assert_eq!(
+            Variant::new(metadata.value(1), value.value(1)),
+            Variant::from("not_binary")
+        );
+
+        // Row 2: top-level null
+        assert!(result.is_null(2));
+        assert!(value.is_null(2));
+        assert!(typed_value.is_null(2));
+
+        // Row 3: variant null falls back to value
+        assert!(result.is_valid(3));
+        assert!(value.is_valid(3));
+        assert!(typed_value.is_null(3));
+        assert_eq!(
+            Variant::new(metadata.value(3), value.value(3)),
+            Variant::Null
+        );
+
+        // Row 4: binary shreds to typed_value
+        assert!(result.is_valid(4));
+        assert!(value.is_null(4));
+        assert_eq!(typed_value.value(4), &[0xff, 0xaa]);
+    }
+
+    #[test]
     fn test_invalid_shredded_types_rejected() {
         let input = VariantArray::from_iter([Variant::from(42)]);
 
@@ -1151,8 +1270,6 @@ mod tests {
             DataType::Time32(TimeUnit::Second),
             DataType::Time64(TimeUnit::Nanosecond),
             DataType::Timestamp(TimeUnit::Millisecond, None),
-            DataType::LargeBinary,
-            DataType::LargeUtf8,
             DataType::FixedSizeBinary(17),
             DataType::Union(
                 UnionFields::from_fields(vec![
@@ -1558,7 +1675,7 @@ mod tests {
     }
 
     #[test]
-    fn test_object_shredding_comprehensive() {
+    fn test_object_shredding_comprehensive() -> Result<()> {
         let input = build_variant_array(vec![
             // Row 0: Fully shredded object
             VariantRow::Object(vec![
@@ -1596,8 +1713,8 @@ mod tests {
         // Create target schema: struct<score: float64, age: int64>
         // Both types are supported for shredding
         let target_schema = ShreddedSchemaBuilder::default()
-            .with_path("score", &DataType::Float64)
-            .with_path("age", &DataType::Int64)
+            .with_path("score", &DataType::Float64)?
+            .with_path("age", &DataType::Int64)?
             .build();
 
         let result = shred_variant(&input, &target_schema).unwrap();
@@ -1903,6 +2020,7 @@ mod tests {
                 }),
             }),
         );
+        Ok(())
     }
 
     #[test]
@@ -1998,7 +2116,7 @@ mod tests {
     }
 
     #[test]
-    fn test_object_different_schemas() {
+    fn test_object_different_schemas() -> Result<()> {
         // Create object with multiple fields
         let input = build_variant_array(vec![VariantRow::Object(vec![
             ("id", VariantValue::from(123i32)),
@@ -2008,7 +2126,7 @@ mod tests {
 
         // Test with schema containing only id field
         let schema1 = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::Int32)
+            .with_path("id", &DataType::Int32)?
             .build();
         let result1 = shred_variant(&input, &schema1).unwrap();
         let value_field1 = result1.value_field().unwrap();
@@ -2016,8 +2134,8 @@ mod tests {
 
         // Test with schema containing id and age fields
         let schema2 = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::Int32)
-            .with_path("age", &DataType::Int64)
+            .with_path("id", &DataType::Int32)?
+            .with_path("age", &DataType::Int64)?
             .build();
         let result2 = shred_variant(&input, &schema2).unwrap();
         let value_field2 = result2.value_field().unwrap();
@@ -2025,17 +2143,19 @@ mod tests {
 
         // Test with schema containing all fields
         let schema3 = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::Int32)
-            .with_path("age", &DataType::Int64)
-            .with_path("score", &DataType::Float64)
+            .with_path("id", &DataType::Int32)?
+            .with_path("age", &DataType::Int64)?
+            .with_path("score", &DataType::Float64)?
             .build();
         let result3 = shred_variant(&input, &schema3).unwrap();
         let value_field3 = result3.value_field().unwrap();
         assert!(value_field3.is_null(0)); // fully shredded, no remaining fields
+
+        Ok(())
     }
 
     #[test]
-    fn test_uuid_shredding_in_objects() {
+    fn test_uuid_shredding_in_objects() -> Result<()> {
         let mock_uuid_1 = Uuid::new_v4();
         let mock_uuid_2 = Uuid::new_v4();
         let mock_uuid_3 = Uuid::new_v4();
@@ -2069,8 +2189,8 @@ mod tests {
         ]);
 
         let target_schema = ShreddedSchemaBuilder::default()
-            .with_path("id", DataType::FixedSizeBinary(16))
-            .with_path("session_id", DataType::FixedSizeBinary(16))
+            .with_path("id", DataType::FixedSizeBinary(16))?
+            .with_path("session_id", DataType::FixedSizeBinary(16))?
             .build();
 
         let result = shred_variant(&input, &target_schema).unwrap();
@@ -2201,6 +2321,8 @@ mod tests {
 
         // Row 5: Null
         assert!(result.is_null(5));
+
+        Ok(())
     }
 
     #[test]
@@ -2251,10 +2373,10 @@ mod tests {
     }
 
     #[test]
-    fn test_variant_schema_builder_simple() {
+    fn test_variant_schema_builder_simple() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("a", &DataType::Int64)
-            .with_path("b", &DataType::Float64)
+            .with_path("a", &DataType::Int64)?
+            .with_path("b", &DataType::Float64)?
             .build();
 
         assert_eq!(
@@ -2264,14 +2386,16 @@ mod tests {
                 Field::new("b", DataType::Float64, true),
             ]))
         );
+
+        Ok(())
     }
 
     #[test]
-    fn test_variant_schema_builder_nested() {
+    fn test_variant_schema_builder_nested() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("a", &DataType::Int64)
-            .with_path("b.c", &DataType::Utf8)
-            .with_path("b.d", &DataType::Float64)
+            .with_path("a", &DataType::Int64)?
+            .with_path("b.c", &DataType::Utf8)?
+            .with_path("b.d", &DataType::Float64)?
             .build();
 
         assert_eq!(
@@ -2288,13 +2412,15 @@ mod tests {
                 ),
             ]))
         );
+
+        Ok(())
     }
 
     #[test]
-    fn test_variant_schema_builder_with_path_variant_path_arg() {
+    fn test_variant_schema_builder_with_path_variant_path_arg() -> Result<()> {
         let path = VariantPath::from_iter([VariantPathElement::from("a.b")]);
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path(path, &DataType::Int64)
+            .with_path(path, &DataType::Int64)?
             .build();
 
         match shredding_type {
@@ -2305,16 +2431,18 @@ mod tests {
             }
             _ => panic!("expected struct data type"),
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_variant_schema_builder_custom_nullability() {
+    fn test_variant_schema_builder_custom_nullability() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
             .with_path(
                 "foo",
                 Arc::new(Field::new("should_be_renamed", DataType::Utf8, false)),
-            )
-            .with_path("bar", (&DataType::Int64, false))
+            )?
+            .with_path("bar", (&DataType::Int64, false))?
             .build();
 
         let DataType::Struct(fields) = shredding_type else {
@@ -2328,10 +2456,12 @@ mod tests {
         let bar = fields.iter().find(|f| f.name() == "bar").unwrap();
         assert_eq!(bar.data_type(), &DataType::Int64);
         assert!(!bar.is_nullable());
+
+        Ok(())
     }
 
     #[test]
-    fn test_variant_schema_builder_with_shred_variant() {
+    fn test_variant_schema_builder_with_shred_variant() -> Result<()> {
         let input = build_variant_array(vec![
             VariantRow::Object(vec![
                 ("time", VariantValue::from(1234567890i64)),
@@ -2346,8 +2476,8 @@ mod tests {
         ]);
 
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("time", &DataType::Int64)
-            .with_path("hostname", &DataType::Utf8)
+            .with_path("time", &DataType::Int64)?
+            .with_path("hostname", &DataType::Utf8)?
             .build();
 
         let result = shred_variant(&input, &shredding_type).unwrap();
@@ -2424,13 +2554,15 @@ mod tests {
 
         // Row 2
         assert!(result.is_null(2));
+
+        Ok(())
     }
 
     #[test]
-    fn test_variant_schema_builder_conflicting_path() {
+    fn test_variant_schema_builder_conflicting_path() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("a", &DataType::Int64)
-            .with_path("a", &DataType::Float64)
+            .with_path("a", &DataType::Int64)?
+            .with_path("a", &DataType::Float64)?
             .build();
 
         assert_eq!(
@@ -2439,25 +2571,30 @@ mod tests {
                 vec![Field::new("a", DataType::Float64, true),]
             ))
         );
+
+        Ok(())
     }
 
     #[test]
-    fn test_variant_schema_builder_root_path() {
+    fn test_variant_schema_builder_root_path() -> Result<()> {
         let path = VariantPath::new(vec![]);
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path(path, &DataType::Int64)
+            .with_path(path, &DataType::Int64)?
             .build();
 
         assert_eq!(shredding_type, DataType::Int64);
+
+        Ok(())
     }
 
     #[test]
-    fn test_variant_schema_builder_empty_path() {
+    fn test_variant_schema_builder_empty_path() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("", &DataType::Int64)
+            .with_path("", &DataType::Int64)?
             .build();
 
         assert_eq!(shredding_type, DataType::Int64);
+        Ok(())
     }
 
     #[test]

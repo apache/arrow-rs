@@ -462,9 +462,8 @@ impl<T: ByteArrayType> std::fmt::Debug for GenericByteArray<T> {
     }
 }
 
-impl<T: ByteArrayType> super::private::Sealed for GenericByteArray<T> {}
-
-impl<T: ByteArrayType> Array for GenericByteArray<T> {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl<T: ByteArrayType> Array for GenericByteArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -525,6 +524,15 @@ impl<T: ByteArrayType> Array for GenericByteArray<T> {
 
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>() + self.get_buffer_memory_size()
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_offsets.claim(pool);
+        self.value_data.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
     }
 }
 

@@ -37,10 +37,12 @@ use arrow_array::{ArrayRef, ArrowPrimitiveType, BooleanArray, PrimitiveArray, St
 use arrow_schema::{ArrowError, DataType, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
+use object_store::local::LocalFileSystem;
 use parquet::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
     ParquetRecordBatchReaderBuilder, RowFilter,
 };
+use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::schema::types::SchemaDescriptor;
@@ -65,6 +67,23 @@ fn async_reader(c: &mut Criterion) {
     }
 }
 
+fn async_reader_object_store(c: &mut Criterion) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let mut async_group = c.benchmark_group("arrow_reader_clickbench/async_object_store");
+    let handle = rt.handle();
+    for query in all_queries() {
+        let query_name = query.to_string();
+        let read_test = ReadTest::new(query);
+        async_group.bench_function(query_name, |b| {
+            b.iter(|| handle.block_on(async { read_test.run_async_object_store().await }))
+        });
+    }
+}
+
 fn sync_reader(c: &mut Criterion) {
     let mut sync_group = c.benchmark_group("arrow_reader_clickbench/sync");
     for query in all_queries() {
@@ -74,7 +93,12 @@ fn sync_reader(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, sync_reader, async_reader);
+criterion_group!(
+    benches,
+    sync_reader,
+    async_reader,
+    async_reader_object_store
+);
 criterion_main!(benches);
 
 /// Predicate Function.
@@ -574,27 +598,38 @@ impl Display for Query {
 /// FULL path to the ClickBench hits_1.parquet file
 static HITS_1_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Finds the paths to the ClickBench file, or panics with a useful message
-/// explaining how to download if it is not found
+/// Finds the paths to the ClickBench file, downloading it if not found
 fn hits_1() -> &'static Path {
     HITS_1_PATH.get_or_init(|| {
-
-    let current_dir = std::env::current_dir().expect("Failed to get current directory");
-    println!(
-        "Looking for ClickBench files starting in current_dir and all parent directories: {current_dir:?}"
-
-    );
-
-    let Some(hits_1_path) = find_file_if_exists(current_dir.clone(), "hits_1.parquet") else {
-        eprintln!(
-            "Could not find hits_1.parquet in directory or parents: {current_dir:?}. Download it via",
+        let current_dir = std::env::current_dir().expect("Failed to get current directory");
+        println!(
+            "Looking for ClickBench files starting in current_dir and all parent directories: {current_dir:?}"
         );
-        eprintln!();
-        eprintln!("wget --continue https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet");
-        panic!("Stopping");
-    };
 
-    hits_1_path
+        if let Some(hits_1_path) = find_file_if_exists(current_dir.clone(), "hits_1.parquet") {
+            return hits_1_path;
+        }
+
+        // File not found, download it
+        let download_path = current_dir.join("hits_1.parquet");
+        let url = "https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet";
+        println!("hits_1.parquet not found, downloading from {url}...");
+
+        let status = std::process::Command::new("wget")
+            .args(["--continue", "-O"])
+            .arg(&download_path)
+            .arg(url)
+            .status()
+            .expect("Failed to execute wget. Please install wget or download manually.");
+
+        assert!(
+            status.success(),
+            "Failed to download hits_1.parquet. You can download it manually via:\n\
+             wget --continue {url}"
+        );
+
+        println!("Downloaded hits_1.parquet to {download_path:?}");
+        download_path
     })
 }
 
@@ -614,66 +649,6 @@ fn find_file_if_exists(mut current_dir: PathBuf, file_name: &str) -> Option<Path
     None
 }
 
-/// Represents a mapping from each column selected in the `ProjectionMask`
-/// created from `filter_columns`, to the corresponding index in the list of
-/// `filter_columns`?
-///
-/// # Example
-///
-/// If:
-/// * the file schema has columns `[A, B, C]`
-/// * `filter_columns` is `[C, A]`
-/// * ==> `ProjectionMask` will be `[true, false, true]` = `[A, C]`
-///
-/// `FilterIndices` will be `[1, 0]`, because column `C` (index 0 in
-/// filter_columns) is selected at index 1 of the `ProjectionMask` and column
-/// `A` (index 1 in `filter_columns`) is selected at index 0 of the
-/// `ProjectionMask`.
-struct FilterIndices {
-    /// * index is offset in Query::filter_columns
-    /// * value is offset in column selected by filter ProjectionMask
-    inner: Vec<usize>,
-}
-
-impl FilterIndices {
-    /// Create a new `FilterIndices` from a list of column indices
-    ///
-    /// Parameters:
-    /// * `schema_descriptor`: The schema of the file
-    /// * `filter_schema_indices`: a list of column indices in the schema
-    fn new(schema_descriptor: &SchemaDescriptor, filter_schema_indices: Vec<usize>) -> Self {
-        for &filter_index in &filter_schema_indices {
-            assert!(filter_index < schema_descriptor.num_columns());
-        }
-        // When the columns are selected using a ProjectionMask, they are
-        // returned in the order of the schema (not the order they were specified)
-        //
-        // So if the original schema indices are 5, 1, 3 (select the sixth and
-        // second and fourth column),  the RecordBatch returned will select them
-        // in order 1, 3, 5,
-        //
-        // Thus we need a map to convert back to the original selection order
-        // `[1, 2, 0]`
-        let mut reordered: Vec<_> = filter_schema_indices.iter().enumerate().collect();
-        reordered.sort_by_key(|(_projection_idx, original_schema_idx)| **original_schema_idx);
-        let mut inner = vec![0; reordered.len()];
-        for (output_idx, (projection_idx, _original_schema_idx)) in
-            reordered.into_iter().enumerate()
-        {
-            inner[projection_idx] = output_idx;
-        }
-        Self { inner }
-    }
-
-    /// Given the index of a column in `filter_columns`, return the index of the
-    /// column in the columns selected from `ProjectionMask`
-    fn map_column(&self, filter_columns_index: usize) -> usize {
-        // The selection index is the index in the filter mask
-        // The inner index is the index in the filter columns
-        self.inner[filter_columns_index]
-    }
-}
-
 /// Encapsulates the test parameters for a single benchmark
 struct ReadTest {
     /// Human identifiable name
@@ -682,10 +657,8 @@ struct ReadTest {
     arrow_reader_metadata: ArrowReaderMetadata,
     /// Which columns in the file should be projected (decoded after filter)?
     projection_mask: ProjectionMask,
-    /// Which columns in the file should be passed to the filter?
-    filter_mask: ProjectionMask,
-    /// Mapping from column selected in filter mask to `Query::filter_columns`
-    filter_indices: FilterIndices,
+    /// Schema indices for each filter column (in filter_columns order)
+    filter_schema_indices: Vec<usize>,
     /// Predicates to apply
     predicates: Vec<ClickBenchPredicate>,
     /// How many rows are expected to pass the predicate?
@@ -720,16 +693,12 @@ impl ReadTest {
         };
 
         let filter_schema_indices = column_indices(schema_descr, &filter_columns);
-        let filter_mask =
-            ProjectionMask::leaves(schema_descr, filter_schema_indices.iter().cloned());
-        let filter_indices = FilterIndices::new(schema_descr, filter_schema_indices);
 
         Self {
             name,
             arrow_reader_metadata,
             projection_mask,
-            filter_mask,
-            filter_indices,
+            filter_schema_indices,
             predicates,
             expected_row_count,
         }
@@ -749,6 +718,37 @@ impl ReadTest {
         // setup the reader
         let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
             parquet_file,
+            self.arrow_reader_metadata.clone(),
+        )
+        .with_batch_size(8192)
+        .with_projection(self.projection_mask.clone())
+        .with_row_filter(self.row_filter())
+        .build()
+        .unwrap();
+
+        // run the stream to its end
+        let mut row_count = 0;
+        while let Some(b) = stream.next().await {
+            let b = b.unwrap();
+            let num_rows = b.num_rows();
+            row_count += num_rows;
+        }
+        self.check_row_count(row_count);
+    }
+
+    /// Run the filter and projection using the async `ObjectStore` reader
+    async fn run_async_object_store(&self) {
+        let hits_path = hits_1();
+        let parent = hits_path.parent().unwrap();
+        let file_name = hits_path.file_name().unwrap().to_str().unwrap();
+        let store = Arc::new(LocalFileSystem::new_with_prefix(parent).unwrap());
+        let location = object_store::path::Path::from(file_name);
+
+        let reader = ParquetObjectReader::new(store, location);
+
+        // setup the reader
+        let mut stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
+            reader,
             self.arrow_reader_metadata.clone(),
         )
         .with_batch_size(8192)
@@ -796,25 +796,26 @@ impl ReadTest {
 
     /// Return a `RowFilter` to apply to the reader.
     ///
-    /// Note that since `RowFilter` does not implement Clone, we need to create
-    /// the filter for each row
+    /// Each predicate gets a ProjectionMask containing only the single column
+    /// it needs, rather than all filter columns. This avoids decoding expensive
+    /// columns (e.g. strings) when evaluating cheap predicates (e.g. integer equality).
     fn row_filter(&self) -> RowFilter {
-        // Note: The predicates are in terms columns in the filter mask
-        // but the record batch passed back has columns in the order of the file
-        // schema
+        let schema_descr = self
+            .arrow_reader_metadata
+            .metadata()
+            .file_metadata()
+            .schema_descr();
 
-        // Convert the predicates to ArrowPredicateFn to conform to the RowFilter API
         let arrow_predicates: Vec<_> = self
             .predicates
             .iter()
             .map(|pred| {
-                let orig_column_index = pred.column_index();
-                let column_index = self.filter_indices.map_column(orig_column_index);
+                let schema_index = self.filter_schema_indices[pred.column_index()];
+                let predicate_mask = ProjectionMask::leaves(schema_descr, [schema_index]);
                 let mut predicate_fn = pred.predicate_fn();
-                Box::new(ArrowPredicateFn::new(
-                    self.filter_mask.clone(),
-                    move |batch| (predicate_fn)(batch.column(column_index)),
-                )) as Box<dyn ArrowPredicate>
+                Box::new(ArrowPredicateFn::new(predicate_mask, move |batch| {
+                    (predicate_fn)(batch.column(0))
+                })) as Box<dyn ArrowPredicate>
             })
             .collect();
 

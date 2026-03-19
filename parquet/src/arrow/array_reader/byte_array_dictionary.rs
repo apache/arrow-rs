@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait, new_empty_array};
 use arrow_buffer::ArrowNativeType;
@@ -278,7 +277,7 @@ where
         decoder.read(&mut buffer, usize::MAX)?;
 
         let array = buffer.into_array(None, self.value_type.clone());
-        self.dict = Some(Arc::new(array));
+        self.dict = Some(array);
         Ok(())
     }
 

@@ -76,9 +76,8 @@ impl NullArray {
     }
 }
 
-impl super::private::Sealed for NullArray {}
-
-impl Array for NullArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for NullArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -133,6 +132,11 @@ impl Array for NullArray {
 
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>()
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, _pool: &dyn arrow_buffer::MemoryPool) {
+        // NullArray has no buffers to claim
     }
 }
 

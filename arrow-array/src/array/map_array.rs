@@ -362,9 +362,8 @@ impl MapArray {
     }
 }
 
-impl super::private::Sealed for MapArray {}
-
-impl Array for MapArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for MapArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -430,6 +429,15 @@ impl Array for MapArray {
             size += n.buffer().capacity();
         }
         size
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_offsets.claim(pool);
+        self.entries.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
     }
 }
 

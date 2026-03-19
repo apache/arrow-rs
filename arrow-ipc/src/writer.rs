@@ -417,7 +417,12 @@ impl IpcDataGenerator {
                 // sequence is assigned depth-first, so we need to first encode children and have
                 // them take their assigned dict IDs before we take the dict ID for this field.
                 let dict_id = dict_id_seq.next().ok_or_else(|| {
-                    ArrowError::IpcError(format!("no dict id for field {}", field.name()))
+                    ArrowError::IpcError(format!(
+                        "no dict id for field {:?}: field.data_type={:?}, column.data_type={:?}",
+                        field.name(),
+                        field.data_type(),
+                        column.data_type()
+                    ))
                 })?;
 
                 match dictionary_tracker.insert_column(

@@ -742,9 +742,8 @@ impl From<UnionArray> for ArrayData {
     }
 }
 
-impl super::private::Sealed for UnionArray {}
-
-impl Array for UnionArray {
+/// SAFETY: Correctly implements the contract of Arrow Arrays
+unsafe impl Array for UnionArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -946,6 +945,17 @@ impl Array for UnionArray {
                 .flat_map(|x| x.as_ref().map(|x| x.get_array_memory_size()))
                 .sum::<usize>()
             + sum
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.type_ids.claim(pool);
+        if let Some(offsets) = &self.offsets {
+            offsets.claim(pool);
+        }
+        for field in self.fields.iter().flatten() {
+            field.claim(pool);
+        }
     }
 }
 
