@@ -432,12 +432,13 @@ impl RowGroupReaderBuilder {
                 )?;
 
                 // Try dictionary pruning before decoding data pages
-                let dict_result = crate::arrow::arrow_reader::dictionary_pruning::try_dictionary_prune_in_memory(
-                    filter_info.current_mut(),
-                    &row_group,
-                    &self.metadata,
-                    self.fields.as_deref(),
-                )?;
+                let dict_result =
+                    crate::arrow::arrow_reader::dictionary_pruning::try_dictionary_prune_in_memory(
+                        filter_info.current_mut(),
+                        &row_group,
+                        &self.metadata,
+                        self.fields.as_deref(),
+                    )?;
 
                 let dict_action = match dict_result {
                     Some(crate::arrow::arrow_reader::DictionaryPredicateResult::AllFalse) => {
@@ -468,7 +469,8 @@ impl RowGroupReaderBuilder {
                     // Without this reset, a prior predicate's override (e.g. Mask)
                     // carries forward and the check returns early, missing unfetched
                     // pages for subsequent predicates.
-                    plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+                    plan_builder =
+                        plan_builder.with_row_selection_policy(self.row_selection_policy);
 
                     // Prepare to evaluate the filter.
                     // Note: first update the selection strategy to properly handle any pages

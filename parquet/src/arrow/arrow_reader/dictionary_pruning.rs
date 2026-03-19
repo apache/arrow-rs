@@ -79,8 +79,7 @@ pub(crate) fn try_dictionary_prune_in_memory(
 
     // Get the arrow type for this column from the ParquetField tree.
     // Only supports top-level primitive columns (not nested in structs/lists).
-    let Some(arrow_type) = fields.and_then(|f| find_top_level_leaf_arrow_type(f, col_idx))
-    else {
+    let Some(arrow_type) = fields.and_then(|f| find_top_level_leaf_arrow_type(f, col_idx)) else {
         return Ok(None);
     };
 
@@ -292,10 +291,10 @@ fn decode_plain_int64_as(buf: &[u8], num_values: usize, arrow_type: &DataType) -
             values.into_iter().map(|v| v as i32).collect::<Vec<_>>(),
         ))),
         DataType::Timestamp(unit, tz) => {
-            use arrow_array::TimestampSecondArray;
-            use arrow_array::TimestampMillisecondArray;
             use arrow_array::TimestampMicrosecondArray;
+            use arrow_array::TimestampMillisecondArray;
             use arrow_array::TimestampNanosecondArray;
+            use arrow_array::TimestampSecondArray;
             use arrow_schema::TimeUnit;
             match unit {
                 TimeUnit::Second => Ok(Arc::new(
