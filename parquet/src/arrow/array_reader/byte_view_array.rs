@@ -30,7 +30,6 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::utf8::check_valid_utf8;
 use arrow_array::{ArrayRef, builder::make_view};
 use arrow_buffer::Buffer;
-use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
@@ -509,74 +508,15 @@ impl ByteViewArrayDecoderDictionary {
             output.buffers.len() as u32 - dict.buffers.len() as u32
         };
 
-        let dict_views = &dict.views;
-        // If bit_width guarantees all indices are valid, skip per-element bounds checks
-        let all_indices_valid = self.decoder.all_indices_valid_for(dict_views.len());
-
         // Pre-reserve output capacity to avoid per-chunk reallocation in extend
         output.views.reserve(len);
 
-        let mut error = None;
-        let read = self.decoder.read(len, |keys| {
-            if all_indices_valid {
-                if base_buffer_idx == 0 {
-                    // SAFETY: bit_width guarantees all decoded indices < dict_views.len()
-                    output.views.extend(keys.iter().map(|k| unsafe {
-                        *dict_views.get_unchecked(*k as usize)
-                    }));
-                } else {
-                    // SAFETY: bit_width guarantees all decoded indices < dict_views.len()
-                    output.views.extend(keys.iter().map(|k| {
-                        let view = unsafe { *dict_views.get_unchecked(*k as usize) };
-                        let len = view as u32;
-                        if len <= 12 {
-                            view
-                        } else {
-                            let mut view = ByteView::from(view);
-                            view.buffer_index += base_buffer_idx;
-                            view.into()
-                        }
-                    }));
-                }
-            } else if base_buffer_idx == 0 {
-                output
-                    .views
-                    .extend(keys.iter().map(|k| match dict_views.get(*k as usize) {
-                        Some(&view) => view,
-                        None => {
-                            if error.is_none() {
-                                error = Some(general_err!("invalid key={} for dictionary", *k));
-                            }
-                            0
-                        }
-                    }));
-            } else {
-                output
-                    .views
-                    .extend(keys.iter().map(|k| match dict_views.get(*k as usize) {
-                        Some(&view) => {
-                            let len = view as u32;
-                            if len <= 12 {
-                                view
-                            } else {
-                                let mut view = ByteView::from(view);
-                                view.buffer_index += base_buffer_idx;
-                                view.into()
-                            }
-                        }
-                        None => {
-                            if error.is_none() {
-                                error = Some(general_err!("invalid key={} for dictionary", *k));
-                            }
-                            0
-                        }
-                    }));
-            }
-            Ok(())
-        })?;
-        if let Some(e) = error {
-            return Err(e);
-        }
+        let read = self.decoder.read_gather_views(
+            len,
+            &dict.views,
+            &mut output.views,
+            base_buffer_idx,
+        )?;
         Ok(read)
     }
 
