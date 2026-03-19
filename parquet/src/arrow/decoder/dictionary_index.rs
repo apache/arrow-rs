@@ -120,8 +120,7 @@ impl DictIndexDecoder {
             let read = self.decoder.get_batch_direct(to_read - values_read, |batch| {
                 match batch {
                     RleDecodedBatch::Rle { index, count } => {
-                        // SAFETY: RLE value was decoded from the stream; validated by caller
-                        let view = unsafe { *dict_views.get_unchecked(index as usize) };
+                        let view = dict_views[index as usize];
                         let view = if base_buffer_idx == 0 || (view as u32) <= 12 {
                             view
                         } else {
@@ -149,15 +148,16 @@ impl DictIndexDecoder {
         output: &mut Vec<u128>,
         base_buffer_idx: u32,
     ) {
+        // Clamp index to valid range to prevent UB on corrupt data.
+        // This is branchless (cmp+csel on ARM) and avoids bounds checks in the hot loop.
+        let max_idx = dict_views.len() - 1;
         if base_buffer_idx == 0 {
-            // SAFETY: caller ensures all indices are valid
             output.extend(keys.iter().map(|k| unsafe {
-                *dict_views.get_unchecked(*k as usize)
+                *dict_views.get_unchecked((*k as usize).min(max_idx))
             }));
         } else {
-            // SAFETY: caller ensures all indices are valid
             output.extend(keys.iter().map(|k| {
-                let view = unsafe { *dict_views.get_unchecked(*k as usize) };
+                let view = unsafe { *dict_views.get_unchecked((*k as usize).min(max_idx)) };
                 if (view as u32) <= 12 {
                     view
                 } else {
