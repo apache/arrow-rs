@@ -19,9 +19,9 @@
 
 use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
-    Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
-    GenericListArray, GenericListViewArray, LargeStringArray, ListLikeArray, PrimitiveArray,
-    StringArray, StringViewArray, StructArray,
+    Array, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
+    FixedSizeListArray, GenericListArray, GenericListViewArray, LargeBinaryArray, LargeStringArray,
+    ListLikeArray, PrimitiveArray, StringArray, StringViewArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
@@ -107,7 +107,9 @@ enum UnshredVariantRowBuilder<'a> {
     PrimitiveString(UnshredPrimitiveRowBuilder<'a, StringArray>),
     PrimitiveStringView(UnshredPrimitiveRowBuilder<'a, StringViewArray>),
     PrimitiveLargeString(UnshredPrimitiveRowBuilder<'a, LargeStringArray>),
+    PrimitiveBinary(UnshredPrimitiveRowBuilder<'a, BinaryArray>),
     PrimitiveBinaryView(UnshredPrimitiveRowBuilder<'a, BinaryViewArray>),
+    PrimitiveLargeBinary(UnshredPrimitiveRowBuilder<'a, LargeBinaryArray>),
     PrimitiveUuid(UnshredPrimitiveRowBuilder<'a, FixedSizeBinaryArray>),
     List(ListUnshredVariantBuilder<'a, GenericListArray<i32>>),
     LargeList(ListUnshredVariantBuilder<'a, GenericListArray<i64>>),
@@ -150,7 +152,9 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::PrimitiveString(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveStringView(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveLargeString(b) => b.append_row(builder, metadata, index),
+            Self::PrimitiveBinary(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveBinaryView(b) => b.append_row(builder, metadata, index),
+            Self::PrimitiveLargeBinary(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveUuid(b) => b.append_row(builder, metadata, index),
             Self::List(b) => b.append_row(builder, metadata, index),
             Self::LargeList(b) => b.append_row(builder, metadata, index),
@@ -232,7 +236,9 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Utf8 => primitive_builder!(PrimitiveString, as_string),
             DataType::Utf8View => primitive_builder!(PrimitiveStringView, as_string_view),
             DataType::LargeUtf8 => primitive_builder!(PrimitiveLargeString, as_string),
+            DataType::Binary => primitive_builder!(PrimitiveBinary, as_binary),
             DataType::BinaryView => primitive_builder!(PrimitiveBinaryView, as_binary_view),
+            DataType::LargeBinary => primitive_builder!(PrimitiveLargeBinary, as_binary),
             DataType::FixedSizeBinary(16) => {
                 primitive_builder!(PrimitiveUuid, as_fixed_size_binary)
             }
