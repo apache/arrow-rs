@@ -458,6 +458,11 @@ impl RleDecoder {
     {
         assert!(buffer.len() >= max_values);
 
+        // If all possible bit_width-bit values are valid dict indices,
+        // we can skip per-element bounds checks in the hot loop.
+        let all_indices_valid = self.bit_width < 64
+            && dict.len() >= (1usize << self.bit_width);
+
         let mut values_read = 0;
         while values_read < max_values {
             let index_buf = self.index_buf.get_or_insert_with(|| Box::new([0; 1024]));
@@ -494,10 +499,20 @@ impl RleDecoder {
                         self.bit_packed_left = 0;
                         break;
                     }
-                    buffer[values_read..values_read + num_values]
-                        .iter_mut()
-                        .zip(index_buf[..num_values].iter())
-                        .for_each(|(b, i)| b.clone_from(&dict[*i as usize]));
+                    if all_indices_valid {
+                        // SAFETY: bit_width guarantees all decoded indices are < dict.len()
+                        buffer[values_read..values_read + num_values]
+                            .iter_mut()
+                            .zip(index_buf[..num_values].iter())
+                            .for_each(|(b, i)| unsafe {
+                                b.clone_from(dict.get_unchecked(*i as usize));
+                            });
+                    } else {
+                        buffer[values_read..values_read + num_values]
+                            .iter_mut()
+                            .zip(index_buf[..num_values].iter())
+                            .for_each(|(b, i)| b.clone_from(&dict[*i as usize]));
+                    }
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {
