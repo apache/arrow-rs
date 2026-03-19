@@ -101,7 +101,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         if self.views.capacity() == 0 {
             self.views.reserve(self.batch_size);
         }
-        debug_assert_eq!(self.views.capacity(), self.batch_size);
     }
 
     /// Finishes in progress buffer, if any

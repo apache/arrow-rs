@@ -437,6 +437,13 @@ impl RowGroupReaderBuilder {
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
+                // Reset to original policy before each predicate so the override
+                // can detect page skipping for THIS predicate's columns.
+                // Without this reset, a prior predicate's override (e.g. Mask)
+                // carries forward and the check returns early, missing unfetched
+                // pages for subsequent predicates.
+                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+
                 let page_boundaries = self.compute_page_aware_boundaries(
                     row_group_idx,
                     plan_builder.selection(),

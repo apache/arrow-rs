@@ -192,20 +192,19 @@ fn convert_stats(
     use crate::file::statistics::Statistics as FStatistics;
     Ok(match thrift_stats {
         Some(stats) => {
-            // Number of nulls recorded, when it is not available, we just mark it as 0.
-            // TODO this should be `None` if there is no information about NULLS.
-            // see https://github.com/apache/arrow-rs/pull/6216/files
-            let null_count = stats.null_count.unwrap_or(0);
-
-            if null_count < 0 {
-                return Err(general_err!(
-                    "Statistics null count is negative {}",
-                    null_count
-                ));
-            }
-
             // Generic null count.
-            let null_count = Some(null_count as u64);
+            let null_count = stats
+                .null_count
+                .map(|null_count| {
+                    if null_count < 0 {
+                        return Err(general_err!(
+                            "Statistics null count is negative {}",
+                            null_count
+                        ));
+                    }
+                    Ok(null_count as u64)
+                })
+                .transpose()?;
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
@@ -1722,6 +1721,7 @@ write_thrift_field!(RustBoundingBox, FieldType::Struct);
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::basic::Type as PhysicalType;
     use crate::errors::Result;
     use crate::file::metadata::thrift::{BoundingBox, SchemaElement, write_schema};
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaDataOptions, RowGroupMetaData};
@@ -1730,7 +1730,8 @@ pub(crate) mod tests {
         ElementType, ThriftCompactOutputProtocol, ThriftSliceInputProtocol, read_thrift_vec,
     };
     use crate::schema::types::{
-        ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
+        ColumnDescriptor, ColumnPath, SchemaDescriptor, TypePtr, num_nodes,
+        parquet_schema_from_array,
     };
     use std::sync::Arc;
 
@@ -1827,5 +1828,49 @@ pub(crate) mod tests {
             mmin: Some(3.7.into()),
             mmax: Some(42.0.into()),
         });
+    }
+
+    #[test]
+    fn test_convert_stats_preserves_missing_null_count() {
+        let primitive =
+            crate::schema::types::Type::primitive_type_builder("col", PhysicalType::INT32)
+                .build()
+                .unwrap();
+        let column_descr = Arc::new(ColumnDescriptor::new(
+            Arc::new(primitive),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        ));
+
+        let none_null_count = super::Statistics {
+            max: None,
+            min: None,
+            null_count: None,
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+        let decoded_none = super::convert_stats(&column_descr, Some(none_null_count))
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded_none.null_count_opt(), None);
+
+        let zero_null_count = super::Statistics {
+            max: None,
+            min: None,
+            null_count: Some(0),
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+        let decoded_zero = super::convert_stats(&column_descr, Some(zero_null_count))
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded_zero.null_count_opt(), Some(0));
     }
 }
