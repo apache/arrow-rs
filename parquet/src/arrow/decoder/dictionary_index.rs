@@ -25,6 +25,9 @@ pub struct DictIndexDecoder {
     /// Decoder for the dictionary offsets array
     decoder: RleDecoder,
 
+    /// The bit width used to encode dictionary indices
+    bit_width: u8,
+
     /// We want to decode the offsets in chunks so we will maintain an internal buffer of decoded
     /// offsets
     index_buf: Box<[i32; 1024]>,
@@ -49,11 +52,18 @@ impl DictIndexDecoder {
 
         Ok(Self {
             decoder,
+            bit_width,
             index_buf: Box::new([0; 1024]),
             index_buf_len: 0,
             index_offset: 0,
             max_remaining_values: num_values.unwrap_or(num_levels),
         })
+    }
+
+    /// Returns true if all possible indices that could be encoded with `bit_width`
+    /// bits are valid for a dictionary of the given length.
+    pub fn all_indices_valid_for(&self, dict_len: usize) -> bool {
+        self.bit_width < 64 && dict_len >= (1usize << self.bit_width)
     }
 
     /// Read up to `len` values, returning the number of values read
