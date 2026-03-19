@@ -495,10 +495,11 @@ struct ClickBenchPredicate {
     /// This is necessary (and awkward) because  `ArrowPredicateFn` does not
     /// implement `Clone`, so it must be created for each reader instance.
     predicate_factory: Box<dyn Fn() -> Box<ColumnPredicateFn>>,
+    use_dict_pushdown: bool,
 }
 
 impl ClickBenchPredicate {
-    /// Create a new `ClickBenchPredicate`
+    /// Create a new `ClickBenchPredicate` with dictionary pushdown enabled.
     ///
     /// Parameters:
     /// * `column_index`: the index of the column in the `filter_columns` list
@@ -510,6 +511,7 @@ impl ClickBenchPredicate {
         Self {
             column_index,
             predicate_factory: Box::new(predicate_factory),
+            use_dict_pushdown: true,
         }
     }
 
@@ -813,9 +815,13 @@ impl ReadTest {
                 let schema_index = self.filter_schema_indices[pred.column_index()];
                 let predicate_mask = ProjectionMask::leaves(schema_descr, [schema_index]);
                 let mut predicate_fn = pred.predicate_fn();
-                Box::new(ArrowPredicateFn::new(predicate_mask, move |batch| {
-                    (predicate_fn)(batch.column(0))
-                })) as Box<dyn ArrowPredicate>
+                let use_dict = pred.use_dict_pushdown;
+                Box::new(
+                    ArrowPredicateFn::new(predicate_mask, move |batch| {
+                        (predicate_fn)(batch.column(0))
+                    })
+                    .with_dict_pushdown(use_dict),
+                ) as Box<dyn ArrowPredicate>
             })
             .collect();
 

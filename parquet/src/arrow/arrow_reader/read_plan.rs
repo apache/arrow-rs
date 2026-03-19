@@ -25,7 +25,7 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
-use arrow_array::Array;
+use arrow_array::{Array, BooleanArray};
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
 
@@ -134,6 +134,36 @@ impl ReadPlanBuilder {
         }
     }
 
+    fn apply_filter(
+        mut self,
+        array_reader: Box<dyn ArrayReader>,
+        mut get_filter: impl FnMut(arrow_array::RecordBatch) -> Result<BooleanArray>,
+    ) -> Result<Self> {
+        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
+        let mut filters = vec![];
+        for maybe_batch in reader {
+            let maybe_batch = maybe_batch?;
+            let input_rows = maybe_batch.num_rows();
+            let filter = get_filter(maybe_batch)?;
+            if filter.len() != input_rows {
+                return Err(arrow_err!(
+                    "Filter returned {} rows, expected {input_rows}",
+                    filter.len()
+                ));
+            }
+            match filter.null_count() {
+                0 => filters.push(filter),
+                _ => filters.push(prep_null_mask_filter(&filter)),
+            };
+        }
+        let raw = RowSelection::from_filters(&filters);
+        self.selection = match self.selection.take() {
+            Some(selection) => Some(selection.and_then(&raw)),
+            None => Some(raw),
+        };
+        Ok(self)
+    }
+
     /// Evaluates an [`ArrowPredicate`], updating this plan's `selection`
     ///
     /// If the current `selection` is `Some`, the resulting [`RowSelection`]
@@ -144,35 +174,31 @@ impl ReadPlanBuilder {
     /// or if the [`ParquetRecordBatchReader`] specified an explicit
     /// [`RowSelection`] in addition to one or more predicates.
     pub fn with_predicate(
-        mut self,
+        self,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
     ) -> Result<Self> {
-        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
-        let mut filters = vec![];
-        for maybe_batch in reader {
-            let maybe_batch = maybe_batch?;
-            let input_rows = maybe_batch.num_rows();
-            let filter = predicate.evaluate(maybe_batch)?;
-            // Since user supplied predicate, check error here to catch bugs quickly
-            if filter.len() != input_rows {
-                return Err(arrow_err!(
-                    "ArrowPredicate predicate returned {} rows, expected {input_rows}",
-                    filter.len()
-                ));
-            }
-            match filter.null_count() {
-                0 => filters.push(filter),
-                _ => filters.push(prep_null_mask_filter(&filter)),
-            };
-        }
+        self.apply_filter(array_reader, |batch| {
+            predicate.evaluate(batch).map_err(|e| e.into())
+        })
+    }
 
-        let raw = RowSelection::from_filters(&filters);
-        self.selection = match self.selection.take() {
-            Some(selection) => Some(selection.and_then(&raw)),
-            None => Some(raw),
-        };
-        Ok(self)
+    /// Use a pre-computed `BooleanArray` filter directly from an array reader.
+    ///
+    /// The array reader must return a single-column `RecordBatch` with a
+    /// `BooleanArray`. The boolean values are used directly as the filter.
+    pub fn with_boolean_filter(self, array_reader: Box<dyn ArrayReader>) -> Result<Self> {
+        self.apply_filter(array_reader, |batch| {
+            let col = batch.column(0);
+            col.as_any()
+                .downcast_ref::<BooleanArray>()
+                .cloned()
+                .ok_or_else(|| {
+                    ParquetError::ArrowError(
+                        "Expected BooleanArray from dictionary filter reader".to_string(),
+                    )
+                })
+        })
     }
 
     /// Create a final `ReadPlan` the read plan for the scan
