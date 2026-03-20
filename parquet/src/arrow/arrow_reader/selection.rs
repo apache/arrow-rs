@@ -316,7 +316,9 @@ impl RowSelection {
         next.row_count = overflow;
 
         std::mem::swap(&mut remaining, &mut self.selectors);
-        Self { selectors: remaining }
+        Self {
+            selectors: remaining,
+        }
     }
     /// returns a [`RowSelection`] representing rows that are selected in both
     /// input [`RowSelection`]s.
