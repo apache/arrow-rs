@@ -723,7 +723,7 @@ impl ReadTest {
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
         .with_row_filter(self.row_filter())
-        .with_scatter_threshold(Some(0.25));
+        .with_scatter_threshold(Some(0.01));
         let mut stream = builder.build().unwrap();
 
         // run the stream to its end
@@ -754,7 +754,7 @@ impl ReadTest {
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
         .with_row_filter(self.row_filter())
-        .with_scatter_threshold(Some(0.25));
+        .with_scatter_threshold(Some(0.01));
         let mut stream = builder.build().unwrap();
 
         // run the stream to its end
@@ -781,7 +781,7 @@ impl ReadTest {
         .with_batch_size(8192)
         .with_projection(self.projection_mask.clone())
         .with_row_filter(self.row_filter())
-        .with_scatter_threshold(Some(0.25));
+        .with_scatter_threshold(Some(0.01));
         let reader = builder.build().unwrap();
 
         // run the stream to its end
