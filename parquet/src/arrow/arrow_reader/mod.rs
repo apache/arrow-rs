@@ -140,7 +140,7 @@ pub struct ArrowReaderBuilder<T> {
 
     pub(crate) max_predicate_cache_size: usize,
 
-    pub(crate) selectivity_threshold: Option<f64>,
+    pub(crate) scatter_threshold: Option<f64>,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -159,7 +159,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("limit", &self.limit)
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
-            .field("selectivity_threshold", &self.selectivity_threshold)
+            .field("scatter_threshold", &self.scatter_threshold)
             .finish()
     }
 }
@@ -181,7 +181,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
-            selectivity_threshold: None,
+            scatter_threshold: None,
         }
     }
 
@@ -435,13 +435,17 @@ impl<T> ArrowReaderBuilder<T> {
         }
     }
 
-    /// Set a selectivity threshold for filter deferral.
+    /// Set a scatter threshold for filter deferral.
     ///
-    /// When a predicate in the [`RowFilter`] passes more than `threshold`
-    /// fraction of rows (e.g., 0.9 means 90%), its result is deferred rather
-    /// than immediately applied to the row selection. This prevents
-    /// non-selective predicates from creating fragmented selections that slow
-    /// subsequent predicate evaluation and the final data read.
+    /// When applying a predicate's result would increase the number of
+    /// selectors (select/skip transitions) by more than `threshold` times
+    /// the current count, the result is deferred rather than applied
+    /// immediately. For example, a threshold of `2.0` defers predicates
+    /// that would more than double the selector count.
+    ///
+    /// This prevents highly-scattering predicates from fragmenting the
+    /// row selection, which slows subsequent predicate evaluation and
+    /// data decoding due to many small skip/read transitions.
     ///
     /// The deferred results are applied at the end via
     /// [`RowSelection::intersection`], so correctness is preserved.
@@ -450,9 +454,9 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// [`RowFilter`]: crate::arrow::arrow_reader::RowFilter
     /// [`RowSelection::intersection`]: crate::arrow::arrow_reader::RowSelection::intersection
-    pub fn with_selectivity_threshold(self, threshold: Option<f64>) -> Self {
+    pub fn with_scatter_threshold(self, threshold: Option<f64>) -> Self {
         Self {
-            selectivity_threshold: threshold,
+            scatter_threshold: threshold,
             ..self
         }
     }
@@ -1214,7 +1218,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
-            selectivity_threshold,
+            scatter_threshold,
         } = self;
 
         // Try to avoid allocate large buffer
@@ -1231,7 +1235,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let mut plan_builder = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
             .with_row_selection_policy(row_selection_policy)
-            .with_selectivity_threshold(selectivity_threshold);
+            .with_scatter_threshold(scatter_threshold);
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {

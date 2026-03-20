@@ -37,16 +37,17 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
-    /// Selectivity threshold above which a predicate's result is deferred
-    /// rather than applied immediately to `selection`.
+    /// Maximum allowed scatter factor for applying a predicate result.
     ///
-    /// When set, predicates whose selectivity (fraction of rows passing)
-    /// exceeds this threshold will have their result accumulated in
-    /// `deferred_selection` instead of fragmenting `selection`. This keeps
-    /// subsequent predicate evaluations operating on a contiguous selection.
+    /// When set, if applying a predicate would increase the number of
+    /// selectors (transitions between select/skip) beyond
+    /// `current_selectors * scatter_threshold`, the result is deferred
+    /// into `deferred_selection` instead. This prevents highly-scattering
+    /// predicates from fragmenting the selection and slowing subsequent
+    /// predicate evaluation and data reads.
     ///
     /// `None` disables deferral (all predicates applied immediately).
-    selectivity_threshold: Option<f64>,
+    scatter_threshold: Option<f64>,
     /// Accumulated deferred selections, merged via `intersection` at build time.
     deferred_selection: Option<RowSelection>,
 }
@@ -58,7 +59,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
-            selectivity_threshold: None,
+            scatter_threshold: None,
             deferred_selection: None,
         }
     }
@@ -82,19 +83,24 @@ impl ReadPlanBuilder {
         &self.row_selection_policy
     }
 
-    /// Set the selectivity threshold for filter deferral.
+    /// Set the scatter threshold for filter deferral.
     ///
-    /// When a predicate's selectivity (fraction of rows passing) exceeds this
-    /// threshold, its result is deferred rather than immediately applied to
-    /// the row selection. This prevents non-selective predicates from
-    /// fragmenting the selection and slowing subsequent predicate evaluation.
+    /// When applying a predicate's result would increase the number of
+    /// selectors (select/skip transitions) by more than this factor compared
+    /// to the current selection, the result is deferred rather than applied
+    /// immediately. For example, a threshold of `2.0` means a predicate is
+    /// deferred if it would more than double the number of selectors.
+    ///
+    /// This directly targets what makes fragmented selections expensive:
+    /// many small skip/read transitions during subsequent predicate evaluation
+    /// and data decoding.
     ///
     /// The deferred results are merged via [`RowSelection::intersection`] at
     /// build time, so correctness is preserved.
     ///
     /// `None` disables deferral (all predicates applied immediately).
-    pub fn with_selectivity_threshold(mut self, threshold: Option<f64>) -> Self {
-        self.selectivity_threshold = threshold;
+    pub fn with_scatter_threshold(mut self, threshold: Option<f64>) -> Self {
+        self.scatter_threshold = threshold;
         self
     }
 
@@ -185,7 +191,7 @@ impl ReadPlanBuilder {
             batch_size: self.batch_size,
             selection: self.selection.clone(),
             row_selection_policy: self.row_selection_policy,
-            selectivity_threshold: None,
+            scatter_threshold: None,
             deferred_selection: None,
         };
         let reader = ParquetRecordBatchReader::new(array_reader, plan_for_reader.build());
@@ -216,18 +222,23 @@ impl ReadPlanBuilder {
         }
         let raw = RowSelection::from_filters(&filters);
 
-        // Check if this predicate should be deferred due to high selectivity
-        let should_defer = self.selectivity_threshold.is_some_and(|threshold| {
-            let selected = raw.row_count();
-            let total = selected + raw.skipped_row_count();
-            total > 0 && (selected as f64 / total as f64) > threshold
-        });
-
         // Compute the absolute-position result
         let absolute = match self.selection.as_ref() {
             Some(selection) => selection.and_then(&raw),
             None => raw,
         };
+
+        // Check if applying this predicate would scatter the selection too much.
+        // Compare the number of selectors before and after: if the result has
+        // significantly more transitions, defer it to avoid fragmenting reads.
+        let should_defer = self.scatter_threshold.is_some_and(|threshold| {
+            let current_selectors = self
+                .selection
+                .as_ref()
+                .map_or(1, |s| s.selector_count().max(1));
+            let new_selectors = absolute.selector_count();
+            new_selectors as f64 > current_selectors as f64 * threshold
+        });
 
         if should_defer {
             // Defer: accumulate into deferred_selection, leave self.selection unchanged
@@ -270,7 +281,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
-            selectivity_threshold: _,
+            scatter_threshold: _,
             deferred_selection: _,
         } = self;
 
@@ -457,7 +468,7 @@ mod tests {
             batch_size: 1024,
             selection,
             row_selection_policy: RowSelectionPolicy::default(),
-            selectivity_threshold: None,
+            scatter_threshold: None,
             deferred_selection: Some(deferred),
         }
     }
@@ -512,20 +523,20 @@ mod tests {
     }
 
     #[test]
-    fn test_selectivity_threshold_setter() {
+    fn test_scatter_threshold_setter() {
         let builder = ReadPlanBuilder::new(1024);
-        assert!(builder.selectivity_threshold.is_none());
+        assert!(builder.scatter_threshold.is_none());
         assert!(builder.deferred_selection.is_none());
 
-        let builder = builder.with_selectivity_threshold(Some(0.9));
-        assert_eq!(builder.selectivity_threshold, Some(0.9));
+        let builder = builder.with_scatter_threshold(Some(0.9));
+        assert_eq!(builder.scatter_threshold, Some(0.9));
     }
 
     #[test]
     fn test_no_deferred_when_threshold_disabled() {
         // Without threshold, deferred_selection should always remain None
         let builder = ReadPlanBuilder::new(1024);
-        assert!(builder.selectivity_threshold.is_none());
+        assert!(builder.scatter_threshold.is_none());
         assert!(builder.deferred_selection.is_none());
     }
 
