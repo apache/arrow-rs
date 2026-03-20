@@ -460,8 +460,11 @@ impl RowGroupReaderBuilder {
                 );
                 // `with_predicate` actually evaluates the filter
 
-                plan_builder =
-                    plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
+                plan_builder = plan_builder.with_predicate(
+                    array_reader,
+                    filter_info.current_mut(),
+                    row_count,
+                )?;
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
@@ -735,6 +738,6 @@ mod tests {
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 256);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 240);
     }
 }

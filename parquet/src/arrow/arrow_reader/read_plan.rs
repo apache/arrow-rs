@@ -182,6 +182,7 @@ impl ReadPlanBuilder {
         mut self,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
+        row_count: usize,
     ) -> Result<Self> {
         // Build a ReadPlan for the predicate reader using only the current
         // selection (not deferred). We avoid cloning the entire builder by
@@ -231,9 +232,8 @@ impl ReadPlanBuilder {
         // Measure selector density: selectors / total_rows. A high density means
         // many small skip/read transitions per row, which is expensive for decoding.
         let should_defer = self.scatter_threshold.is_some_and(|threshold| {
-            let total_rows = absolute.total_row_count();
-            total_rows > 0
-                && absolute.selector_count() as f64 / total_rows as f64 > threshold
+            row_count > 0
+                && absolute.selector_count() as f64 / row_count as f64 > threshold
         });
 
         if should_defer {

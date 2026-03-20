@@ -138,19 +138,9 @@ impl RowSelector {
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct RowSelection {
     selectors: Vec<RowSelector>,
-    /// Cached total row count (selected + skipped) for O(1) access.
-    row_count: usize,
 }
 
 impl RowSelection {
-    fn from_selectors(selectors: Vec<RowSelector>) -> Self {
-        let row_count = selectors.iter().map(|s| s.row_count).sum();
-        Self {
-            selectors,
-            row_count,
-        }
-    }
-
     /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
     ///
     /// # Panic
@@ -201,7 +191,7 @@ impl RowSelection {
             selectors.push(RowSelector::skip(total_rows - last_end))
         }
 
-        Self::from_selectors(selectors)
+        Self { selectors }
     }
 
     /// Given an offset index, return the byte ranges for all data pages selected by `self`
@@ -307,8 +297,7 @@ impl RowSelection {
             Some(idx) => idx,
             None => {
                 let selectors = std::mem::take(&mut self.selectors);
-                self.row_count = 0;
-                return Self::from_selectors(selectors);
+                return Self { selectors };
             }
         };
 
@@ -327,9 +316,7 @@ impl RowSelection {
         next.row_count = overflow;
 
         std::mem::swap(&mut remaining, &mut self.selectors);
-        // Update cached row_count for self (now the tail portion)
-        self.row_count = self.selectors.iter().map(|s| s.row_count).sum();
-        Self::from_selectors(remaining)
+        Self { selectors: remaining }
     }
     /// returns a [`RowSelection`] representing rows that are selected in both
     /// input [`RowSelection`]s.
@@ -413,7 +400,7 @@ impl RowSelection {
             selectors.push(RowSelector::skip(to_skip));
         }
 
-        Self::from_selectors(selectors)
+        Self { selectors }
     }
 
     /// Compute the intersection of two [`RowSelection`]
@@ -486,7 +473,7 @@ impl RowSelection {
         selectors.push(RowSelector::select(selected_count - offset));
         selectors.extend_from_slice(&self.selectors[split_idx + 1..]);
 
-        Self::from_selectors(selectors)
+        Self { selectors }
     }
 
     /// Limit this [`RowSelection`] to only select `limit` rows
@@ -506,7 +493,6 @@ impl RowSelection {
                 }
             }
         }
-        self.row_count = self.selectors.iter().map(|s| s.row_count).sum();
         self
     }
 
@@ -522,11 +508,6 @@ impl RowSelection {
     /// sequential reads due to many small skip/read transitions.
     pub fn selector_count(&self) -> usize {
         self.selectors.len()
-    }
-
-    /// Returns the total number of rows (selected + skipped) in O(1).
-    pub fn total_row_count(&self) -> usize {
-        self.row_count
     }
 
     /// Returns the number of selected rows
@@ -624,7 +605,7 @@ impl FromIterator<RowSelector> for RowSelection {
             }
         }
 
-        Self::from_selectors(selectors)
+        Self { selectors }
     }
 }
 
