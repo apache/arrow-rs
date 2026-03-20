@@ -100,6 +100,15 @@ impl ColumnWriter<'_> {
         downcast_writer!(self, typed, typed.get_estimated_total_bytes())
     }
 
+    /// Finalize the currently buffered values as a data page.
+    ///
+    /// This is used by content-defined chunking to force a page boundary at
+    /// content-determined positions.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn add_data_page(&mut self) -> Result<()> {
+        downcast_writer!(self, typed, typed.add_data_page())
+    }
+
     /// Close this [`ColumnWriter`], returning the metadata for the column chunk.
     pub fn close(self) -> Result<ColumnCloseResult> {
         downcast_writer!(self, typed, typed.close())
@@ -1001,7 +1010,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Adds data page.
     /// Data page is either buffered in case of dictionary encoding or written directly.
-    fn add_data_page(&mut self) -> Result<()> {
+    pub(crate) fn add_data_page(&mut self) -> Result<()> {
         // Extract encoded values
         let values_data = self.encoder.flush_data_page()?;
 
