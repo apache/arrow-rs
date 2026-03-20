@@ -231,8 +231,15 @@ impl ReadPlanBuilder {
         // Check if applying this predicate would scatter the selection too much.
         // Measure selector density: selectors / total_rows. A high density means
         // many small skip/read transitions per row, which is expensive for decoding.
+        // Only defer if the predicate actually increases fragmentation — if it
+        // reduces the selector count, always apply it.
+        let current_selectors = self
+            .selection
+            .as_ref()
+            .map_or(0, |s| s.selector_count());
         let should_defer = self.scatter_threshold.is_some_and(|threshold| {
             row_count > 0
+                && absolute.selector_count() > current_selectors
                 && absolute.selector_count() as f64 / row_count as f64 > threshold
         });
 
@@ -269,6 +276,7 @@ impl ReadPlanBuilder {
         if !self.selects_any() {
             self.selection = Some(RowSelection::from(vec![]));
         }
+
 
         // Preferred strategy must not be Auto
         let selection_strategy = self.resolve_selection_strategy();
