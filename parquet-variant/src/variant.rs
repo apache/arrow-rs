@@ -779,6 +779,10 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts a boolean or numeric variant to the specified numeric type `T`.
+    ///
+    /// Uses Arrow's casting logic to perform the conversion. Returns `Some(T)` if
+    /// the conversion succeeds, `None` if the variant can't be casted to type `T`.
     fn as_num<T>(&self) -> Option<T>
     where
         T: NumCast + Default,
@@ -826,7 +830,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v4.as_int8(), None);
     /// ```
     pub fn as_int8(&self) -> Option<i8> {
-        self.as_num::<i8>()
+        self.as_num()
     }
 
     /// Converts this variant to an `i16` if possible.
@@ -856,7 +860,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v4.as_int16(), None);
     /// ```
     pub fn as_int16(&self) -> Option<i16> {
-        self.as_num::<i16>()
+        self.as_num()
     }
 
     /// Converts this variant to an `i32` if possible.
@@ -886,7 +890,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v4.as_int32(), None);
     /// ```
     pub fn as_int32(&self) -> Option<i32> {
-        self.as_num::<_>()
+        self.as_num()
     }
 
     /// Converts this variant to an `i64` if possible.
@@ -912,7 +916,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v3.as_int64(), None);
     /// ```
     pub fn as_int64(&self) -> Option<i64> {
-        self.as_num::<i64>()
+        self.as_num()
     }
 
     /// Converts this variant to a `u8` if possible.
@@ -952,7 +956,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  assert_eq!(v6.as_u8(), None);
     /// ```
     pub fn as_u8(&self) -> Option<u8> {
-        self.as_num::<u8>()
+        self.as_num()
     }
 
     /// Converts this variant to an `u16` if possible.
@@ -992,7 +996,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  assert_eq!(v6.as_u16(), None);
     /// ```
     pub fn as_u16(&self) -> Option<u16> {
-        self.as_num::<u16>()
+        self.as_num()
     }
 
     /// Converts this variant to an `u32` if possible.
@@ -1032,7 +1036,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  assert_eq!(v6.as_u32(), None);
     /// ```
     pub fn as_u32(&self) -> Option<u32> {
-        self.as_num::<u32>()
+        self.as_num()
     }
 
     /// Converts this variant to an `u64` if possible.
@@ -1072,7 +1076,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  assert_eq!(v6.as_u64(), None);
     /// ```
     pub fn as_u64(&self) -> Option<u64> {
-        self.as_num::<u64>()
+        self.as_num()
     }
 
     /// Converts this variant to tuple with a 4-byte unscaled value if possible.
@@ -1215,7 +1219,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v5 = Variant::from("hello!");
     /// assert_eq!(v5.as_f16(), None);
     pub fn as_f16(&self) -> Option<f16> {
-        self.as_num::<f16>()
+        self.as_num()
     }
 
     /// Converts this variant to an `f32` if possible.
@@ -1250,7 +1254,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     #[allow(clippy::cast_possible_truncation)]
     pub fn as_f32(&self) -> Option<f32> {
-        self.as_num::<f32>()
+        self.as_num()
     }
 
     /// Converts this variant to an `f64` if possible.
@@ -1281,7 +1285,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v5.as_f64(), None);
     /// ```
     pub fn as_f64(&self) -> Option<f64> {
-        self.as_num::<f64>()
+        self.as_num()
     }
 
     /// Converts this variant to an `Object` if it is an [`VariantObject`].
@@ -1529,7 +1533,7 @@ impl From<u8> for Variant<'_, '_> {
             Variant::Int8(value)
         } else {
             // It will always fit in i16 because u8 max is 255 and i16 max is 32767
-            Variant::Int16(num_cast::<u8, i16>(value).unwrap())
+            Variant::Int16(num_cast(value).unwrap())
         }
     }
 }
@@ -1541,7 +1545,7 @@ impl From<u16> for Variant<'_, '_> {
             Variant::Int16(value)
         } else {
             // It will always fit in i32 because u16 max is 65535 and i32 max is 2147483647
-            Variant::Int32(num_cast::<u16, i32>(value).unwrap())
+            Variant::Int32(num_cast(value).unwrap())
         }
     }
 }
@@ -1552,7 +1556,7 @@ impl From<u32> for Variant<'_, '_> {
             Variant::Int32(value)
         } else {
             // It will always fit in i64 because u32 max is 4294967295 and i64 max is 9223372036854775807
-            Variant::Int64(num_cast::<u32, i64>(value).unwrap())
+            Variant::Int64(num_cast(value).unwrap())
         }
     }
 }
@@ -1564,9 +1568,7 @@ impl From<u64> for Variant<'_, '_> {
             Variant::Int64(value)
         } else {
             // u64 max is 18446744073709551615, which fits in i128
-            Variant::Decimal16(
-                VariantDecimal16::try_new(num_cast::<u64, i128>(value).unwrap(), 0).unwrap(),
-            )
+            Variant::Decimal16(VariantDecimal16::try_new(num_cast(value).unwrap(), 0).unwrap())
         }
     }
 }
