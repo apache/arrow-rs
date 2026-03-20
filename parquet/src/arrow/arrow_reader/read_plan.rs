@@ -216,21 +216,18 @@ impl ReadPlanBuilder {
         }
         let raw = RowSelection::from_filters(&filters);
 
+        // Check if this predicate should be deferred due to high selectivity
+        let should_defer = self.selectivity_threshold.is_some_and(|threshold| {
+            let selected = raw.row_count();
+            let total = selected + raw.skipped_row_count();
+            total > 0 && (selected as f64 / total as f64) > threshold
+        });
+
         // Compute the absolute-position result
         let absolute = match self.selection.as_ref() {
             Some(selection) => selection.and_then(&raw),
             None => raw,
         };
-
-        // Check if this predicate should be deferred due to high selectivity.
-        // Selectivity is measured in absolute terms (fraction of total row
-        // group rows) so that predicates remain comparable regardless of how
-        // much prior filtering has been applied.
-        let should_defer = self.selectivity_threshold.is_some_and(|threshold| {
-            let selected = absolute.row_count();
-            let total = selected + absolute.skipped_row_count();
-            total > 0 && (selected as f64 / total as f64) > threshold
-        });
 
         if should_defer {
             // Defer: accumulate into deferred_selection, leave self.selection unchanged
