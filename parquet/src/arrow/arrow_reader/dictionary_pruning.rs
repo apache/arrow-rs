@@ -212,6 +212,25 @@ fn is_all_dictionary_encoded(col_meta: &crate::file::metadata::ColumnChunkMetaDa
         return mask.is_only(Encoding::PLAIN_DICTIONARY) || mask.is_only(Encoding::RLE_DICTIONARY);
     }
 
+    // Method 1a: Use full page encoding stats if the mask form wasn't used
+    // (i.e. ParquetMetaDataOptions::with_encoding_stats_as_mask was set to false)
+    if let Some(stats) = col_meta.page_encoding_stats() {
+        return stats
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.page_type,
+                    crate::basic::PageType::DATA_PAGE | crate::basic::PageType::DATA_PAGE_V2
+                )
+            })
+            .all(|s| {
+                matches!(
+                    s.encoding,
+                    Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY
+                )
+            });
+    }
+
     // Method 2: Check column-level encodings.
     // Dictionary-encoded columns have PLAIN_DICTIONARY or RLE_DICTIONARY for data,
     // plus PLAIN and/or RLE for definition/repetition levels.
