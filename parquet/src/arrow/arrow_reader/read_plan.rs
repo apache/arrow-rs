@@ -228,12 +228,12 @@ impl ReadPlanBuilder {
         };
 
         // Check if applying this predicate would scatter the selection too much.
-        // Measure selector density: selectors / rows. A high density means many
-        // small skip/read transitions per row, which is expensive for decoding.
+        // Measure selector density: selectors / total_rows. A high density means
+        // many small skip/read transitions per row, which is expensive for decoding.
         let should_defer = self.scatter_threshold.is_some_and(|threshold| {
-            let row_count = absolute.row_count() + absolute.skipped_row_count();
-            row_count > 0
-                && absolute.selector_count() as f64 / row_count as f64 > threshold
+            let total_rows = absolute.total_row_count();
+            total_rows > 0
+                && absolute.selector_count() as f64 / total_rows as f64 > threshold
         });
 
         if should_defer {
