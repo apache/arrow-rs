@@ -37,14 +37,13 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
-    /// Maximum allowed scatter factor for applying a predicate result.
+    /// Maximum allowed selector density (selectors / rows) for applying a
+    /// predicate result.
     ///
-    /// When set, if applying a predicate would increase the number of
-    /// selectors (transitions between select/skip) beyond
-    /// `current_selectors * scatter_threshold`, the result is deferred
-    /// into `deferred_selection` instead. This prevents highly-scattering
-    /// predicates from fragmenting the selection and slowing subsequent
-    /// predicate evaluation and data reads.
+    /// When set, if applying a predicate would produce a selector density
+    /// above this threshold, the result is deferred into `deferred_selection`
+    /// instead. For example, `0.25` means at most 25 selectors per 100 rows;
+    /// anything more fragmented gets deferred.
     ///
     /// `None` disables deferral (all predicates applied immediately).
     scatter_threshold: Option<f64>,
@@ -85,15 +84,15 @@ impl ReadPlanBuilder {
 
     /// Set the scatter threshold for filter deferral.
     ///
-    /// When applying a predicate's result would increase the number of
-    /// selectors (select/skip transitions) by more than this factor compared
-    /// to the current selection, the result is deferred rather than applied
-    /// immediately. For example, a threshold of `2.0` means a predicate is
-    /// deferred if it would more than double the number of selectors.
+    /// The threshold is the maximum allowed **selector density**
+    /// (`selector_count / row_count`). If applying a predicate would produce
+    /// a density above this value, its result is deferred. For example,
+    /// `0.25` allows at most 25 selectors per 100 rows.
     ///
-    /// This directly targets what makes fragmented selections expensive:
-    /// many small skip/read transitions during subsequent predicate evaluation
-    /// and data decoding.
+    /// A high selector density means many small skip/read transitions,
+    /// which is expensive for subsequent predicate evaluation and data
+    /// decoding. Deferring scattering predicates keeps the selection
+    /// contiguous for intermediate steps.
     ///
     /// The deferred results are merged via [`RowSelection::intersection`] at
     /// build time, so correctness is preserved.
@@ -229,15 +228,12 @@ impl ReadPlanBuilder {
         };
 
         // Check if applying this predicate would scatter the selection too much.
-        // Compare the number of selectors before and after: if the result has
-        // significantly more transitions, defer it to avoid fragmenting reads.
+        // Measure selector density: selectors / rows. A high density means many
+        // small skip/read transitions per row, which is expensive for decoding.
         let should_defer = self.scatter_threshold.is_some_and(|threshold| {
-            let current_selectors = self
-                .selection
-                .as_ref()
-                .map_or(1, |s| s.selector_count().max(1));
-            let new_selectors = absolute.selector_count();
-            new_selectors as f64 > current_selectors as f64 * threshold
+            let row_count = absolute.row_count() + absolute.skipped_row_count();
+            row_count > 0
+                && absolute.selector_count() as f64 / row_count as f64 > threshold
         });
 
         if should_defer {
