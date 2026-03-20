@@ -428,11 +428,7 @@ impl RleDecoder {
     /// For RLE runs, provides [`RleDecodedBatch::Rle`] so callers can fill output directly.
     /// For bit-packed runs, provides [`RleDecodedBatch::BitPacked`] with decoded indices.
     #[cfg(feature = "arrow")]
-    pub fn get_batch_direct<F>(
-        &mut self,
-        max_values: usize,
-        mut f: F,
-    ) -> Result<usize>
+    pub fn get_batch_direct<F>(&mut self, max_values: usize, mut f: F) -> Result<usize>
     where
         F: FnMut(RleDecodedBatch<'_>),
     {
@@ -442,7 +438,10 @@ impl RleDecoder {
             if self.rle_left > 0 {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let idx = self.current_value.unwrap() as i32;
-                f(RleDecodedBatch::Rle { index: idx, count: num_values });
+                f(RleDecodedBatch::Rle {
+                    index: idx,
+                    count: num_values,
+                });
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
             } else if self.bit_packed_left > 0 {

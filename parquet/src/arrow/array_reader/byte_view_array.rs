@@ -511,12 +511,9 @@ impl ByteViewArrayDecoderDictionary {
         // Pre-reserve output capacity to avoid per-chunk reallocation in extend
         output.views.reserve(len);
 
-        let read = self.decoder.read_gather_views(
-            len,
-            &dict.views,
-            &mut output.views,
-            base_buffer_idx,
-        )?;
+        let read =
+            self.decoder
+                .read_gather_views(len, &dict.views, &mut output.views, base_buffer_idx)?;
         Ok(read)
     }
 
