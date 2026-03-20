@@ -19,7 +19,7 @@
 extern crate criterion;
 
 use criterion::{Bencher, Criterion, Throughput};
-use parquet::arrow::arrow_writer::{ArrowRowGroupWriterFactory, compute_leaves};
+use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
 
 extern crate arrow;
@@ -33,10 +33,8 @@ use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
 use arrow_array::RecordBatchOptions;
-use parquet::arrow::ArrowSchemaConverter;
 use parquet::errors::Result;
-use parquet::file::properties::{WriterProperties, WriterVersion};
-use parquet::file::writer::SerializedFileWriter;
+use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 
 fn create_primitive_bench_batch(
     size: usize,
@@ -342,39 +340,21 @@ fn write_batch_with_option(
     batch: &RecordBatch,
     props: Option<WriterProperties>,
 ) -> Result<()> {
-    let mut file = Empty::default();
-    let props = Arc::new(props.unwrap_or_default());
-    let parquet_schema = ArrowSchemaConverter::new()
-        .with_coerce_types(props.coerce_types())
-        .convert(batch.schema_ref())?;
-    let writer = SerializedFileWriter::new(&mut file, parquet_schema.root_schema_ptr(), props)?;
-    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, batch.schema());
+    let props = props.unwrap_or_default();
 
     bench.iter(|| {
-        let mut row_group = row_group_writer_factory.create_column_writers(0).unwrap();
-
-        let mut writers = row_group.iter_mut();
-        for (field, column) in batch
-            .schema()
-            .fields()
-            .iter()
-            .zip(black_box(batch).columns())
-        {
-            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
-                writers.next().unwrap().write(&leaf).unwrap()
-            }
-        }
-
-        for writer in row_group.into_iter() {
-            black_box(writer.close()).unwrap();
-        }
+        let mut file = Empty::default();
+        let mut writer =
+            ArrowWriter::try_new(&mut file, batch.schema(), Some(props.clone())).unwrap();
+        writer.write(black_box(batch)).unwrap();
+        black_box(writer.close()).unwrap();
     });
 
     Ok(())
 }
 
 fn create_batches() -> Vec<(&'static str, RecordBatch)> {
-    const BATCH_SIZE: usize = 4096;
+    const BATCH_SIZE: usize = 1024 * 1024;
 
     let mut batches = vec![];
 
@@ -439,6 +419,11 @@ fn create_writer_props() -> Vec<(&'static str, WriterProperties)> {
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .build();
     props.push(("zstd_parquet_2", prop));
+
+    let prop = WriterProperties::builder()
+        .set_content_defined_chunking(Some(CdcOptions::default()))
+        .build();
+    props.push(("cdc", prop));
 
     props
 }
