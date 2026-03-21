@@ -3144,8 +3144,12 @@ mod test {
 
         let result = variant_get(&variant_array_ref, options).unwrap();
         let struct_result = result.as_struct();
-        let field_a = struct_result.column(0).as_primitive::<arrow::datatypes::Int32Type>();
-        let field_b = struct_result.column(1).as_primitive::<arrow::datatypes::Int32Type>();
+        let field_a = struct_result
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        let field_b = struct_result
+            .column(1)
+            .as_primitive::<arrow::datatypes::Int32Type>();
 
         // Row 0 is an object, so the struct row is valid with extracted fields.
         assert!(!struct_result.is_null(0));
@@ -3187,9 +3191,10 @@ mod test {
         };
 
         let err = variant_get(&variant_array_ref, options).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Failed to extract struct from variant"));
+        assert!(
+            err.to_string()
+                .contains("Failed to extract struct from variant")
+        );
     }
 
     /// Create comprehensive shredded variant with diverse null patterns and empty objects
