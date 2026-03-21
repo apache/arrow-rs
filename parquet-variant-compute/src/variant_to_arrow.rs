@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::shred_variant::{
-    VariantToShreddedVariantRowBuilder, make_variant_to_shredded_variant_arrow_row_builder,
+    AppendNullMode, VariantToShreddedVariantRowBuilder,
+    make_variant_to_shredded_variant_arrow_row_builder,
 };
 use crate::type_conversion::{
     PrimitiveFromVariant, TimestampFromVariant, variant_to_unscaled_decimal,
@@ -919,7 +920,7 @@ where
             element_data_type,
             cast_options,
             capacity,
-            false,
+            AppendNullMode::ArrayElement,
         )?;
         Ok(Self {
             field,
@@ -941,7 +942,14 @@ where
         match value {
             Variant::List(list) => {
                 for element in list.iter() {
-                    self.element_builder.append_value(element)?;
+                    match element {
+                        Variant::Null => {
+                            self.element_builder.append_null()?;
+                        }
+                        _ => {
+                            self.element_builder.append_value(element)?;
+                        }
+                    }
                     self.current_offset = self.current_offset.add_checked(O::ONE)?;
                 }
                 self.offsets.push(self.current_offset);

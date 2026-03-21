@@ -84,7 +84,7 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
         as_type,
         &cast_options,
         array.len(),
-        true,
+        AppendNullMode::TopLevelVariant,
     )?;
     for i in 0..array.len() {
         if array.is_null(i) {
@@ -102,11 +102,41 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
     ))
 }
 
+/// Controls how `append_null` is encoded for a shredded `(value, typed_value)` pair.
+///
+/// | Mode | Struct validity bit | `value` | `typed_value` | Meaning |
+/// | --- | --- | --- | --- | --- |
+/// | `TopLevelVariant` | null | NULL | NULL | SQL NULL at the top-level variant row |
+/// | `ObjectField` | non-null | NULL | NULL | Missing object field |
+/// | `ArrayElement` | non-null | `Variant::Null` | NULL | Explicit null array element |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppendNullMode {
+    TopLevelVariant,
+    ObjectField,
+    ArrayElement,
+}
+
+impl AppendNullMode {
+    fn append_to_struct_nulls(self, nulls: &mut NullBufferBuilder) {
+        match self {
+            Self::TopLevelVariant => nulls.append_null(),
+            Self::ObjectField | Self::ArrayElement => nulls.append_non_null(),
+        }
+    }
+
+    fn append_to_value(self, value_builder: &mut VariantValueArrayBuilder) {
+        match self {
+            Self::TopLevelVariant | Self::ObjectField => value_builder.append_null(),
+            Self::ArrayElement => value_builder.append_value(Variant::Null),
+        }
+    }
+}
+
 pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     data_type: &'a DataType,
     cast_options: &'a CastOptions,
     capacity: usize,
-    top_level: bool,
+    null_mode: AppendNullMode,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
@@ -114,7 +144,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 fields,
                 cast_options,
                 capacity,
-                top_level,
+                null_mode,
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
@@ -127,6 +157,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 data_type,
                 cast_options,
                 capacity,
+                null_mode,
             )?;
             VariantToShreddedVariantRowBuilder::Array(typed_value_builder)
         }
@@ -156,7 +187,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
             let typed_value_builder =
-                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, top_level);
+                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, null_mode);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
         }
         DataType::FixedSizeBinary(_) => {
@@ -204,33 +235,31 @@ impl<'a> VariantToShreddedVariantRowBuilder<'a> {
     }
 }
 
-/// A top-level variant shredder -- appending NULL produces typed_value=NULL and value=Variant::Null
+/// A shredded primitive field builder.
 pub(crate) struct VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
     typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
     nulls: NullBufferBuilder,
-    top_level: bool,
+    null_mode: AppendNullMode,
 }
 
 impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     pub(crate) fn new(
         typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
         capacity: usize,
-        top_level: bool,
+        null_mode: AppendNullMode,
     ) -> Self {
         Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
             typed_value_builder,
             nulls: NullBufferBuilder::new(capacity),
-            top_level,
+            null_mode,
         }
     }
 
     fn append_null(&mut self) -> Result<()> {
-        // Only the top-level struct that represents the variant can be nullable; object fields and
-        // array elements are non-nullable.
-        self.nulls.append(!self.top_level);
-        self.value_builder.append_null();
+        self.null_mode.append_to_struct_nulls(&mut self.nulls);
+        self.null_mode.append_to_value(&mut self.value_builder);
         self.typed_value_builder.append_null()
     }
 
@@ -256,6 +285,8 @@ impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
 pub(crate) struct VariantToShreddedArrayVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
     typed_value_builder: ArrayVariantToArrowRowBuilder<'a>,
+    nulls: NullBufferBuilder,
+    null_mode: AppendNullMode,
 }
 
 impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
@@ -263,6 +294,7 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         data_type: &'a DataType,
         cast_options: &'a CastOptions,
         capacity: usize,
+        null_mode: AppendNullMode,
     ) -> Result<Self> {
         Ok(Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
@@ -271,11 +303,14 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
                 cast_options,
                 capacity,
             )?,
+            nulls: NullBufferBuilder::new(capacity),
+            null_mode,
         })
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.value_builder.append_value(Variant::Null);
+        self.null_mode.append_to_struct_nulls(&mut self.nulls);
+        self.null_mode.append_to_value(&mut self.value_builder);
         self.typed_value_builder.append_null()?;
         Ok(())
     }
@@ -285,12 +320,14 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         // If the variant is an array, value must be null.
         match variant {
             Variant::List(list) => {
+                self.nulls.append_non_null();
                 self.value_builder.append_null();
                 self.typed_value_builder
                     .append_value(&Variant::List(list))?;
                 Ok(true)
             }
             other => {
+                self.nulls.append_non_null();
                 self.value_builder.append_value(other);
                 self.typed_value_builder.append_null()?;
                 Ok(false)
@@ -298,13 +335,11 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         }
     }
 
-    fn finish(self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
+    fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
         Ok((
             self.value_builder.build()?,
             self.typed_value_builder.finish()?,
-            // All elements of an array must be present (not missing) because
-            // the array Variant encoding does not allow missing elements
-            None,
+            self.nulls.finish(),
         ))
     }
 }
@@ -314,7 +349,7 @@ pub(crate) struct VariantToShreddedObjectVariantRowBuilder<'a> {
     typed_value_builders: IndexMap<&'a str, VariantToShreddedVariantRowBuilder<'a>>,
     typed_value_nulls: NullBufferBuilder,
     nulls: NullBufferBuilder,
-    top_level: bool,
+    null_mode: AppendNullMode,
 }
 
 impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
@@ -322,14 +357,14 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         fields: &'a Fields,
         cast_options: &'a CastOptions,
         capacity: usize,
-        top_level: bool,
+        null_mode: AppendNullMode,
     ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
                 field.data_type(),
                 cast_options,
                 capacity,
-                false,
+                AppendNullMode::ObjectField,
             )?;
             Ok((field.name().as_str(), builder))
         });
@@ -338,15 +373,13 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             typed_value_builders: typed_value_builders.collect::<Result<_>>()?,
             typed_value_nulls: NullBufferBuilder::new(capacity),
             nulls: NullBufferBuilder::new(capacity),
-            top_level,
+            null_mode,
         })
     }
 
     fn append_null(&mut self) -> Result<()> {
-        // Only the top-level struct that represents the variant can be nullable; object fields and
-        // array elements are non-nullable.
-        self.nulls.append(!self.top_level);
-        self.value_builder.append_null();
+        self.null_mode.append_to_struct_nulls(&mut self.nulls);
+        self.null_mode.append_to_value(&mut self.value_builder);
         self.typed_value_nulls.append_null();
         for (_, typed_value_builder) in &mut self.typed_value_builders {
             typed_value_builder.append_null()?;
@@ -881,7 +914,9 @@ mod tests {
                                 expected_variant.clone()
                             );
                         }
-                        None => unreachable!(),
+                        None => {
+                            assert!(fallbacks.0.is_null(idx));
+                        }
                     }
                 }
             }
@@ -945,6 +980,54 @@ mod tests {
                     );
                 }
                 None => assert!(element_fallbacks.is_null(idx)),
+            }
+        }
+    }
+
+    #[test]
+    fn test_append_null_mode_semantics() {
+        let cast_options = arrow::compute::CastOptions::default();
+        let modes = [
+            AppendNullMode::TopLevelVariant,
+            AppendNullMode::ObjectField,
+            AppendNullMode::ArrayElement,
+        ];
+
+        for mode in modes {
+            let mut primitive_builder = make_variant_to_shredded_variant_arrow_row_builder(
+                &DataType::Int64,
+                &cast_options,
+                1,
+                mode,
+            )
+            .unwrap();
+            primitive_builder.append_null().unwrap();
+            let (primitive_value, primitive_typed_value, primitive_nulls) =
+                primitive_builder.finish().unwrap();
+            let primitive_typed_value = primitive_typed_value
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+
+            assert!(primitive_typed_value.is_null(0));
+
+            match mode {
+                AppendNullMode::TopLevelVariant => {
+                    assert!(primitive_nulls.unwrap().is_null(0));
+                    assert!(primitive_value.is_null(0));
+                }
+                AppendNullMode::ObjectField => {
+                    assert!(primitive_nulls.is_none());
+                    assert!(primitive_value.is_null(0));
+                }
+                AppendNullMode::ArrayElement => {
+                    assert!(primitive_nulls.is_none());
+                    assert!(primitive_value.is_valid(0));
+                    assert_eq!(
+                        Variant::new(EMPTY_VARIANT_METADATA_BYTES, primitive_value.value(0)),
+                        Variant::Null
+                    );
+                }
             }
         }
     }
@@ -1338,13 +1421,7 @@ mod tests {
             5,
             &[0, 3, 6, 6, 6, 6],
             &[Some(3), Some(3), None, None, Some(0)],
-            &[
-                None,
-                None,
-                Some(Variant::from("not a list")),
-                Some(Variant::Null),
-                None,
-            ],
+            &[None, None, Some(Variant::from("not a list")), None, None],
             (
                 &[Some(1), Some(2), Some(3), Some(1), None, None],
                 &[
@@ -1414,13 +1491,7 @@ mod tests {
             5,
             &[0, 3, 6, 6, 6],
             &[Some(3), Some(3), None, None, Some(0)],
-            &[
-                None,
-                None,
-                Some(Variant::from("not a list")),
-                Some(Variant::Null),
-                None,
-            ],
+            &[None, None, Some(Variant::from("not a list")), None, None],
             (
                 &[Some(1), Some(2), Some(3), Some(1), None, None],
                 &[
@@ -1522,12 +1593,7 @@ mod tests {
             4,
             &[0, 3, 6, 6, 6],
             &[Some(3), Some(3), None, None],
-            &[
-                None,
-                None,
-                Some(Variant::from("not a list")),
-                Some(Variant::Null),
-            ],
+            &[None, None, Some(Variant::from("not a list")), None],
         );
 
         let outer_elements =
@@ -1615,7 +1681,7 @@ mod tests {
             3,
             &[0, 2, 2, 2],
             &[Some(2), None, None],
-            &[None, Some(Variant::from("not a list")), Some(Variant::Null)],
+            &[None, Some(Variant::from("not a list")), None],
         );
 
         // Validate nested struct fields for each element
@@ -2101,13 +2167,7 @@ mod tests {
             scores_field.len(),
             &[0i32, 2, 4, 4, 4, 4],
             &[Some(2), Some(2), None, None, None],
-            &[
-                None,
-                None,
-                Some(Variant::Null),
-                Some(Variant::Null),
-                Some(Variant::Null),
-            ],
+            &[None, None, None, None, None],
             (
                 &[Some(10), Some(20), None, None],
                 &[None, None, Some(Variant::from("oops")), Some(Variant::Null)],
