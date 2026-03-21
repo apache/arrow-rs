@@ -21,10 +21,12 @@ use std::io::{BufRead, Seek};
 use arrow_schema::{ArrowError, Schema};
 use serde_json::Value;
 
+use self::infer::{InferTy, infer_json_type};
+use self::json_type::TapeValue;
 use super::tape::TapeDecoder;
-use infer::{ANY_TY, EMPTY_OBJECT_TY, InferTy, TapeValue, infer_json_type};
 
 mod infer;
+mod json_type;
 
 /// Infer the fields of a JSON file by reading the first n records of the file, with
 /// `max_read_records` controlling the maximum number of records to read.
@@ -143,7 +145,7 @@ where
 {
     value_iter
         .into_iter()
-        .try_fold(EMPTY_OBJECT_TY.clone(), |ty, record| {
+        .try_fold(InferTy::any(), |ty, record| {
             infer_json_type(record?.borrow(), ty)
         })?
         .into_schema()
@@ -162,7 +164,7 @@ impl SchemaDecoder {
             decoder: TapeDecoder::new(1024, 8),
             max_read_records,
             record_count: 0,
-            schema: ANY_TY.clone(),
+            schema: InferTy::empty_object(),
         }
     }
 
@@ -215,6 +217,14 @@ mod tests {
     /// Shorthand for building list data type of `ty`
     fn list_type_of(ty: DataType) -> DataType {
         DataType::List(Arc::new(Field::new_list_field(ty, true)))
+    }
+
+    #[test]
+    fn test_empty_input_infers_empty_schema() {
+        let (inferred_schema, n_rows) = infer_json_schema_from_seekable(Cursor::new(b""), None)
+            .expect("failed to infer schema");
+        assert_eq!(inferred_schema, Schema::empty());
+        assert_eq!(n_rows, 0);
     }
 
     #[test]
