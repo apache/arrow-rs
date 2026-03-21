@@ -1219,7 +1219,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 let mut cache_projection = predicate.projection().clone();
                 cache_projection.intersect(&projection);
 
-                let array_reader = ArrayReaderBuilder::new(&reader, &metrics, batch_size)
+                let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                    .with_batch_size(batch_size)
                     .with_parquet_metadata(&reader.metadata)
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
 
@@ -1227,7 +1228,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             }
         }
 
-        let array_reader = ArrayReaderBuilder::new(&reader, &metrics, batch_size)
+        let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+            .with_batch_size(batch_size)
             .with_parquet_metadata(&reader.metadata)
             .build_array_reader(fields.as_deref(), &projection)?;
 
@@ -1534,7 +1536,8 @@ impl ParquetRecordBatchReader {
     ) -> Result<Self> {
         // note metrics are not supported in this API
         let metrics = ArrowReaderMetrics::disabled();
-        let array_reader = ArrayReaderBuilder::new(row_groups, &metrics, batch_size)
+        let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
+            .with_batch_size(batch_size)
             .with_parquet_metadata(row_groups.metadata())
             .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 

@@ -33,6 +33,7 @@ use crate::arrow::array_reader::{
     NullArrayReader, PrimitiveArrayReader, RowGroups, StructArrayReader,
     make_byte_array_dictionary_reader, make_byte_array_reader,
 };
+use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::schema::{ParquetField, ParquetFieldType, VirtualColumnType};
 use crate::basic::Type as PhysicalType;
@@ -102,21 +103,22 @@ pub struct ArrayReaderBuilder<'a> {
 
 impl<'a> ArrayReaderBuilder<'a> {
     /// Create a new `ArrayReaderBuilder`
-    ///
-    /// `batch_size` is used to pre-allocate internal buffers with the expected capacity,
-    /// avoiding reallocations when reading the first batch of data.
-    pub fn new(
-        row_groups: &'a dyn RowGroups,
-        metrics: &'a ArrowReaderMetrics,
-        batch_size: usize,
-    ) -> Self {
+    pub fn new(row_groups: &'a dyn RowGroups, metrics: &'a ArrowReaderMetrics) -> Self {
         Self {
             row_groups,
             cache_options: None,
             parquet_metadata: None,
             metrics,
-            batch_size,
+            batch_size: DEFAULT_BATCH_SIZE,
         }
+    }
+
+    /// Set the batch size used to pre-allocate internal buffers.
+    ///
+    /// This avoids reallocations when reading the first batch of data.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
     }
 
     /// Add cache options to the builder
@@ -566,7 +568,8 @@ mod tests {
         .unwrap();
 
         let metrics = ArrowReaderMetrics::disabled();
-        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics, 1024)
+        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
+            .with_batch_size(DEFAULT_BATCH_SIZE)
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 
@@ -599,7 +602,8 @@ mod tests {
         .unwrap();
 
         let metrics = ArrowReaderMetrics::disabled();
-        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics, 1024)
+        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
+            .with_batch_size(DEFAULT_BATCH_SIZE)
             .with_parquet_metadata(file_reader.metadata())
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
