@@ -543,6 +543,7 @@ impl<'a> ArrayReaderBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::schema::virtual_type::RowNumber;
     use crate::file::reader::{FileReader, SerializedFileReader};
@@ -566,7 +567,7 @@ mod tests {
         .unwrap();
 
         let metrics = ArrowReaderMetrics::disabled();
-        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics, 1024)
+        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics, DEFAULT_BATCH_SIZE)
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 
@@ -599,7 +600,7 @@ mod tests {
         .unwrap();
 
         let metrics = ArrowReaderMetrics::disabled();
-        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics, 1024)
+        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics, DEFAULT_BATCH_SIZE)
             .with_parquet_metadata(file_reader.metadata())
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();

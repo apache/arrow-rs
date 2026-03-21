@@ -270,6 +270,7 @@ mod tests {
 
     use arrow::buffer::Buffer;
 
+    use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
     use crate::basic::Encoding;
     use crate::data_type::Int32Type;
     use crate::schema::parser::parse_message_type;
@@ -294,7 +295,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
 
         // First page
 
@@ -367,7 +368,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
 
         // First page
 
@@ -469,7 +470,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
 
         // First page
 
@@ -572,7 +573,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
 
         {
             let values = [100; 5000];
@@ -622,7 +623,7 @@ mod tests {
         pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
         let page = pb.consume();
 
-        let mut record_reader = RecordReader::<Int32Type>::new(desc, 1024);
+        let mut record_reader = RecordReader::<Int32Type>::new(desc, DEFAULT_BATCH_SIZE);
         let page_reader = Box::new(InMemoryPageReader::new(vec![page.clone()]));
         record_reader.set_page_reader(page_reader).unwrap();
         assert_eq!(record_reader.read_records(4).unwrap(), 4);
@@ -661,7 +662,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
 
         // First page
 
@@ -735,7 +736,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
 
         // First page
 

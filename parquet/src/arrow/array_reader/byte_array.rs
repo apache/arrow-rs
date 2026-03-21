@@ -485,24 +485,28 @@ impl ByteArrayDecoderDeltaLength {
         let initial_values_length = output.values.len();
 
         let to_read = len.min(self.lengths.len() - self.length_offset);
-        output.offsets.reserve(to_read);
-
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
-
         let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
+
+        // Reserve capacity for both offsets and values upfront
+        output.offsets.reserve(to_read);
         output.values.reserve(total_bytes);
 
-        let mut current_offset = self.data_offset;
-        for length in src_lengths {
-            let end_offset = current_offset + *length as usize;
-            output.try_push(
-                &self.data.as_ref()[current_offset..end_offset],
-                self.validate_utf8,
-            )?;
-            current_offset = end_offset;
-        }
+        // Delta length data is contiguous — copy all value bytes at once
+        let data_end = self.data_offset + total_bytes;
+        output
+            .values
+            .extend_from_slice(&self.data.as_ref()[self.data_offset..data_end]);
 
-        self.data_offset = current_offset;
+        // Compute and extend offsets in batch using extend
+        let base_offset = initial_values_length;
+        let mut running = base_offset;
+        output.offsets.extend(src_lengths.iter().map(|length| {
+            running += *length as usize;
+            I::from_usize(running).expect("index overflow decoding byte array")
+        }));
+
+        self.data_offset = data_end;
         self.length_offset += to_read;
 
         if self.validate_utf8 {

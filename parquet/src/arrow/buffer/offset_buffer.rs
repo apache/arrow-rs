@@ -95,6 +95,8 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         dict_offsets: &[V],
         dict_values: &[u8],
     ) -> Result<()> {
+        self.offsets.reserve(keys.len());
+
         for key in keys {
             let index = key.as_usize();
             if index + 1 >= dict_offsets.len() {
@@ -107,7 +109,11 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             let end_offset = dict_offsets[index + 1].as_usize();
 
             // Dictionary values are verified when decoding dictionary page
-            self.try_push(&dict_values[start_offset..end_offset], false)?;
+            self.values
+                .extend_from_slice(&dict_values[start_offset..end_offset]);
+            let index_offset = I::from_usize(self.values.len())
+                .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
+            self.offsets.push(index_offset);
         }
         Ok(())
     }

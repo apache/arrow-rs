@@ -51,15 +51,6 @@ impl ViewBuffer {
         block_id
     }
 
-    /// Directly append a view to the view array.
-    /// This is used when we create a StringViewArray from a dictionary whose values are StringViewArray.
-    ///
-    /// # Safety
-    /// The `view` must be a valid view as per the ByteView spec.
-    pub unsafe fn append_raw_view_unchecked(&mut self, view: u128) {
-        self.views.push(view);
-    }
-
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: &ArrowType) -> ArrayRef {
         let len = self.views.len();
@@ -122,11 +113,9 @@ mod tests {
         let string_buffer = Buffer::from(data);
         let block_id = buffer.append_block(string_buffer);
 
-        unsafe {
-            buffer.append_raw_view_unchecked(make_view(&data[0..1], block_id, 0));
-            buffer.append_raw_view_unchecked(make_view(&data[1..10], block_id, 1));
-            buffer.append_raw_view_unchecked(make_view(&data[10..41], block_id, 10));
-        }
+        buffer.views.push(make_view(&data[0..1], block_id, 0));
+        buffer.views.push(make_view(&data[1..10], block_id, 1));
+        buffer.views.push(make_view(&data[10..41], block_id, 10));
 
         let array = buffer.into_array(None, &ArrowType::Utf8View);
         let string_array = array
@@ -150,11 +139,9 @@ mod tests {
         let string_buffer = Buffer::from(data);
         let block_id = buffer.append_block(string_buffer);
 
-        unsafe {
-            buffer.append_raw_view_unchecked(make_view(&data[0..1], block_id, 0));
-            buffer.append_raw_view_unchecked(make_view(&data[1..10], block_id, 1));
-            buffer.append_raw_view_unchecked(make_view(&data[10..41], block_id, 10));
-        }
+        buffer.views.push(make_view(&data[0..1], block_id, 0));
+        buffer.views.push(make_view(&data[1..10], block_id, 1));
+        buffer.views.push(make_view(&data[10..41], block_id, 10));
 
         let valid = [true, false, false, true, false, false, true];
         let valid_mask = Buffer::from_iter(valid.iter().copied());

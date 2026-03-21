@@ -439,6 +439,7 @@ fn pack_dictionary_impl<K: ArrowDictionaryKeyType, V: ArrowPrimitiveType>(
 mod tests {
     use super::*;
     use crate::arrow::array_reader::test_util::EmptyPageIterator;
+    use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
     use crate::basic::Encoding;
     use crate::column::page::Page;
     use crate::data_type::{Int32Type, Int64Type};
@@ -513,7 +514,7 @@ mod tests {
             Box::<EmptyPageIterator>::default(),
             schema.column(0),
             None,
-            1024,
+            DEFAULT_BATCH_SIZE,
         )
         .unwrap();
 
@@ -560,7 +561,7 @@ mod tests {
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                1024,
+                DEFAULT_BATCH_SIZE,
             )
             .unwrap();
 
@@ -631,7 +632,7 @@ mod tests {
                     Box::new(page_iterator),
                     column_desc.clone(),
                     None,
-                    1024,
+                    DEFAULT_BATCH_SIZE,
                 )
                 .expect("Unable to get array reader");
 
@@ -771,7 +772,7 @@ mod tests {
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                1024,
+                DEFAULT_BATCH_SIZE,
             )
             .unwrap();
 
@@ -851,7 +852,7 @@ mod tests {
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                1024,
+                DEFAULT_BATCH_SIZE,
             )
             .unwrap();
 
@@ -914,7 +915,7 @@ mod tests {
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                1024,
+                DEFAULT_BATCH_SIZE,
             )
             .unwrap();
 
@@ -980,7 +981,7 @@ mod tests {
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                1024,
+                DEFAULT_BATCH_SIZE,
             )
             .unwrap();
 

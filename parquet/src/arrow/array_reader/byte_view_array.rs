@@ -675,12 +675,19 @@ impl ByteViewArrayDecoderDelta {
     // <https://parquet.apache.org/docs/file-format/data-pages/encodings/#delta-strings-delta_byte_array--7>
 
     fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
-        output.views.reserve(len.min(self.decoder.remaining()));
+        let to_reserve = len.min(self.decoder.remaining());
+        output.views.reserve(to_reserve);
 
         // array buffer only have long strings
         let mut array_buffer: Vec<u8> = Vec::with_capacity(4096);
 
         let buffer_id = output.buffers.len() as u32;
+
+        // Use unsafe ptr writes instead of per-element push to avoid
+        // repeated length checks. Safety: we reserved enough space above.
+        let views_ptr = output.views.as_mut_ptr();
+        let initial_len = output.views.len();
+        let mut write_count = 0;
 
         let read = if !self.validate_utf8 {
             self.decoder.read(len, |bytes| {
@@ -691,18 +698,18 @@ impl ByteViewArrayDecoderDelta {
                     array_buffer.extend_from_slice(bytes);
                 }
 
-                // # Safety
-                // The buffer_id is the last buffer in the output buffers
-                // The offset is calculated from the buffer, so it is valid
+                // Safety: views_ptr is valid for writes, we reserved enough space,
+                // and write_count < to_reserve.
                 unsafe {
-                    output.append_raw_view_unchecked(view);
+                    views_ptr.add(initial_len + write_count).write(view);
                 }
+                write_count += 1;
                 Ok(())
             })?
         } else {
             // utf8 validation buffer has only short strings. These short
             // strings are inlined into the views but we copy them into a
-            // contiguous buffer to accelerate validation.®
+            // contiguous buffer to accelerate validation.
             let mut utf8_validation_buffer = Vec::with_capacity(4096);
 
             let v = self.decoder.read(len, |bytes| {
@@ -715,19 +722,23 @@ impl ByteViewArrayDecoderDelta {
                     utf8_validation_buffer.extend_from_slice(bytes);
                 }
 
-                // # Safety
-                // The buffer_id is the last buffer in the output buffers
-                // The offset is calculated from the buffer, so it is valid
-                // Utf-8 validation is done later
+                // Safety: views_ptr is valid for writes, we reserved enough space,
+                // and write_count < to_reserve. Utf-8 validation is done later.
                 unsafe {
-                    output.append_raw_view_unchecked(view);
+                    views_ptr.add(initial_len + write_count).write(view);
                 }
+                write_count += 1;
                 Ok(())
             })?;
             check_valid_utf8(&array_buffer)?;
             check_valid_utf8(&utf8_validation_buffer)?;
             v
         };
+
+        // Safety: we wrote exactly `read` views via ptr writes above
+        unsafe {
+            output.views.set_len(initial_len + read);
+        }
 
         let actual_block_id = output.append_block(Buffer::from_vec(array_buffer));
         assert_eq!(actual_block_id, buffer_id);
