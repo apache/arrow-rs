@@ -102,7 +102,7 @@ where
     // If the inferred type is the same as the expected type,
     // reuse the expected type and thus any inner `Arc`s it contains,
     // to avoid excess heap allocations.
-    if elem.ptr_eq(&*expected_elem) {
+    if elem.ptr_eq(&expected_elem) {
         Ok(InferTy::Array(expected_elem))
     } else {
         Ok(InferTy::Array(elem.to_arc()))
@@ -164,7 +164,7 @@ where
 
 macro_rules! memoize {
     ($ty:ty, $value:expr) => {{
-        const VALUE: LazyLock<Arc<$ty>> = LazyLock::new(|| Arc::new($value));
+        static VALUE: LazyLock<Arc<$ty>> = LazyLock::new(|| Arc::new($value));
         VALUE.clone()
     }};
 }
