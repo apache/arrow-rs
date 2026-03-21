@@ -29,7 +29,7 @@ pub(crate) enum InferTy {
     Any,
     Scalar(ScalarTy),
     Array(Arc<InferTy>),
-    Object(InferFields),
+    Object(Arc<InferFields>),
 }
 
 /// An inferred scalar type.
@@ -42,7 +42,7 @@ pub(crate) enum ScalarTy {
 }
 
 /// A field in an inferred object type.
-pub(crate) type InferFields = Arc<[(Arc<str>, InferTy)]>;
+pub(crate) type InferFields = [(Arc<str>, InferTy)];
 
 /// Infers the type of a JSON value, given an expected type.
 pub fn infer_json_type<'a, T>(value: T, expected: InferTy) -> Result<InferTy, ArrowError>
@@ -88,11 +88,7 @@ where
     I::Item: JsonValue<'a>,
 {
     let expected_elem = match expected {
-        InferTy::Any => {
-            // Memoize to avoid excess heap allocations
-            static ANY_TY: LazyLock<Arc<InferTy>> = LazyLock::new(|| InferTy::Any.into());
-            ANY_TY.clone()
-        }
+        InferTy::Any => InferTy::Any.to_arc(),
         InferTy::Array(inner) => inner.clone(),
         _ => Err(ArrowError::JsonError(format!(
             "Expected {expected}, found an array"
@@ -109,7 +105,7 @@ where
     if elem.ptr_eq(&*expected_elem) {
         Ok(InferTy::Array(expected_elem))
     } else {
-        Ok(InferTy::Array(elem.into()))
+        Ok(InferTy::Array(elem.to_arc()))
     }
 }
 
@@ -120,11 +116,7 @@ where
     T: JsonValue<'a>,
 {
     let expected_fields = match expected {
-        InferTy::Any => {
-            // Memoize to avoid excess heap allocations
-            static EMPTY_FIELDS: LazyLock<InferFields> = LazyLock::new(|| Arc::new([]));
-            EMPTY_FIELDS.clone()
-        }
+        InferTy::Any => InferTy::empty_fields(),
         InferTy::Object(fields) => fields.clone(),
         _ => Err(ArrowError::JsonError(format!(
             "Expected {expected}, found an object"
@@ -170,22 +162,50 @@ where
     Ok(InferTy::Object(fields))
 }
 
+macro_rules! memoize {
+    ($ty:ty, $value:expr) => {{
+        const VALUE: LazyLock<Arc<$ty>> = LazyLock::new(|| Arc::new($value));
+        VALUE.clone()
+    }};
+}
+
 impl InferTy {
     /// Returns an `InferTy` that represents any possible JSON type.
-    pub fn any() -> Self {
+    pub const fn any() -> Self {
         Self::Any
     }
 
     /// Returns an `InferTy` that represents an empty JSON object.
     pub fn empty_object() -> Self {
-        // Memoised to avoid excess heap allocations
-        static EMPTY_OBJECT: LazyLock<InferTy> = LazyLock::new(|| InferTy::Object(Arc::new([])));
-        EMPTY_OBJECT.clone()
+        Self::Object(Self::empty_fields())
+    }
+
+    /// Returns an `InferFields` with no fields.
+    fn empty_fields() -> Arc<InferFields> {
+        memoize!(InferFields, [])
+    }
+
+    /// Returns this `InferTy` as an `Arc`.
+    ///
+    /// To avoid excess heaps allocations, common types are memoized in static variables.
+    fn to_arc(&self) -> Arc<Self> {
+        use ScalarTy::*;
+
+        match self {
+            // Use a memoized `Arc` if possible
+            Self::Any => memoize!(InferTy, InferTy::Any),
+            Self::Scalar(Bool) => memoize!(InferTy, InferTy::Scalar(Bool)),
+            Self::Scalar(Int64) => memoize!(InferTy, InferTy::Scalar(Int64)),
+            Self::Scalar(Float64) => memoize!(InferTy, InferTy::Scalar(Float64)),
+            Self::Scalar(String) => memoize!(InferTy, InferTy::Scalar(String)),
+            // Otherwise allocate a new `Arc`
+            _ => Arc::new(self.clone()),
+        }
     }
 
     /// Performs a shallow comparison between two types, only checking for
     /// pointer equality on any nested `Arc`s.
-    pub fn ptr_eq(&self, other: &Self) -> bool {
+    fn ptr_eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, Self::Any) => true,
             (Self::Scalar(lhs), Self::Scalar(rhs)) => lhs == rhs,
