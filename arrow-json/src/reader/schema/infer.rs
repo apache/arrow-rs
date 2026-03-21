@@ -25,51 +25,24 @@ use super::json_type::{JsonType, JsonValue};
 
 /// Represents an inferred JSON type.
 #[derive(Clone, Debug)]
-pub(crate) struct InferTy(Arc<TyKind>);
-
-/// The possible variants of an `InferTy`.
-#[derive(Clone, Debug)]
-enum TyKind {
+pub(crate) enum InferTy {
     Any,
     Scalar(ScalarTy),
-    Array(InferTy),
-    Object(Arc<[InferField]>),
+    Array(Arc<InferTy>),
+    Object(InferFields),
 }
-
-/// A field in an inferred object type.
-type InferField = (Arc<str>, InferTy);
 
 /// An inferred scalar type.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ScalarTy {
+pub(crate) enum ScalarTy {
     Bool,
     Int64,
     Float64,
     String,
 }
 
-/// During the process of schema inference, types are frequently produced and discarded.
-/// As an optimisation to avoid excess heap allocations, a few common types
-/// are instantiated here so they can be reused.
-static COMMON_TYS: LazyLock<CommonTypes> = LazyLock::new(|| CommonTypes {
-    any: InferTy(TyKind::Any.into()),
-    bool: InferTy(TyKind::Scalar(ScalarTy::Bool).into()),
-    int64: InferTy(TyKind::Scalar(ScalarTy::Int64).into()),
-    float64: InferTy(TyKind::Scalar(ScalarTy::Float64).into()),
-    string: InferTy(TyKind::Scalar(ScalarTy::String).into()),
-    array_of_any: InferTy::new_array(InferTy(TyKind::Any.into())),
-    empty_object: InferTy::new_object(Arc::new([])),
-});
-
-struct CommonTypes {
-    any: InferTy,
-    bool: InferTy,
-    int64: InferTy,
-    float64: InferTy,
-    string: InferTy,
-    array_of_any: InferTy,
-    empty_object: InferTy,
-}
+/// A field in an inferred object type.
+pub(crate) type InferFields = Arc<[(Arc<str>, InferTy)]>;
 
 /// Infers the type of a JSON value, given an expected type.
 pub fn infer_json_type<'a, T>(value: T, expected: InferTy) -> Result<InferTy, ArrowError>
@@ -88,70 +61,71 @@ where
 }
 
 /// Infers the type of a scalar JSON value, given an expected type.
+///
+/// Mixed integer and float types will coerce to float, and any other
+/// mixtures will coerce to string.
 fn infer_scalar(scalar: ScalarTy, expected: InferTy) -> Result<InferTy, ArrowError> {
-    Ok(match expected.kind() {
-        TyKind::Any => match scalar {
-            ScalarTy::Bool => COMMON_TYS.bool.clone(),
-            ScalarTy::Int64 => COMMON_TYS.int64.clone(),
-            ScalarTy::Float64 => COMMON_TYS.float64.clone(),
-            ScalarTy::String => COMMON_TYS.string.clone(),
-        },
-        TyKind::Scalar(expect) => match (expect, &scalar) {
-            (ScalarTy::Bool, ScalarTy::Bool) => COMMON_TYS.bool.clone(),
-            (ScalarTy::Int64, ScalarTy::Int64) => COMMON_TYS.int64.clone(),
-            // Mixed numbers coerce to f64
-            (ScalarTy::Int64 | ScalarTy::Float64, ScalarTy::Int64 | ScalarTy::Float64) => {
-                COMMON_TYS.float64.clone()
-            }
-            // Any other combination coerces to string
-            _ => COMMON_TYS.string.clone(),
+    use ScalarTy::*;
+
+    Ok(InferTy::Scalar(match expected {
+        InferTy::Any => scalar,
+        InferTy::Scalar(expect) => match (expect, &scalar) {
+            (Bool, Bool) => Bool,
+            (Int64, Int64) => Int64,
+            (Int64 | Float64, Int64 | Float64) => Float64,
+            _ => String,
         },
         _ => Err(ArrowError::JsonError(format!(
             "Expected {expected}, found {scalar}"
         )))?,
-    })
+    }))
 }
 
 /// Infers the type of a JSON array, given an expected type.
-fn infer_array<'a, I>(mut elements: I, mut expected: InferTy) -> Result<InferTy, ArrowError>
+fn infer_array<'a, I>(mut elements: I, expected: InferTy) -> Result<InferTy, ArrowError>
 where
     I: Iterator,
     I::Item: JsonValue<'a>,
 {
-    if let TyKind::Any = expected.kind() {
-        expected = COMMON_TYS.array_of_any.clone();
-    }
-
-    let (expected_elem, expected) = match expected.kind() {
-        TyKind::Array(inner) => (inner.clone(), expected),
+    let expected_elem = match expected {
+        InferTy::Any => {
+            // Memoize to avoid excess heap allocations
+            static ANY_TY: LazyLock<Arc<InferTy>> = LazyLock::new(|| InferTy::Any.into());
+            ANY_TY.clone()
+        }
+        InferTy::Array(inner) => inner.clone(),
         _ => Err(ArrowError::JsonError(format!(
             "Expected {expected}, found an array"
         )))?,
     };
 
-    let elem = elements.try_fold(expected_elem.clone(), |expected, value| {
+    let elem = elements.try_fold((*expected_elem).clone(), |expected, value| {
         infer_json_type(value, expected)
     })?;
 
-    if elem.ptr_eq(&expected_elem) {
-        return Ok(expected);
+    // If the inferred type is the same as the expected type,
+    // reuse the expected type and thus any inner `Arc`s it contains,
+    // to avoid excess heap allocations.
+    if elem.ptr_eq(&*expected_elem) {
+        Ok(InferTy::Array(expected_elem))
+    } else {
+        Ok(InferTy::Array(elem.into()))
     }
-
-    Ok(InferTy::new_array(elem))
 }
 
 /// Infers the type of a JSON object, given an expected type.
-fn infer_object<'a, I, T>(fields: I, mut expected: InferTy) -> Result<InferTy, ArrowError>
+fn infer_object<'a, I, T>(fields: I, expected: InferTy) -> Result<InferTy, ArrowError>
 where
     I: Iterator<Item = (&'a str, T)>,
     T: JsonValue<'a>,
 {
-    if let TyKind::Any = expected.kind() {
-        expected = COMMON_TYS.empty_object.clone();
-    }
-
-    let (expected_fields, expected) = match expected.kind() {
-        TyKind::Object(fields) => (fields.clone(), expected),
+    let expected_fields = match expected {
+        InferTy::Any => {
+            // Memoize to avoid excess heap allocations
+            static EMPTY_FIELDS: LazyLock<InferFields> = LazyLock::new(|| Arc::new([]));
+            EMPTY_FIELDS.clone()
+        }
+        InferTy::Object(fields) => fields.clone(),
         _ => Err(ArrowError::JsonError(format!(
             "Expected {expected}, found an object"
         )))?,
@@ -176,14 +150,14 @@ where
             None => {
                 let field_idx = num_fields;
                 num_fields += 1;
-                let ty = infer_json_type(value, COMMON_TYS.any.clone())?;
+                let ty = infer_json_type(value, InferTy::Any)?;
                 substs.insert(field_idx, (key.into(), ty));
             }
         };
     }
 
     if substs.is_empty() {
-        return Ok(expected);
+        return Ok(InferTy::Object(expected_fields));
     }
 
     let fields = (0..num_fields)
@@ -193,40 +167,40 @@ where
         })
         .collect();
 
-    Ok(InferTy::new_object(fields))
+    Ok(InferTy::Object(fields))
 }
 
 impl InferTy {
+    /// Returns an `InferTy` that represents any possible JSON type.
     pub fn any() -> Self {
-        COMMON_TYS.any.clone()
+        Self::Any
     }
 
-    fn new_array(inner: impl Into<Self>) -> Self {
-        Self(TyKind::Array(inner.into()).into())
-    }
-
-    fn new_object(fields: Arc<[(Arc<str>, InferTy)]>) -> Self {
-        Self(TyKind::Object(fields).into())
-    }
-
+    /// Returns an `InferTy` that represents an empty JSON object.
     pub fn empty_object() -> Self {
-        COMMON_TYS.empty_object.clone()
+        // Memoised to avoid excess heap allocations
+        static EMPTY_OBJECT: LazyLock<InferTy> = LazyLock::new(|| InferTy::Object(Arc::new([])));
+        EMPTY_OBJECT.clone()
     }
 
-    fn kind(&self) -> &TyKind {
-        &self.0
-    }
-
-    fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+    /// Performs a shallow comparison between two types, only checking for
+    /// pointer equality on any nested `Arc`s.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, Self::Any) => true,
+            (Self::Scalar(lhs), Self::Scalar(rhs)) => lhs == rhs,
+            (Self::Array(lhs), Self::Array(rhs)) => Arc::ptr_eq(lhs, rhs),
+            (Self::Object(lhs), Self::Object(rhs)) => Arc::ptr_eq(lhs, rhs),
+            _ => false,
+        }
     }
 
     pub fn to_datatype(&self) -> DataType {
-        match self.kind() {
-            TyKind::Any => DataType::Null,
-            TyKind::Scalar(s) => s.into_datatype(),
-            TyKind::Array(elem) => DataType::List(elem.to_list_field().into()),
-            TyKind::Object(fields) => {
+        match self {
+            InferTy::Any => DataType::Null,
+            InferTy::Scalar(s) => s.into_datatype(),
+            InferTy::Array(elem) => DataType::List(elem.to_list_field().into()),
+            InferTy::Object(fields) => {
                 DataType::Struct(fields.iter().map(|(key, ty)| ty.to_field(&**key)).collect())
             }
         }
@@ -241,7 +215,7 @@ impl InferTy {
     }
 
     pub fn into_schema(self) -> Result<Schema, ArrowError> {
-        let TyKind::Object(fields) = self.kind() else {
+        let InferTy::Object(fields) = self else {
             Err(ArrowError::JsonError(format!(
                 "Expected JSON object, found {self:?}",
             )))?
@@ -256,19 +230,13 @@ impl InferTy {
     }
 }
 
-impl From<&InferTy> for InferTy {
-    fn from(value: &InferTy) -> Self {
-        Self(value.0.clone())
-    }
-}
-
 impl Display for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.kind() {
-            TyKind::Any => write!(f, "any value"),
-            TyKind::Scalar(s) => write!(f, "{}", s),
-            TyKind::Array(_) => write!(f, "an array"),
-            TyKind::Object(_) => write!(f, "an object"),
+        match self {
+            InferTy::Any => write!(f, "any value"),
+            InferTy::Scalar(s) => write!(f, "{}", s),
+            InferTy::Array(_) => write!(f, "an array"),
+            InferTy::Object(_) => write!(f, "an object"),
         }
     }
 }
