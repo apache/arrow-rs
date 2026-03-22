@@ -2263,10 +2263,6 @@ mod tests {
     #[test]
     fn test_read_list_view() {
         assert_read_list_view::<i32>();
-    }
-
-    #[test]
-    fn test_read_large_list_view() {
         assert_read_list_view::<i64>();
     }
 

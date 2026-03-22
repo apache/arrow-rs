@@ -1286,10 +1286,6 @@ mod tests {
     #[test]
     fn write_list_view() {
         assert_write_list_view::<i32>();
-    }
-
-    #[test]
-    fn write_large_list_view() {
         assert_write_list_view::<i64>();
     }
 
