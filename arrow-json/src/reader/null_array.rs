@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::reader::ArrayDecoder;
-use crate::reader::tape::{Tape, TapeElement};
+use std::sync::Arc;
+
 use arrow_array::{ArrayRef, NullArray};
 use arrow_schema::ArrowError;
-use std::sync::Arc;
+
+use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 
 #[derive(Default)]
 pub struct NullArrayDecoder {}

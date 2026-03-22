@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use arrow_array::builder::BooleanBufferBuilder;
+use arrow_array::{Array, ArrayRef, StructArray};
+use arrow_buffer::buffer::NullBuffer;
+use arrow_schema::{ArrowError, DataType, Fields};
+
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext, StructMode};
-use arrow_array::builder::BooleanBufferBuilder;
-use arrow_array::{Array, ArrayRef, make_array};
-use arrow_buffer::buffer::NullBuffer;
-use arrow_data::ArrayDataBuilder;
-use arrow_schema::{ArrowError, DataType, Fields};
-use std::collections::HashMap;
 
 /// Reusable buffer for tape positions, indexed by (field_idx, row_idx).
 /// A value of 0 indicates the field is absent for that row.
@@ -217,28 +219,25 @@ impl ArrayDecoder for StructArrayDecoder {
             }
         }
 
-        let child_data = self
+        let child_arrays = self
             .decoders
             .iter_mut()
             .enumerate()
             .zip(fields)
             .map(|((field_idx, d), f)| {
                 let pos = self.field_tape_positions.field_positions(field_idx);
-                d.decode(tape, pos)
-                    .map(|a| a.to_data())
-                    .map_err(|e| match e {
-                        ArrowError::JsonError(s) => ArrowError::JsonError(format!(
-                            "whilst decoding field '{}': {s}",
-                            f.name()
-                        )),
-                        e => e,
-                    })
+                d.decode(tape, pos).map_err(|e| match e {
+                    ArrowError::JsonError(s) => {
+                        ArrowError::JsonError(format!("whilst decoding field '{}': {s}", f.name()))
+                    }
+                    e => e,
+                })
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
-        for (c, f) in child_data.iter().zip(fields) {
+        for (c, f) in child_arrays.iter().zip(fields) {
             // Sanity check
             assert_eq!(c.len(), pos.len());
             if let Some(a) = c.nulls() {
@@ -253,14 +252,11 @@ impl ArrayDecoder for StructArrayDecoder {
             }
         }
 
-        let data = ArrayDataBuilder::new(self.data_type.clone())
-            .len(pos.len())
-            .nulls(nulls)
-            .child_data(child_data);
-
-        // Safety
-        // Validated lengths above
-        Ok(make_array(unsafe { data.build_unchecked() }))
+        // SAFETY: fields, child array lengths, and nullability are validated above
+        let array = unsafe {
+            StructArray::new_unchecked_with_length(fields.clone(), child_arrays, nulls, row_count)
+        };
+        Ok(Arc::new(array))
     }
 }
 

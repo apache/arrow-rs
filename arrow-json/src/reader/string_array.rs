@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::GenericStringBuilder;
-use arrow_array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
-use arrow_schema::ArrowError;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use crate::reader::ArrayDecoder;
-use crate::reader::tape::{Tape, TapeElement};
-
+use arrow_array::builder::GenericStringBuilder;
+use arrow_array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow_schema::ArrowError;
 use itoa;
 use ryu;
+
+use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 
 const TRUE: &str = "true";
 const FALSE: &str = "false";

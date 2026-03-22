@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write;
+use std::sync::Arc;
+
 use arrow_array::ArrayRef;
 use arrow_array::builder::GenericByteViewBuilder;
 use arrow_array::types::StringViewType;
 use arrow_schema::ArrowError;
-use std::fmt::Write;
-use std::sync::Arc;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};

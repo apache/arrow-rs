@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::marker::PhantomData;
+use std::sync::Arc;
+
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::{ArrayRef, ArrowPrimitiveType};
 use arrow_cast::parse::Parser;
 use arrow_schema::{ArrowError, DataType};
 use half::f16;
 use num_traits::NumCast;
-use std::marker::PhantomData;
-use std::sync::Arc;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
