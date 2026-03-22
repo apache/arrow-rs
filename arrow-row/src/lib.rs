@@ -1414,9 +1414,12 @@ impl DoubleEndedIterator for RowsIter<'_> {
         if self.end == self.start {
             return None;
         }
-        // Safety: We have checked that `start` is less than `end`
-        let row = unsafe { self.rows.row_unchecked(self.end) };
+
         self.end -= 1;
+
+        // Safety: By construction we create `end >= start`, so if `end` is not equal to `start` it cannot be less than `start`
+        //          therefore `end - 1` is within range
+        let row = unsafe { self.rows.row_unchecked(self.end) };
         Some(row)
     }
 }
@@ -5650,5 +5653,41 @@ mod tests {
                 .to_string()
                 .contains("not yet implemented")
         );
+    }
+
+    #[test]
+    fn empty_row_iter_next_back() {
+        let rows = RowConverter::new(vec![SortField::new(DataType::UInt8)])
+            .unwrap()
+            .empty_rows(0, 0);
+        let mut rows_iter = rows.iter();
+        assert_eq!(rows_iter.next_back(), None);
+        assert_eq!(rows_iter.next_back(), None);
+        assert_eq!(rows_iter.next_back(), None);
+    }
+
+    #[test]
+    fn row_iter_next_back() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let array = generate_primitive_array::<UInt8Type>(&mut rng, 100, 0.8);
+        let rows = row_converter.convert_columns(&[Arc::new(array)]).unwrap();
+
+        let mut rows_iter = rows.iter();
+        let mut bytes: Vec<u8> = vec![];
+
+        while let Some(row) = rows_iter.next_back() {
+            bytes.extend(row.data.iter().rev());
+        }
+
+        bytes.reverse();
+
+        assert_eq!(
+            bytes,
+            &rows.buffer.as_slice()[..*rows.offsets.last().unwrap()]
+        );
+
+        assert_eq!(rows_iter.next_back(), None);
+        assert_eq!(rows_iter.next(), None);
     }
 }

@@ -150,6 +150,7 @@ use arrow_array::{RecordBatch, RecordBatchReader, StructArray, downcast_integer,
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
+pub use value_iter::ValueIter;
 
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
@@ -179,6 +180,7 @@ mod string_view_array;
 mod struct_array;
 mod tape;
 mod timestamp_array;
+mod value_iter;
 
 /// A builder for [`Reader`] and [`Decoder`]
 pub struct ReaderBuilder {
