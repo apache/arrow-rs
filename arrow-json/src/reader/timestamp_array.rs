@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::marker::PhantomData;
+use std::sync::Arc;
+
 use arrow_array::ArrayRef;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::ArrowTimestampType;
 use arrow_cast::parse::string_to_datetime;
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::TimeZone;
-use std::marker::PhantomData;
-use std::sync::Arc;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};

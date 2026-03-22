@@ -133,25 +133,22 @@
 //! ```
 //!
 
-use crate::StructMode;
-use crate::reader::binary_array::{
-    BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
-};
 use std::borrow::Cow;
 use std::io::BufRead;
 use std::sync::Arc;
-
-use chrono::Utc;
-use serde_core::Serialize;
 
 use arrow_array::cast::AsArray;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader, downcast_integer};
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
-pub use schema::*;
-pub use value_iter::ValueIter;
+use chrono::Utc;
+use serde_core::Serialize;
 
+use crate::StructMode;
+use crate::reader::binary_array::{
+    BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
+};
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
 use crate::reader::list_array::{ListArrayDecoder, ListViewArrayDecoder};
@@ -164,6 +161,9 @@ use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
+
+pub use schema::*;
+pub use value_iter::ValueIter;
 
 mod binary_array;
 mod boolean_array;

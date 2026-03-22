@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::{BinaryViewBuilder, FixedSizeBinaryBuilder, GenericBinaryBuilder};
-use arrow_array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
-use arrow_schema::ArrowError;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
+
+use arrow_array::builder::{BinaryViewBuilder, FixedSizeBinaryBuilder, GenericBinaryBuilder};
+use arrow_array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow_schema::ArrowError;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};

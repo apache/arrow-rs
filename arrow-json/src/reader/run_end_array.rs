@@ -18,12 +18,13 @@
 use crate::reader::tape::Tape;
 use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_array::types::RunEndIndexType;
-use arrow_array::{Array, ArrayRef, PrimitiveArray, make_array, new_empty_array};
-use arrow_buffer::{ArrowNativeType, ScalarBuffer};
+use arrow_array::{ArrayRef, RunArray, make_array, new_empty_array};
+use arrow_buffer::{ArrowNativeType, RunEndBuffer, ScalarBuffer};
+use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
-use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 pub struct RunEndEncodedArrayDecoder<R> {
     data_type: DataType,
@@ -63,7 +64,7 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
 
         let flat_data = self.decoder.decode(tape, pos)?.to_data();
 
-        let mut run_ends: Vec<R::Native> = Vec::new();
+        let mut run_end_values: Vec<R::Native> = Vec::new();
         let mut mutable = MutableArrayData::new(vec![&flat_data], false, len);
 
         let mut run_start = 0;
@@ -75,7 +76,7 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
                         R::DATA_TYPE
                     ))
                 })?;
-                run_ends.push(run_end);
+                run_end_values.push(run_end);
                 mutable.extend(0, run_start, run_start + 1);
                 run_start = i;
             }
@@ -86,22 +87,19 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
                 R::DATA_TYPE
             ))
         })?;
-        run_ends.push(run_end);
+        run_end_values.push(run_end);
         mutable.extend(0, run_start, run_start + 1);
 
-        let values_data = mutable.freeze();
-        let run_ends_data =
-            PrimitiveArray::<R>::new(ScalarBuffer::from(run_ends), None).into_data();
+        let values = make_array(mutable.freeze());
+        // SAFETY: run_ends are strictly increasing with the last value equal to len
+        let run_ends = unsafe {
+            RunEndBuffer::new_unchecked(ScalarBuffer::from(run_end_values), 0, len)
+        };
 
-        let data = ArrayDataBuilder::new(self.data_type.clone())
-            .len(len)
-            .add_child_data(run_ends_data)
-            .add_child_data(values_data);
-
-        // Safety:
-        // run_ends are strictly increasing with the last value equal to len,
-        // and values has the same length as run_ends
-        Ok(make_array(unsafe { data.build_unchecked() }))
+        // SAFETY: run_ends are valid and values has the same length as run_ends
+        let array =
+            unsafe { RunArray::<R>::new_unchecked(self.data_type.clone(), run_ends, values) };
+        Ok(Arc::new(array))
     }
 }
 
