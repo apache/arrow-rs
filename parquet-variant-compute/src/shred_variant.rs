@@ -1096,9 +1096,10 @@ mod tests {
             assert!(typed_struct.is_null(0));
 
             for field_name in ["id", "name"] {
-                let field =
-                    ShreddedVariantFieldArray::try_new(typed_struct.column_by_name(field_name).unwrap())
-                        .unwrap();
+                let field = ShreddedVariantFieldArray::try_new(
+                    typed_struct.column_by_name(field_name).unwrap(),
+                )
+                .unwrap();
                 assert!(field.value_field().unwrap().is_null(0));
                 assert!(field.typed_value_field().unwrap().is_null(0));
             }
