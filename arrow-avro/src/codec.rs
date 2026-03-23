@@ -94,7 +94,9 @@ pub(crate) struct ResolvedRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ResolvedField {
     /// Resolves to a field indexed in the reader schema.
-    ToReader(usize),
+    /// The `AvroDataType` is the writer's type for this field, used by the Skipper
+    /// to correctly consume writer bytes when the whole record is being skipped.
+    ToReader(usize, AvroDataType),
     /// For fields present in the writer's schema but not the reader's, this stores their data type.
     /// This is needed to correctly skip over these fields during deserialization.
     Skip(AvroDataType),
@@ -2341,10 +2343,10 @@ impl<'a> Maker<'a> {
             .iter()
             .enumerate()
             .map(|(writer_index, writer_field)| {
+                let dt = self.parse_type(&writer_field.r#type, writer_ns)?;
                 if let Some(reader_index) = writer_to_reader[writer_index] {
-                    Ok(ResolvedField::ToReader(reader_index))
+                    Ok(ResolvedField::ToReader(reader_index, dt))
                 } else {
-                    let dt = self.parse_type(&writer_field.r#type, writer_ns)?;
                     Ok(ResolvedField::Skip(dt))
                 }
             })
@@ -2888,7 +2890,7 @@ mod tests {
                 default_fields,
             }) => {
                 assert_eq!(writer_fields.len(), 1);
-                assert_eq!(writer_fields[0], ResolvedField::ToReader(0));
+                assert!(matches!(writer_fields[0], ResolvedField::ToReader(0, _)));
                 assert_eq!(default_fields.len(), 1);
                 assert_eq!(default_fields[0], 1);
             }
@@ -2981,7 +2983,7 @@ mod tests {
                 default_fields,
             }) => {
                 assert_eq!(writer_fields.len(), 1);
-                assert_eq!(writer_fields[0], ResolvedField::ToReader(0));
+                assert!(matches!(writer_fields[0], ResolvedField::ToReader(0, _)));
                 assert_eq!(default_fields.len(), 1);
                 assert_eq!(default_fields[0], 1);
             }
@@ -3802,9 +3804,9 @@ mod tests {
         assert!(matches!(
             &rec.writer_fields[..],
             &[
-                ResolvedField::ToReader(1),
+                ResolvedField::ToReader(1, _),
                 ResolvedField::Skip(_),
-                ResolvedField::ToReader(0),
+                ResolvedField::ToReader(0, _),
             ]
         ));
         assert_eq!(rec.default_fields.as_ref(), &[2usize, 3usize]);
