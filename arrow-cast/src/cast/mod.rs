@@ -43,6 +43,7 @@ mod list;
 mod map;
 mod run_array;
 mod string;
+mod union;
 
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
@@ -50,6 +51,7 @@ use crate::cast::list::*;
 use crate::cast::map::*;
 use crate::cast::run_array::*;
 use crate::cast::string::*;
+pub use crate::cast::union::*;
 
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_data::ByteView;
@@ -230,7 +232,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
-
+        (Union(fields, _), _) => union::resolve_variant(fields, to_type).is_some(),
+        (_, Union(_, _)) => false,
         (_, Boolean) => from_type.is_integer() || from_type.is_floating() || from_type.is_string(),
         (Boolean, _) => to_type.is_integer() || to_type.is_floating() || to_type.is_string(),
 
@@ -1178,6 +1181,14 @@ pub fn cast_with_options(
             "Casting from {from_type} to {to_type} not supported"
         ))),
         (_, Struct(_)) => Err(ArrowError::CastError(format!(
+            "Casting from {from_type} to {to_type} not supported"
+        ))),
+        (Union(_, _), _) => union_extract_by_type(
+            array.as_any().downcast_ref::<UnionArray>().unwrap(),
+            to_type,
+            cast_options,
+        ),
+        (_, Union(_, _)) => Err(ArrowError::CastError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
         (_, Boolean) => match from_type {
