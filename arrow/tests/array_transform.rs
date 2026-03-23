@@ -1180,6 +1180,9 @@ fn test_extend_nulls_sparse_union() {
     mutable.extend_nulls(2); // add two nulls
     let result = mutable.freeze();
 
+    // Union arrays must not have a null bitmap per Arrow spec
+    assert!(result.nulls().is_none());
+
     let result_array = UnionArray::from(result);
     assert_eq!(result_array.len(), 3);
     // First element should be type_id 1 (str)
@@ -1220,6 +1223,9 @@ fn test_extend_nulls_dense_union() {
     mutable.extend(0, 0, 1); // copy the first element
     mutable.extend_nulls(2); // add two nulls
     let result = mutable.freeze();
+
+    // Union arrays must not have a null bitmap per Arrow spec
+    assert!(result.nulls().is_none());
 
     let result_array = UnionArray::from(result);
     assert_eq!(result_array.len(), 3);
