@@ -110,6 +110,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             can_cast_types(from_value_type, to_value_type)
         }
         (Dictionary(_, value_type), _) => can_cast_types(value_type, to_type),
+        (Union(fields, _), _) => union::resolve_variant(fields, to_type).is_some(),
+        (_, Union(_, _)) => false,
         (RunEndEncoded(_, value_type), _) => can_cast_types(value_type.data_type(), to_type),
         (_, RunEndEncoded(_, value_type)) => can_cast_types(from_type, value_type.data_type()),
         (_, Dictionary(_, value_type)) => can_cast_types(from_type, value_type),
@@ -232,8 +234,6 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
-        (Union(fields, _), _) => union::resolve_variant(fields, to_type).is_some(),
-        (_, Union(_, _)) => false,
         (_, Boolean) => from_type.is_integer() || from_type.is_floating() || from_type.is_string(),
         (Boolean, _) => to_type.is_integer() || to_type.is_floating() || to_type.is_string(),
 
@@ -784,6 +784,14 @@ pub fn cast_with_options(
                 ))),
             }
         }
+        (Union(_, _), _) => union_extract_by_type(
+            array.as_any().downcast_ref::<UnionArray>().unwrap(),
+            to_type,
+            cast_options,
+        ),
+        (_, Union(_, _)) => Err(ArrowError::CastError(format!(
+            "Casting from {from_type} to {to_type} not supported"
+        ))),
         (Dictionary(index_type, _), _) => match **index_type {
             Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
             Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
@@ -1181,14 +1189,6 @@ pub fn cast_with_options(
             "Casting from {from_type} to {to_type} not supported"
         ))),
         (_, Struct(_)) => Err(ArrowError::CastError(format!(
-            "Casting from {from_type} to {to_type} not supported"
-        ))),
-        (Union(_, _), _) => union_extract_by_type(
-            array.as_any().downcast_ref::<UnionArray>().unwrap(),
-            to_type,
-            cast_options,
-        ),
-        (_, Union(_, _)) => Err(ArrowError::CastError(format!(
             "Casting from {from_type} to {to_type} not supported"
         ))),
         (_, Boolean) => match from_type {

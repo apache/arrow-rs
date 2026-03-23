@@ -19,7 +19,7 @@
 
 use crate::cast::can_cast_types;
 use crate::cast_with_options;
-use arrow_array::{Array, ArrayRef, UnionArray, new_null_array};
+use arrow_array::{Array, ArrayRef, UnionArray};
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionFields};
 use arrow_select::union_extract::union_extract;
 
@@ -42,6 +42,20 @@ fn same_type_family(a: &DataType, b: &DataType) -> bool {
                 UInt8 | UInt16 | UInt32 | UInt64
             )
             | (Float16 | Float32 | Float64, Float16 | Float32 | Float64)
+    )
+}
+
+fn is_complex_container(dt: &DataType) -> bool {
+    use DataType::*;
+    matches!(
+        dt,
+        List(_)
+            | LargeList(_)
+            | ListView(_)
+            | LargeListView(_)
+            | FixedSizeList(_, _)
+            | Struct(_)
+            | Map(_, _)
     )
 }
 
@@ -68,6 +82,12 @@ pub(crate) fn resolve_variant<'a>(
                 .find(|(_, f)| same_type_family(f.data_type(), target_type))
         })
         .or_else(|| {
+            // skip complex container types in pass 3 — union extraction introduces nulls,
+            // and casting nullable arrays to containers like List/Struct/Map can fail when
+            // inner fields are non-nullable.
+            if is_complex_container(target_type) {
+                return None;
+            }
             fields
                 .iter()
                 .find(|(_, f)| can_cast_types(f.data_type(), target_type))
@@ -126,7 +146,15 @@ pub fn union_extract_by_type(
     };
 
     let Some(field) = resolve_variant(fields, target_type) else {
-        return Ok(new_null_array(target_type, union_array.len()));
+        return Err(ArrowError::CastError(format!(
+            "cannot cast Union with fields {} to {}",
+            fields
+                .iter()
+                .map(|(_, f)| f.data_type().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            target_type
+        )));
     };
 
     let extracted = union_extract(union_array, field.name())?;
@@ -337,10 +365,9 @@ mod tests {
 
     // no matching variant — all three passes fail.
     // Union(Int32, Utf8) targeting Struct({x: Int32}). neither Int32 nor Utf8
-    // can be cast to a Struct, so can_cast_types returns false and
-    // union_extract_by_type returns an all-null array.
+    // can be cast to a Struct, so both can_cast_types and cast return errors.
     #[test]
-    fn test_no_match_returns_nulls() {
+    fn test_no_match_errors() {
         let target = DataType::Struct(vec![Field::new("x", DataType::Int32, true)].into());
 
         assert!(!can_cast_types(
@@ -359,9 +386,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = union_extract_by_type(&union, &target, &CastOptions::default()).unwrap();
-        assert_eq!(result.data_type(), &target);
-        assert_eq!(result.null_count(), 2);
+        assert!(cast::cast(&union, &target).is_err());
     }
 
     // priority: exact match (pass 1) wins over family match (pass 2).
