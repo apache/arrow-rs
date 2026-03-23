@@ -117,14 +117,15 @@ pub(crate) enum AppendNullMode {
 }
 
 impl AppendNullMode {
-    fn append_to_struct_nulls(self, nulls: &mut NullBufferBuilder) {
+    fn append_to_null_row(
+        self,
+        nulls: &mut NullBufferBuilder,
+        value_builder: &mut VariantValueArrayBuilder,
+    ) {
         match self {
             Self::TopLevelVariant => nulls.append_null(),
             Self::ObjectField | Self::ArrayElement => nulls.append_non_null(),
         }
-    }
-
-    fn append_to_value(self, value_builder: &mut VariantValueArrayBuilder) {
         match self {
             Self::TopLevelVariant | Self::ObjectField => value_builder.append_null(),
             Self::ArrayElement => value_builder.append_value(Variant::Null),
@@ -258,8 +259,8 @@ impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.null_mode.append_to_struct_nulls(&mut self.nulls);
-        self.null_mode.append_to_value(&mut self.value_builder);
+        self.null_mode
+            .append_to_null_row(&mut self.nulls, &mut self.value_builder);
         self.typed_value_builder.append_null()
     }
 
@@ -309,8 +310,8 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.null_mode.append_to_struct_nulls(&mut self.nulls);
-        self.null_mode.append_to_value(&mut self.value_builder);
+        self.null_mode
+            .append_to_null_row(&mut self.nulls, &mut self.value_builder);
         self.typed_value_builder.append_null()?;
         Ok(())
     }
@@ -378,8 +379,8 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.null_mode.append_to_struct_nulls(&mut self.nulls);
-        self.null_mode.append_to_value(&mut self.value_builder);
+        self.null_mode
+            .append_to_null_row(&mut self.nulls, &mut self.value_builder);
         self.typed_value_nulls.append_null();
         for (_, typed_value_builder) in &mut self.typed_value_builders {
             typed_value_builder.append_null()?;
