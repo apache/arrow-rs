@@ -703,6 +703,12 @@ mod tests {
     use std::sync::Arc;
     use uuid::Uuid;
 
+    const APPEND_NULL_MODES: [AppendNullMode; 3] = [
+        AppendNullMode::TopLevelVariant,
+        AppendNullMode::ObjectField,
+        AppendNullMode::ArrayElement,
+    ];
+
     #[derive(Clone)]
     enum VariantValue<'a> {
         Value(Variant<'a, 'a>),
@@ -985,16 +991,33 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_append_null_mode_semantics() {
-        let cast_options = arrow::compute::CastOptions::default();
-        let modes = [
-            AppendNullMode::TopLevelVariant,
-            AppendNullMode::ObjectField,
-            AppendNullMode::ArrayElement,
-        ];
+    fn assert_append_null_mode_value_and_struct_nulls(
+        mode: AppendNullMode,
+        value: &BinaryViewArray,
+        nulls: Option<&arrow::buffer::NullBuffer>,
+    ) {
+        if mode == AppendNullMode::TopLevelVariant {
+            assert!(nulls.is_some_and(|n| n.is_null(0)));
+        } else {
+            assert!(nulls.is_none());
+        }
 
-        for mode in modes {
+        if mode == AppendNullMode::ArrayElement {
+            assert!(value.is_valid(0));
+            assert_eq!(
+                Variant::new(EMPTY_VARIANT_METADATA_BYTES, value.value(0)),
+                Variant::Null
+            );
+        } else {
+            assert!(value.is_null(0));
+        }
+    }
+
+    #[test]
+    fn test_append_null_mode_semantics_primitive_builder() {
+        let cast_options = arrow::compute::CastOptions::default();
+
+        for mode in APPEND_NULL_MODES {
             let mut primitive_builder = make_variant_to_shredded_variant_arrow_row_builder(
                 &DataType::Int64,
                 &cast_options,
@@ -1011,24 +1034,73 @@ mod tests {
                 .unwrap();
 
             assert!(primitive_typed_value.is_null(0));
+            assert_append_null_mode_value_and_struct_nulls(
+                mode,
+                &primitive_value,
+                primitive_nulls.as_ref(),
+            );
+        }
+    }
 
-            match mode {
-                AppendNullMode::TopLevelVariant => {
-                    assert!(primitive_nulls.unwrap().is_null(0));
-                    assert!(primitive_value.is_null(0));
-                }
-                AppendNullMode::ObjectField => {
-                    assert!(primitive_nulls.is_none());
-                    assert!(primitive_value.is_null(0));
-                }
-                AppendNullMode::ArrayElement => {
-                    assert!(primitive_nulls.is_none());
-                    assert!(primitive_value.is_valid(0));
-                    assert_eq!(
-                        Variant::new(EMPTY_VARIANT_METADATA_BYTES, primitive_value.value(0)),
-                        Variant::Null
-                    );
-                }
+    #[test]
+    fn test_append_null_mode_semantics_array_builder() {
+        let cast_options = arrow::compute::CastOptions::default();
+        let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+
+        for mode in APPEND_NULL_MODES {
+            let mut array_builder = make_variant_to_shredded_variant_arrow_row_builder(
+                &list_type,
+                &cast_options,
+                1,
+                mode,
+            )
+            .unwrap();
+            array_builder.append_null().unwrap();
+            let (value, typed_value, nulls) = array_builder.finish().unwrap();
+
+            assert_append_null_mode_value_and_struct_nulls(mode, &value, nulls.as_ref());
+
+            let typed_value = typed_value.as_any().downcast_ref::<ListArray>().unwrap();
+            assert_eq!(typed_value.len(), 1);
+            assert!(typed_value.is_null(0));
+            assert_eq!(typed_value.values().len(), 0);
+        }
+    }
+
+    #[test]
+    fn test_append_null_mode_semantics_object_builder() {
+        let cast_options = arrow::compute::CastOptions::default();
+        let object_type = DataType::Struct(Fields::from(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+
+        for mode in APPEND_NULL_MODES {
+            let mut object_builder = make_variant_to_shredded_variant_arrow_row_builder(
+                &object_type,
+                &cast_options,
+                1,
+                mode,
+            )
+            .unwrap();
+            object_builder.append_null().unwrap();
+            let (value, typed_value, nulls) = object_builder.finish().unwrap();
+
+            assert_append_null_mode_value_and_struct_nulls(mode, &value, nulls.as_ref());
+
+            let typed_struct = typed_value
+                .as_any()
+                .downcast_ref::<arrow::array::StructArray>()
+                .unwrap();
+            assert_eq!(typed_struct.len(), 1);
+            assert!(typed_struct.is_null(0));
+
+            for field_name in ["id", "name"] {
+                let field =
+                    ShreddedVariantFieldArray::try_new(typed_struct.column_by_name(field_name).unwrap())
+                        .unwrap();
+                assert!(field.value_field().unwrap().is_null(0));
+                assert!(field.typed_value_field().unwrap().is_null(0));
             }
         }
     }
