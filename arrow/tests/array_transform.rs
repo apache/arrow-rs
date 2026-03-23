@@ -1151,3 +1151,85 @@ fn test_fixed_size_list_append() {
     .unwrap();
     assert_eq!(finished, expected_fixed_size_list_data);
 }
+
+#[test]
+fn test_extend_nulls_sparse_union() {
+    let fields = UnionFields::try_new(
+        vec![0, 1],
+        vec![
+            Field::new("null", DataType::Null, true),
+            Field::new("str", DataType::Utf8, true),
+        ],
+    )
+    .unwrap();
+
+    let type_ids = ScalarBuffer::from(vec![1i8]);
+    let child_null = Arc::new(NullArray::new(1)) as ArrayRef;
+    let child_str = Arc::new(StringArray::from(vec![Some("hello")])) as ArrayRef;
+    let union_array = UnionArray::try_new(
+        fields.clone(),
+        type_ids,
+        None, // sparse
+        vec![child_null, child_str],
+    )
+    .unwrap();
+
+    let data = union_array.to_data();
+    let mut mutable = MutableArrayData::new(vec![&data], true, 4);
+    mutable.extend(0, 0, 1); // copy the first element
+    mutable.extend_nulls(2); // add two nulls
+    let result = mutable.freeze();
+
+    let result_array = UnionArray::from(result);
+    assert_eq!(result_array.len(), 3);
+    // First element should be type_id 1 (str)
+    assert_eq!(result_array.type_id(0), 1);
+    // Null elements use the first type_id (0)
+    assert_eq!(result_array.type_id(1), 0);
+    assert_eq!(result_array.type_id(2), 0);
+    // All children should have length 3 (sparse invariant)
+    assert_eq!(result_array.child(0).len(), 3);
+    assert_eq!(result_array.child(1).len(), 3);
+}
+
+#[test]
+fn test_extend_nulls_dense_union() {
+    let fields = UnionFields::try_new(
+        vec![0, 1],
+        vec![
+            Field::new("i", DataType::Int32, true),
+            Field::new("str", DataType::Utf8, true),
+        ],
+    )
+    .unwrap();
+
+    let type_ids = ScalarBuffer::from(vec![1i8]);
+    let offsets = ScalarBuffer::from(vec![0i32]);
+    let child_int = Arc::new(Int32Array::new_null(0)) as ArrayRef;
+    let child_str = Arc::new(StringArray::from(vec![Some("hello")])) as ArrayRef;
+    let union_array = UnionArray::try_new(
+        fields.clone(),
+        type_ids,
+        Some(offsets),
+        vec![child_int, child_str],
+    )
+    .unwrap();
+
+    let data = union_array.to_data();
+    let mut mutable = MutableArrayData::new(vec![&data], true, 4);
+    mutable.extend(0, 0, 1); // copy the first element
+    mutable.extend_nulls(2); // add two nulls
+    let result = mutable.freeze();
+
+    let result_array = UnionArray::from(result);
+    assert_eq!(result_array.len(), 3);
+    // First element is type_id 1 (str)
+    assert_eq!(result_array.type_id(0), 1);
+    // Null elements use the first type_id (0)
+    assert_eq!(result_array.type_id(1), 0);
+    assert_eq!(result_array.type_id(2), 0);
+    // First child (int) should have 2 null entries from extend_nulls
+    assert_eq!(result_array.child(0).len(), 2);
+    // Second child (str) should have 1 entry from extend
+    assert_eq!(result_array.child(1).len(), 1);
+}

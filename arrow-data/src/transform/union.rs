@@ -16,6 +16,7 @@
 // under the License.
 
 use super::{_MutableArrayData, Extend};
+use arrow_schema::DataType;
 use crate::ArrayData;
 
 pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
@@ -68,10 +69,47 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend<'_> {
     )
 }
 
-pub(super) fn extend_nulls_dense(_mutable: &mut _MutableArrayData, _len: usize) {
-    panic!("cannot call extend_nulls on UnionArray as cannot infer type");
+pub(super) fn extend_nulls_dense(mutable: &mut _MutableArrayData, len: usize) {
+    let DataType::Union(fields, _) = &mutable.data_type else {
+        unreachable!()
+    };
+    let first_type_id = fields
+        .iter()
+        .next()
+        .expect("union must have at least one field")
+        .0;
+
+    // Extend type_ids buffer
+    mutable
+        .buffer1
+        .extend_from_slice(&vec![first_type_id; len]);
+
+    // Dense: extend offsets pointing into the first child, then extend nulls in that child
+    let child_offset = mutable.child_data[0].len();
+    for i in 0..len {
+        mutable.buffer2.push((child_offset + i) as i32);
+    }
+    mutable.child_data[0].extend_nulls(len);
 }
 
-pub(super) fn extend_nulls_sparse(_mutable: &mut _MutableArrayData, _len: usize) {
-    panic!("cannot call extend_nulls on UnionArray as cannot infer type");
+pub(super) fn extend_nulls_sparse(mutable: &mut _MutableArrayData, len: usize) {
+    let DataType::Union(fields, _) = &mutable.data_type else {
+        unreachable!()
+    };
+    let first_type_id = fields
+        .iter()
+        .next()
+        .expect("union must have at least one field")
+        .0;
+
+    // Extend type_ids buffer
+    mutable
+        .buffer1
+        .extend_from_slice(&vec![first_type_id; len]);
+
+    // Sparse: extend nulls in ALL children
+    mutable
+        .child_data
+        .iter_mut()
+        .for_each(|child| child.extend_nulls(len));
 }
