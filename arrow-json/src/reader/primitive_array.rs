@@ -106,7 +106,13 @@ where
                     builder.append_null();
                     continue;
                 }
-                TapeElement::String(idx) | TapeElement::Number(idx) => {
+                TapeElement::String(idx) => {
+                    let s = tape.get_string(idx);
+                    P::parse(s).ok_or_else(|| {
+                        ArrowError::JsonError(format!("failed to parse \"{s}\" as {d}",))
+                    })
+                }
+                TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
                     ParseJsonNumber::parse(s.as_bytes()).ok_or_else(|| {
                         ArrowError::JsonError(format!("failed to parse {s} as {d}",))
