@@ -16,8 +16,8 @@
 // under the License.
 
 use super::{_MutableArrayData, Extend};
-use arrow_schema::DataType;
 use crate::ArrayData;
+use arrow_schema::DataType;
 
 pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
     let type_ids = array.buffer::<i8>(0);
@@ -80,9 +80,7 @@ pub(super) fn extend_nulls_dense(mutable: &mut _MutableArrayData, len: usize) {
         .0;
 
     // Extend type_ids buffer
-    mutable
-        .buffer1
-        .extend_from_slice(&vec![first_type_id; len]);
+    mutable.buffer1.extend_from_slice(&vec![first_type_id; len]);
 
     // Dense: extend offsets pointing into the first child, then extend nulls in that child
     let child_offset = mutable.child_data[0].len();
@@ -103,9 +101,7 @@ pub(super) fn extend_nulls_sparse(mutable: &mut _MutableArrayData, len: usize) {
         .0;
 
     // Extend type_ids buffer
-    mutable
-        .buffer1
-        .extend_from_slice(&vec![first_type_id; len]);
+    mutable.buffer1.extend_from_slice(&vec![first_type_id; len]);
 
     // Sparse: extend nulls in ALL children
     mutable
