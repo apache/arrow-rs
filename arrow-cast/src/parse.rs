@@ -445,7 +445,7 @@ pub trait Parser: ArrowPrimitiveType {
 
 impl Parser for Float16Type {
     fn parse(string: &str) -> Option<f16> {
-        lexical_core::parse(string.trim().as_bytes())
+        lexical_core::parse(string.trim_ascii().as_bytes())
             .ok()
             .map(f16::from_f32)
     }
@@ -453,13 +453,13 @@ impl Parser for Float16Type {
 
 impl Parser for Float32Type {
     fn parse(string: &str) -> Option<f32> {
-        lexical_core::parse(string.trim().as_bytes()).ok()
+        lexical_core::parse(string.trim_ascii().as_bytes()).ok()
     }
 }
 
 impl Parser for Float64Type {
     fn parse(string: &str) -> Option<f64> {
-        lexical_core::parse(string.trim().as_bytes()).ok()
+        lexical_core::parse(string.trim_ascii().as_bytes()).ok()
     }
 }
 
@@ -467,7 +467,7 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                let string = string.trim();
+                let string = string.trim_ascii();
                 if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
                     return None;
                 }
