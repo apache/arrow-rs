@@ -137,7 +137,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     data_type: &'a DataType,
     cast_options: &'a CastOptions,
     capacity: usize,
-    null_mode: NullValue,
+    null_value: NullValue,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
@@ -145,7 +145,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 fields,
                 cast_options,
                 capacity,
-                null_mode,
+                null_value,
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
@@ -158,7 +158,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 data_type,
                 cast_options,
                 capacity,
-                null_mode,
+                null_value,
             )?;
             VariantToShreddedVariantRowBuilder::Array(typed_value_builder)
         }
@@ -188,7 +188,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
             let typed_value_builder =
-                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, null_mode);
+                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, null_value);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
         }
         DataType::FixedSizeBinary(_) => {
@@ -241,25 +241,25 @@ pub(crate) struct VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
     typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
     nulls: NullBufferBuilder,
-    null_mode: NullValue,
+    null_value: NullValue,
 }
 
 impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     pub(crate) fn new(
         typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
         capacity: usize,
-        null_mode: NullValue,
+        null_value: NullValue,
     ) -> Self {
         Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
             typed_value_builder,
             nulls: NullBufferBuilder::new(capacity),
-            null_mode,
+            null_value,
         }
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.null_mode
+        self.null_value
             .append_to(&mut self.nulls, &mut self.value_builder);
         self.typed_value_builder.append_null()
     }
@@ -287,7 +287,7 @@ pub(crate) struct VariantToShreddedArrayVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
     typed_value_builder: ArrayVariantToArrowRowBuilder<'a>,
     nulls: NullBufferBuilder,
-    null_mode: NullValue,
+    null_value: NullValue,
 }
 
 impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
@@ -295,7 +295,7 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         data_type: &'a DataType,
         cast_options: &'a CastOptions,
         capacity: usize,
-        null_mode: NullValue,
+        null_value: NullValue,
     ) -> Result<Self> {
         Ok(Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
@@ -305,12 +305,12 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
                 capacity,
             )?,
             nulls: NullBufferBuilder::new(capacity),
-            null_mode,
+            null_value,
         })
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.null_mode
+        self.null_value
             .append_to(&mut self.nulls, &mut self.value_builder);
         self.typed_value_builder.append_null()?;
         Ok(())
@@ -350,7 +350,7 @@ pub(crate) struct VariantToShreddedObjectVariantRowBuilder<'a> {
     typed_value_builders: IndexMap<&'a str, VariantToShreddedVariantRowBuilder<'a>>,
     typed_value_nulls: NullBufferBuilder,
     nulls: NullBufferBuilder,
-    null_mode: NullValue,
+    null_value: NullValue,
 }
 
 impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
@@ -358,7 +358,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         fields: &'a Fields,
         cast_options: &'a CastOptions,
         capacity: usize,
-        null_mode: NullValue,
+        null_value: NullValue,
     ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
@@ -374,12 +374,12 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             typed_value_builders: typed_value_builders.collect::<Result<_>>()?,
             typed_value_nulls: NullBufferBuilder::new(capacity),
             nulls: NullBufferBuilder::new(capacity),
-            null_mode,
+            null_value,
         })
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.null_mode
+        self.null_value
             .append_to(&mut self.nulls, &mut self.value_builder);
         self.typed_value_nulls.append_null();
         for (_, typed_value_builder) in &mut self.typed_value_builders {
