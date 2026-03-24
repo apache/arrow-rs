@@ -47,12 +47,9 @@ pub(crate) enum ShreddedPathStep {
 
 /// Build the next shredding state by taking one list-like element (at `index`) per input row.
 ///
-/// With `cast_options.safe = true`, out-of-bounds indices become nulls for those rows.
-/// With `cast_options.safe = false`, out-of-bounds indices return [`ArrowError::CastError`].
 fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
     typed_value: &dyn Array,
     index: usize,
-    cast_options: &CastOptions,
 ) -> Result<Option<ShreddingState>> {
     let list_array = typed_value.as_any().downcast_ref::<L>().ok_or_else(|| {
         ArrowError::ComputeError(format!(
@@ -92,13 +89,8 @@ fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
                 ArrowError::ComputeError("List-like index does not fit into u64".into())
             })?;
             take_indices.push(Some(absolute_index));
-        } else if cast_options.safe {
-            take_indices.push(None);
         } else {
-            return Err(ArrowError::CastError(format!(
-                "Cannot access index '{}' for row {} with list length {}",
-                index, row, len
-            )));
+            take_indices.push(None);
         }
     }
 
@@ -140,8 +132,9 @@ fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
 /// - List index out-of-bounds produces nulls for the corresponding rows.
 ///
 /// Unsafe-cast behavior (`cast_options.safe = false`):
-/// - Type mismatch during path traversal returns [`ArrowError::CastError`].
-/// - List index out-of-bounds returns [`ArrowError::CastError`].
+/// - Field access on non-struct returns [`ArrowError::CastError`].
+/// - List index path steps follow JSONPath semantics and return missing/null for non-list or
+///   out-of-bounds rows.
 pub(crate) fn follow_shredded_path_element(
     shredding_state: &ShreddingState,
     path_element: &VariantPathElement<'_>,
@@ -198,33 +191,19 @@ pub(crate) fn follow_shredded_path_element(
             let state = match typed_value.data_type() {
                 DataType::List(_) => take_list_like_index_as_shredding_state::<
                     GenericListArray<i32>,
-                >(typed_value.as_ref(), *index, cast_options)?,
+                >(typed_value.as_ref(), *index)?,
                 DataType::LargeList(_) => take_list_like_index_as_shredding_state::<
                     GenericListArray<i64>,
-                >(
-                    typed_value.as_ref(), *index, cast_options
-                )?,
+                >(typed_value.as_ref(), *index)?,
                 DataType::ListView(_) => take_list_like_index_as_shredding_state::<
                     GenericListViewArray<i32>,
-                >(
-                    typed_value.as_ref(), *index, cast_options
-                )?,
+                >(typed_value.as_ref(), *index)?,
                 DataType::LargeListView(_) => take_list_like_index_as_shredding_state::<
                     GenericListViewArray<i64>,
-                >(
-                    typed_value.as_ref(), *index, cast_options
-                )?,
-                _ if cast_options.safe => {
-                    // With safe cast options, return NULL (missing_path_step)
-                    return Ok(missing_path_step());
-                }
+                >(typed_value.as_ref(), *index)?,
                 _ => {
-                    // Downcast failure - if strict cast options are enabled, this should be an error
-                    return Err(ArrowError::CastError(format!(
-                        "Cannot access index '{}' on non-list type: {}",
-                        index,
-                        typed_value.data_type()
-                    )));
+                    // JSONPath semantics: indexing a non-list yields no match.
+                    return Ok(missing_path_step());
                 }
             };
 
@@ -1906,7 +1885,7 @@ mod test {
     }
 
     #[test]
-    fn test_shredded_list_like_index_out_of_bounds_unsafe_cast_errors() {
+    fn test_shredded_list_like_index_out_of_bounds_unsafe_cast_returns_null() {
         let options =
             GetOptions::new_with_path(VariantPath::from(10)).with_cast_options(CastOptions {
                 safe: false,
@@ -1914,11 +1893,10 @@ mod test {
             });
 
         for (case, array_gen) in shredded_list_like_cases() {
-            let err = variant_get(&array_gen(), options.clone()).unwrap_err();
-            assert!(
-                err.to_string().contains("Cannot access index '10'"),
-                "{case}"
-            );
+            let result = variant_get(&array_gen(), options.clone()).unwrap();
+            let result_variant = VariantArray::try_new(&result).unwrap();
+            assert_eq!(result_variant.value(0), Variant::Null, "{case}");
+            assert_eq!(result_variant.value(1), Variant::Null, "{case}");
         }
     }
 
@@ -2826,6 +2804,33 @@ mod test {
                 .to_string()
                 .contains("Cannot access field 'nonexistent_field' on non-struct type")
         );
+    }
+
+    #[test]
+    fn test_strict_cast_options_index_on_non_list_returns_null() {
+        use arrow::compute::CastOptions;
+        use arrow::datatypes::{DataType, Field};
+        use parquet_variant::VariantPath;
+        use std::sync::Arc;
+
+        // Use existing test data that has Int32 typed_value at the top level.
+        let variant_array = perfectly_shredded_int32_variant_array();
+        let options = GetOptions {
+            path: VariantPath::from(0),
+            as_type: Some(Arc::new(Field::new("result", DataType::Int32, true))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let variant_array_ref: Arc<dyn Array> = variant_array.clone();
+        let result = variant_get(&variant_array_ref, options).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert!(result.is_null(0));
+        assert!(result.is_null(1));
+        assert!(result.is_null(2));
     }
 
     #[test]
