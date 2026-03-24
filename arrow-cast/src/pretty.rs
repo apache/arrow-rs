@@ -1665,4 +1665,158 @@ mod tests {
             .unwrap();
         insta::assert_snapshot!(error, @"Invalid argument error: Expected the same number of columns in a record batch (1) as the number of fields (2) in the schema");
     }
+
+    #[test]
+    fn test_quoted_strings() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "strings",
+            DataType::Utf8,
+            true,
+        )]));
+
+        let string_array = StringArray::from(vec![
+            Some("hello"),
+            Some("world"),
+            Some(""),
+            Some("tab\there"),
+            Some("newline\ntest"),
+            Some("quote\"test"),
+            Some("backslash\\test"),
+            None,
+        ]);
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(string_array)]).unwrap();
+
+        let options_none = FormatOptions::new().with_null("NULL");
+        let table = pretty_format_batches_with_options(std::slice::from_ref(&batch), &options_none)
+            .unwrap()
+            .to_string();
+
+        insta::assert_snapshot!(table, @"
+        +----------------+
+        | strings        |
+        +----------------+
+        | hello          |
+        | world          |
+        |                |
+        | tab	here       |
+        | newline        |
+        | test           |
+        | quote\"test     |
+        | backslash\\test |
+        | NULL           |
+        +----------------+
+        ");
+
+        let options_quoted = FormatOptions::new()
+            .with_null("NULL")
+            .with_quoted_strings(true);
+
+        let table = pretty_format_batches_with_options(&[batch], &options_quoted)
+            .unwrap()
+            .to_string();
+
+        insta::assert_snapshot!(table, @r#"
+        +-------------------+
+        | strings           |
+        +-------------------+
+        | "hello"           |
+        | "world"           |
+        | ""                |
+        | "tab\there"       |
+        | "newline\ntest"   |
+        | "quote\"test"     |
+        | "backslash\\test" |
+        | NULL              |
+        +-------------------+
+        "#);
+    }
+
+    #[test]
+    fn test_string_view_quoted() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "view_strings",
+            DataType::Utf8View,
+            true,
+        )]));
+
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("hello");
+        builder.append_null();
+        builder.append_value("quote\"test");
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let options = FormatOptions::new().with_quoted_strings(true);
+
+        let table = pretty_format_batches_with_options(&[batch], &options)
+            .unwrap()
+            .to_string();
+
+        insta::assert_snapshot!(table, @"
+        +---------------+
+        | view_strings  |
+        +---------------+
+        | \"hello\"       |
+        |               |
+        | \"quote\\\"test\" |
+        +---------------+
+        ");
+    }
+
+    #[test]
+    fn test_quoted_strings_in_struct() {
+        let string_builder = StringBuilder::new();
+        let mut name_builder = string_builder;
+        name_builder.append_value("Alice");
+        name_builder.append_value("");
+        name_builder.append_value("Bob");
+
+        let fields = vec![Field::new("name", DataType::Utf8, false)];
+        let mut struct_builder = StructBuilder::new(fields, vec![Box::new(name_builder)]);
+        struct_builder.append(true);
+        struct_builder.append(true);
+        struct_builder.append(true);
+
+        let struct_array = struct_builder.finish();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "person",
+            struct_array.data_type().clone(),
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(struct_array)]).unwrap();
+
+        let options_none = FormatOptions::new();
+        let table = pretty_format_batches_with_options(std::slice::from_ref(&batch), &options_none)
+            .unwrap()
+            .to_string();
+
+        insta::assert_snapshot!(table, @"
+        +---------------+
+        | person        |
+        +---------------+
+        | {name: Alice} |
+        | {name: }      |
+        | {name: Bob}   |
+        +---------------+
+        ");
+
+        let options_quoted = FormatOptions::new().with_quoted_strings(true);
+        let table = pretty_format_batches_with_options(&[batch], &options_quoted)
+            .unwrap()
+            .to_string();
+
+        insta::assert_snapshot!(table, @"
+        +-----------------+
+        | person          |
+        +-----------------+
+        | {name: \"Alice\"} |
+        | {name: \"\"}      |
+        | {name: \"Bob\"}   |
+        +-----------------+
+        ");
+    }
 }
