@@ -2595,7 +2595,7 @@ mod tests {
     #[test]
     fn test_float_statistics() {
         let stats = statistics_roundtrip::<FloatType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
             assert_eq!(stats.max_opt().unwrap(), &3.0);
@@ -2607,7 +2607,7 @@ mod tests {
     #[test]
     fn test_double_statistics() {
         let stats = statistics_roundtrip::<DoubleType>(&[-1.0, 3.0, -2.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
             assert_eq!(stats.max_opt().unwrap(), &3.0);
@@ -2665,7 +2665,7 @@ mod tests {
         .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(
             stats.min_opt().unwrap(),
             &ByteArray::from(-f16::from_f32(2.0))
@@ -2684,7 +2684,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
             stats.max_opt().unwrap(),
@@ -2700,7 +2700,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
             stats.max_opt().unwrap(),
@@ -2716,7 +2716,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
             stats.max_opt().unwrap(),
@@ -2734,7 +2734,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(stats.min_bytes_opt().is_none());
         assert!(stats.max_bytes_opt().is_none());
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
     }
 
     #[test]
@@ -2745,7 +2745,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
     }
@@ -2758,7 +2758,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
     }
@@ -2771,7 +2771,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::PI));
     }
@@ -2784,7 +2784,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::PI));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
     }
@@ -2792,7 +2792,7 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_middle() {
         let stats = statistics_roundtrip::<FloatType>(&[1.0, f32::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
@@ -2804,7 +2804,7 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_start() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, 1.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
@@ -2818,14 +2818,14 @@ mod tests {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, f32::NAN]);
         assert!(stats.min_bytes_opt().is_none());
         assert!(stats.max_bytes_opt().is_none());
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         assert!(matches!(stats, Statistics::Float(_)));
     }
 
     #[test]
     fn test_float_statistics_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
@@ -2839,7 +2839,7 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
@@ -2853,7 +2853,7 @@ mod tests {
     #[test]
     fn test_float_statistics_zero_min() {
         let stats = statistics_roundtrip::<FloatType>(&[0.0, 1.0, f32::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
@@ -2866,7 +2866,7 @@ mod tests {
     #[test]
     fn test_float_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<FloatType>(&[-0.0, -1.0, f32::NAN, -2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
             assert_eq!(stats.max_opt().unwrap(), &0.0);
@@ -2879,7 +2879,7 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_middle() {
         let stats = statistics_roundtrip::<DoubleType>(&[1.0, f64::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
@@ -2891,7 +2891,7 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_start() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, 1.0, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
@@ -2906,13 +2906,13 @@ mod tests {
         assert!(stats.min_bytes_opt().is_none());
         assert!(stats.max_bytes_opt().is_none());
         assert!(matches!(stats, Statistics::Double(_)));
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
     }
 
     #[test]
     fn test_double_statistics_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
@@ -2926,7 +2926,7 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
@@ -2940,7 +2940,7 @@ mod tests {
     #[test]
     fn test_double_statistics_zero_min() {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0, 1.0, f64::NAN, 2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
@@ -2953,7 +2953,7 @@ mod tests {
     #[test]
     fn test_double_statistics_neg_zero_max() {
         let stats = statistics_roundtrip::<DoubleType>(&[-0.0, -1.0, f64::NAN, -2.0]);
-        assert!(stats.is_min_max_backwards_compatible());
+        assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
             assert_eq!(stats.max_opt().unwrap(), &0.0);

@@ -997,11 +997,14 @@ impl ColumnDescriptor {
 
     /// Returns the sort order for this column
     pub fn sort_order(&self) -> SortOrder {
-        ColumnOrder::sort_order_for_type(
+        // FIXME(ets): we need ColumnOrder to be a field so that we get the correct behavior
+        // for older files that use TYPE_DEFINED_ORDER for floats
+        ColumnOrder::column_order_for_type(
             self.logical_type_ref(),
             self.converted_type(),
             self.physical_type(),
         )
+        .sort_order()
     }
 }
 

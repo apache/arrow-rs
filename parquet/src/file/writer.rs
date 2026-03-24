@@ -1226,7 +1226,7 @@ mod tests {
             // INTERVAL
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
             // Float16
-            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
             // String
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
         ];
