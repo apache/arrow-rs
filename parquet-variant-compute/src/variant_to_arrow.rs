@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::shred_variant::{
-    AppendNullMode, VariantToShreddedVariantRowBuilder,
+    NullValue, VariantToShreddedVariantRowBuilder,
     make_variant_to_shredded_variant_arrow_row_builder,
 };
 use crate::type_conversion::{
@@ -920,7 +920,7 @@ where
             element_data_type,
             cast_options,
             capacity,
-            AppendNullMode::ArrayElement,
+            NullValue::ArrayElement,
         )?;
         Ok(Self {
             field,
@@ -1129,3 +1129,4 @@ mod tests {
         }
     }
 }
+
