@@ -228,7 +228,7 @@ impl<R> AsyncAvroFileReader<R> {
     /// Drain any remaining buffered records from the decoder.
     #[inline]
     fn poll_flush(&mut self) -> Poll<Option<Result<RecordBatch, AvroError>>> {
-        match self.decoder.flush() {
+        match self.decoder.flush_block() {
             Ok(Some(batch)) => {
                 self.reader_state = ReaderState::Flushing;
                 Poll::Ready(Some(Ok(batch)))
@@ -512,7 +512,7 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
                     // We have a full batch ready, emit it
                     // (This is not mutually exclusive with the block being finished, so the state change is valid)
                     if self.decoder.batch_is_full() {
-                        return match self.decoder.flush() {
+                        return match self.decoder.flush_block() {
                             Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
                             Ok(None) => self.finish_with_error(AvroError::General(
                                 "Decoder reported a full batch, but flush returned None".into(),
