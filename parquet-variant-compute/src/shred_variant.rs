@@ -2737,4 +2737,3 @@ mod tests {
         assert_eq!(shredding_type, DataType::Null);
     }
 }
-
