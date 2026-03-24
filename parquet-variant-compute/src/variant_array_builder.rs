@@ -609,7 +609,7 @@ mod test {
 
         let array2 = VariantArray::from_parts(
             array.metadata_field().clone(),
-            Some(value_builder.build().unwrap()),
+            Some(Arc::new(value_builder.build().unwrap()) as ArrayRef),
             None,
             None,
         );
