@@ -231,12 +231,8 @@ fn shredded_get_path(
                 // VariantArray instead of casting to the declared data type. This allows
                 // callers to request structs where some fields remain as variants.
                 // See test_struct_extraction_with_variant_fields for usage example.
-                let is_variant_field = field.try_extension_type::<VariantType>().is_ok();
-                let field_as_type: Option<&Field> = if is_variant_field {
-                    None
-                } else {
-                    Some(field.as_ref())
-                };
+                let is_strongly_typed = field.try_extension_type::<VariantType>().is_err();
+                let field_as_type = is_strongly_typed.then(|| field.as_ref());
                 let child = shredded_get_path(
                     &target,
                     &[VariantPathElement::from(field.name().as_str())],
@@ -252,22 +248,16 @@ fn shredded_get_path(
                 // When the field is entirely absent in the data, shredded_get_path
                 // returns a NullArray (DataType::Null). VariantType only supports
                 // Struct storage, so we must skip the extension in that case.
+                let is_variant_field = !is_strongly_typed;
+                let new_field = field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(child.data_type().clone());
                 let updated_field =
                     if is_variant_field && matches!(child.data_type(), DataType::Struct(_)) {
-                        field
-                            .as_ref()
-                            .clone()
-                            .with_data_type(child.data_type().clone())
-                            .with_extension_type(VariantType)
-                    } else if is_variant_field {
-                        // Field was requested as Variant but data is all-null;
-                        // preserve the data type from the child without extension metadata.
-                        field
-                            .as_ref()
-                            .clone()
-                            .with_data_type(child.data_type().clone())
+                        new_field.with_extension_type(VariantType)
                     } else {
-                        field.as_ref().clone()
+                        new_field
                     };
                 updated_fields.push(updated_field);
 
