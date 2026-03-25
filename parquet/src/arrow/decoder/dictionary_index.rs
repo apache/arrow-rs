@@ -18,7 +18,7 @@
 use bytes::Bytes;
 
 use crate::encodings::rle::{RleDecodedBatch, RleDecoder};
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 
 /// Decoder for `Encoding::RLE_DICTIONARY` indices
 pub struct DictIndexDecoder {
@@ -105,12 +105,13 @@ impl DictIndexDecoder {
     ) -> Result<usize> {
         let to_read = len.min(self.max_remaining_values);
         let mut values_read = 0;
+        let mut error = None;
 
         // Flush any buffered indices from previous reads
         if self.index_offset < self.index_buf_len {
             let n = (self.index_buf_len - self.index_offset).min(to_read);
             let keys = &self.index_buf[self.index_offset..self.index_offset + n];
-            Self::gather_views(keys, dict_views, output, base_buffer_idx);
+            Self::gather_views(keys, dict_views, output, base_buffer_idx, &mut error);
             self.index_offset += n;
             self.max_remaining_values -= n;
             values_read += n;
@@ -121,24 +122,45 @@ impl DictIndexDecoder {
                 self.decoder
                     .get_batch_direct(to_read - values_read, |batch| match batch {
                         RleDecodedBatch::Rle { index, count } => {
-                            let view = dict_views[index as usize];
-                            let view = if base_buffer_idx == 0 || (view as u32) <= 12 {
-                                view
-                            } else {
-                                let mut bv = arrow_data::ByteView::from(view);
-                                bv.buffer_index += base_buffer_idx;
-                                bv.into()
-                            };
-                            output.extend(std::iter::repeat_n(view, count));
+                            match dict_views.get(index as usize) {
+                                Some(&view) => {
+                                    let view =
+                                        if base_buffer_idx == 0 || (view as u32) <= 12 {
+                                            view
+                                        } else {
+                                            let mut bv = arrow_data::ByteView::from(view);
+                                            bv.buffer_index += base_buffer_idx;
+                                            bv.into()
+                                        };
+                                    output.extend(std::iter::repeat_n(view, count));
+                                }
+                                None => {
+                                    if error.is_none() {
+                                        error = Some(general_err!(
+                                            "invalid key={} for dictionary",
+                                            index
+                                        ));
+                                    }
+                                }
+                            }
                         }
                         RleDecodedBatch::BitPacked(keys) => {
-                            Self::gather_views(keys, dict_views, output, base_buffer_idx);
+                            Self::gather_views(
+                                keys,
+                                dict_views,
+                                output,
+                                base_buffer_idx,
+                                &mut error,
+                            );
                         }
                     })?;
             self.max_remaining_values -= read;
             values_read += read;
         }
 
+        if let Some(e) = error {
+            return Err(e);
+        }
         Ok(values_read)
     }
 
@@ -147,24 +169,38 @@ impl DictIndexDecoder {
         dict_views: &[u128],
         output: &mut Vec<u128>,
         base_buffer_idx: u32,
+        error: &mut Option<ParquetError>,
     ) {
-        // Clamp index to valid range to prevent UB on corrupt data.
-        // This is branchless (cmp+csel on ARM) and avoids bounds checks in the hot loop.
-        let max_idx = dict_views.len() - 1;
         if base_buffer_idx == 0 {
-            output.extend(
-                keys.iter()
-                    .map(|k| unsafe { *dict_views.get_unchecked((*k as usize).min(max_idx)) }),
-            );
+            output.extend(keys.iter().map(|k| {
+                match dict_views.get(*k as usize) {
+                    Some(&view) => view,
+                    None => {
+                        if error.is_none() {
+                            *error = Some(general_err!("invalid key={} for dictionary", *k));
+                        }
+                        0
+                    }
+                }
+            }));
         } else {
             output.extend(keys.iter().map(|k| {
-                let view = unsafe { *dict_views.get_unchecked((*k as usize).min(max_idx)) };
-                if (view as u32) <= 12 {
-                    view
-                } else {
-                    let mut bv = arrow_data::ByteView::from(view);
-                    bv.buffer_index += base_buffer_idx;
-                    bv.into()
+                match dict_views.get(*k as usize) {
+                    Some(&view) => {
+                        if (view as u32) <= 12 {
+                            view
+                        } else {
+                            let mut bv = arrow_data::ByteView::from(view);
+                            bv.buffer_index += base_buffer_idx;
+                            bv.into()
+                        }
+                    }
+                    None => {
+                        if error.is_none() {
+                            *error = Some(general_err!("invalid key={} for dictionary", *k));
+                        }
+                        0
+                    }
                 }
             }));
         }

@@ -169,6 +169,7 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             self.validate_utf8,
         );
         decoder.read(&mut buffer, usize::MAX)?;
+        buffer.compute_all_views_inlined();
         self.dict = Some(buffer);
         Ok(())
     }
@@ -477,7 +478,8 @@ impl ByteViewArrayDecoderDictionary {
         // Check if all dictionary views are inlined (len <= 12).
         // If so, we can skip buffer management entirely since inline views
         // don't reference any buffers.
-        let all_views_inlined = dict.views.iter().all(|&v| (v as u32) <= 12);
+        // This value is precomputed when the dictionary is set.
+        let all_views_inlined = dict.all_views_inlined().unwrap_or(false);
 
         if !all_views_inlined {
             // Check if the last few buffer of `output`` are the same as the `dict` buffer

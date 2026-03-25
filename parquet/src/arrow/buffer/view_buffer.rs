@@ -30,11 +30,26 @@ use std::sync::Arc;
 pub struct ViewBuffer {
     pub views: Vec<u128>,
     pub buffers: Vec<Buffer>,
+    /// Whether all views are inlined (length <= 12), meaning no buffer references are needed.
+    /// Lazily computed and cached.
+    all_views_inlined: Option<bool>,
 }
 
 impl ViewBuffer {
     pub fn is_empty(&self) -> bool {
         self.views.is_empty()
+    }
+
+    /// Computes and caches whether all views are inlined (length <= 12).
+    /// Call this after the buffer is fully built.
+    pub fn compute_all_views_inlined(&mut self) {
+        self.all_views_inlined = Some(self.views.iter().all(|&v| (v as u32) <= 12));
+    }
+
+    /// Returns the cached result of whether all views are inlined.
+    /// Returns `None` if `compute_all_views_inlined` has not been called.
+    pub fn all_views_inlined(&self) -> Option<bool> {
+        self.all_views_inlined
     }
 
     pub fn append_block(&mut self, block: Buffer) -> u32 {
