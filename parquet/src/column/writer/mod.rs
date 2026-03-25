@@ -24,7 +24,6 @@ use crate::bloom_filter::Sbbf;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use std::collections::{BTreeSet, VecDeque};
-use std::mem;
 use std::str;
 
 use crate::basic::{
@@ -1060,19 +1059,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 let mut buffer = vec![];
 
                 if max_rep_level > 0 {
-                    let encoder = mem::replace(
-                        &mut self.rep_levels_encoder,
-                        Self::create_level_encoder(max_rep_level, &self.props),
-                    );
-                    buffer.extend_from_slice(&encoder.consume());
+                    self.rep_levels_encoder
+                        .flush_to(|data| buffer.extend_from_slice(data));
                 }
 
                 if max_def_level > 0 {
-                    let encoder = mem::replace(
-                        &mut self.def_levels_encoder,
-                        Self::create_level_encoder(max_def_level, &self.props),
-                    );
-                    buffer.extend_from_slice(&encoder.consume());
+                    self.def_levels_encoder
+                        .flush_to(|data| buffer.extend_from_slice(data));
                 }
 
                 buffer.extend_from_slice(&values_data.buf);
@@ -1102,23 +1095,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 let mut buffer = vec![];
 
                 if max_rep_level > 0 {
-                    let encoder = mem::replace(
-                        &mut self.rep_levels_encoder,
-                        Self::create_level_encoder(max_rep_level, &self.props),
-                    );
-                    let levels = encoder.consume();
-                    rep_levels_byte_len = levels.len();
-                    buffer.extend_from_slice(&levels);
+                    self.rep_levels_encoder
+                        .flush_to(|data| buffer.extend_from_slice(data));
+                    rep_levels_byte_len = buffer.len();
                 }
 
                 if max_def_level > 0 {
-                    let encoder = mem::replace(
-                        &mut self.def_levels_encoder,
-                        Self::create_level_encoder(max_def_level, &self.props),
-                    );
-                    let levels = encoder.consume();
-                    def_levels_byte_len = levels.len();
-                    buffer.extend_from_slice(&levels);
+                    self.def_levels_encoder
+                        .flush_to(|data| buffer.extend_from_slice(data));
+                    def_levels_byte_len = buffer.len() - rep_levels_byte_len;
                 }
 
                 let uncompressed_size =

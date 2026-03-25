@@ -147,6 +147,7 @@ impl LevelEncoder {
     /// Finalizes level encoder, flush all intermediate buffers and return resulting
     /// encoded buffer. Returned buffer is already truncated to encoded bytes only.
     #[inline]
+    #[allow(unused)]
     pub fn consume(self) -> Vec<u8> {
         match self {
             LevelEncoder::Rle(encoder) => {
@@ -161,5 +162,35 @@ impl LevelEncoder {
             LevelEncoder::RleV2(encoder) => encoder.consume(),
             LevelEncoder::BitPacked(_, encoder) => encoder.consume(),
         }
+    }
+
+    /// Flushes all intermediate buffers, passes the encoded data to `f`, then
+    /// resets the encoder for reuse while retaining the buffer allocation.
+    #[inline]
+    pub fn flush_to<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        let result = match self {
+            LevelEncoder::Rle(encoder) => {
+                let data = encoder.flush_buffer_mut();
+                // Patch the 4-byte length header reserved at the start of the buffer
+                let encoded_len = (data.len() - mem::size_of::<i32>()) as i32;
+                data[..4].copy_from_slice(&encoded_len.to_le_bytes());
+                f(data)
+            }
+            LevelEncoder::RleV2(encoder) => f(encoder.flush_buffer()),
+            LevelEncoder::BitPacked(_, encoder) => f(encoder.flush_buffer()),
+        };
+        match self {
+            LevelEncoder::Rle(encoder) => {
+                encoder.clear();
+                // Re-reserve the 4-byte length header for the next page
+                encoder.skip(mem::size_of::<i32>());
+            }
+            LevelEncoder::RleV2(encoder) => encoder.clear(),
+            LevelEncoder::BitPacked(_, encoder) => encoder.clear(),
+        }
+        result
     }
 }
