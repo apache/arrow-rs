@@ -15,19 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 
 #[derive(Default)]
-pub struct NullArrayDecoder {}
+pub struct NullArrayDecoder {
+    ignore_type_conflicts: bool,
+}
+impl NullArrayDecoder {
+    pub fn new(ctx: &DecoderContext) -> Self {
+        Self {
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
+        }
+    }
+}
 
 impl ArrayDecoder for NullArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        for p in pos {
-            if !matches!(tape.get(*p), TapeElement::Null) {
-                return Err(tape.error(*p, "null"));
+        if !self.ignore_type_conflicts {
+            for p in pos {
+                if !matches!(tape.get(*p), TapeElement::Null) {
+                    return Err(tape.error(*p, "null"));
+                }
             }
         }
         ArrayDataBuilder::new(DataType::Null).len(pos.len()).build()

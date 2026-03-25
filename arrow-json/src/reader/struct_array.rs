@@ -72,6 +72,7 @@ pub struct StructArrayDecoder {
     data_type: DataType,
     decoders: Vec<Box<dyn ArrayDecoder>>,
     strict_mode: bool,
+    ignore_type_conflicts: bool,
     is_nullable: bool,
     struct_mode: StructMode,
     field_name_to_index: Option<HashMap<String, usize>>,
@@ -107,6 +108,7 @@ impl StructArrayDecoder {
             data_type: data_type.clone(),
             decoders,
             strict_mode: ctx.strict_mode(),
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             is_nullable,
             struct_mode,
             field_name_to_index,
@@ -138,6 +140,10 @@ impl ArrayDecoder for StructArrayDecoder {
                                 end_idx
                             }
                             (TapeElement::Null, Some(nulls)) => {
+                                nulls.append(false);
+                                continue;
+                            }
+                            (_, Some(nulls)) if self.ignore_type_conflicts => {
                                 nulls.append(false);
                                 continue;
                             }
@@ -183,6 +189,10 @@ impl ArrayDecoder for StructArrayDecoder {
                                 end_idx
                             }
                             (TapeElement::Null, Some(nulls)) => {
+                                nulls.append(false);
+                                continue;
+                            }
+                            (_, Some(nulls)) if self.ignore_type_conflicts => {
                                 nulls.append(false);
                                 continue;
                             }

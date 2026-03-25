@@ -27,6 +27,7 @@ pub struct MapArrayDecoder {
     data_type: DataType,
     keys: Box<dyn ArrayDecoder>,
     values: Box<dyn ArrayDecoder>,
+    ignore_type_conflicts: bool,
     is_nullable: bool,
 }
 
@@ -60,6 +61,7 @@ impl MapArrayDecoder {
             data_type: data_type.clone(),
             keys,
             values,
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             is_nullable,
         })
     }
@@ -93,6 +95,10 @@ impl ArrayDecoder for MapArrayDecoder {
                     end_idx
                 }
                 (TapeElement::Null, Some(nulls)) => {
+                    nulls.append(false);
+                    p + 1
+                }
+                (_, Some(nulls)) if self.ignore_type_conflicts => {
                     nulls.append(false);
                     p + 1
                 }

@@ -22,19 +22,23 @@ use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 use std::fmt::Write;
 
-use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{ArrayDecoder, DecoderContext};
 
 const TRUE: &str = "true";
 const FALSE: &str = "false";
 
 pub struct StringViewArrayDecoder {
     coerce_primitive: bool,
+    ignore_type_conflicts: bool,
 }
 
 impl StringViewArrayDecoder {
-    pub fn new(coerce_primitive: bool) -> Self {
-        Self { coerce_primitive }
+    pub fn new(ctx: &DecoderContext) -> Self {
+        Self {
+            coerce_primitive: ctx.coerce_primitive(),
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
+        }
     }
 }
 
@@ -99,6 +103,7 @@ impl ArrayDecoder for StringViewArrayDecoder {
                 TapeElement::F64(_) if coerce => {
                     data_capacity += 10;
                 }
+                _ if self.ignore_type_conflicts => {} // treat type conflicts like nulls
                 _ => {
                     return Err(tape.error(p, "string"));
                 }
@@ -155,6 +160,9 @@ impl ArrayDecoder for StringViewArrayDecoder {
                     }
                     _ => unreachable!(),
                 },
+                _ if self.ignore_type_conflicts => {
+                    builder.append_null();
+                }
                 _ => unreachable!(),
             }
         }
