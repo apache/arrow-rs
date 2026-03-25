@@ -113,6 +113,7 @@ struct Statistics<'a> {
    6: optional binary<'a> min_value;
    7: optional bool is_max_value_exact;
    8: optional bool is_min_value_exact;
+   9: optional i64 nan_count;
 }
 );
 
@@ -991,6 +992,7 @@ pub(crate) struct PageStatistics {
    6: optional binary min_value;
    7: optional bool is_max_value_exact;
    8: optional bool is_min_value_exact;
+   9: optional i64 nan_count;
 }
 );
 
@@ -1853,6 +1855,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
         let decoded_none = super::convert_stats(&column_descr, Some(none_null_count))
             .unwrap()
@@ -1868,6 +1871,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
         let decoded_zero = super::convert_stats(&column_descr, Some(zero_null_count))
             .unwrap()

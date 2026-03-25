@@ -23,6 +23,7 @@ use half::f16;
 use crate::bloom_filter::Sbbf;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
@@ -211,6 +212,7 @@ struct PageMetrics {
     num_buffered_values: u32,
     num_buffered_rows: u32,
     num_page_nulls: u64,
+    num_page_nans: Option<u64>,
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
 }
@@ -238,6 +240,7 @@ impl PageMetrics {
         self.num_buffered_values = 0;
         self.num_buffered_rows = 0;
         self.num_page_nulls = 0;
+        self.num_page_nans = None;
         self.repetition_level_histogram
             .as_mut()
             .map(LevelHistogram::reset);
@@ -274,6 +277,7 @@ struct ColumnMetrics<T: Default> {
     min_column_value: Option<T>,
     max_column_value: Option<T>,
     num_column_nulls: u64,
+    num_column_nans: Option<u64>,
     column_distinct_count: Option<u64>,
     variable_length_bytes: Option<i64>,
     repetition_level_histogram: Option<LevelHistogram>,
@@ -786,17 +790,31 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         page_statistics: Option<&ValueStatistics<E::T>>,
         page_variable_length_bytes: Option<i64>,
     ) {
+        // Determine if this is a floating-point column
+        let is_float_column = matches!(self.descr.physical_type(), Type::FLOAT | Type::DOUBLE)
+            || (self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY
+                && self.descr.logical_type_ref() == Some(&LogicalType::Float16));
+
         // update the column index
         let null_page =
             (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
         // a page contains only null values,
         // and writers have to set the corresponding entries in min_values and max_values to byte[0]
         if null_page && self.column_index_builder.valid() {
+            // For float columns, always provide Some(n), even if n is 0
+            // For non-float columns, always provide None
+            let nan_count = if is_float_column {
+                Some(self.page_metrics.num_page_nans.unwrap_or(0) as i64)
+            } else {
+                None
+            };
+
             self.column_index_builder.append(
                 null_page,
                 vec![],
                 vec![],
                 self.page_metrics.num_page_nulls as i64,
+                nan_count,
             );
         } else if self.column_index_builder.valid() {
             // from page statistics
@@ -830,6 +848,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     }
                     self.last_non_null_data_page_min_max = Some((new_min.clone(), new_max.clone()));
 
+                    // For float columns, always provide Some(n), even if n is 0
+                    // For non-float columns, always provide None
+                    let nan_count = if is_float_column {
+                        Some(stat.nan_count_opt().unwrap_or(0) as i64)
+                    } else {
+                        None
+                    };
+
                     if self.can_truncate_value() {
                         self.column_index_builder.append(
                             null_page,
@@ -844,6 +870,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             )
                             .0,
                             self.page_metrics.num_page_nulls as i64,
+                            nan_count,
                         );
                     } else {
                         self.column_index_builder.append(
@@ -851,6 +878,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             stat.min_bytes_opt().unwrap().to_vec(),
                             stat.max_bytes_opt().unwrap().to_vec(),
                             self.page_metrics.num_page_nulls as i64,
+                            nan_count,
                         );
                     }
                 }
@@ -1019,6 +1047,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         self.column_metrics.num_column_nulls += self.page_metrics.num_page_nulls;
 
+        if let Some(nan_count) = values_data.nan_count {
+            *self.column_metrics.num_column_nans.get_or_insert(0) += nan_count;
+            self.page_metrics.num_page_nans = Some(nan_count);
+        }
+
         let page_statistics = match (values_data.min_value, values_data.max_value) {
             (Some(min), Some(max)) => {
                 // Update chunk level statistics
@@ -1032,7 +1065,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         None,
                         Some(self.page_metrics.num_page_nulls),
                         false,
-                    ),
+                    )
+                    .with_nan_count(values_data.nan_count),
                 )
             }
             _ => None,
@@ -1218,6 +1252,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 Some(self.column_metrics.num_column_nulls),
                 false,
             )
+            .with_nan_count(self.column_metrics.num_column_nans)
             .with_backwards_compatible_min_max(backwards_compatible_min_max)
             .into();
 
@@ -1428,6 +1463,16 @@ fn update_stat<T: ParquetValueType, F>(
 /// Evaluate `a > b` according to underlying logical type.
 fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
     match T::PHYSICAL_TYPE {
+        Type::FLOAT => {
+            let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
+            let b = f32::from_le_bytes(b.as_bytes().try_into().unwrap());
+            return a.total_cmp(&b) == Ordering::Greater;
+        }
+        Type::DOUBLE => {
+            let a = f64::from_le_bytes(a.as_bytes().try_into().unwrap());
+            let b = f64::from_le_bytes(b.as_bytes().try_into().unwrap());
+            return a.total_cmp(&b) == Ordering::Greater;
+        }
         Type::INT32 | Type::INT64 => {
             if let Some(LogicalType::Integer {
                 is_signed: false, ..
@@ -1505,7 +1550,7 @@ fn compare_greater_unsigned_int<T: ParquetValueType>(a: &T, b: &T) -> bool {
 fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
     let a = f16::from_le_bytes(a.try_into().unwrap());
     let b = f16::from_le_bytes(b.try_into().unwrap());
-    a > b
+    a.total_cmp(&b) == Ordering::Greater
 }
 
 /// Signed comparison of bytes arrays
