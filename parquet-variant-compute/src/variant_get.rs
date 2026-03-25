@@ -77,21 +77,8 @@ fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
     let mut take_indices = Vec::with_capacity(list_array.len());
     for row in 0..list_array.len() {
         let row_range = list_array.element_range(row);
-        let len = row_range.len();
-
-        if index < len {
-            let absolute_index = row_range.start.checked_add(index).ok_or_else(|| {
-                ArrowError::ComputeError(
-                    "List-like index overflow while building take indices".into(),
-                )
-            })?;
-            let absolute_index = u64::try_from(absolute_index).map_err(|_| {
-                ArrowError::ComputeError("List-like index does not fit into u64".into())
-            })?;
-            take_indices.push(Some(absolute_index));
-        } else {
-            take_indices.push(None);
-        }
+        let take_index = (index < row_range.len()).then(|| (row_range.start + index) as u64);
+        take_indices.push(take_index);
     }
 
     let index_array = UInt64Array::from(take_indices);
