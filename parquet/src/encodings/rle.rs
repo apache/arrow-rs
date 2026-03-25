@@ -516,10 +516,6 @@ impl RleDecoder {
         if dict.is_empty() {
             return Ok(0);
         }
-        // Clamp index to valid range to prevent UB on corrupt data.
-        // This is branchless (cmp+csel on ARM) and avoids bounds checks in the hot loop.
-        let max_idx = dict.len() - 1;
-
         let mut values_read = 0;
         while values_read < max_values {
             let index_buf = self.index_buf.get_or_insert_with(|| Box::new([0; 1024]));
@@ -559,8 +555,8 @@ impl RleDecoder {
                     buffer[values_read..values_read + num_values]
                         .iter_mut()
                         .zip(index_buf[..num_values].iter())
-                        .for_each(|(b, i)| unsafe {
-                            b.clone_from(dict.get_unchecked((*i as usize).min(max_idx)));
+                        .for_each(|(b, i)| {
+                            b.clone_from(&dict[*i as usize]);
                         });
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
