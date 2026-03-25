@@ -148,6 +148,19 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     Ok(builder)
 }
 
+/// Applies consistent null-cast semantics across builders:
+/// `Variant::Null` is always accepted and appended as Arrow null, even in strict mode.
+fn append_null_if_variant_null(
+    value: &Variant<'_, '_>,
+    append_null: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
+    if matches!(value, Variant::Null) {
+        append_null()?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Builder for converting primitive variant values to Arrow arrays. It is used by both
 /// `VariantToArrowRowBuilder` (below) and `VariantToShreddedPrimitiveVariantRowBuilder` (in
 /// `shred_variant.rs`).
@@ -546,6 +559,9 @@ impl<'a> StructVariantToArrowRowBuilder<'a> {
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        if append_null_if_variant_null(value, || self.append_null())? {
+            return Ok(false);
+        }
         let Variant::Object(obj) = value else {
             if self.cast_options.safe {
                 self.append_null()?;
@@ -708,6 +724,12 @@ macro_rules! define_variant_to_primitive_builder {
             }
 
             fn append_value(&mut self, $value: &Variant<'_, '_>) -> Result<bool> {
+                if append_null_if_variant_null($value, || {
+                    self.builder.append_null();
+                    Ok(())
+                })? {
+                    return Ok(false);
+                }
                 if let Some(v) = $value_transform {
                     self.builder.append_value(v);
                     Ok(true)
@@ -822,6 +844,12 @@ where
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        if append_null_if_variant_null(value, || {
+            self.builder.append_null();
+            Ok(())
+        })? {
+            return Ok(false);
+        }
         if let Some(scaled) = variant_to_unscaled_decimal::<T>(value, self.precision, self.scale) {
             self.builder.append_value(scaled);
             Ok(true)
@@ -864,6 +892,12 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        if append_null_if_variant_null(value, || {
+            self.builder.append_null();
+            Ok(())
+        })? {
+            return Ok(false);
+        }
         match value.as_uuid() {
             Some(uuid) => {
                 self.builder
@@ -939,17 +973,13 @@ where
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        if append_null_if_variant_null(value, || self.append_null())? {
+            return Ok(false);
+        }
         match value {
             Variant::List(list) => {
                 for element in list.iter() {
-                    match element {
-                        Variant::Null => {
-                            self.element_builder.append_null()?;
-                        }
-                        _ => {
-                            self.element_builder.append_value(element)?;
-                        }
-                    }
+                    self.element_builder.append_value(element)?;
                     self.current_offset = self.current_offset.add_checked(O::ONE)?;
                 }
                 self.offsets.push(self.current_offset);
@@ -1075,11 +1105,18 @@ define_variant_to_primitive_builder!(
 
 #[cfg(test)]
 mod tests {
-    use super::make_primitive_variant_to_arrow_row_builder;
+    use super::{
+        make_primitive_variant_to_arrow_row_builder, make_typed_variant_to_arrow_row_builder,
+    };
+    use arrow::array::{
+        Array, Decimal32Array, FixedSizeBinaryArray, Int32Array, ListArray, StructArray,
+    };
     use arrow::compute::CastOptions;
     use arrow::datatypes::{DataType, Field, Fields, UnionFields, UnionMode};
     use arrow::error::ArrowError;
+    use parquet_variant::{Variant, VariantDecimal4};
     use std::sync::Arc;
+    use uuid::Uuid;
 
     #[test]
     fn make_primitive_builder_rejects_non_primitive_types() {
@@ -1127,5 +1164,98 @@ mod tests {
                 other => panic!("expected InvalidArgumentError, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn strict_cast_allows_variant_null_for_primitive_builder() {
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let mut builder =
+            make_primitive_variant_to_arrow_row_builder(&DataType::Int32, &cast_options, 2)
+                .unwrap();
+
+        assert!(!builder.append_value(&Variant::Null).unwrap());
+        assert!(builder.append_value(&Variant::Int32(42)).unwrap());
+
+        let array = builder.finish().unwrap();
+        let int_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert!(int_array.is_null(0));
+        assert_eq!(int_array.value(1), 42);
+    }
+
+    #[test]
+    fn strict_cast_allows_variant_null_for_decimal_builder() {
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let mut builder = make_primitive_variant_to_arrow_row_builder(
+            &DataType::Decimal32(9, 2),
+            &cast_options,
+            2,
+        )
+        .unwrap();
+        let decimal_variant: Variant<'_, '_> = VariantDecimal4::try_new(1234, 2).unwrap().into();
+
+        assert!(!builder.append_value(&Variant::Null).unwrap());
+        assert!(builder.append_value(&decimal_variant).unwrap());
+
+        let array = builder.finish().unwrap();
+        let decimal_array = array.as_any().downcast_ref::<Decimal32Array>().unwrap();
+        assert!(decimal_array.is_null(0));
+        assert_eq!(decimal_array.value(1), 1234);
+    }
+
+    #[test]
+    fn strict_cast_allows_variant_null_for_uuid_builder() {
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let mut builder = make_primitive_variant_to_arrow_row_builder(
+            &DataType::FixedSizeBinary(16),
+            &cast_options,
+            2,
+        )
+        .unwrap();
+        let uuid = Uuid::nil();
+
+        assert!(!builder.append_value(&Variant::Null).unwrap());
+        assert!(builder.append_value(&Variant::Uuid(uuid)).unwrap());
+
+        let array = builder.finish().unwrap();
+        let uuid_array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert!(uuid_array.is_null(0));
+        assert_eq!(uuid_array.value(1), uuid.as_bytes());
+    }
+
+    #[test]
+    fn strict_cast_allows_variant_null_for_list_and_struct_builders() {
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+        let mut list_builder =
+            make_typed_variant_to_arrow_row_builder(&list_type, &cast_options, 1).unwrap();
+        assert!(!list_builder.append_value(Variant::Null).unwrap());
+        let list_array = list_builder.finish().unwrap();
+        let list_array = list_array.as_any().downcast_ref::<ListArray>().unwrap();
+        assert!(list_array.is_null(0));
+
+        let struct_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)]));
+        let mut struct_builder =
+            make_typed_variant_to_arrow_row_builder(&struct_type, &cast_options, 1).unwrap();
+        assert!(!struct_builder.append_value(Variant::Null).unwrap());
+        let struct_array = struct_builder.finish().unwrap();
+        let struct_array = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
+        assert!(struct_array.is_null(0));
     }
 }
