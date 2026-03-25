@@ -232,8 +232,10 @@ fn read_bloom_filter_header_and_length_from_bytes(
     Ok((header, (total_length - prot.as_slice().len()) as u64))
 }
 
-pub(crate) const BITSET_MIN_LENGTH: usize = 32;
-pub(crate) const BITSET_MAX_LENGTH: usize = 128 * 1024 * 1024;
+/// The minimum number of bytes for a bloom filter bitset.
+pub const BITSET_MIN_LENGTH: usize = 32;
+/// The maximum number of bytes for a bloom filter bitset.
+pub const BITSET_MAX_LENGTH: usize = 128 * 1024 * 1024;
 
 #[inline]
 fn optimal_num_of_bytes(num_bytes: usize) -> usize {
@@ -255,7 +257,7 @@ fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
 impl Sbbf {
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
     /// Will return an error if `fpp` is greater than or equal to 1.0 or less than 0.0.
-    pub(crate) fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Result<Self, ParquetError> {
+    pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Result<Self, ParquetError> {
         if !(0.0..1.0).contains(&fpp) {
             return Err(ParquetError::General(format!(
                 "False positive probability must be between 0.0 and 1.0, got {fpp}"
@@ -267,7 +269,7 @@ impl Sbbf {
 
     /// Create a new [Sbbf] with given number of bytes, the exact number of bytes will be adjusted
     /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
-    pub(crate) fn new_with_num_of_bytes(num_bytes: usize) -> Self {
+    pub fn new_with_num_of_bytes(num_bytes: usize) -> Self {
         let num_bytes = optimal_num_of_bytes(num_bytes);
         assert_eq!(num_bytes % size_of::<Block>(), 0);
         let num_blocks = num_bytes / size_of::<Block>();
@@ -275,7 +277,8 @@ impl Sbbf {
         Self(bitset)
     }
 
-    pub(crate) fn new(bitset: &[u8]) -> Self {
+    /// Creates a new [Sbbf] from a raw byte slice.
+    pub fn new(bitset: &[u8]) -> Self {
         let data = bitset
             .chunks_exact(4 * 8)
             .map(|chunk| {
@@ -304,7 +307,7 @@ impl Sbbf {
 
     /// Write the bitset in serialized form to the writer.
     #[cfg(not(target_endian = "little"))]
-    fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+    pub fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         for block in &self.0 {
             writer
                 .write_all(block.to_le_bytes().as_slice())
@@ -317,7 +320,7 @@ impl Sbbf {
 
     /// Write the bitset in serialized form to the writer.
     #[cfg(target_endian = "little")]
-    fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+    pub fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         // Safety: Block is repr(transparent) and [u32; 8] can be reinterpreted as [u8; 32].
         let slice = unsafe {
             std::slice::from_raw_parts(
@@ -411,7 +414,7 @@ impl Sbbf {
     }
 
     /// Check if an [AsBytes] value is probably present or definitely absent in the filter
-    pub fn check<T: AsBytes>(&self, value: &T) -> bool {
+    pub fn check<T: AsBytes + ?Sized>(&self, value: &T) -> bool {
         self.check_hash(hash_as_bytes(value))
     }
 
