@@ -169,7 +169,6 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             self.validate_utf8,
         );
         decoder.read(&mut buffer, usize::MAX)?;
-        buffer.compute_all_views_inlined();
         self.dict = Some(buffer);
         Ok(())
     }
@@ -475,40 +474,28 @@ impl ByteViewArrayDecoderDictionary {
             return Ok(0);
         }
 
-        // Check if all dictionary views are inlined (len <= 12).
-        // If so, we can skip buffer management entirely since inline views
-        // don't reference any buffers.
-        // This value is precomputed when the dictionary is set.
-        let all_views_inlined = dict.all_views_inlined().unwrap_or(false);
+        // Check if the last few buffer of `output`` are the same as the `dict` buffer
+        // This is to avoid creating a new buffers if the same dictionary is used for multiple `read`
+        let need_to_create_new_buffer = {
+            if output.buffers.len() >= dict.buffers.len() {
+                let offset = output.buffers.len() - dict.buffers.len();
+                output.buffers[offset..]
+                    .iter()
+                    .zip(dict.buffers.iter())
+                    .any(|(a, b)| !a.ptr_eq(b))
+            } else {
+                true
+            }
+        };
 
-        if !all_views_inlined {
-            // Check if the last few buffer of `output`` are the same as the `dict` buffer
-            // This is to avoid creating a new buffers if the same dictionary is used for multiple `read`
-            let need_to_create_new_buffer = {
-                if output.buffers.len() >= dict.buffers.len() {
-                    let offset = output.buffers.len() - dict.buffers.len();
-                    output.buffers[offset..]
-                        .iter()
-                        .zip(dict.buffers.iter())
-                        .any(|(a, b)| !a.ptr_eq(b))
-                } else {
-                    true
-                }
-            };
-
-            if need_to_create_new_buffer {
-                for b in dict.buffers.iter() {
-                    output.buffers.push(b.clone());
-                }
+        if need_to_create_new_buffer {
+            for b in dict.buffers.iter() {
+                output.buffers.push(b.clone());
             }
         }
 
         // Calculate the offset of the dictionary buffers in the output buffers
-        let base_buffer_idx = if all_views_inlined {
-            0
-        } else {
-            output.buffers.len() as u32 - dict.buffers.len() as u32
-        };
+        let base_buffer_idx = output.buffers.len() as u32 - dict.buffers.len() as u32;
 
         // Pre-reserve output capacity to avoid per-chunk reallocation in extend
         output.views.reserve(len);
