@@ -124,14 +124,13 @@ impl DictIndexDecoder {
                         RleDecodedBatch::Rle { index, count } => {
                             match dict_views.get(index as usize) {
                                 Some(&view) => {
-                                    let view =
-                                        if base_buffer_idx == 0 || (view as u32) <= 12 {
-                                            view
-                                        } else {
-                                            let mut bv = arrow_data::ByteView::from(view);
-                                            bv.buffer_index += base_buffer_idx;
-                                            bv.into()
-                                        };
+                                    let view = if base_buffer_idx == 0 || (view as u32) <= 12 {
+                                        view
+                                    } else {
+                                        let mut bv = arrow_data::ByteView::from(view);
+                                        bv.buffer_index += base_buffer_idx;
+                                        bv.into()
+                                    };
                                     output.extend(std::iter::repeat_n(view, count));
                                 }
                                 None => {
@@ -172,35 +171,31 @@ impl DictIndexDecoder {
         error: &mut Option<ParquetError>,
     ) {
         if base_buffer_idx == 0 {
-            output.extend(keys.iter().map(|k| {
-                match dict_views.get(*k as usize) {
-                    Some(&view) => view,
-                    None => {
-                        if error.is_none() {
-                            *error = Some(general_err!("invalid key={} for dictionary", *k));
-                        }
-                        0
+            output.extend(keys.iter().map(|k| match dict_views.get(*k as usize) {
+                Some(&view) => view,
+                None => {
+                    if error.is_none() {
+                        *error = Some(general_err!("invalid key={} for dictionary", *k));
                     }
+                    0
                 }
             }));
         } else {
-            output.extend(keys.iter().map(|k| {
-                match dict_views.get(*k as usize) {
-                    Some(&view) => {
-                        if (view as u32) <= 12 {
-                            view
-                        } else {
-                            let mut bv = arrow_data::ByteView::from(view);
-                            bv.buffer_index += base_buffer_idx;
-                            bv.into()
-                        }
+            output.extend(keys.iter().map(|k| match dict_views.get(*k as usize) {
+                Some(&view) => {
+                    if (view as u32) <= 12 {
+                        view
+                    } else {
+                        let mut bv = arrow_data::ByteView::from(view);
+                        bv.buffer_index += base_buffer_idx;
+                        bv.into()
                     }
-                    None => {
-                        if error.is_none() {
-                            *error = Some(general_err!("invalid key={} for dictionary", *k));
-                        }
-                        0
+                }
+                None => {
+                    if error.is_none() {
+                        *error = Some(general_err!("invalid key={} for dictionary", *k));
                     }
+                    0
                 }
             }));
         }
