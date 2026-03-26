@@ -2690,6 +2690,131 @@ mod tests {
     }
 
     #[test]
+    fn test_ieee754_total_order_float() {
+        // Test IEEE 754 total order for f32
+        // Order should be: -NaN < -Inf < -1.0 < -0.0 < +0.0 < 1.0 < +Inf < +NaN
+        let neg_nan = f32::from_bits(0xffc00000);
+        let neg_inf = f32::NEG_INFINITY;
+        let neg_one = -1.0_f32;
+        let neg_zero = -0.0_f32;
+        let pos_zero = 0.0_f32;
+        let pos_one = 1.0_f32;
+        let pos_inf = f32::INFINITY;
+        let pos_nan = f32::from_bits(0x7fc00000);
+
+        let values = vec![
+            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero,
+        ];
+
+        let stats = statistics_roundtrip::<FloatType>(&values);
+        if let Statistics::Float(stats) = stats {
+            // With IEEE 754 total order, min should be -NaN, max should be +NaN
+            // But since we filter out NaN values, min should be -Inf, max should be +Inf
+            assert_eq!(stats.min_opt().unwrap(), &neg_inf);
+            assert_eq!(stats.max_opt().unwrap(), &pos_inf);
+            assert_eq!(stats.nan_count_opt(), Some(2)); // neg_nan and pos_nan
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_float_only_nan() {
+        // Test IEEE 754 total order for f32
+        // Order should be: -NaN < -Inf < -1.0 < -0.0 < +0.0 < 1.0 < +Inf < +NaN
+        let neg_nan1 = f32::from_bits(0xffc00000);
+        let neg_nan2 = f32::from_bits(0xffc00001);
+        let neg_nan3 = f32::from_bits(0xffc00002);
+        let pos_nan1 = f32::from_bits(0x7fc00000);
+        let pos_nan2 = f32::from_bits(0x7fc00001);
+        let pos_nan3 = f32::from_bits(0x7fc00002);
+
+        let values = vec![
+            neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3,
+        ];
+
+        let stats = statistics_roundtrip::<FloatType>(&values);
+        if let Statistics::Float(stats) = stats {
+            // With IEEE 754 total order, min should be -NaN, max should be +NaN
+            // But since we filter out NaN values, min should be -Inf, max should be +Inf
+            assert_eq!(stats.min_opt().unwrap().total_cmp(&neg_nan3), Ordering::Equal);
+            assert_eq!(stats.max_opt().unwrap().total_cmp(&pos_nan3), Ordering::Equal);
+            assert_eq!(stats.nan_count_opt(), Some(6));
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_double() {
+        // Test IEEE 754 total order for f64
+        let neg_nan = f64::from_bits(0xfff8000000000000);
+        let neg_inf = f64::NEG_INFINITY;
+        let neg_one = -1.0_f64;
+        let neg_zero = -0.0_f64;
+        let pos_zero = 0.0_f64;
+        let pos_one = 1.0_f64;
+        let pos_inf = f64::INFINITY;
+        let pos_nan = f64::from_bits(0x7ff8000000000000);
+
+        let values = vec![
+            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero,
+        ];
+
+        let stats = statistics_roundtrip::<DoubleType>(&values);
+        if let Statistics::Double(stats) = stats {
+            // With IEEE 754 total order, and NaN filtering
+            assert_eq!(stats.min_opt().unwrap(), &neg_inf);
+            assert_eq!(stats.max_opt().unwrap(), &pos_inf);
+            assert_eq!(stats.nan_count_opt(), Some(2));
+        } else {
+            panic!("Expected double statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_double_only_nan() {
+        // Test IEEE 754 total order for f64
+        // Order should be: -NaN < -Inf < -1.0 < -0.0 < +0.0 < 1.0 < +Inf < +NaN
+        let neg_nan1 = f64::from_bits(0xfff8000000000000);
+        let neg_nan2 = f64::from_bits(0xfff8000000000001);
+        let neg_nan3 = f64::from_bits(0xfff8000000000002);
+        let pos_nan1 = f64::from_bits(0x7ff8000000000000);
+        let pos_nan2 = f64::from_bits(0x7ff8000000000001);
+        let pos_nan3 = f64::from_bits(0x7ff8000000000002);
+
+        let values = vec![
+            neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3,
+        ];
+
+        let stats = statistics_roundtrip::<DoubleType>(&values);
+        if let Statistics::Double(stats) = stats {
+            // With IEEE 754 total order, min should be -NaN, max should be +NaN
+            // But since we filter out NaN values, min should be -Inf, max should be +Inf
+            assert_eq!(stats.min_opt().unwrap().total_cmp(&neg_nan3), Ordering::Equal);
+            assert_eq!(stats.max_opt().unwrap().total_cmp(&pos_nan3), Ordering::Equal);
+            assert_eq!(stats.nan_count_opt(), Some(6));
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
+    fn test_ieee754_total_order_zeros() {
+        // Test that -0.0 and +0.0 are handled correctly
+        let values = vec![-0.0_f32, 0.0_f32, -0.0_f32, 0.0_f32];
+
+        let stats = statistics_roundtrip::<FloatType>(&values);
+        if let Statistics::Float(stats) = stats {
+            // With IEEE 754 total order, -0.0 < +0.0
+            assert_eq!(stats.min_opt().unwrap().to_bits(), (-0.0_f32).to_bits());
+            assert_eq!(stats.max_opt().unwrap().to_bits(), 0.0_f32.to_bits());
+        } else {
+            panic!("Expected float statistics");
+        }
+    }
+
+    #[test]
     fn test_column_writer_check_float16_min_max() {
         let input = [
             -f16::ONE,
