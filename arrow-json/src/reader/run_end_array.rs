@@ -15,16 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::marker::PhantomData;
+use std::ops::Range;
+use std::slice::from_ref;
+use std::sync::Arc;
+
+use arrow_array::types::RunEndIndexType;
+use arrow_array::{ArrayRef, RunArray, UInt32Array, new_empty_array};
+use arrow_buffer::{ArrowNativeType, RunEndBuffer, ScalarBuffer};
+use arrow_ord::partition::partition;
+use arrow_schema::{ArrowError, DataType};
+use arrow_select::take::take;
+
 use crate::reader::tape::Tape;
 use crate::reader::{ArrayDecoder, DecoderContext};
-use arrow_array::types::RunEndIndexType;
-use arrow_array::{ArrayRef, RunArray, make_array, new_empty_array};
-use arrow_buffer::{ArrowNativeType, RunEndBuffer, ScalarBuffer};
-use arrow_data::ArrayData;
-use arrow_data::transform::MutableArrayData;
-use arrow_schema::{ArrowError, DataType};
-use std::marker::PhantomData;
-use std::sync::Arc;
 
 pub struct RunEndEncodedArrayDecoder<R> {
     data_type: DataType,
@@ -62,55 +66,33 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
             return Ok(new_empty_array(&self.data_type));
         }
 
-        let flat_data = self.decoder.decode(tape, pos)?.to_data();
+        let flat_array = self.decoder.decode(tape, pos)?;
 
-        let mut run_end_values: Vec<R::Native> = Vec::new();
-        let mut mutable = MutableArrayData::new(vec![&flat_data], false, len);
+        let partitions = partition(from_ref(&flat_array))?;
+        let size = partitions.len();
+        let mut run_ends = Vec::with_capacity(size);
+        let mut value_indices = Vec::with_capacity(size);
 
-        let mut run_start = 0;
-        for i in 1..len {
-            if !same_run(&flat_data, run_start, i) {
-                let run_end = R::Native::from_usize(i).ok_or_else(|| {
-                    ArrowError::JsonError(format!(
-                        "Run end value {i} exceeds {:?} range",
-                        R::DATA_TYPE
-                    ))
-                })?;
-                run_end_values.push(run_end);
-                mutable.extend(0, run_start, run_start + 1);
-                run_start = i;
-            }
+        for Range { start, end } in partitions.ranges() {
+            let run_end = R::Native::from_usize(end).ok_or_else(|| {
+                ArrowError::JsonError(format!(
+                    "Run end value {end} exceeds {:?} range",
+                    R::DATA_TYPE
+                ))
+            })?;
+            run_ends.push(run_end);
+            value_indices.push(start);
         }
-        let run_end = R::Native::from_usize(len).ok_or_else(|| {
-            ArrowError::JsonError(format!(
-                "Run end value {len} exceeds {:?} range",
-                R::DATA_TYPE
-            ))
-        })?;
-        run_end_values.push(run_end);
-        mutable.extend(0, run_start, run_start + 1);
 
-        let values = make_array(mutable.freeze());
+        let indices = UInt32Array::from_iter_values(value_indices.into_iter().map(|i| i as u32));
+        let values = take(flat_array.as_ref(), &indices, None)?;
+
         // SAFETY: run_ends are strictly increasing with the last value equal to len
-        let run_ends = unsafe {
-            RunEndBuffer::new_unchecked(ScalarBuffer::from(run_end_values), 0, len)
-        };
+        let run_ends = unsafe { RunEndBuffer::new_unchecked(ScalarBuffer::from(run_ends), 0, len) };
 
         // SAFETY: run_ends are valid and values has the same length as run_ends
         let array =
             unsafe { RunArray::<R>::new_unchecked(self.data_type.clone(), run_ends, values) };
         Ok(Arc::new(array))
     }
-}
-
-fn same_run(data: &ArrayData, i: usize, j: usize) -> bool {
-    let null_i = data.is_null(i);
-    let null_j = data.is_null(j);
-    if null_i != null_j {
-        return false;
-    }
-    if null_i {
-        return true;
-    }
-    data.slice(i, 1) == data.slice(j, 1)
 }
