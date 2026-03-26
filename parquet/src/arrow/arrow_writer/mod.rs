@@ -1663,6 +1663,7 @@ fn get_fsb_array_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cmp::Ordering;
     use std::collections::HashMap;
 
     use std::fs::File;
@@ -2918,8 +2919,31 @@ mod tests {
             for column in row_group.columns() {
                 assert!(column.offset_index_offset().is_some());
                 assert!(column.offset_index_length().is_some());
-                assert!(column.column_index_offset().is_none());
-                assert!(column.column_index_length().is_none());
+                assert!(column.column_index_offset().is_some());
+                assert!(column.column_index_length().is_some());
+            }
+        }
+        assert!(file_meta_data.column_index().is_some());
+        if let Some(col_indexes) = file_meta_data.column_index() {
+            for rg_idx in col_indexes {
+                for idx in rg_idx {
+                    assert!(idx.nan_counts().is_some());
+                    let float_idx = match idx {
+                        ColumnIndexMetaData::DOUBLE(idx) => idx,
+                        _ => panic!("expected double statistics"),
+                    };
+                    for i in 0..idx.num_pages() as usize {
+                        assert_eq!(float_idx.nan_count(i), Some(10));
+                        assert_eq!(
+                            f64::NAN.total_cmp(float_idx.min_value(i).unwrap()),
+                            Ordering::Equal
+                        );
+                        assert_eq!(
+                            f64::NAN.total_cmp(float_idx.max_value(i).unwrap()),
+                            Ordering::Equal
+                        );
+                    }
+                }
             }
         }
     }

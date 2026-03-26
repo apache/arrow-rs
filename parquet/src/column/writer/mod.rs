@@ -1418,11 +1418,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 }
 
 fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, min, |cur| compare_greater(descr, cur, val))
+    update_stat::<T, _>(val, min, |cur| compare_greater(descr, cur, val))
 }
 
 fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, max, |cur| compare_greater(descr, val, cur))
+    update_stat::<T, _>(val, max, |cur| compare_greater(descr, val, cur))
 }
 
 #[inline]
@@ -1443,18 +1443,10 @@ fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
 ///
 /// If `cur` is `None`, sets `cur` to `Some(val)`, otherwise calls `should_update` with
 /// the value of `cur`, and updates `cur` to `Some(val)` if it returns `true`
-fn update_stat<T: ParquetValueType, F>(
-    descr: &ColumnDescriptor,
-    val: &T,
-    cur: &mut Option<T>,
-    should_update: F,
-) where
+fn update_stat<T: ParquetValueType, F>(val: &T, cur: &mut Option<T>, should_update: F)
+where
     F: Fn(&T) -> bool,
 {
-    if is_nan(descr, val) {
-        return;
-    }
-
     if cur.as_ref().is_none_or(should_update) {
         *cur = Some(val.clone());
     }
@@ -2735,6 +2727,7 @@ mod tests {
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2751,6 +2744,7 @@ mod tests {
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2767,6 +2761,7 @@ mod tests {
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2777,9 +2772,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         let stats = float16_statistics_roundtrip(&input);
-        assert!(stats.min_bytes_opt().is_none());
-        assert!(stats.max_bytes_opt().is_none());
+        assert_eq!(
+            stats.min_bytes_opt(),
+            Some(ByteArray::from(f16::NAN).as_bytes())
+        );
+        assert_eq!(
+            stats.max_bytes_opt(),
+            Some(ByteArray::from(f16::NAN).as_bytes())
+        );
         assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.nan_count_opt(), Some(2));
     }
 
     #[test]
@@ -2791,7 +2793,7 @@ mod tests {
 
         let stats = float16_statistics_roundtrip(&input);
         assert!(!stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
     }
 
@@ -2805,7 +2807,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
-        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
     }
 
     #[test]
@@ -2817,7 +2819,7 @@ mod tests {
 
         let stats = float16_statistics_roundtrip(&input);
         assert!(!stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::PI));
     }
 
@@ -2831,7 +2833,7 @@ mod tests {
         let stats = float16_statistics_roundtrip(&input);
         assert!(!stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::PI));
-        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
     }
 
     #[test]
@@ -2841,6 +2843,7 @@ mod tests {
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2853,6 +2856,7 @@ mod tests {
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2861,8 +2865,9 @@ mod tests {
     #[test]
     fn test_float_statistics_nan_only() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, f32::NAN]);
-        assert!(stats.min_bytes_opt().is_none());
-        assert!(stats.max_bytes_opt().is_none());
+        assert_eq!(stats.min_bytes_opt(), Some(f32::NAN.as_bytes()));
+        assert_eq!(stats.max_bytes_opt(), Some(f32::NAN.as_bytes()));
+        assert_eq!(stats.nan_count_opt(), Some(2));
         assert!(!stats.is_min_max_backwards_compatible());
         assert!(matches!(stats, Statistics::Float(_)));
     }
@@ -2872,8 +2877,8 @@ mod tests {
         let stats = statistics_roundtrip::<FloatType>(&[0.0]);
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &0.0);
             assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
@@ -2888,8 +2893,8 @@ mod tests {
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2900,8 +2905,8 @@ mod tests {
         let stats = statistics_roundtrip::<FloatType>(&[0.0, 1.0, f32::NAN, 2.0]);
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
@@ -2914,8 +2919,8 @@ mod tests {
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Float(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2928,6 +2933,7 @@ mod tests {
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2940,6 +2946,7 @@ mod tests {
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
+            assert_eq!(stats.nan_count_opt(), Some(1))
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2948,8 +2955,9 @@ mod tests {
     #[test]
     fn test_double_statistics_nan_only() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, f64::NAN]);
-        assert!(stats.min_bytes_opt().is_none());
-        assert!(stats.max_bytes_opt().is_none());
+        assert_eq!(stats.min_bytes_opt(), Some(f64::NAN.as_bytes()));
+        assert_eq!(stats.max_bytes_opt(), Some(f64::NAN.as_bytes()));
+        assert_eq!(stats.nan_count_opt(), Some(2));
         assert!(matches!(stats, Statistics::Double(_)));
         assert!(!stats.is_min_max_backwards_compatible());
     }
@@ -2959,8 +2967,8 @@ mod tests {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0]);
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &0.0);
             assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
@@ -2975,8 +2983,8 @@ mod tests {
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-0.0);
             assert!(stats.min_opt().unwrap().is_sign_negative());
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Double");
         }
@@ -2987,8 +2995,8 @@ mod tests {
         let stats = statistics_roundtrip::<DoubleType>(&[0.0, 1.0, f64::NAN, 2.0]);
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &-0.0);
-            assert!(stats.min_opt().unwrap().is_sign_negative());
+            assert_eq!(stats.min_opt().unwrap(), &0.0);
+            assert!(stats.min_opt().unwrap().is_sign_positive());
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
@@ -3001,8 +3009,8 @@ mod tests {
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
-            assert_eq!(stats.max_opt().unwrap(), &0.0);
-            assert!(stats.max_opt().unwrap().is_sign_positive());
+            assert_eq!(stats.max_opt().unwrap(), &-0.0);
+            assert!(stats.max_opt().unwrap().is_sign_negative());
         } else {
             panic!("expecting Statistics::Double");
         }
