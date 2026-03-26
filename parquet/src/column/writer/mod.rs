@@ -1418,11 +1418,39 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 }
 
 fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut Option<T>) {
-    update_stat::<T, _>(val, min, |cur| compare_greater(descr, cur, val))
+    if min.is_none() {
+        *min = Some(val.clone());
+    } else {
+        // safe to unwrap min since we've already tested for None
+        let is_min_nan = is_nan(descr, min.as_ref().unwrap());
+        let is_val_nan = is_nan(descr, val);
+        match (is_min_nan, is_val_nan) {
+            // current min is not NaN, but incoming is NaN: skip
+            (false, true) => {}
+            // current min is NaN, but incoming is not: assign val to min
+            (true, false) => *min = Some(val.clone()),
+            // both NaN or non-NaN, safe to call update_stat()
+            _ => update_stat::<T, _>(val, min, |cur| compare_greater(descr, cur, val)),
+        }
+    }
 }
 
 fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut Option<T>) {
-    update_stat::<T, _>(val, max, |cur| compare_greater(descr, val, cur))
+    if max.is_none() {
+        *max = Some(val.clone());
+    } else {
+        // safe to unwrap max since we've already tested for None
+        let is_max_nan = is_nan(descr, max.as_ref().unwrap());
+        let is_val_nan = is_nan(descr, val);
+        match (is_max_nan, is_val_nan) {
+            // current max is not NaN, but incoming is NaN: skip
+            (false, true) => {}
+            // current max is NaN, but incoming is not: assign val to max
+            (true, false) => *max = Some(val.clone()),
+            // both NaN or non-NaN, safe to call update_stat()
+            _ => update_stat::<T, _>(val, max, |cur| compare_greater(descr, val, cur)),
+        }
+    }
 }
 
 #[inline]
@@ -1439,15 +1467,15 @@ fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
     }
 }
 
-/// Perform a conditional update of `cur`, skipping any NaN values
+/// Perform a conditional update of `cur`
 ///
-/// If `cur` is `None`, sets `cur` to `Some(val)`, otherwise calls `should_update` with
-/// the value of `cur`, and updates `cur` to `Some(val)` if it returns `true`
+/// Calls `should_update` with the value of `cur`, and updates `cur` to `Some(val)` if it
+/// returns `true`. `cur` must not be `None` or this will panic.
 fn update_stat<T: ParquetValueType, F>(val: &T, cur: &mut Option<T>, should_update: F)
 where
     F: Fn(&T) -> bool,
 {
-    if cur.as_ref().is_none_or(should_update) {
+    if should_update(cur.as_ref().unwrap()) {
         *cur = Some(val.clone());
     }
 }
