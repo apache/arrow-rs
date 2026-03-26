@@ -491,8 +491,7 @@ mod tests {
     use super::{Encoder, WriterBuilder};
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer, ToByteSlice, i256};
-    use arrow_data::ArrayData;
+    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer, i256};
 
     use crate::reader::*;
 
@@ -1070,25 +1069,19 @@ mod tests {
 
     #[test]
     fn write_struct_with_list_field() {
-        let field_c1 = Field::new(
-            "c1",
-            DataType::List(Arc::new(Field::new("c_list", DataType::Utf8, false))),
-            false,
-        );
+        let field_c_list = Arc::new(Field::new("c_list", DataType::Utf8, false));
+        let field_c1 = Field::new("c1", DataType::List(field_c_list.clone()), false);
         let field_c2 = Field::new("c2", DataType::Int32, false);
         let schema = Schema::new(vec![field_c1.clone(), field_c2]);
 
         let a_values = StringArray::from(vec!["a", "a1", "b", "c", "d", "e"]);
         // list column rows: ["a", "a1"], ["b"], ["c"], ["d"], ["e"]
-        let a_value_offsets = Buffer::from([0, 2, 3, 4, 5, 6].to_byte_slice());
-        let a_list_data = ArrayData::builder(field_c1.data_type().clone())
-            .len(5)
-            .add_buffer(a_value_offsets)
-            .add_child_data(a_values.into_data())
-            .null_bit_buffer(Some(Buffer::from([0b00011111])))
-            .build()
-            .unwrap();
-        let a = ListArray::from(a_list_data);
+        let a = ListArray::new(
+            field_c_list,
+            OffsetBuffer::new(ScalarBuffer::from(vec![0i32, 2, 3, 4, 5, 6])),
+            Arc::new(a_values),
+            None,
+        );
 
         let b = Int32Array::from(vec![1, 2, 3, 4, 5]);
 
@@ -1113,41 +1106,32 @@ mod tests {
 
     #[test]
     fn write_nested_list() {
-        let list_inner_type = Field::new(
+        let field_b = Arc::new(Field::new("b", DataType::Int32, false));
+        let field_a = Arc::new(Field::new(
             "a",
-            DataType::List(Arc::new(Field::new("b", DataType::Int32, false))),
+            DataType::List(field_b.clone()),
             false,
-        );
-        let field_c1 = Field::new(
-            "c1",
-            DataType::List(Arc::new(list_inner_type.clone())),
-            false,
-        );
+        ));
+        let field_c1 = Field::new("c1", DataType::List(field_a.clone()), false);
         let field_c2 = Field::new("c2", DataType::Utf8, true);
         let schema = Schema::new(vec![field_c1.clone(), field_c2]);
 
         // list column rows: [[1, 2], [3]], [], [[4, 5, 6]]
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
-        let a_value_offsets = Buffer::from([0, 2, 3, 6].to_byte_slice());
-        // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(list_inner_type.data_type().clone())
-            .len(3)
-            .add_buffer(a_value_offsets)
-            .null_bit_buffer(Some(Buffer::from([0b00000111])))
-            .add_child_data(a_values.into_data())
-            .build()
-            .unwrap();
+        let a_list = ListArray::new(
+            field_b,
+            OffsetBuffer::new(ScalarBuffer::from(vec![0i32, 2, 3, 6])),
+            Arc::new(a_values),
+            None,
+        );
 
-        let c1_value_offsets = Buffer::from([0, 2, 2, 3].to_byte_slice());
-        let c1_list_data = ArrayData::builder(field_c1.data_type().clone())
-            .len(3)
-            .add_buffer(c1_value_offsets)
-            .add_child_data(a_list_data)
-            .build()
-            .unwrap();
-
-        let c1 = ListArray::from(c1_list_data);
+        let c1 = ListArray::new(
+            field_a,
+            OffsetBuffer::new(ScalarBuffer::from(vec![0i32, 2, 2, 3])),
+            Arc::new(a_list),
+            None,
+        );
         let c2 = StringArray::from(vec![Some("foo"), Some("bar"), None]);
 
         let batch =
@@ -1211,15 +1195,16 @@ mod tests {
         // [{"c11": 1, "c12": {"c121": "e"}}, {"c12": {"c121": "f"}}],
         // null,
         // [{"c11": 5, "c12": {"c121": "g"}}]
-        let c1_value_offsets = Buffer::from([0, 2, 2, 3].to_byte_slice());
-        let c1_list_data = ArrayData::builder(field_c1.data_type().clone())
-            .len(3)
-            .add_buffer(c1_value_offsets)
-            .add_child_data(struct_values.into_data())
-            .null_bit_buffer(Some(Buffer::from([0b00000101])))
-            .build()
-            .unwrap();
-        let c1 = ListArray::from(c1_list_data);
+        let c1_inner = match field_c1.data_type() {
+            DataType::List(f) => f.clone(),
+            _ => unreachable!(),
+        };
+        let c1 = ListArray::new(
+            c1_inner,
+            OffsetBuffer::new(ScalarBuffer::from(vec![0i32, 2, 2, 3])),
+            Arc::new(struct_values),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
 
         let c2 = Int32Array::from(vec![1, 2, 3]);
 
@@ -1447,30 +1432,22 @@ mod tests {
             (values_field, Arc::new(values_array) as ArrayRef),
         ]);
 
-        let map_data_type = DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                entry_struct.data_type().clone(),
-                false,
-            )),
+        let entries_field = Arc::new(Field::new(
+            "entries",
+            entry_struct.data_type().clone(),
+            false,
+        ));
+
+        // [{"foo": 10}, null, {}, {"bar": 20, "baz": 30, "qux": 40}, {"quux": 50}, {}]
+        let map = MapArray::new(
+            entries_field.clone(),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0i32, 1, 1, 1, 4, 5, 5])),
+            entry_struct,
+            Some(NullBuffer::from(vec![true, false, true, true, true, true])),
             false,
         );
 
-        // [{"foo": 10}, null, {}, {"bar": 20, "baz": 30, "qux": 40}, {"quux": 50}, {}]
-        let entry_offsets = Buffer::from([0, 1, 1, 1, 4, 5, 5].to_byte_slice());
-        let valid_buffer = Buffer::from([0b00111101]);
-
-        let map_data = ArrayData::builder(map_data_type.clone())
-            .len(6)
-            .null_bit_buffer(Some(valid_buffer))
-            .add_buffer(entry_offsets)
-            .add_child_data(entry_struct.into_data())
-            .build()
-            .unwrap();
-
-        let map = MapArray::from(map_data);
-
-        let map_field = Field::new("map", map_data_type, true);
+        let map_field = Field::new("map", DataType::Map(entries_field, false), true);
         let schema = Arc::new(Schema::new(vec![map_field]));
 
         let batch = RecordBatch::try_new(schema, vec![Arc::new(map)]).unwrap();
@@ -1648,22 +1625,17 @@ mod tests {
                 ),
             ]);
 
-            let field = Field::new_list(
-                "list",
-                Field::new("struct", struct_array.data_type().clone(), true),
-                true,
-            );
+            let values_field =
+                Arc::new(Field::new("struct", struct_array.data_type().clone(), true));
+            let field = Field::new_list("list", values_field.as_ref().clone(), true);
 
             // [{"list":[{"int32":1,"utf8":"a"},{"int32":null,"utf8":"b"}]},{"list":null},{"list":[{int32":5,"utf8":null}]},{"list":null}]
-            let entry_offsets = Buffer::from([0, 2, 2, 3, 3].to_byte_slice());
-            let data = ArrayData::builder(field.data_type().clone())
-                .len(4)
-                .add_buffer(entry_offsets)
-                .add_child_data(struct_array.into_data())
-                .null_bit_buffer(Some([0b00000101].into()))
-                .build()
-                .unwrap();
-            let array = Arc::new(ListArray::from(data));
+            let array = Arc::new(ListArray::new(
+                values_field,
+                OffsetBuffer::new(ScalarBuffer::from(vec![0i32, 2, 2, 3, 3])),
+                Arc::new(struct_array),
+                Some(NullBuffer::from(vec![true, false, true, false])),
+            ));
             (array, field)
         }
 
