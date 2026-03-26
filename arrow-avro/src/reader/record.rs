@@ -94,6 +94,7 @@ pub(crate) struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
     projector: Option<Projector>,
+    row_count: usize,
 }
 
 impl RecordDecoder {
@@ -136,6 +137,7 @@ impl RecordDecoder {
                     schema: Arc::new(ArrowSchema::new(arrow_fields)),
                     fields: encodings,
                     projector,
+                    row_count: 0,
                 })
             }
             other => Err(AvroError::ParseError(format!(
@@ -166,6 +168,7 @@ impl RecordDecoder {
                 }
             }
         }
+        self.row_count += count;
         Ok(cursor.position())
     }
 
@@ -176,7 +179,10 @@ impl RecordDecoder {
             .iter_mut()
             .map(|x| x.flush(None))
             .collect::<Result<Vec<_>, _>>()?;
-        RecordBatch::try_new(self.schema.clone(), arrays).map_err(Into::into)
+        let batch_options = RecordBatchOptions::new().with_row_count(Some(self.row_count));
+        self.row_count = 0;
+        RecordBatch::try_new_with_options(self.schema.clone(), arrays, &batch_options)
+            .map_err(Into::into)
     }
 }
 
