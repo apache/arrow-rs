@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FetchNextBehaviour","ReaderState"],"fn":["read_header_info"],"mod":["async_file_reader","builder","store"],"struct":["AsyncAvroFileReader","AvroObjectReader","ReaderBuilder"],"trait":["AsyncFileReader"]};
