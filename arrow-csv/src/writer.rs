@@ -616,6 +616,11 @@ impl WriterBuilder {
         self
     }
 
+    /// Get the configured quoting style
+    pub fn quote_style(&self) -> QuoteStyle {
+        self.quote_style
+    }
+
     /// Set the CSV file's line terminator
     pub fn with_line_terminator(mut self, terminator: Terminator) -> Self {
         self.terminator = terminator;
