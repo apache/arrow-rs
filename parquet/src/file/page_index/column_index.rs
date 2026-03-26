@@ -103,6 +103,7 @@ pub struct PrimitiveColumnIndex<T> {
 }
 
 impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         null_pages: Vec<bool>,
         boundary_order: BoundaryOrder,
@@ -295,6 +296,7 @@ pub struct ByteArrayColumnIndex {
 }
 
 impl ByteArrayColumnIndex {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         null_pages: Vec<bool>,
         boundary_order: BoundaryOrder,

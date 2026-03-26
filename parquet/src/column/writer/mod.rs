@@ -2729,16 +2729,20 @@ mod tests {
         let pos_nan2 = f32::from_bits(0x7fc00001);
         let pos_nan3 = f32::from_bits(0x7fc00002);
 
-        let values = vec![
-            neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3,
-        ];
+        let values = vec![neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3];
 
         let stats = statistics_roundtrip::<FloatType>(&values);
         if let Statistics::Float(stats) = stats {
             // With IEEE 754 total order, min should be -NaN, max should be +NaN
             // But since we filter out NaN values, min should be -Inf, max should be +Inf
-            assert_eq!(stats.min_opt().unwrap().total_cmp(&neg_nan3), Ordering::Equal);
-            assert_eq!(stats.max_opt().unwrap().total_cmp(&pos_nan3), Ordering::Equal);
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&neg_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&pos_nan3),
+                Ordering::Equal
+            );
             assert_eq!(stats.nan_count_opt(), Some(6));
         } else {
             panic!("Expected float statistics");
@@ -2783,16 +2787,20 @@ mod tests {
         let pos_nan2 = f64::from_bits(0x7ff8000000000001);
         let pos_nan3 = f64::from_bits(0x7ff8000000000002);
 
-        let values = vec![
-            neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3,
-        ];
+        let values = vec![neg_nan1, neg_nan2, neg_nan3, pos_nan1, pos_nan2, pos_nan3];
 
         let stats = statistics_roundtrip::<DoubleType>(&values);
         if let Statistics::Double(stats) = stats {
             // With IEEE 754 total order, min should be -NaN, max should be +NaN
             // But since we filter out NaN values, min should be -Inf, max should be +Inf
-            assert_eq!(stats.min_opt().unwrap().total_cmp(&neg_nan3), Ordering::Equal);
-            assert_eq!(stats.max_opt().unwrap().total_cmp(&pos_nan3), Ordering::Equal);
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&neg_nan3),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&pos_nan3),
+                Ordering::Equal
+            );
             assert_eq!(stats.nan_count_opt(), Some(6));
         } else {
             panic!("Expected float statistics");

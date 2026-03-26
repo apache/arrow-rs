@@ -1571,12 +1571,12 @@ impl ColumnIndexBuilder {
         })
     }
 
-    fn build_nan_counts(nan_counts: &Vec<Option<i64>>) -> Option<Vec<i64>> {
+    fn build_nan_counts(nan_counts: &[Option<i64>]) -> Option<Vec<i64>> {
         let has_some = nan_counts.iter().any(|x| x.is_some());
         let has_none = nan_counts.iter().any(|x| x.is_none());
 
         if has_some && !has_none {
-            Some(nan_counts.into_iter().map(|x| x.unwrap()).collect())
+            Some(nan_counts.iter().map(|x| x.unwrap()).collect())
         } else if !has_some && has_none {
             None
         } else {
@@ -1584,7 +1584,7 @@ impl ColumnIndexBuilder {
                 false,
                 "Mixed Some/None in nan_counts - caller should provide consistent values"
             );
-            Some(nan_counts.into_iter().map(|x| x.unwrap_or(0)).collect())
+            Some(nan_counts.iter().map(|x| x.unwrap_or(0)).collect())
         }
     }
 
