@@ -148,17 +148,10 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     Ok(builder)
 }
 
-/// Applies consistent null-cast semantics across builders:
-/// `Variant::Null` is always accepted and appended as Arrow null, even in strict mode.
-fn append_null_if_variant_null(
-    value: &Variant<'_, '_>,
-    append_null: impl FnOnce() -> Result<()>,
-) -> Result<bool> {
-    if matches!(value, Variant::Null) {
-        append_null()?;
-        return Ok(true);
-    }
-    Ok(false)
+/// Determines when an invalid cast should be represented as Arrow null.
+#[inline]
+fn treat_invalid_as_null(cast_options: &CastOptions<'_>, value: &Variant<'_, '_>) -> bool {
+    matches!(value, Variant::Null) || cast_options.safe
 }
 
 /// Builder for converting primitive variant values to Arrow arrays. It is used by both
@@ -559,11 +552,8 @@ impl<'a> StructVariantToArrowRowBuilder<'a> {
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if append_null_if_variant_null(value, || self.append_null())? {
-            return Ok(false);
-        }
         let Variant::Object(obj) = value else {
-            if self.cast_options.safe {
+            if treat_invalid_as_null(self.cast_options, value) {
                 self.append_null()?;
                 return Ok(false);
             }
@@ -724,27 +714,22 @@ macro_rules! define_variant_to_primitive_builder {
             }
 
             fn append_value(&mut self, $value: &Variant<'_, '_>) -> Result<bool> {
-                if append_null_if_variant_null($value, || {
-                    self.builder.append_null();
-                    Ok(())
-                })? {
-                    return Ok(false);
-                }
                 if let Some(v) = $value_transform {
                     self.builder.append_value(v);
                     Ok(true)
                 } else {
-                    if !self.cast_options.safe {
+                    if treat_invalid_as_null(self.cast_options, $value) {
+                        // Safe casting (or variant null): append null on conversion failure
+                        self.builder.append_null();
+                        Ok(false)
+                    } else {
                         // Unsafe casting: return error on conversion failure
-                        return Err(ArrowError::CastError(format!(
+                        Err(ArrowError::CastError(format!(
                             "Failed to extract primitive of type {} from variant {:?} at path VariantPath([])",
                             $type_name,
                             $value
-                        )));
+                        )))
                     }
-                    // Safe casting: append null on conversion failure
-                    self.builder.append_null();
-                    Ok(false)
                 }
             }
 
@@ -844,16 +829,10 @@ where
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if append_null_if_variant_null(value, || {
-            self.builder.append_null();
-            Ok(())
-        })? {
-            return Ok(false);
-        }
         if let Some(scaled) = variant_to_unscaled_decimal::<T>(value, self.precision, self.scale) {
             self.builder.append_value(scaled);
             Ok(true)
-        } else if self.cast_options.safe {
+        } else if treat_invalid_as_null(self.cast_options, value) {
             self.builder.append_null();
             Ok(false)
         } else {
@@ -892,12 +871,6 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if append_null_if_variant_null(value, || {
-            self.builder.append_null();
-            Ok(())
-        })? {
-            return Ok(false);
-        }
         match value.as_uuid() {
             Some(uuid) => {
                 self.builder
@@ -906,7 +879,7 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
 
                 Ok(true)
             }
-            None if self.cast_options.safe => {
+            None if treat_invalid_as_null(self.cast_options, value) => {
                 self.builder.append_null();
                 Ok(false)
             }
@@ -973,9 +946,6 @@ where
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if append_null_if_variant_null(value, || self.append_null())? {
-            return Ok(false);
-        }
         match value {
             Variant::List(list) => {
                 for element in list.iter() {
@@ -986,7 +956,7 @@ where
                 self.nulls.append_non_null();
                 Ok(true)
             }
-            _ if self.cast_options.safe => {
+            _ if treat_invalid_as_null(self.cast_options, value) => {
                 self.append_null()?;
                 Ok(false)
             }
