@@ -358,6 +358,8 @@ pub struct WriterBuilder {
     quote: u8,
     /// Optional escape character. Defaults to `b'\\'`
     escape: u8,
+    /// Optional line terminator. Defaults to `LF` (`\n`)
+    terminator: Terminator,
     /// Enable double quote escapes. Defaults to `true`
     double_quote: bool,
     /// Optional date format for date arrays
@@ -380,6 +382,15 @@ pub struct WriterBuilder {
     quote_style: QuoteStyle,
 }
 
+/// The line terminator to use when writing CSV files.
+#[derive(Clone, Debug)]
+pub enum Terminator {
+    /// Use CRLF (`\r\n`) as the line terminator
+    CRLF,
+    /// Use the specified byte character as the line terminator
+    Any(u8),
+}
+
 impl Default for WriterBuilder {
     fn default() -> Self {
         WriterBuilder {
@@ -387,6 +398,7 @@ impl Default for WriterBuilder {
             has_header: true,
             quote: b'"',
             escape: b'\\',
+            terminator: Terminator::Any(b'\n'),
             double_quote: true,
             date_format: None,
             datetime_format: None,
@@ -604,20 +616,33 @@ impl WriterBuilder {
         self
     }
 
-    /// Get the configured quoting style
-    pub fn quote_style(&self) -> QuoteStyle {
-        self.quote_style
+    /// Set the CSV file's line terminator
+    pub fn with_line_terminator(mut self, terminator: Terminator) -> Self {
+        self.terminator = terminator;
+        self
+    }
+
+    /// Get the CSV file's line terminator, defaults to `LF` (`\n`)
+    pub fn line_terminator(&self) -> &Terminator {
+        &self.terminator
     }
 
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let mut builder = csv::WriterBuilder::new();
+
+        let terminator = match self.terminator {
+            Terminator::CRLF => csv::Terminator::CRLF,
+            Terminator::Any(byte) => csv::Terminator::Any(byte),
+        };
+
         let writer = builder
             .delimiter(self.delimiter)
             .quote(self.quote)
             .quote_style(self.quote_style)
             .double_quote(self.double_quote)
             .escape(self.escape)
+            .terminator(terminator)
             .from_writer(writer);
         Writer {
             writer,
@@ -1027,10 +1052,80 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
-        assert_eq!(
-            "c1,c2\n00:02,46:17\n00:02,\n",
-            String::from_utf8(buffer).unwrap()
-        );
+        let output = String::from_utf8(buffer).unwrap();
+        assert_eq!(output, "c1,c2\n00:02,46:17\n00:02,\n");
+    }
+
+    #[test]
+    fn test_write_csv_with_lf_terminator() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]);
+
+        let c1 = StringArray::from(vec!["hello", "world"]);
+        let c2 = PrimitiveArray::<UInt32Type>::from(vec![1, 2]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_line_terminator(Terminator::Any(b'\n'))
+            .build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, "c1,c2\nhello,1\nworld,2\n");
+    }
+
+    #[test]
+    fn test_write_csv_with_crlf_terminator() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]);
+
+        let c1 = StringArray::from(vec!["hello", "world"]);
+        let c2 = PrimitiveArray::<UInt32Type>::from(vec![1, 2]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_line_terminator(Terminator::CRLF)
+            .build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, "c1,c2\r\nhello,1\r\nworld,2\r\n");
+    }
+
+    #[test]
+    fn test_write_csv_with_any_terminator() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]);
+
+        let c1 = StringArray::from(vec!["hello", "world"]);
+        let c2 = PrimitiveArray::<UInt32Type>::from(vec![1, 2]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_line_terminator(Terminator::Any(b'|'))
+            .build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, "c1,c2|hello,1|world,2|");
     }
 
     #[test]
