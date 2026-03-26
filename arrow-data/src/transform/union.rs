@@ -84,9 +84,8 @@ pub(super) fn extend_nulls_dense(mutable: &mut _MutableArrayData, len: usize) {
 
     // Dense: extend offsets pointing into the first child, then extend nulls in that child
     let child_offset = mutable.child_data[0].len();
-    mutable
-        .buffer2
-        .extend((0..len).map(|i| (child_offset + i) as i32));
+    let (start, end) = (child_offset as i32, (child_offset + len) as i32);
+    mutable.buffer2.extend(start..end);
     mutable.child_data[0].extend_nulls(len);
 }
 
