@@ -683,15 +683,14 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///
     /// Then this method would report 48
     pub fn total_buffer_bytes_used(&self) -> usize {
+        if self.data_buffers().is_empty() {
+            return 0;
+        }
         self.views()
             .iter()
             .map(|v| {
                 let len = *v as u32;
-                if len > MAX_INLINE_VIEW_LEN {
-                    len as usize
-                } else {
-                    0
-                }
+                (((len > MAX_INLINE_VIEW_LEN) as u32).wrapping_neg() & len) as usize
             })
             .sum()
     }
