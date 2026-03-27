@@ -26,6 +26,7 @@ use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::{ParquetError, Result};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
+use ring::aead::AES_256_GCM;
 use std::collections::HashMap;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
@@ -316,4 +317,15 @@ impl KeyRetriever for TestKeyRetriever {
             ))),
         }
     }
+}
+
+pub fn encrypted_data_path(footer_key: &[u8], file_name: &str) -> String {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let subpath = if AES_256_GCM.key_len() == footer_key.len() {
+        "aes256/"
+    } else {
+        ""
+    };
+    let path = format!("{test_data}/{subpath}/{file_name}");
+    path
 }
