@@ -779,7 +779,8 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts a boolean or numeric variant to the specified numeric type `T`.
+    /// Converts a boolean or numeric variant(integers, floating-point, and decimals with scale 0)
+    /// to the specified numeric type `T`.
     ///
     /// Uses Arrow's casting logic to perform the conversion. Returns `Some(T)` if
     /// the conversion succeeds, `None` if the variant can't be casted to type `T`.
@@ -805,7 +806,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i8` if possible.
     ///
-    /// Returns `Some(i8)` for integer variants that fit in `i8` range and boolean variant,
+    /// Returns `Some(i8)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `i8` range,
     /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
@@ -835,7 +837,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i16` if possible.
     ///
-    /// Returns `Some(i16)` for integer variants that fit in `i16` range and boolean variant,
+    /// Returns `Some(i16)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `i16` range
     /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
@@ -865,7 +868,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i32` if possible.
     ///
-    /// Returns `Some(i32)` for integer variants that fit in `i32` range and boolean variant,
+    /// Returns `Some(i32)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `i32` range
     /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
@@ -895,7 +899,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `i64` if possible.
     ///
-    /// Returns `Some(i64)` for integer variants that fit in `i64` range and boolean variant,
+    /// Returns `Some(i64)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `i64` range
     /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
@@ -921,7 +926,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `u8` if possible.
     ///
-    /// Returns `Some(u8)` for integer variants that fit in `u8` and boolean variant
+    /// Returns `Some(u8)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `u8` range
     /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
@@ -940,7 +946,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// // or from boolean variant
     /// let v3 = Variant::BooleanFalse;
-    /// assert_eq!(v3.as_int8(), Some(0));
+    /// assert_eq!(v3.as_u8(), Some(0));
     ///
     ///  // but not a variant that can't fit into the range
     ///  let v4 = Variant::from(-1);
@@ -961,7 +967,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `u16` if possible.
     ///
-    /// Returns `Some(u16)` for integer variants that fit in `u16` or boolean variant
+    /// Returns `Some(u16)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `u16` range
     /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
@@ -980,7 +987,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// // or from boolean variant
     /// let v3= Variant::BooleanFalse;
-    /// assert_eq!(v3.as_int8(), Some(0));
+    /// assert_eq!(v3.as_u16(), Some(0));
     ///
     ///  // but not a variant that can't fit into the range
     ///  let v4 = Variant::from(-1);
@@ -1001,7 +1008,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `u32` if possible.
     ///
-    /// Returns `Some(u32)` for integer variants that fit in `u32` and boolean variant
+    /// Returns `Some(u32)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `u32` range
     /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
@@ -1020,7 +1028,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// // or from boolean variant
     /// let v3 = Variant::BooleanFalse;
-    /// assert_eq!(v3.as_int8(), Some(0));
+    /// assert_eq!(v3.as_u32(), Some(0));
     ///
     ///  // but not a variant that can't fit into the range
     ///  let v4 = Variant::from(-1);
@@ -1041,7 +1049,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `u64` if possible.
     ///
-    /// Returns `Some(u64)` for integer variants that fit in `u64` and boolean variant
+    /// Returns `Some(u64)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `u64` range
     /// `None` for other variants or values that would overflow.
     ///
     /// # Examples
@@ -1060,7 +1069,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// // or from boolean variant
     /// let v3 = Variant::BooleanFalse;
-    /// assert_eq!(v3.as_int8(), Some(0));
+    /// assert_eq!(v3.as_u64(), Some(0));
     ///
     ///  // but not a variant that can't fit into the range
     ///  let v4 = Variant::from(-1);
@@ -1190,7 +1199,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `f16` if possible.
     ///
-    /// Returns `Some(f16)` for floating point values, integer and boolean variants.
+    /// Returns `Some(f16)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `f16` range
     /// `None` otherwise.
     ///
     /// # Example
@@ -1224,7 +1234,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `f32` if possible.
     ///
-    /// Returns `Some(f32)` for floating point values, integer values, and boolean variants.
+    /// Returns `Some(f32)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `f32` range
     /// `None` otherwise.
     ///
     /// # Examples
@@ -1259,14 +1270,14 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `f64` if possible.
     ///
-    /// Returns `Some(f64)` for floating point values, integer values, and boolean variants
+    /// Returns `Some(f64)` for boolean and numeric variants(integers, floating-point,
+    /// and decimals with scale 0) that fit in `f64` range
     /// `None` for other variants or can't be represented by an f64.
     ///
     /// # Examples
     ///
     /// ```
     /// use parquet_variant::Variant;
-    /// use parquet_variant::VariantDecimal16;
     ///
     /// // you can extract an f64 from a float variant
     /// let v1 = Variant::from(std::f32::consts::PI);

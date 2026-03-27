@@ -2605,7 +2605,7 @@ where
     unsafe { PrimitiveArray::<T>::from_trusted_len_iter(iter) }
 }
 
-/// Cat single bool value to numeric value.
+/// Cast single bool value to numeric value.
 #[inline]
 pub fn single_bool_to_numeric<O>(value: bool) -> Option<O>
 where

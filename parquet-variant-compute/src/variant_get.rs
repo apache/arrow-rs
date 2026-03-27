@@ -2626,7 +2626,7 @@ mod test {
     #[test]
     fn test_error_message_boolean_type_display() {
         let mut builder = VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::Null);
+        builder.append_variant(Variant::from("abcd"));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         // Request Boolean with strict casting to force an error
@@ -2647,10 +2647,10 @@ mod test {
     #[test]
     fn test_error_message_numeric_type_display() {
         let mut builder = VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::Null);
+        builder.append_variant(Variant::from("abcd"));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
-        // Request Boolean with strict casting to force an error
+        // Request Float32 with strict casting to force an error
         let options = GetOptions {
             path: VariantPath::default(),
             as_type: Some(Arc::new(Field::new("result", DataType::Float32, true))),
@@ -2671,7 +2671,7 @@ mod test {
         builder.append_variant(Variant::BooleanFalse);
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
-        // Request Boolean with strict casting to force an error
+        // Request Timestamp with strict casting to force an error
         let options = GetOptions {
             path: VariantPath::default(),
             as_type: Some(Arc::new(Field::new(
