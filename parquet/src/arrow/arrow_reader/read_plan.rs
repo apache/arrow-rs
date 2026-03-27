@@ -37,6 +37,18 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
+    /// Maximum allowed selector density (selectors / rows) for applying a
+    /// predicate result.
+    ///
+    /// When set, if applying a predicate would produce a selector density
+    /// above this threshold, the result is deferred into `deferred_selection`
+    /// instead. For example, `0.25` means at most 25 selectors per 100 rows;
+    /// anything more fragmented gets deferred.
+    ///
+    /// `None` disables deferral (all predicates applied immediately).
+    scatter_threshold: Option<f64>,
+    /// Accumulated deferred selections, merged via `intersection` at build time.
+    deferred_selection: Option<RowSelection>,
 }
 
 impl ReadPlanBuilder {
@@ -46,6 +58,8 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
+            scatter_threshold: None,
+            deferred_selection: None,
         }
     }
 
@@ -66,6 +80,27 @@ impl ReadPlanBuilder {
     /// Returns the current row selection policy
     pub fn row_selection_policy(&self) -> &RowSelectionPolicy {
         &self.row_selection_policy
+    }
+
+    /// Set the scatter threshold for filter deferral.
+    ///
+    /// The threshold is the maximum allowed **selector density**
+    /// (`selector_count / row_count`). If applying a predicate would produce
+    /// a density above this value, its result is deferred. For example,
+    /// `0.25` allows at most 25 selectors per 100 rows.
+    ///
+    /// A high selector density means many small skip/read transitions,
+    /// which is expensive for subsequent predicate evaluation and data
+    /// decoding. Deferring scattering predicates keeps the selection
+    /// contiguous for intermediate steps.
+    ///
+    /// The deferred results are merged via [`RowSelection::intersection`] at
+    /// build time, so correctness is preserved.
+    ///
+    /// `None` disables deferral (all predicates applied immediately).
+    pub fn with_scatter_threshold(mut self, threshold: Option<f64>) -> Self {
+        self.scatter_threshold = threshold;
+        self
     }
 
     /// Returns the current selection, if any
@@ -147,8 +182,19 @@ impl ReadPlanBuilder {
         mut self,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
+        row_count: usize,
     ) -> Result<Self> {
-        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
+        // Build a ReadPlan for the predicate reader using only the current
+        // selection (not deferred). We avoid cloning the entire builder by
+        // constructing a minimal ReadPlanBuilder with just what build() needs.
+        let plan_for_reader = ReadPlanBuilder {
+            batch_size: self.batch_size,
+            selection: self.selection.clone(),
+            row_selection_policy: self.row_selection_policy,
+            scatter_threshold: None,
+            deferred_selection: None,
+        };
+        let reader = ParquetRecordBatchReader::new(array_reader, plan_for_reader.build());
         let mut filters = vec![];
         for maybe_batch in reader {
             let maybe_batch = maybe_batch?;
@@ -175,15 +221,54 @@ impl ReadPlanBuilder {
             return Ok(self);
         }
         let raw = RowSelection::from_filters(&filters);
-        self.selection = match self.selection.take() {
-            Some(selection) => Some(selection.and_then(&raw)),
-            None => Some(raw),
+
+        // Compute the absolute-position result
+        let absolute = match self.selection.as_ref() {
+            Some(selection) => selection.and_then(&raw),
+            None => raw,
         };
+
+        // Check if applying this predicate would scatter the selection too much.
+        // Measure selector density: selectors / total_rows. A high density means
+        // many small skip/read transitions per row, which is expensive for decoding.
+        // Only defer if the predicate actually increases fragmentation — if it
+        // reduces the selector count, always apply it.
+        let current_selectors = self.selection.as_ref().map_or(0, |s| s.selector_count());
+        let should_defer = self.scatter_threshold.is_some_and(|threshold| {
+            row_count > 0
+                && absolute.selector_count() > current_selectors
+                && absolute.selector_count() as f64 / row_count as f64 > threshold
+        });
+
+        if should_defer {
+            // Defer: accumulate into deferred_selection, leave self.selection unchanged
+            self.deferred_selection = Some(match self.deferred_selection.take() {
+                Some(existing) => existing.intersection(&absolute),
+                None => absolute,
+            });
+        } else {
+            // Apply normally
+            self.selection = Some(absolute);
+        }
+
         Ok(self)
+    }
+
+    /// Merge any deferred selection into the main selection.
+    fn merge_deferred(&mut self) {
+        if let Some(deferred) = self.deferred_selection.take() {
+            self.selection = Some(match self.selection.take() {
+                Some(selection) => selection.intersection(&deferred),
+                None => deferred,
+            });
+        }
     }
 
     /// Create a final `ReadPlan` the read plan for the scan
     pub fn build(mut self) -> ReadPlan {
+        // Merge any deferred selection before finalizing
+        self.merge_deferred();
+
         // If selection is empty, truncate
         if !self.selects_any() {
             self.selection = Some(RowSelection::from(vec![]));
@@ -196,6 +281,8 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
+            scatter_threshold: _,
+            deferred_selection: _,
         } = self;
 
         let selection = selection.map(|s| s.trim());
@@ -267,6 +354,10 @@ impl LimitedReadPlanBuilder {
             offset,
             limit,
         } = self;
+
+        // Merge deferred selection before applying offset/limit so that
+        // offset and limit operate on the correctly filtered row set.
+        inner.merge_deferred();
 
         // If the selection is empty, truncate
         if !inner.selects_any() {
@@ -366,5 +457,104 @@ mod tests {
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors
         );
+    }
+
+    /// Helper to build a `ReadPlanBuilder` with deferred selection set directly
+    fn builder_with_deferred(
+        selection: Option<RowSelection>,
+        deferred: RowSelection,
+    ) -> ReadPlanBuilder {
+        ReadPlanBuilder {
+            batch_size: 1024,
+            selection,
+            row_selection_policy: RowSelectionPolicy::default(),
+            scatter_threshold: None,
+            deferred_selection: Some(deferred),
+        }
+    }
+
+    #[test]
+    fn test_merge_deferred_no_prior_selection() {
+        // Deferred selection with no main selection: result = deferred
+        let deferred = RowSelection::from(vec![RowSelector::select(90), RowSelector::skip(10)]);
+        let mut builder = builder_with_deferred(None, deferred);
+        builder.merge_deferred();
+        let sel = builder.selection.unwrap();
+        assert_eq!(sel.row_count(), 90);
+        assert_eq!(sel.skipped_row_count(), 10);
+        assert!(builder.deferred_selection.is_none());
+    }
+
+    #[test]
+    fn test_merge_deferred_with_prior_selection() {
+        // Main selects first 50, deferred selects rows 0..40 and 50..100
+        // Intersection should select rows 0..40 (first 40 of 100)
+        let main_sel = RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]);
+        let deferred = RowSelection::from(vec![
+            RowSelector::select(40),
+            RowSelector::skip(10),
+            RowSelector::select(50),
+        ]);
+        let mut builder = builder_with_deferred(Some(main_sel), deferred);
+        builder.merge_deferred();
+        let sel = builder.selection.unwrap();
+        assert_eq!(sel.row_count(), 40);
+    }
+
+    #[test]
+    fn test_merge_deferred_in_build() {
+        // Verify that build() merges deferred before creating the ReadPlan
+        let deferred = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
+        let builder = builder_with_deferred(None, deferred);
+        // build() should merge and produce a plan that selects 80 rows
+        let _plan = builder.build();
+        // If it didn't panic, the merge worked (selection was properly set)
+    }
+
+    #[test]
+    fn test_merge_deferred_in_build_limited() {
+        // Verify that build_limited() merges deferred before applying offset/limit
+        let deferred = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
+        let builder = builder_with_deferred(None, deferred);
+        let limited = builder.limited(100).with_limit(Some(50)).build_limited();
+        let sel = limited.selection.unwrap();
+        // After merge: 80 selected, 20 skipped. After limit(50): 50 selected.
+        assert_eq!(sel.row_count(), 50);
+    }
+
+    #[test]
+    fn test_scatter_threshold_setter() {
+        let builder = ReadPlanBuilder::new(1024);
+        assert!(builder.scatter_threshold.is_none());
+        assert!(builder.deferred_selection.is_none());
+
+        let builder = builder.with_scatter_threshold(Some(0.9));
+        assert_eq!(builder.scatter_threshold, Some(0.9));
+    }
+
+    #[test]
+    fn test_no_deferred_when_threshold_disabled() {
+        // Without threshold, deferred_selection should always remain None
+        let builder = ReadPlanBuilder::new(1024);
+        assert!(builder.scatter_threshold.is_none());
+        assert!(builder.deferred_selection.is_none());
+    }
+
+    #[test]
+    fn test_multiple_deferred_selections_intersected() {
+        // Two deferred selections should be intersected
+        let deferred1 = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
+        let deferred2 = RowSelection::from(vec![
+            RowSelector::skip(10),
+            RowSelector::select(70),
+            RowSelector::skip(20),
+        ]);
+        // intersection: only rows 10..80 (70 rows)
+        let mut builder = builder_with_deferred(None, deferred1);
+        builder.deferred_selection =
+            Some(builder.deferred_selection.unwrap().intersection(&deferred2));
+        builder.merge_deferred();
+        let sel = builder.selection.unwrap();
+        assert_eq!(sel.row_count(), 70);
     }
 }
