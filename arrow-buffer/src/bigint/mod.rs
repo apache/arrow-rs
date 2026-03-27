@@ -17,6 +17,7 @@
 
 use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
+use ::i256::I256 as ExtI256;
 use num_bigint::BigInt;
 use num_traits::{
     Bounded, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
@@ -613,6 +614,56 @@ impl i256 {
         let n = input << k; // left-justify (no redundant sign bits)
         let n = (n.high >> 64) as i64; // throw away the lower 192 bits
         (n as f64) * f64::powi(2.0, 192 - (k as i32)) // convert to f64 and scale it, as we left-shift k bit previous, so we need to scale it by 2^(192-k)
+    }
+
+    /// Computes the `base` logarithm of the number `self`
+    /// Returns `None` if `self` is less than or equal to zero, or if `base` is less than 2.
+    #[inline]
+    pub fn checked_ilog(self, base: i256) -> Option<u32> {
+        self.to_ext_i256().checked_ilog(base.to_ext_i256())
+    }
+
+    /// Computes the `base` logarithm of the number `self`
+    /// Panic if `self` is less than or equal to zero, or if `base` is less than 2.
+    #[inline]
+    pub fn ilog(self, base: i256) -> u32 {
+        self.checked_ilog(base)
+            .unwrap_or_else(|| panic!("ilog overflow with {self} and base {base}"))
+    }
+
+    /// Computes the decimal logarithm of the number `self`
+    /// Returns `None` if `self` is less than or equal to zero.
+    #[inline]
+    pub fn checked_ilog10(self) -> Option<u32> {
+        // Switch to I256::checked_ilog10 when I256 switches MSRV
+        self.checked_ilog(i256::from(10))
+    }
+
+    /// Computes the decimal logarithm of the number `self`
+    /// Panics if `self` is less than or equal to zero.
+    #[inline]
+    pub fn ilog10(self) -> u32 {
+        self.checked_ilog10()
+            .unwrap_or_else(|| panic!("ilog10 overflow with {self}"))
+    }
+
+    /// Computes the binary logarithm of the number `self`
+    /// Returns `None` if `self` is less than or equal to zero.
+    #[inline]
+    pub fn checked_ilog2(self) -> Option<u32> {
+        self.to_ext_i256().checked_ilog2()
+    }
+
+    /// Computes the base 2 logarithm of the number, rounded down.
+    #[inline]
+    pub fn ilog2(self) -> u32 {
+        self.checked_ilog2()
+            .unwrap_or_else(|| panic!("ilog2 overflow with {self}"))
+    }
+
+    /// Converts self into an `i256::I256`
+    fn to_ext_i256(self) -> ExtI256 {
+        ExtI256::from_le_bytes(self.to_le_bytes())
     }
 }
 
@@ -1579,5 +1630,68 @@ mod tests {
 
         assert_eq!(i256::MAX.trailing_zeros(), 0);
         assert_eq!(i256::from(-1).trailing_zeros(), 0);
+    }
+
+    #[test]
+    fn test_ilog() {
+        let value = i256::from(128);
+
+        // log2
+        assert_eq!(value.ilog(i256::from(2)), 7);
+        assert_eq!(value.ilog2(), 7);
+
+        // log10
+        assert_eq!(value.ilog(i256::from(10)), 2);
+        assert_eq!(value.ilog10(), 2);
+
+        // negative base
+        assert_eq!(value.checked_ilog(i256::from(-2)), None);
+        assert_eq!(value.checked_ilog(i256::from(-10)), None);
+        assert_eq!(value.checked_ilog(i256::from(0)), None);
+        assert_eq!(value.checked_ilog(i256::from(1)), None);
+
+        // negative self
+        let neg_value = i256::from(-128);
+        assert_eq!(neg_value.checked_ilog(i256::from(2)), None);
+        assert_eq!(neg_value.checked_ilog(i256::from(10)), None);
+        assert_eq!(neg_value.checked_ilog10(), None);
+        assert_eq!(neg_value.checked_ilog2(), None);
+
+        // zero self
+        assert_eq!(i256::ZERO.checked_ilog(i256::from(2)), None);
+        assert_eq!(i256::ZERO.checked_ilog(i256::from(10)), None);
+        assert_eq!(i256::ZERO.checked_ilog10(), None);
+        assert_eq!(i256::ZERO.checked_ilog2(), None);
+
+        // Large i256 values
+        let large = i256::from_parts(100000000, i128::MAX);
+        // log2 of 2 powered to approximately 255 should be 254
+        assert_eq!(large.checked_ilog(i256::from(2)), Some(254));
+
+        // log10 should be 76 or 77
+        let result = large.checked_ilog(i256::from(10));
+        assert_eq!(result.unwrap(), 76);
+
+        // log5
+        let result = large.checked_ilog(i256::from(5));
+        assert_eq!(result.unwrap(), 109);
+    }
+
+    #[test]
+    #[should_panic(expected = "ilog10 overflow")]
+    fn test_ilog10_zero_panics() {
+        let _ = i256::ZERO.ilog10();
+    }
+
+    #[test]
+    #[should_panic(expected = "ilog overflow")]
+    fn test_ilog_zero_panics() {
+        let _ = i256::ZERO.ilog(i256::from(5));
+    }
+
+    #[test]
+    #[should_panic(expected = "ilog2 overflow")]
+    fn test_ilog2_zero_panics() {
+        let _ = i256::ZERO.ilog2();
     }
 }
