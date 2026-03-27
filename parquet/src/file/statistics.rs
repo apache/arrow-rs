@@ -1264,7 +1264,7 @@ mod tests {
 
     #[test]
     fn test_statistics_with_nan_min_max() {
-        // Test that when there are only NaN values, min/max should be None
+        // Test that when there are only NaN values, min/max are NaN
         let stats = Statistics::Float(
             ValueStatistics::new(
                 Some(f32::NAN), // min and max should have NaN values
