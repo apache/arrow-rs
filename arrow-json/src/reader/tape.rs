@@ -142,6 +142,55 @@ impl<'a> Tape<'a> {
         self.num_rows
     }
 
+    /// Iterates over the rows of the tape
+    pub fn iter_rows(&self) -> impl Iterator<Item = u32> {
+        self.iter_values(0, self.elements.len() as u32)
+    }
+
+    /// Iterates over the elements of the array starting at `idx`
+    pub fn iter_elements(&self, idx: u32) -> impl Iterator<Item = u32> {
+        let end = match self.get(idx) {
+            TapeElement::StartList(end) => end,
+            elem => panic!("Expected the start of a list, found {:?}", elem),
+        };
+
+        self.iter_values(idx, end)
+    }
+
+    /// Iterates over the fields of the objected starting at `idx`
+    pub fn iter_fields(&self, idx: u32) -> impl Iterator<Item = (&'a str, u32)> {
+        let end = match self.get(idx) {
+            TapeElement::StartObject(end) => end,
+            elem => panic!("Expected the start of an object, found {:?}", elem),
+        };
+
+        let mut idx = idx + 1;
+
+        std::iter::from_fn(move || {
+            (idx < end).then(|| {
+                let key = match self.get(idx) {
+                    TapeElement::String(s) => self.get_string(s),
+                    elem => panic!("Expected a string, found {:?}", elem),
+                };
+                let value_idx = idx + 1;
+                idx = self.next(value_idx, "field value").unwrap();
+                (key, value_idx)
+            })
+        })
+    }
+
+    fn iter_values(&self, start: u32, end: u32) -> impl Iterator<Item = u32> {
+        let mut idx = start + 1;
+
+        std::iter::from_fn(move || {
+            (idx < end).then(|| {
+                let value_id = idx;
+                idx = self.next(idx, "value").unwrap();
+                value_id
+            })
+        })
+    }
+
     /// Serialize the tape element at index `idx` to `out` returning the next field index
     fn serialize(&self, out: &mut String, idx: u32) -> u32 {
         match self.get(idx) {
