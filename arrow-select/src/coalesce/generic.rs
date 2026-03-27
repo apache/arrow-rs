@@ -17,7 +17,8 @@
 
 use super::InProgressArray;
 use crate::concat::concat;
-use arrow_array::ArrayRef;
+use crate::filter::FilterPredicate;
+use arrow_array::{Array, ArrayRef};
 use arrow_schema::ArrowError;
 
 /// Generic implementation for [`InProgressArray`] that works with any type of
@@ -57,6 +58,22 @@ impl InProgressArray for GenericInProgressArray {
         })?;
         let array = source.slice(offset, len);
         self.buffered_arrays.push(array);
+        Ok(())
+    }
+
+    fn copy_rows_by_filter(
+        &mut self,
+        filter: &FilterPredicate,
+        offset: usize,
+        len: usize,
+    ) -> Result<(), ArrowError> {
+        let Some(source) = self.source.as_mut() else {
+            return Err(ArrowError::InvalidArgumentError(
+                "Internal Error: GenericInProgressArray: source not set".to_string(),
+            ));
+        };
+        let filtered_array = filter.filter(&source.slice(offset, len))?;
+        self.buffered_arrays.push(filtered_array);
         Ok(())
     }
 
