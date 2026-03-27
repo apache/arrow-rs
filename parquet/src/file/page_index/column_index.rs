@@ -43,6 +43,7 @@ pub struct ColumnIndex {
     pub(crate) null_counts: Option<Vec<i64>>,
     pub(crate) repetition_level_histograms: Option<Vec<i64>>,
     pub(crate) definition_level_histograms: Option<Vec<i64>>,
+    pub(crate) nan_counts: Option<Vec<i64>>,
 }
 
 impl ColumnIndex {
@@ -56,6 +57,13 @@ impl ColumnIndex {
     /// Returns `None` if no null counts have been set in the index
     pub fn null_count(&self, idx: usize) -> Option<i64> {
         self.null_counts.as_ref().map(|nc| nc[idx])
+    }
+
+    /// Returns the number of NaN values in the page indexed by `idx`
+    ///
+    /// Returns `None` if no NaN counts have been set in the index
+    pub fn nan_count(&self, idx: usize) -> Option<i64> {
+        self.nan_counts.as_ref().map(|nc| nc[idx])
     }
 
     /// Returns the repetition level histogram for the page indexed by `idx`
@@ -95,10 +103,12 @@ pub struct PrimitiveColumnIndex<T> {
 }
 
 impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         null_pages: Vec<bool>,
         boundary_order: BoundaryOrder,
         null_counts: Option<Vec<i64>>,
+        nan_counts: Option<Vec<i64>>,
         repetition_level_histograms: Option<Vec<i64>>,
         definition_level_histograms: Option<Vec<i64>>,
         min_bytes: Vec<&[u8]>,
@@ -130,6 +140,7 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
                 null_counts,
                 repetition_level_histograms,
                 definition_level_histograms,
+                nan_counts,
             },
             min_values,
             max_values,
@@ -141,6 +152,7 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
             index.null_pages,
             index.boundary_order,
             index.null_counts,
+            index.nan_counts,
             index.repetition_level_histograms,
             index.definition_level_histograms,
             index.min_values,
@@ -284,10 +296,12 @@ pub struct ByteArrayColumnIndex {
 }
 
 impl ByteArrayColumnIndex {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         null_pages: Vec<bool>,
         boundary_order: BoundaryOrder,
         null_counts: Option<Vec<i64>>,
+        nan_counts: Option<Vec<i64>>,
         repetition_level_histograms: Option<Vec<i64>>,
         definition_level_histograms: Option<Vec<i64>>,
         min_values: Vec<&[u8]>,
@@ -333,6 +347,7 @@ impl ByteArrayColumnIndex {
                 null_pages,
                 boundary_order,
                 null_counts,
+                nan_counts,
                 repetition_level_histograms,
                 definition_level_histograms,
             },
@@ -348,6 +363,7 @@ impl ByteArrayColumnIndex {
             index.null_pages,
             index.boundary_order,
             index.null_counts,
+            index.nan_counts,
             index.repetition_level_histograms,
             index.definition_level_histograms,
             index.min_values,
@@ -563,6 +579,23 @@ impl ColumnIndexMetaData {
         }
     }
 
+    /// Returns array of NaN counts, one per page.
+    ///
+    /// Returns `None` if now null counts have been set in the index
+    pub fn nan_counts(&self) -> Option<&Vec<i64>> {
+        match self {
+            Self::NONE => None,
+            Self::BOOLEAN(index) => index.nan_counts.as_ref(),
+            Self::INT32(index) => index.nan_counts.as_ref(),
+            Self::INT64(index) => index.nan_counts.as_ref(),
+            Self::INT96(index) => index.nan_counts.as_ref(),
+            Self::FLOAT(index) => index.nan_counts.as_ref(),
+            Self::DOUBLE(index) => index.nan_counts.as_ref(),
+            Self::BYTE_ARRAY(index) => index.nan_counts.as_ref(),
+            Self::FIXED_LEN_BYTE_ARRAY(index) => index.nan_counts.as_ref(),
+        }
+    }
+
     /// Returns the number of pages
     pub fn num_pages(&self) -> u64 {
         colidx_enum_func!(self, num_pages)
@@ -573,6 +606,13 @@ impl ColumnIndexMetaData {
     /// Returns `None` if no null counts have been set in the index
     pub fn null_count(&self, idx: usize) -> Option<i64> {
         colidx_enum_func!(self, null_count, idx)
+    }
+
+    /// Returns the number of NaN values in the page indexed by `idx`
+    ///
+    /// Returns `None` if no null counts have been set in the index
+    pub fn nan_count(&self, idx: usize) -> Option<i64> {
+        colidx_enum_func!(self, nan_count, idx)
     }
 
     /// Returns the repetition level histogram for the page indexed by `idx`
@@ -676,6 +716,7 @@ mod tests {
                 null_pages: vec![false],
                 boundary_order: BoundaryOrder::ASCENDING,
                 null_counts: Some(vec![0]),
+                nan_counts: None,
                 repetition_level_histograms: Some(vec![1, 2]),
                 definition_level_histograms: Some(vec![1, 2, 3]),
             },
@@ -700,6 +741,7 @@ mod tests {
                 null_pages: vec![true],
                 boundary_order: BoundaryOrder::ASCENDING,
                 null_counts: Some(vec![1]),
+                nan_counts: None,
                 repetition_level_histograms: None,
                 definition_level_histograms: Some(vec![1, 0]),
             },
@@ -727,6 +769,7 @@ mod tests {
                 &[], // this shouldn't be empty as null_pages[1] is false
             ],
             null_counts: None,
+            nan_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,
             boundary_order: BoundaryOrder::UNORDERED,
