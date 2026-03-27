@@ -26,6 +26,7 @@ use crate::util::bit_util::{BitWriter, ceil, num_required_bits};
 /// Computes max buffer size for level encoder/decoder based on encoding, max
 /// repetition/definition level and number of total buffered values (includes null
 /// values).
+#[allow(dead_code)]
 #[inline]
 pub fn max_buffer_size(encoding: Encoding, max_level: i16, num_buffered_values: usize) -> usize {
     let bit_width = num_required_bits(max_level as u64);
@@ -53,6 +54,7 @@ impl LevelEncoder {
     /// Used to encode levels for Data Page v1.
     ///
     /// Panics, if encoding is not supported.
+    #[allow(dead_code)]
     pub fn v1(encoding: Encoding, max_level: i16, capacity: usize) -> Self {
         let capacity_bytes = max_buffer_size(encoding, max_level, capacity);
         let mut buffer = Vec::with_capacity(capacity_bytes);
@@ -76,6 +78,7 @@ impl LevelEncoder {
 
     /// Creates new level encoder based on RLE encoding. Used to encode Data Page v2
     /// repetition and definition levels.
+    #[allow(dead_code)]
     pub fn v2(max_level: i16, capacity: usize) -> Self {
         let capacity_bytes = max_buffer_size(Encoding::RLE, max_level, capacity);
         let buffer = Vec::with_capacity(capacity_bytes);
@@ -83,9 +86,44 @@ impl LevelEncoder {
         LevelEncoder::RleV2(RleEncoder::new_from_buf(bit_width, buffer))
     }
 
+    /// Creates a new streaming level encoder for Data Page v1.
+    ///
+    /// Unlike [`v1`](Self::v1), this does not require knowing the number of values
+    /// upfront, making it suitable for incremental encoding where levels are fed in
+    /// as they arrive via [`put`](Self::put).
+    pub fn v1_streaming(encoding: Encoding, max_level: i16) -> Self {
+        let bit_width = num_required_bits(max_level as u64);
+        match encoding {
+            Encoding::RLE => {
+                // Reserve space for length header
+                let buffer = vec![0u8; 4];
+                LevelEncoder::Rle(RleEncoder::new_from_buf(bit_width, buffer))
+            }
+            #[allow(deprecated)]
+            Encoding::BIT_PACKED => {
+                LevelEncoder::BitPacked(bit_width, BitWriter::new_from_buf(Vec::new()))
+            }
+            _ => panic!("Unsupported encoding type {encoding}"),
+        }
+    }
+
+    /// Creates a new streaming RLE level encoder for Data Page v2.
+    ///
+    /// Unlike [`v2`](Self::v2), this does not require knowing the number of values
+    /// upfront, making it suitable for incremental encoding where levels are fed in
+    /// as they arrive via [`put`](Self::put).
+    pub fn v2_streaming(max_level: i16) -> Self {
+        let bit_width = num_required_bits(max_level as u64);
+        LevelEncoder::RleV2(RleEncoder::new_from_buf(bit_width, Vec::new()))
+    }
+
     /// Put/encode levels vector into this level encoder.
     /// Returns number of encoded values that are less than or equal to length of the
     /// input buffer.
+    ///
+    /// This method does **not** flush the underlying encoder, so it can be called
+    /// incrementally across multiple batches without forcing run boundaries.
+    /// The encoder is flushed automatically when [`consume`](Self::consume) is called.
     #[inline]
     pub fn put(&mut self, buffer: &[i16]) -> usize {
         let mut num_encoded = 0;
@@ -95,14 +133,12 @@ impl LevelEncoder {
                     encoder.put(*value as u64);
                     num_encoded += 1;
                 }
-                encoder.flush();
             }
             LevelEncoder::BitPacked(bit_width, ref mut encoder) => {
                 for value in buffer {
                     encoder.put_value(*value as u64, bit_width as usize);
                     num_encoded += 1;
                 }
-                encoder.flush();
             }
         }
         num_encoded
@@ -111,6 +147,7 @@ impl LevelEncoder {
     /// Finalizes level encoder, flush all intermediate buffers and return resulting
     /// encoded buffer. Returned buffer is already truncated to encoded bytes only.
     #[inline]
+    #[allow(unused)]
     pub fn consume(self) -> Vec<u8> {
         match self {
             LevelEncoder::Rle(encoder) => {
@@ -125,5 +162,35 @@ impl LevelEncoder {
             LevelEncoder::RleV2(encoder) => encoder.consume(),
             LevelEncoder::BitPacked(_, encoder) => encoder.consume(),
         }
+    }
+
+    /// Flushes all intermediate buffers, passes the encoded data to `f`, then
+    /// resets the encoder for reuse while retaining the buffer allocation.
+    #[inline]
+    pub fn flush_to<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        let result = match self {
+            LevelEncoder::Rle(encoder) => {
+                let data = encoder.flush_buffer_mut();
+                // Patch the 4-byte length header reserved at the start of the buffer
+                let encoded_len = (data.len() - mem::size_of::<i32>()) as i32;
+                data[..4].copy_from_slice(&encoded_len.to_le_bytes());
+                f(data)
+            }
+            LevelEncoder::RleV2(encoder) => f(encoder.flush_buffer()),
+            LevelEncoder::BitPacked(_, encoder) => f(encoder.flush_buffer()),
+        };
+        match self {
+            LevelEncoder::Rle(encoder) => {
+                encoder.clear();
+                // Re-reserve the 4-byte length header for the next page
+                encoder.skip(mem::size_of::<i32>());
+            }
+            LevelEncoder::RleV2(encoder) => encoder.clear(),
+            LevelEncoder::BitPacked(_, encoder) => encoder.clear(),
+        }
+        result
     }
 }
