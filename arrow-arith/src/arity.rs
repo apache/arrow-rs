@@ -19,7 +19,6 @@
 
 use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
-use arrow_buffer::ArrowNativeType;
 use arrow_buffer::MutableBuffer;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::ArrayData;
@@ -379,11 +378,25 @@ where
     O: ArrowPrimitiveType,
     F: Fn(A::Item, B::Item) -> Result<O::Native, ArrowError>,
 {
-    let mut buffer = MutableBuffer::new(len * O::Native::get_byte_width());
-    for idx in 0..len {
-        unsafe {
-            buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
-        };
+    let mut error = None;
+
+    let buffer = unsafe {
+        MutableBuffer::from_trusted_len_iter((0..len).map(|idx| {
+            let res = op(a.value_unchecked(idx), b.value_unchecked(idx));
+            match res {
+                Err(err) => {
+                    // capture the first error
+                    if error.is_none() {
+                        error = Some(err);
+                    }
+                    O::Native::default()
+                }
+                Ok(v) => v,
+            }
+        }))
+    };
+    if let Some(err) = error {
+        return Err(err);
     }
     Ok(PrimitiveArray::new(buffer.into(), None))
 }
