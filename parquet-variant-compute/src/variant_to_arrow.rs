@@ -20,7 +20,8 @@ use crate::shred_variant::{
     make_variant_to_shredded_variant_arrow_row_builder,
 };
 use crate::type_conversion::{
-    PrimitiveFromVariant, TimestampFromVariant, variant_to_unscaled_decimal,
+    PrimitiveFromVariant, TimestampFromVariant, variant_cast_with_options,
+    variant_to_unscaled_decimal,
 };
 use crate::variant_array::ShreddedVariantFieldArray;
 use crate::{VariantArray, VariantValueArrayBuilder};
@@ -146,12 +147,6 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     };
 
     Ok(builder)
-}
-
-/// Determines when an invalid cast should be represented as Arrow null.
-#[inline]
-fn treat_invalid_as_null(cast_options: &CastOptions<'_>, value: &Variant<'_, '_>) -> bool {
-    matches!(value, Variant::Null) || cast_options.safe
 }
 
 /// Builder for converting primitive variant values to Arrow arrays. It is used by both
@@ -552,15 +547,13 @@ impl<'a> StructVariantToArrowRowBuilder<'a> {
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        let Variant::Object(obj) = value else {
-            if treat_invalid_as_null(self.cast_options, value) {
-                self.append_null()?;
-                return Ok(false);
-            }
-            return Err(ArrowError::CastError(format!(
-                "Failed to extract struct from variant {:?}",
-                value
-            )));
+        let Some(obj) =
+            variant_cast_with_options(value, self.cast_options, Variant::as_object, |value| {
+                format!("Failed to extract struct from variant {value:?}")
+            })?
+        else {
+            self.append_null()?;
+            return Ok(false);
         };
 
         for (index, field) in self.fields.iter().enumerate() {
@@ -714,22 +707,22 @@ macro_rules! define_variant_to_primitive_builder {
             }
 
             fn append_value(&mut self, $value: &Variant<'_, '_>) -> Result<bool> {
-                if let Some(v) = $value_transform {
+                if let Some(v) = variant_cast_with_options(
+                    $value,
+                    self.cast_options,
+                    |$value| $value_transform,
+                    |value| {
+                        format!(
+                            "Failed to extract primitive of type {type_name} from variant {value:?} at path VariantPath([])",
+                            type_name = $type_name
+                        )
+                    },
+                )? {
                     self.builder.append_value(v);
                     Ok(true)
                 } else {
-                    if treat_invalid_as_null(self.cast_options, $value) {
-                        // Safe casting (or variant null): append null on conversion failure
-                        self.builder.append_null();
-                        Ok(false)
-                    } else {
-                        // Unsafe casting: return error on conversion failure
-                        Err(ArrowError::CastError(format!(
-                            "Failed to extract primitive of type {} from variant {:?} at path VariantPath([])",
-                            $type_name,
-                            $value
-                        )))
-                    }
+                    self.builder.append_null();
+                    Ok(false)
                 }
             }
 
@@ -829,20 +822,24 @@ where
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if let Some(scaled) = variant_to_unscaled_decimal::<T>(value, self.precision, self.scale) {
+        if let Some(scaled) = variant_cast_with_options(
+            value,
+            self.cast_options,
+            |value| variant_to_unscaled_decimal::<T>(value, self.precision, self.scale),
+            |value| {
+                format!(
+                    "Failed to cast to {prefix}(precision={precision}, scale={scale}) from variant {value:?}",
+                    prefix = T::PREFIX,
+                    precision = self.precision,
+                    scale = self.scale
+                )
+            },
+        )? {
             self.builder.append_value(scaled);
             Ok(true)
-        } else if treat_invalid_as_null(self.cast_options, value) {
+        } else {
             self.builder.append_null();
             Ok(false)
-        } else {
-            Err(ArrowError::CastError(format!(
-                "Failed to cast to {}(precision={}, scale={}) from variant {:?}",
-                T::PREFIX,
-                self.precision,
-                self.scale,
-                value
-            )))
         }
     }
 
@@ -871,21 +868,19 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        match value.as_uuid() {
-            Some(uuid) => {
-                self.builder
-                    .append_value(uuid.as_bytes())
-                    .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+        if let Some(uuid) =
+            variant_cast_with_options(value, self.cast_options, Variant::as_uuid, |value| {
+                format!("Failed to extract UUID from variant {value:?}")
+            })?
+        {
+            self.builder
+                .append_value(uuid.as_bytes())
+                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
 
-                Ok(true)
-            }
-            None if treat_invalid_as_null(self.cast_options, value) => {
-                self.builder.append_null();
-                Ok(false)
-            }
-            None => Err(ArrowError::CastError(format!(
-                "Failed to extract UUID from variant {value:?}",
-            ))),
+            Ok(true)
+        } else {
+            self.builder.append_null();
+            Ok(false)
         }
     }
 
@@ -946,24 +941,21 @@ where
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        match value {
-            Variant::List(list) => {
-                for element in list.iter() {
-                    self.element_builder.append_value(element)?;
-                    self.current_offset = self.current_offset.add_checked(O::ONE)?;
-                }
-                self.offsets.push(self.current_offset);
-                self.nulls.append_non_null();
-                Ok(true)
+        if let Some(list) =
+            variant_cast_with_options(value, self.cast_options, Variant::as_list, |value| {
+                format!("Failed to extract list from variant {value:?}")
+            })?
+        {
+            for element in list.iter() {
+                self.element_builder.append_value(element)?;
+                self.current_offset = self.current_offset.add_checked(O::ONE)?;
             }
-            _ if treat_invalid_as_null(self.cast_options, value) => {
-                self.append_null()?;
-                Ok(false)
-            }
-            _ => Err(ArrowError::CastError(format!(
-                "Failed to extract list from variant {:?}",
-                value
-            ))),
+            self.offsets.push(self.current_offset);
+            self.nulls.append_non_null();
+            Ok(true)
+        } else {
+            self.append_null()?;
+            Ok(false)
         }
     }
 
