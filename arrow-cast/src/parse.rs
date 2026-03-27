@@ -445,7 +445,7 @@ pub trait Parser: ArrowPrimitiveType {
 
 impl Parser for Float16Type {
     fn parse(string: &str) -> Option<f16> {
-        lexical_core::parse(string.as_bytes())
+        lexical_core::parse(string.trim_ascii().as_bytes())
             .ok()
             .map(f16::from_f32)
     }
@@ -453,13 +453,13 @@ impl Parser for Float16Type {
 
 impl Parser for Float32Type {
     fn parse(string: &str) -> Option<f32> {
-        lexical_core::parse(string.as_bytes()).ok()
+        lexical_core::parse(string.trim_ascii().as_bytes()).ok()
     }
 }
 
 impl Parser for Float64Type {
     fn parse(string: &str) -> Option<f64> {
-        lexical_core::parse(string.as_bytes()).ok()
+        lexical_core::parse(string.trim_ascii().as_bytes()).ok()
     }
 }
 
@@ -467,6 +467,7 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
+                let string = string.trim_ascii();
                 if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
                     return None;
                 }
@@ -2801,6 +2802,44 @@ mod tests {
         assert_eq!(Float64Type::parse("+"), None);
         assert_eq!(TimestampNanosecondType::parse(""), None);
         assert_eq!(Date32Type::parse(""), None);
+    }
+
+    #[test]
+    fn test_parse_trimmed_whitespace() {
+        // Float types
+        assert_eq!(Float16Type::parse(" 1.5 "), Some(f16::from_f32(1.5)));
+        assert_eq!(Float32Type::parse(" 1.5 "), Some(1.5_f32));
+        assert_eq!(Float64Type::parse(" 1.5 "), Some(1.5_f64));
+        assert_eq!(Float32Type::parse("\t2.0\n"), Some(2.0_f32));
+        assert_eq!(Float64Type::parse("\t2.0\n"), Some(2.0_f64));
+
+        // Integer types
+        assert_eq!(Int8Type::parse(" 42 "), Some(42_i8));
+        assert_eq!(Int16Type::parse(" 42 "), Some(42_i16));
+        assert_eq!(Int32Type::parse(" 42 "), Some(42_i32));
+        assert_eq!(Int64Type::parse(" 42 "), Some(42_i64));
+        assert_eq!(UInt8Type::parse(" 42 "), Some(42_u8));
+        assert_eq!(UInt16Type::parse(" 42 "), Some(42_u16));
+        assert_eq!(UInt32Type::parse(" 42 "), Some(42_u32));
+        assert_eq!(UInt64Type::parse(" 42 "), Some(42_u64));
+
+        // Negative integers with whitespace
+        assert_eq!(Int32Type::parse(" -1 "), Some(-1_i32));
+        assert_eq!(Int64Type::parse("\t-100\n"), Some(-100_i64));
+
+        // Whitespace-only strings should return None
+        assert_eq!(Int32Type::parse("  "), None);
+        assert_eq!(Float32Type::parse("  "), None);
+
+        // only leading
+        assert_eq!(Int8Type::parse("    63"), Some(63_i8));
+        assert_eq!(Int16Type::parse(" 87"), Some(87_i16));
+        assert_eq!(Int32Type::parse("     765"), Some(765_i32));
+
+        // only trailing
+        assert_eq!(Int8Type::parse("34 "), Some(34_i8));
+        assert_eq!(Int16Type::parse("87   "), Some(87_i16));
+        assert_eq!(Int32Type::parse("765     "), Some(765_i32));
     }
 
     #[test]
