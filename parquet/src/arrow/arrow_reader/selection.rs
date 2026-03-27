@@ -271,8 +271,64 @@ impl RowSelection {
         })
     }
 
-    /// Returns true if selectors should be forced, preventing mask materialisation
-    pub(crate) fn should_force_selectors(
+    /// Returns row offsets for the starts of skipped pages across projected columns
+    fn skipped_page_row_offsets(
+        &self,
+        projection: &ProjectionMask,
+        columns: &[OffsetIndexMetaData],
+    ) -> Vec<usize> {
+        let mut skipped_page_rows: Vec<usize> = Vec::new();
+
+        for (leaf_idx, column) in columns.iter().enumerate() {
+            if !projection.leaf_included(leaf_idx) {
+                continue;
+            }
+
+            let locations = column.page_locations();
+            if locations.is_empty() {
+                continue;
+            }
+
+            let selected_ranges = self.scan_ranges(locations);
+            let mut selected_idx = 0usize;
+            for page in locations {
+                let page_start = page.offset as u64;
+
+                while selected_idx < selected_ranges.len()
+                    && selected_ranges[selected_idx].start < page_start
+                {
+                    selected_idx += 1;
+                }
+
+                let selected = selected_idx < selected_ranges.len()
+                    && selected_ranges[selected_idx].start == page_start;
+
+                if selected {
+                    selected_idx += 1;
+                } else {
+                    skipped_page_rows.push(page.first_row_index as usize);
+                }
+            }
+        }
+
+        skipped_page_rows.sort_unstable();
+        skipped_page_rows.dedup();
+        skipped_page_rows
+    }
+
+    /// Returns row offsets for skipped page starts when page-aware mask chunking is needed
+    pub(crate) fn page_aware_mask_boundaries(
+        &self,
+        projection: &ProjectionMask,
+        offset_index: Option<&[OffsetIndexMetaData]>,
+    ) -> Option<Vec<usize>> {
+        offset_index
+            .map(|columns| self.skipped_page_row_offsets(projection, columns))
+            .filter(|offsets| !offsets.is_empty())
+    }
+
+    /// Returns true if bitmasks should be page aware
+    pub(crate) fn requires_page_aware_mask(
         &self,
         projection: &ProjectionMask,
         offset_index: Option<&[OffsetIndexMetaData]>,
@@ -770,6 +826,9 @@ pub struct MaskCursor {
     mask: BooleanBuffer,
     /// Current absolute offset into the selection
     position: usize,
+    /// Index of the next page boundary candidate. This advances monotonically
+    /// as `position` advances.
+    next_boundary_idx: usize,
 }
 
 impl MaskCursor {
@@ -778,8 +837,13 @@ impl MaskCursor {
         self.position >= self.mask.len()
     }
 
-    /// Advance through the mask representation, producing the next chunk summary
-    pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
+    /// Advance through the mask representation, producing the next chunk summary.
+    /// Optionally clips chunk boundaries to the next page boundary.
+    pub fn next_mask_chunk(
+        &mut self,
+        batch_size: usize,
+        page_boundaries: Option<&[usize]>,
+    ) -> Option<MaskChunk> {
         let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
             let mask = &self.mask;
 
@@ -791,6 +855,7 @@ impl MaskCursor {
             let mut cursor = start_position;
             let mut initial_skip = 0;
 
+            // Skip unselected rows
             while cursor < mask.len() && !mask.value(cursor) {
                 initial_skip += 1;
                 cursor += 1;
@@ -800,10 +865,23 @@ impl MaskCursor {
             let mut chunk_rows = 0;
             let mut selected_rows = 0;
 
-            // Advance until enough rows have been selected to satisfy the batch size,
-            // or until the mask is exhausted. This mirrors the behaviour of the legacy
-            // `RowSelector` queue-based iteration.
-            while cursor < mask.len() && selected_rows < batch_size {
+            let max_chunk_rows = page_boundaries
+                .and_then(|boundaries| {
+                    while self.next_boundary_idx < boundaries.len()
+                        && boundaries[self.next_boundary_idx] <= mask_start
+                    {
+                        self.next_boundary_idx += 1;
+                    }
+                    boundaries
+                        .get(self.next_boundary_idx)
+                        .and_then(|&start| (start > mask_start).then_some(start - mask_start))
+                })
+                .unwrap_or(usize::MAX);
+
+            // Advance until enough rows have been selected to satisfy batch_size,
+            // or until the mask is exhausted or until a page boundary.
+            while cursor < mask.len() && selected_rows < batch_size && chunk_rows < max_chunk_rows {
+                // Increment counters
                 chunk_rows += 1;
                 if mask.value(cursor) {
                     selected_rows += 1;
@@ -906,6 +984,7 @@ impl RowSelectionCursor {
         Self::Mask(MaskCursor {
             mask: boolean_mask_from_selectors(&selectors),
             position: 0,
+            next_boundary_idx: 0,
         })
     }
 
@@ -1535,6 +1614,60 @@ mod tests {
 
         // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
         assert_eq!(ranges, vec![10..20, 20..30, 30..40]);
+    }
+
+    #[test]
+    fn test_page_aware_mask_boundaries_skipped_pages_only() {
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(10),
+            RowSelector::select(10),
+            RowSelector::skip(10),
+            RowSelector::select(20),
+            RowSelector::skip(20),
+        ]);
+
+        let page_locations = vec![
+            PageLocation {
+                offset: 0,
+                compressed_page_size: 10,
+                first_row_index: 0,
+            },
+            PageLocation {
+                offset: 10,
+                compressed_page_size: 10,
+                first_row_index: 10,
+            },
+            PageLocation {
+                offset: 20,
+                compressed_page_size: 10,
+                first_row_index: 20,
+            },
+            PageLocation {
+                offset: 30,
+                compressed_page_size: 10,
+                first_row_index: 30,
+            },
+            PageLocation {
+                offset: 40,
+                compressed_page_size: 10,
+                first_row_index: 40,
+            },
+            PageLocation {
+                offset: 50,
+                compressed_page_size: 10,
+                first_row_index: 50,
+            },
+        ];
+
+        let offsets = selection.page_aware_mask_boundaries(
+            &ProjectionMask::all(),
+            Some(&[OffsetIndexMetaData {
+                page_locations,
+                unencoded_byte_array_data_bytes: None,
+            }]),
+        );
+
+        assert_eq!(offsets, Some(vec![0, 20, 50]));
     }
 
     #[test]

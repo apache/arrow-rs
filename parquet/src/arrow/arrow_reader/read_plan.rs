@@ -28,6 +28,7 @@ use crate::errors::{ParquetError, Result};
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]
@@ -37,6 +38,8 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
+    /// Precomputed page boundary row indices for mask chunking
+    page_boundaries: Option<Arc<[usize]>>,
 }
 
 impl ReadPlanBuilder {
@@ -46,6 +49,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
+            page_boundaries: None,
         }
     }
 
@@ -182,6 +186,12 @@ impl ReadPlanBuilder {
         Ok(self)
     }
 
+    /// Set page boundary rows directly for mask chunking
+    pub(crate) fn with_page_boundaries(mut self, boundaries: Option<Arc<[usize]>>) -> Self {
+        self.page_boundaries = boundaries;
+        self
+    }
+
     /// Create a final `ReadPlan` the read plan for the scan
     pub fn build(mut self) -> ReadPlan {
         // If selection is empty, truncate
@@ -196,6 +206,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection,
             row_selection_policy: _,
+            page_boundaries: _,
         } = self;
 
         let selection = selection.map(|s| s.trim());
@@ -216,6 +227,7 @@ impl ReadPlanBuilder {
         ReadPlan {
             batch_size,
             row_selection_cursor,
+            page_boundaries: self.page_boundaries,
         }
     }
 }
@@ -314,6 +326,8 @@ pub struct ReadPlan {
     batch_size: usize,
     /// Row ranges to be selected from the data source
     row_selection_cursor: RowSelectionCursor,
+    /// Precomputed page boundary row indices for mask chunking
+    page_boundaries: Option<Arc<[usize]>>,
 }
 
 impl ReadPlan {
@@ -336,6 +350,11 @@ impl ReadPlan {
     #[inline(always)]
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    /// Return the page boundary row indices used for mask chunking
+    pub fn page_boundaries(&self) -> Option<Arc<[usize]>> {
+        self.page_boundaries.clone()
     }
 }
 
