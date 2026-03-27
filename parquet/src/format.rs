@@ -450,6 +450,8 @@ impl Encoding {
   /// Added in 2.8 for FLOAT and DOUBLE.
   /// Support for INT32, INT64 and FIXED_LEN_BYTE_ARRAY added in 2.11.
   pub const BYTE_STREAM_SPLIT: Encoding = Encoding(9);
+  /// Adaptive Lossless floating-Point encoding (ALP) for FLOAT and DOUBLE.
+  pub const ALP: Encoding = Encoding(10);
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::PLAIN,
     Self::PLAIN_DICTIONARY,
@@ -460,6 +462,7 @@ impl Encoding {
     Self::DELTA_BYTE_ARRAY,
     Self::RLE_DICTIONARY,
     Self::BYTE_STREAM_SPLIT,
+    Self::ALP,
   ];
 }
 
@@ -486,6 +489,7 @@ impl From<i32> for Encoding {
       7 => Encoding::DELTA_BYTE_ARRAY,
       8 => Encoding::RLE_DICTIONARY,
       9 => Encoding::BYTE_STREAM_SPLIT,
+      10 => Encoding::ALP,
       _ => Encoding(i)
     }
   }
@@ -6041,4 +6045,3 @@ impl crate::thrift::TSerializable for FileCryptoMetaData {
     o_prot.write_struct_end()
   }
 }
-
