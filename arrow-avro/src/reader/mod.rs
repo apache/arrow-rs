@@ -2950,6 +2950,7 @@ mod test {
         },"default":{"x":7}}),
                 serde_json::json!({"name":"d_nullable_null","type":["null","int"],"default":null}),
                 serde_json::json!({"name":"d_nullable_value","type":["int","null"],"default":123}),
+                serde_json::json!({"name":"d_nullable_null_second","type":["int","null"],"default":null}),
             ],
         );
         let actual = read_alltypes_with_reader_schema(path, reader_schema);
@@ -2957,7 +2958,7 @@ mod test {
         assert!(num_rows > 0, "skippable_types.avro should contain rows");
         assert_eq!(
             actual.num_columns(),
-            22,
+            23,
             "expected exactly our defaulted fields"
         );
         let mut arrays: Vec<Arc<dyn Array>> = Vec::with_capacity(22);
@@ -3083,6 +3084,10 @@ mod test {
         ))));
         arrays.push(Arc::new(Int32Array::from_iter_values(std::iter::repeat_n(
             123, num_rows,
+        ))));
+        arrays.push(Arc::new(Int32Array::from_iter(std::iter::repeat_n(
+            None::<i32>,
+            num_rows,
         ))));
         let expected = RecordBatch::try_new(actual.schema(), arrays).unwrap();
         assert_eq!(

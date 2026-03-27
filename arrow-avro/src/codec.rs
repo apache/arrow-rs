@@ -313,18 +313,18 @@ impl AvroDataType {
             }
         }
 
-        // Handle JSON nulls per-spec: allowed only for `null` type or unions with null FIRST
+        // Handle JSON nulls per-spec: allowed only for `null` type or unions with null
         if default_json.is_null() {
             return match self.codec() {
                 Codec::Null => Ok(AvroLiteral::Null),
-                Codec::Union(encodings, _, _) if !encodings.is_empty()
-                    && matches!(encodings[0].codec(), Codec::Null) =>
+                Codec::Union(encodings, _, _)
+                    if encodings.iter().any(|enc| matches!(enc.codec(), Codec::Null)) =>
                     {
                         Ok(AvroLiteral::Null)
                     }
-                _ if self.nullability() == Some(Nullability::NullFirst) => Ok(AvroLiteral::Null),
+                _ if self.nullability().is_some() => Ok(AvroLiteral::Null),
                 _ => Err(ArrowError::SchemaError(
-                    "JSON null default is only valid for `null` type or for a union whose first branch is `null`"
+                    "JSON null default is only valid for `null` type or for a union with a `null` branch"
                         .to_string(),
                 )),
             };
@@ -3284,12 +3284,9 @@ mod tests {
         assert_default_stored(&dt_int_nf, &Value::Null);
         let mut dt_int_ns =
             AvroDataType::new(Codec::Int32, HashMap::new(), Some(Nullability::NullSecond));
-        let err2 = dt_int_ns.parse_and_store_default(&Value::Null).unwrap_err();
-        assert!(
-            err2.to_string()
-                .contains("JSON null default is only valid for `null` type"),
-            "unexpected error: {err2}"
-        );
+        let lit3 = dt_int_ns.parse_and_store_default(&Value::Null).unwrap();
+        assert_eq!(lit3, AvroLiteral::Null);
+        assert_default_stored(&dt_int_ns, &Value::Null);
     }
 
     #[test]
