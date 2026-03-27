@@ -224,7 +224,6 @@ pub struct WriterProperties {
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
     column_index_truncate_length: Option<usize>,
-    statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
     #[cfg(feature = "encryption")]
@@ -405,15 +404,19 @@ impl WriterProperties {
         self.column_index_truncate_length
     }
 
-    /// Returns the maximum length of truncated min/max values in [`Statistics`].
+    /// Returns the maximum length of truncated min/max values in [`Statistics`] for a specific column.
     ///
     /// `None` if truncation is disabled, must be greater than 0 otherwise.
     ///
-    /// For more details see [`WriterPropertiesBuilder::set_statistics_truncate_length`]
+    /// For more details see [`WriterPropertiesBuilder::set_column_statistics_truncate_length`]
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
-    pub fn statistics_truncate_length(&self) -> Option<usize> {
-        self.statistics_truncate_length
+    pub fn statistics_truncate_length(&self, col: &ColumnPath) -> Option<usize> {
+        self.column_properties
+            .get(col)
+            .and_then(|props| props.statistics_truncate_length())
+            .or_else(|| self.default_column_properties.statistics_truncate_length())
+            .unwrap_or(DEFAULT_STATISTICS_TRUNCATE_LENGTH)
     }
 
     /// Returns `true` if type coercion is enabled.
@@ -551,7 +554,6 @@ pub struct WriterPropertiesBuilder {
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
     column_index_truncate_length: Option<usize>,
-    statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
     #[cfg(feature = "encryption")]
@@ -575,7 +577,7 @@ impl Default for WriterPropertiesBuilder {
             column_properties: HashMap::new(),
             sorting_columns: None,
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
-            statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
+
             coerce_types: DEFAULT_COERCE_TYPES,
             content_defined_chunking: None,
             #[cfg(feature = "encryption")]
@@ -601,7 +603,7 @@ impl WriterPropertiesBuilder {
             column_properties: self.column_properties,
             sorting_columns: self.sorting_columns,
             column_index_truncate_length: self.column_index_truncate_length,
-            statistics_truncate_length: self.statistics_truncate_length,
+
             coerce_types: self.coerce_types,
             content_defined_chunking: self.content_defined_chunking,
             #[cfg(feature = "encryption")]
@@ -791,7 +793,7 @@ impl WriterPropertiesBuilder {
             );
         }
 
-        self.statistics_truncate_length = max_length;
+        self.default_column_properties.statistics_truncate_length = Some(max_length);
         self
     }
 
@@ -1113,6 +1115,24 @@ impl WriterPropertiesBuilder {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
         self
     }
+
+    /// Sets the statistics truncate length for a specific column.
+    ///
+    /// If `Some`, must be greater than 0, otherwise will panic
+    /// If `None`, there's no effective limit.
+    ///
+    /// This method sets column-specific statistics truncate length.
+    pub fn set_column_statistics_truncate_length(
+        mut self,
+        col: ColumnPath,
+        max_length: Option<usize>,
+    ) -> Self {
+        if let Some(length) = max_length {
+            assert!(length > 0, "Cannot have a 0 statistics truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+        }
+        self.get_mut_props(col).statistics_truncate_length = Some(max_length);
+        self
+    }
 }
 
 impl From<WriterProperties> for WriterPropertiesBuilder {
@@ -1242,6 +1262,8 @@ struct ColumnProperties {
     write_page_header_statistics: Option<bool>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
+    /// statistics truncate length for this column
+    statistics_truncate_length: Option<Option<usize>>,
 }
 
 impl ColumnProperties {
@@ -1371,6 +1393,11 @@ impl ColumnProperties {
     /// Returns the bloom filter properties, or `None` if not enabled
     fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
         self.bloom_filter_properties.as_ref()
+    }
+
+    /// Returns the statistics truncate length for this column.
+    fn statistics_truncate_length(&self) -> Option<Option<usize>> {
+        self.statistics_truncate_length
     }
 }
 
