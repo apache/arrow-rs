@@ -30,7 +30,6 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::utf8::check_valid_utf8;
 use arrow_array::{ArrayRef, builder::make_view};
 use arrow_buffer::Buffer;
-use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
@@ -496,56 +495,14 @@ impl ByteViewArrayDecoderDictionary {
         }
 
         // Calculate the offset of the dictionary buffers in the output buffers
-        // For example if the 2nd buffer in the dictionary is the 5th buffer in the output buffers,
-        // then the base_buffer_idx is 5 - 2 = 3
         let base_buffer_idx = output.buffers.len() as u32 - dict.buffers.len() as u32;
 
         // Pre-reserve output capacity to avoid per-chunk reallocation in extend
         output.views.reserve(len);
 
-        let mut error = None;
-        let read = self.decoder.read(len, |keys| {
-            if base_buffer_idx == 0 {
-                // the dictionary buffers are the last buffers in output, we can directly use the views
-                output
-                    .views
-                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
-                        Some(&view) => view,
-                        None => {
-                            if error.is_none() {
-                                error = Some(general_err!("invalid key={} for dictionary", *k));
-                            }
-                            0
-                        }
-                    }));
-                Ok(())
-            } else {
-                output
-                    .views
-                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
-                        Some(&view) => {
-                            let len = view as u32;
-                            if len <= 12 {
-                                view
-                            } else {
-                                let mut view = ByteView::from(view);
-                                view.buffer_index += base_buffer_idx;
-                                view.into()
-                            }
-                        }
-                        None => {
-                            if error.is_none() {
-                                error = Some(general_err!("invalid key={} for dictionary", *k));
-                            }
-                            0
-                        }
-                    }));
-                Ok(())
-            }
-        })?;
-        if let Some(e) = error {
-            return Err(e);
-        }
+        let read =
+            self.decoder
+                .read_gather_views(len, &dict.views, &mut output.views, base_buffer_idx)?;
         Ok(read)
     }
 

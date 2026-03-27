@@ -17,8 +17,8 @@
 
 use bytes::Bytes;
 
-use crate::encodings::rle::RleDecoder;
-use crate::errors::Result;
+use crate::encodings::rle::{RleDecodedBatch, RleDecoder};
+use crate::errors::{ParquetError, Result};
 
 /// Decoder for `Encoding::RLE_DICTIONARY` indices
 pub struct DictIndexDecoder {
@@ -27,7 +27,7 @@ pub struct DictIndexDecoder {
 
     /// We want to decode the offsets in chunks so we will maintain an internal buffer of decoded
     /// offsets
-    index_buf: Box<[i32; 1024]>,
+    index_buf: Vec<i32>,
     /// Current length of `index_buf`
     index_buf_len: usize,
     /// Current offset into `index_buf`. If `index_buf_offset` == `index_buf_len` then we've consumed
@@ -46,13 +46,14 @@ impl DictIndexDecoder {
         let bit_width = data[0];
         let mut decoder = RleDecoder::new(bit_width);
         decoder.set_data(data.slice(1..))?;
+        let max_remaining = num_values.unwrap_or(num_levels);
 
         Ok(Self {
             decoder,
-            index_buf: Box::new([0; 1024]),
+            index_buf: vec![0; max_remaining.min(1024)],
             index_buf_len: 0,
             index_offset: 0,
-            max_remaining_values: num_values.unwrap_or(num_levels),
+            max_remaining_values: max_remaining,
         })
     }
 
@@ -89,6 +90,115 @@ impl DictIndexDecoder {
         self.max_remaining_values -= values_read;
 
         Ok(values_read)
+    }
+
+    /// Decode indices and gather views directly into `output`.
+    ///
+    /// For RLE runs, fills output with the repeated view directly (no index buffer needed).
+    /// For bit-packed runs, decodes indices to a stack-local buffer and gathers immediately.
+    pub fn read_gather_views(
+        &mut self,
+        len: usize,
+        dict_views: &[u128],
+        output: &mut Vec<u128>,
+        base_buffer_idx: u32,
+    ) -> Result<usize> {
+        let to_read = len.min(self.max_remaining_values);
+        let mut values_read = 0;
+        let mut error = None;
+
+        // Flush any buffered indices from previous reads
+        if self.index_offset < self.index_buf_len {
+            let n = (self.index_buf_len - self.index_offset).min(to_read);
+            let keys = &self.index_buf[self.index_offset..self.index_offset + n];
+            Self::gather_views(keys, dict_views, output, base_buffer_idx, &mut error);
+            self.index_offset += n;
+            self.max_remaining_values -= n;
+            values_read += n;
+        }
+
+        if values_read < to_read {
+            let read =
+                self.decoder
+                    .get_batch_direct(to_read - values_read, |batch| match batch {
+                        RleDecodedBatch::Rle { index, count } => {
+                            match dict_views.get(index as usize) {
+                                Some(&view) => {
+                                    let view = if base_buffer_idx == 0 || (view as u32) <= 12 {
+                                        view
+                                    } else {
+                                        let mut bv = arrow_data::ByteView::from(view);
+                                        bv.buffer_index += base_buffer_idx;
+                                        bv.into()
+                                    };
+                                    output.extend(std::iter::repeat_n(view, count));
+                                }
+                                None => {
+                                    if error.is_none() {
+                                        error = Some(general_err!(
+                                            "invalid key={} for dictionary",
+                                            index
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        RleDecodedBatch::BitPacked(keys) => {
+                            Self::gather_views(
+                                keys,
+                                dict_views,
+                                output,
+                                base_buffer_idx,
+                                &mut error,
+                            );
+                        }
+                    })?;
+            self.max_remaining_values -= read;
+            values_read += read;
+        }
+
+        if let Some(e) = error {
+            return Err(e);
+        }
+        Ok(values_read)
+    }
+
+    fn gather_views(
+        keys: &[i32],
+        dict_views: &[u128],
+        output: &mut Vec<u128>,
+        base_buffer_idx: u32,
+        error: &mut Option<ParquetError>,
+    ) {
+        if base_buffer_idx == 0 {
+            output.extend(keys.iter().map(|k| match dict_views.get(*k as usize) {
+                Some(&view) => view,
+                None => {
+                    if error.is_none() {
+                        *error = Some(general_err!("invalid key={} for dictionary", *k));
+                    }
+                    0
+                }
+            }));
+        } else {
+            output.extend(keys.iter().map(|k| match dict_views.get(*k as usize) {
+                Some(&view) => {
+                    if (view as u32) <= 12 {
+                        view
+                    } else {
+                        let mut bv = arrow_data::ByteView::from(view);
+                        bv.buffer_index += base_buffer_idx;
+                        bv.into()
+                    }
+                }
+                None => {
+                    if error.is_none() {
+                        *error = Some(general_err!("invalid key={} for dictionary", *k));
+                    }
+                    0
+                }
+            }));
+        }
     }
 
     /// Skip up to `to_skip` values, returning the number of values skipped
