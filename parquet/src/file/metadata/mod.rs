@@ -95,6 +95,9 @@ pub(crate) mod reader;
 pub(crate) mod thrift;
 mod writer;
 
+#[cfg(feature = "flatbuffers_metadata")]
+pub mod flatbuf;
+
 use crate::basic::{EncodingMask, PageType};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
