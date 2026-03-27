@@ -591,12 +591,19 @@ impl IpcDataGenerator {
             let b = batch_builder.finish();
             b.as_union_value()
         };
+        // serialize custom_metadata (must be created before MessageBuilder)
+        let fb_custom_metadata = (!batch.custom_metadata().is_empty())
+            .then(|| crate::convert::metadata_to_fb(&mut fbb, batch.custom_metadata()));
+
         // create an crate::Message
         let mut message = crate::MessageBuilder::new(&mut fbb);
         message.add_version(write_options.metadata_version);
         message.add_header_type(crate::MessageHeader::RecordBatch);
         message.add_bodyLength(arrow_data.len() as i64);
         message.add_header(root);
+        if let Some(m) = fb_custom_metadata {
+            message.add_custom_metadata(m);
+        }
         let root = message.finish();
         fbb.finish(root, None);
         let finished_data = fbb.finished_data();
@@ -4260,5 +4267,225 @@ mod tests {
         let mut reader = StreamReader::try_new(Cursor::new(buffer), None).unwrap();
         let read_batch = reader.next().unwrap().unwrap();
         assert_eq!(read_batch, batch2);
+    }
+
+    #[test]
+    fn test_custom_metadata_ipc_file_roundtrip() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )
+        .unwrap()
+        .with_custom_metadata(
+            [("key".to_string(), "value".to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        // Write IPC file
+        let mut writer = FileWriter::try_new(vec![], &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        let data = writer.into_inner().unwrap();
+
+        // Read back
+        let reader = FileReader::try_new(Cursor::new(data), None).unwrap();
+        let read_batches: Vec<_> = reader.map(|b| b.unwrap()).collect();
+        assert_eq!(read_batches.len(), 1);
+        assert_eq!(
+            read_batches[0].custom_metadata().get("key"),
+            Some(&"value".to_string())
+        );
+        assert_eq!(read_batches[0], batch);
+    }
+
+    #[test]
+    fn test_custom_metadata_ipc_stream_roundtrip() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )
+        .unwrap()
+        .with_custom_metadata(
+            [("key".to_string(), "value".to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        // Write IPC stream
+        let mut buf = vec![];
+        {
+            let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // Read back via StreamReader
+        let mut reader = StreamReader::try_new(Cursor::new(&buf), None).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+        assert_eq!(
+            read_batch.custom_metadata().get("key"),
+            Some(&"value".to_string())
+        );
+        assert_eq!(read_batch, batch);
+    }
+
+    #[test]
+    fn test_custom_metadata_stream_decoder_roundtrip() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )
+        .unwrap()
+        .with_custom_metadata(
+            [("key".to_string(), "value".to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        // Write IPC stream
+        let mut buf = vec![];
+        {
+            let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // Read back via StreamDecoder
+        let mut decoder = StreamDecoder::new();
+        let mut buf = arrow_buffer::Buffer::from(buf);
+        let decoded = decoder.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(
+            decoded.custom_metadata().get("key"),
+            Some(&"value".to_string())
+        );
+        assert_eq!(decoded, batch);
+    }
+
+    #[test]
+    fn test_multiple_batches_different_metadata() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch0 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )
+        .unwrap()
+        .with_custom_metadata(
+            [("batch_index".to_string(), "0".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let batch1 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![4, 5])) as ArrayRef],
+        )
+        .unwrap()
+        .with_custom_metadata(
+            [("batch_index".to_string(), "1".to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        // Write IPC file with both batches
+        let mut writer = FileWriter::try_new(vec![], &schema).unwrap();
+        writer.write(&batch0).unwrap();
+        writer.write(&batch1).unwrap();
+        writer.finish().unwrap();
+        let data = writer.into_inner().unwrap();
+
+        // Read back
+        let reader = FileReader::try_new(Cursor::new(data), None).unwrap();
+        let read_batches: Vec<_> = reader.map(|b| b.unwrap()).collect();
+        assert_eq!(read_batches.len(), 2);
+        assert_eq!(
+            read_batches[0].custom_metadata().get("batch_index"),
+            Some(&"0".to_string())
+        );
+        assert_eq!(
+            read_batches[1].custom_metadata().get("batch_index"),
+            Some(&"1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_no_custom_metadata_backward_compat() {
+        // Batches without custom metadata should still work fine
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )
+        .unwrap();
+        assert!(batch.custom_metadata().is_empty());
+
+        let data = serialize_file(&batch);
+        let reader = FileReader::try_new(Cursor::new(data), None).unwrap();
+        let read_batches: Vec<_> = reader.map(|b| b.unwrap()).collect();
+        assert_eq!(read_batches.len(), 1);
+        assert!(read_batches[0].custom_metadata().is_empty());
+        assert_eq!(read_batches[0], batch);
+    }
+
+    #[test]
+    fn test_pyarrow_custom_metadata_file() {
+        let data = include_bytes!("../test_data/custom_metadata.arrow_file");
+        let reader = FileReader::try_new(Cursor::new(data.as_slice()), None).unwrap();
+        let batches: Vec<_> = reader.map(|b| b.unwrap()).collect();
+        assert_eq!(batches.len(), 2);
+
+        // Batch 0
+        assert_eq!(
+            batches[0].custom_metadata().get("batch_index"),
+            Some(&"0".to_string())
+        );
+        assert_eq!(
+            batches[0].custom_metadata().get("source"),
+            Some(&"test".to_string())
+        );
+        assert_eq!(batches[0].num_rows(), 3);
+
+        // Batch 1
+        assert_eq!(
+            batches[1].custom_metadata().get("batch_index"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            batches[1].custom_metadata().get("source"),
+            Some(&"test".to_string())
+        );
+        assert_eq!(batches[1].num_rows(), 2);
+    }
+
+    #[test]
+    fn test_pyarrow_custom_metadata_stream() {
+        let data = include_bytes!("../test_data/custom_metadata.arrow_stream");
+        let mut reader = StreamReader::try_new(Cursor::new(data.as_slice()), None).unwrap();
+
+        let batch0 = reader.next().unwrap().unwrap();
+        assert_eq!(
+            batch0.custom_metadata().get("batch_index"),
+            Some(&"0".to_string())
+        );
+        assert_eq!(
+            batch0.custom_metadata().get("source"),
+            Some(&"test".to_string())
+        );
+        assert_eq!(batch0.num_rows(), 3);
+
+        let batch1 = reader.next().unwrap().unwrap();
+        assert_eq!(
+            batch1.custom_metadata().get("batch_index"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            batch1.custom_metadata().get("source"),
+            Some(&"test".to_string())
+        );
+        assert_eq!(batch1.num_rows(), 2);
+
+        assert!(reader.next().is_none());
     }
 }
