@@ -80,7 +80,7 @@ pub const DEFAULT_CDC_NORM_LEVEL: i32 = 0;
 /// following options control the chunks' size and the chunking process. Note
 /// that the chunk size is calculated based on the logical value of the data,
 /// before any encoding or compression is applied.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CdcOptions {
     /// Minimum chunk size in bytes, default is 256 KiB.
     /// The rolling hash will not be updated until this size is reached for each chunk.
@@ -1863,5 +1863,19 @@ mod tests {
                 assert_eq!(e, "Invalid statistics arg: ChunkAndPage");
             }
         }
+    }
+
+    #[test]
+    fn test_cdc_options_equality() {
+        let opts = CdcOptions::default();
+        assert_eq!(opts, CdcOptions::default());
+
+        let custom = CdcOptions {
+            min_chunk_size: 1024,
+            max_chunk_size: 8192,
+            norm_level: 1,
+        };
+        assert_eq!(custom, custom);
+        assert_ne!(opts, custom);
     }
 }
