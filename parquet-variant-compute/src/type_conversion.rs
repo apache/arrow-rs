@@ -47,14 +47,15 @@ pub(crate) fn variant_cast_with_options<'a, 'm, 'v, T>(
     variant: &'a Variant<'m, 'v>,
     cast_options: &CastOptions<'_>,
     cast: impl FnOnce(&'a Variant<'m, 'v>) -> Option<T>,
-    error_fn: impl FnOnce(&'a Variant<'m, 'v>) -> String,
 ) -> Result<Option<T>> {
     if let Some(value) = cast(variant) {
         Ok(Some(value))
     } else if matches!(variant, Variant::Null) || cast_options.safe {
         Ok(None)
     } else {
-        Err(ArrowError::CastError(error_fn(variant)))
+        Err(ArrowError::CastError(format!(
+            "Failed to cast variant value {variant:?}"
+        )))
     }
 }
 
