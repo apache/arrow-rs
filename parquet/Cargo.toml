@@ -101,8 +101,10 @@ all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
-# Enable snappy compression (uses C++ snappy library via snappy_src, plus snap crate for CLI framed format)
-snap = ["snappy_src", "dep:snap"]
+# Enable snappy compression using the pure-Rust snap crate
+snap = ["dep:snap"]
+# Use C++ snappy library instead of the pure-Rust snap crate (requires C++ compiler, not available on wasm32)
+snappy_cpp = ["snap", "snappy_src"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs

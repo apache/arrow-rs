@@ -196,8 +196,8 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
     }
 }
 
-/// Snappy codec using C++ snappy library (non-wasm targets)
-#[cfg(all(any(feature = "snap", test), not(target_arch = "wasm32")))]
+/// Snappy codec using C++ snappy library (requires `snappy_cpp` feature, non-wasm targets only)
+#[cfg(all(feature = "snappy_cpp", not(target_arch = "wasm32")))]
 mod snappy_codec {
     use std::os::raw::c_char;
 
@@ -242,9 +242,7 @@ mod snappy_codec {
                 }
             };
             let offset = output_buf.len();
-            output_buf.reserve(len);
-            // SAFETY: we just reserved `len` bytes and snappy will write exactly `len` bytes
-            unsafe { output_buf.set_len(offset + len) };
+            output_buf.resize(offset + len, 0);
             let mut out_len = len;
             let status = unsafe {
                 snappy_uncompress(
@@ -263,11 +261,8 @@ mod snappy_codec {
 
         fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()> {
             let output_buf_len = output_buf.len();
-            let required_len =
-                unsafe { snappy_max_compressed_length(input_buf.len()) };
-            output_buf.reserve(required_len);
-            // SAFETY: we just reserved `required_len` bytes
-            unsafe { output_buf.set_len(output_buf_len + required_len) };
+            let required_len = unsafe { snappy_max_compressed_length(input_buf.len()) };
+            output_buf.resize(output_buf_len + required_len, 0);
             let mut out_len = required_len;
             let status = unsafe {
                 snappy_compress(
@@ -287,13 +282,16 @@ mod snappy_codec {
     }
 }
 
-/// Snappy codec using pure-Rust snap crate (wasm32 fallback)
-#[cfg(all(any(feature = "snap", test), target_arch = "wasm32"))]
+/// Snappy codec using pure-Rust snap crate (default, or wasm32 when snappy_cpp is enabled)
+#[cfg(all(
+    any(feature = "snap", test),
+    not(all(feature = "snappy_cpp", not(target_arch = "wasm32")))
+))]
 mod snappy_codec {
     use snap::raw::{Decoder, Encoder};
 
     use crate::compression::Codec;
-    use crate::errors::Result;
+    use crate::errors::{ParquetError, Result};
 
     pub struct SnappyCodec {
         decoder: Decoder,
