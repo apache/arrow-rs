@@ -1371,7 +1371,7 @@ mod tests {
             assert_eq!(pool.used(), 40);
 
             // Truncate to zero
-            buffer.truncate(0);
+            buffer.clear();
             assert_eq!(buffer.len(), 0);
             assert_eq!(pool.used(), 0);
         }
