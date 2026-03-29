@@ -709,6 +709,7 @@ mod test {
         assert_eq!(batch1, TEST_BATCH.slice(0, 100));
         assert_eq!(decoder.buffered_bytes(), test_file_len());
 
+        // All of the buffer is released
         decoder.release_all_ranges();
         assert_eq!(decoder.buffered_bytes(), 0);
 
