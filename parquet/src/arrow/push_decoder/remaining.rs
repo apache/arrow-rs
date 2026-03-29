@@ -70,6 +70,11 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.buffered_bytes()
     }
 
+    /// Release any staged ranges currently buffered for future decode work
+    pub fn release_all_ranges(&mut self) {
+        self.row_group_reader_builder.release_all_ranges();
+    }
+
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
     /// group of rows from the Parquet data, or the list of data ranges still
     /// needed to proceed

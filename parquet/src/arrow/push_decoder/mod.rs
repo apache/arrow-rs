@@ -365,6 +365,15 @@ impl ParquetPushDecoder {
     pub fn buffered_bytes(&self) -> u64 {
         self.state.buffered_bytes()
     }
+
+    /// Release any staged ranges currently buffered for future decode work.
+    ///
+    /// This clears byte ranges still owned by the decoder's internal
+    /// [`PushBuffers`]. It does not affect any data that has already been handed
+    /// off to an active [`ParquetRecordBatchReader`].
+    pub fn release_all_ranges(&mut self) {
+        self.state.release_all_ranges();
+    }
 }
 
 /// Internal state machine for the [`ParquetPushDecoder`]
@@ -573,6 +582,20 @@ impl ParquetDecoderState {
             ParquetDecoderState::Finished => 0,
         }
     }
+
+    /// Release any staged ranges currently buffered in the decoder.
+    fn release_all_ranges(&mut self) {
+        match self {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            } => remaining_row_groups.release_all_ranges(),
+            ParquetDecoderState::DecodingRowGroup {
+                record_batch_reader: _,
+                remaining_row_groups,
+            } => remaining_row_groups.release_all_ranges(),
+            ParquetDecoderState::Finished => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -663,6 +686,54 @@ mod test {
         // Check that the output matches the input batch
         let all_output = concat_batches(&TEST_BATCH.schema(), &results).unwrap();
         assert_eq!(all_output, *TEST_BATCH);
+    }
+
+    /// Releasing staged ranges should free speculative buffers without affecting
+    /// the active row group reader.
+    #[test]
+    fn test_decoder_release_all_ranges() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_batch_size(100)
+            .build()
+            .unwrap();
+
+        decoder
+            .push_range(test_file_range(), TEST_FILE_DATA.clone())
+            .unwrap();
+        assert_eq!(decoder.buffered_bytes(), test_file_len());
+
+        // The current row group reader is built from the prefetched bytes, but
+        // the speculative full-file range remains staged in the decoder.
+        let batch1 = expect_data(decoder.try_decode());
+        assert_eq!(batch1, TEST_BATCH.slice(0, 100));
+        assert_eq!(decoder.buffered_bytes(), test_file_len());
+
+        decoder.release_all_ranges();
+        assert_eq!(decoder.buffered_bytes(), 0);
+
+        // The active reader still owns the current row group's bytes, so it can
+        // continue decoding without consulting PushBuffers.
+        let batch2 = expect_data(decoder.try_decode());
+        assert_eq!(batch2, TEST_BATCH.slice(100, 100));
+        assert_eq!(decoder.buffered_bytes(), 0);
+
+        // Moving to the next row group now requires the decoder to ask for data
+        // again because the staged speculative ranges were released.
+        let ranges = expect_needs_data(decoder.try_decode());
+        let num_bytes_requested: u64 = ranges.iter().map(|r| r.end - r.start).sum();
+        push_ranges_to_decoder(&mut decoder, ranges);
+        assert_eq!(decoder.buffered_bytes(), num_bytes_requested);
+
+        let batch3 = expect_data(decoder.try_decode());
+        assert_eq!(batch3, TEST_BATCH.slice(200, 100));
+        assert_eq!(decoder.buffered_bytes(), 0);
+
+        let batch4 = expect_data(decoder.try_decode());
+        assert_eq!(batch4, TEST_BATCH.slice(300, 100));
+        assert_eq!(decoder.buffered_bytes(), 0);
+
+        expect_finished(decoder.try_decode());
     }
 
     /// Decode the entire file incrementally, simulating partial reads
