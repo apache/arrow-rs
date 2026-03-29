@@ -366,7 +366,7 @@ impl ParquetPushDecoder {
         self.state.buffered_bytes()
     }
 
-    /// Release any staged ranges currently buffered for future decode work.
+    /// Release any staged byte ranges currently buffered for future decode work.
     ///
     /// This clears byte ranges still owned by the decoder's internal
     /// [`PushBuffers`]. It does not affect any data that has already been handed
