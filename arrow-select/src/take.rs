@@ -495,14 +495,19 @@ fn take_boolean<IndexType: ArrowPrimitiveType>(
 /// # Safety
 /// Each `(start, end)` in `ranges` must be in-bounds of `src`, and
 /// `capacity` must equal the total bytes across all ranges.
-unsafe fn copy_byte_ranges(src: &[u8], ranges: &[(usize, usize)], capacity: usize) -> Vec<u8> {
+unsafe fn copy_byte_ranges(
+    src: &[u8],
+    ranges: &[(usize, usize)],
+    capacity: usize,
+    values: &mut Vec<u8>,
+) {
+    values.reserve(capacity);
     debug_assert_eq!(
         ranges.iter().map(|(s, e)| e - s).sum::<usize>(),
         capacity,
         "capacity must equal total bytes across all ranges"
     );
     let src_len = src.len();
-    let mut values = Vec::with_capacity(capacity);
     let src = src.as_ptr();
     let mut dst = values.as_mut_ptr();
     for &(start, end) in ranges {
@@ -523,7 +528,6 @@ unsafe fn copy_byte_ranges(src: &[u8], ranges: &[(usize, usize)], capacity: usiz
     // SAFETY: caller guarantees `capacity` == total bytes across all ranges,
     // so the loop above wrote exactly `capacity` bytes.
     unsafe { values.set_len(capacity) };
-    values
 }
 
 /// `take` implementation for string arrays
@@ -531,20 +535,18 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     array: &GenericByteArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteArray<T>, ArrowError> {
+    let mut values = Vec::new();
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(T::Offset::default());
 
     let input_offsets = array.value_offsets();
-    let input_values = array.value_data();
     let mut capacity = 0;
     let nulls = take_nulls(array.nulls(), indices);
 
-    // Pass 1: compute offsets and collect byte ranges.
     // Branch on output nulls — `None` means every output slot is valid.
-    let ranges = match nulls.as_ref().filter(|n| n.null_count() > 0) {
+    match nulls.as_ref().filter(|n| n.null_count() > 0) {
         // Fast path: no nulls in output, every index is valid.
         None => {
-            let mut ranges = Vec::with_capacity(indices.len());
             for index in indices.values() {
                 let index = index.as_usize();
                 let start = input_offsets[index].as_usize();
@@ -554,9 +556,26 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                     T::Offset::from_usize(capacity)
                         .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
                 );
-                ranges.push((start, end));
             }
-            ranges
+
+            values.reserve(capacity);
+
+            let mut dst = values.as_mut_ptr();
+
+            for index in indices.values() {
+                // SAFETY: in-bounds proven by the first loop's bounds-checked offset access.
+                // dst stays within reserved capacity computed from the same indices.
+                unsafe {
+                    let data: &[u8] = array.value_unchecked(index.as_usize()).as_ref();
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
+                    dst = dst.add(data.len());
+                }
+            }
+
+            // SAFETY: wrote exactly `capacity` bytes above; reserved on line above.
+            unsafe {
+                values.set_len(capacity);
+            }
         }
         // Nullable path: only process valid (non-null) output positions.
         Some(output_nulls) => {
@@ -566,6 +585,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             // Pre-fill offsets; we overwrite valid positions below.
             offsets.resize(indices.len() + 1, T::Offset::default());
 
+            // Pass 1: find all valid ranges that need to be copied.
             for i in output_nulls.valid_indices() {
                 let current_offset = T::Offset::from_usize(capacity)
                     .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
@@ -589,14 +609,10 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             let final_offset = T::Offset::from_usize(capacity)
                 .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
             offsets[last_filled + 1..].fill(final_offset);
-            ranges
+            // Pass 2: copy byte data for all collected ranges.
+            unsafe { copy_byte_ranges(array.value_data(), &ranges, capacity, &mut values) };
         }
     };
-
-    // Pass 2: copy byte data for all collected ranges.
-    let values = unsafe { copy_byte_ranges(input_values, &ranges, capacity) };
-
-    debug_assert_eq!(capacity, values.len());
 
     // SAFETY: offsets are monotonically increasing and in-bounds of `values`,
     // and `nulls` (if present) has length == `indices.len()`.
