@@ -41,17 +41,13 @@ use parquet_variant::{
 use std::borrow::Cow;
 use std::sync::Arc;
 
-/// Returns the raw bytes at the given index from a binary-like array.
-///
-/// # Panics
-/// Panics if the array is not `Binary`, `LargeBinary`, or `BinaryView`,
-/// or if `index` is out of bounds.
-pub(crate) fn binary_array_value(array: &dyn Array, index: usize) -> &[u8] {
+/// Returns the raw bytes at the given index from a binary-like array, return `None` if the array isn't binary-like.
+pub(crate) fn binary_array_value(array: &dyn Array, index: usize) -> Option<&[u8]> {
     match array.data_type() {
-        DataType::Binary => array.as_binary::<i32>().value(index),
-        DataType::LargeBinary => array.as_binary::<i64>().value(index),
-        DataType::BinaryView => array.as_binary_view().value(index),
-        other => panic!("Expected Binary, LargeBinary, or BinaryView array, got {other}"),
+        DataType::Binary => Some(array.as_binary::<i32>().value(index)),
+        DataType::LargeBinary => Some(array.as_binary::<i64>().value(index)),
+        DataType::BinaryView => Some(array.as_binary_view().value(index)),
+        _ => None,
     }
 }
 
@@ -401,8 +397,10 @@ impl VariantArray {
             }
             // Otherwise fall back to value, if available
             (_, Some(value)) if value.is_valid(index) => {
-                let metadata = binary_array_value(self.metadata.as_ref(), index);
-                let value = binary_array_value(value.as_ref(), index);
+                let metadata = binary_array_value(self.metadata.as_ref(), index)
+                    .expect("metadata field must be a binary-like array");
+                let value = binary_array_value(value.as_ref(), index)
+                    .expect("value field must be a binary-like array");
                 Ok(Variant::new(metadata, value))
             }
             // It is technically invalid for neither value nor typed_value fields to be available,
@@ -986,7 +984,8 @@ fn typed_value_to_variant<'a>(
             Ok(Uuid::from_slice(value).unwrap().into()) // unwrap is safe: slice is always 16 bytes
         }
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-            let value = binary_array_value(typed_value.as_ref(), index);
+            let value = binary_array_value(typed_value.as_ref(), index)
+                .expect("match arm guarantees the array is binary-like");
             Ok(Variant::from(value))
         }
         DataType::Utf8 => {

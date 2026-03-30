@@ -917,7 +917,7 @@ mod tests {
                         Some(expected_variant) => {
                             assert!(fallback_value.is_valid(idx));
                             let metadata_bytes =
-                                binary_array_value(fallback_metadata.as_ref(), idx);
+                                binary_array_value(fallback_metadata.as_ref(), idx).unwrap();
                             let metadata_bytes =
                                 if fallback_metadata.is_valid(idx) && !metadata_bytes.is_empty() {
                                     metadata_bytes
@@ -927,7 +927,7 @@ mod tests {
                             assert_eq!(
                                 Variant::new(
                                     metadata_bytes,
-                                    binary_array_value(fallback_value.as_ref(), idx)
+                                    binary_array_value(fallback_value.as_ref(), idx).unwrap()
                                 ),
                                 expected_variant.clone()
                             );
@@ -995,7 +995,7 @@ mod tests {
                     assert_eq!(
                         Variant::new(
                             EMPTY_VARIANT_METADATA_BYTES,
-                            binary_array_value(element_fallbacks.as_ref(), idx)
+                            binary_array_value(element_fallbacks.as_ref(), idx).unwrap()
                         ),
                         expected_variant.clone()
                     );
@@ -1257,8 +1257,8 @@ mod tests {
         assert!(typed_value_field.is_null(1)); // typed_value should be null
         assert_eq!(
             Variant::new(
-                binary_array_value(metadata_field.as_ref(), 1),
-                binary_array_value(value_field.as_ref(), 1)
+                binary_array_value(metadata_field.as_ref(), 1).unwrap(),
+                binary_array_value(value_field.as_ref(), 1).unwrap()
             ),
             Variant::from("hello")
         );
@@ -1276,8 +1276,8 @@ mod tests {
         assert!(!value_field.is_null(4)); // should contain Variant::Null
         assert_eq!(
             Variant::new(
-                binary_array_value(metadata_field.as_ref(), 4),
-                binary_array_value(value_field.as_ref(), 4)
+                binary_array_value(metadata_field.as_ref(), 4).unwrap(),
+                binary_array_value(value_field.as_ref(), 4).unwrap()
             ),
             Variant::Null
         );
@@ -1356,8 +1356,8 @@ mod tests {
         assert!(typed_value.is_null(1));
         assert_eq!(
             Variant::new(
-                binary_array_value(metadata.as_ref(), 1),
-                binary_array_value(value.as_ref(), 1)
+                binary_array_value(metadata.as_ref(), 1).unwrap(),
+                binary_array_value(value.as_ref(), 1).unwrap()
             ),
             Variant::from(42i64)
         );
@@ -1373,8 +1373,8 @@ mod tests {
         assert!(typed_value.is_null(3));
         assert_eq!(
             Variant::new(
-                binary_array_value(metadata.as_ref(), 3),
-                binary_array_value(value.as_ref(), 3)
+                binary_array_value(metadata.as_ref(), 3).unwrap(),
+                binary_array_value(value.as_ref(), 3).unwrap()
             ),
             Variant::Null
         );
@@ -1418,8 +1418,8 @@ mod tests {
         assert!(typed_value.is_null(1));
         assert_eq!(
             Variant::new(
-                binary_array_value(metadata.as_ref(), 1),
-                binary_array_value(value.as_ref(), 1)
+                binary_array_value(metadata.as_ref(), 1).unwrap(),
+                binary_array_value(value.as_ref(), 1).unwrap()
             ),
             Variant::from("not_binary")
         );
@@ -1435,8 +1435,8 @@ mod tests {
         assert!(typed_value.is_null(3));
         assert_eq!(
             Variant::new(
-                binary_array_value(metadata.as_ref(), 3),
-                binary_array_value(value.as_ref(), 3)
+                binary_array_value(metadata.as_ref(), 3).unwrap(),
+                binary_array_value(value.as_ref(), 3).unwrap()
             ),
             Variant::Null
         );
@@ -1825,7 +1825,7 @@ mod tests {
         assert_eq!(
             Variant::new(
                 EMPTY_VARIANT_METADATA_BYTES,
-                binary_array_value(id_values.as_ref(), 1)
+                binary_array_value(id_values.as_ref(), 1).unwrap()
             ),
             Variant::Null
         );
@@ -1945,8 +1945,8 @@ mod tests {
             value: &'v dyn Array,
         ) -> Variant<'m, 'v> {
             Variant::new(
-                binary_array_value(metadata, i),
-                binary_array_value(value, i),
+                binary_array_value(metadata, i).unwrap(),
+                binary_array_value(value, i).unwrap(),
             )
         }
         let expect = |i, expected_result: Option<ShreddedValue<ShreddedStruct>>| {
@@ -2143,7 +2143,7 @@ mod tests {
         // Helper to correctly create a variant object using a row's existing metadata
         let object_with_foo_field = |i| {
             use parquet_variant::{ParentState, ValueBuilder, VariantMetadata};
-            let metadata = VariantMetadata::new(binary_array_value(metadata.as_ref(), i));
+            let metadata = VariantMetadata::new(binary_array_value(metadata.as_ref(), i).unwrap());
             let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
             let mut value_builder = ValueBuilder::new();
             let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
@@ -2243,8 +2243,8 @@ mod tests {
         assert!(value_field.is_valid(3));
         assert_eq!(
             Variant::new(
-                binary_array_value(result.metadata_field().as_ref(), 3),
-                binary_array_value(value_field.as_ref(), 3)
+                binary_array_value(result.metadata_field().as_ref(), 3).unwrap(),
+                binary_array_value(value_field.as_ref(), 3).unwrap()
             ),
             Variant::from("not an object")
         );
@@ -2427,8 +2427,8 @@ mod tests {
 
         // Verify the value field contains the name field
         let row_1_variant = Variant::new(
-            binary_array_value(metadata.as_ref(), 1),
-            binary_array_value(value.as_ref(), 1),
+            binary_array_value(metadata.as_ref(), 1).unwrap(),
+            binary_array_value(value.as_ref(), 1).unwrap(),
         );
         let Variant::Object(obj) = row_1_variant else {
             panic!("Expected object");
@@ -2462,8 +2462,8 @@ mod tests {
         assert!(session_id_value.is_valid(3)); // type mismatch, stored in value
         assert!(session_id_typed_value.is_null(3));
         let session_id_variant = Variant::new(
-            binary_array_value(metadata.as_ref(), 3),
-            binary_array_value(session_id_value.as_ref(), 3),
+            binary_array_value(metadata.as_ref(), 3).unwrap(),
+            binary_array_value(session_id_value.as_ref(), 3).unwrap(),
         );
         assert_eq!(session_id_variant, Variant::from("not-a-uuid"));
 
@@ -2476,8 +2476,8 @@ mod tests {
         assert!(id_value.is_valid(4)); // type mismatch, stored in value
         assert!(id_typed_value.is_null(4));
         let id_variant = Variant::new(
-            binary_array_value(metadata.as_ref(), 4),
-            binary_array_value(id_value.as_ref(), 4),
+            binary_array_value(metadata.as_ref(), 4).unwrap(),
+            binary_array_value(id_value.as_ref(), 4).unwrap(),
         );
         assert_eq!(id_variant, Variant::from(12345i64));
 
