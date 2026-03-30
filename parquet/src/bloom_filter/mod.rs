@@ -915,7 +915,7 @@ mod tests {
 
         2. the bit pattern set _within_ a block depends only on the lower 32 bits of the hash,
         which doesn't change with filter size. So the same bits get set regardless!
-        > structually trivial, mask() takes a u32 and uses only the SALT constants..
+        > structually trivial, mask() takes a u32 and uses only the SALT constants.
 
 
         When you combine it together, every hash sets the same bits in the same destination block
