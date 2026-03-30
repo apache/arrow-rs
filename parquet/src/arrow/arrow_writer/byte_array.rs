@@ -22,7 +22,9 @@ use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion, DEFAULT_MAX_ROW_GROUP_ROW_COUNT};
+use crate::file::properties::{
+    DEFAULT_MAX_ROW_GROUP_ROW_COUNT, EnabledStatistics, WriterProperties, WriterVersion,
+};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
