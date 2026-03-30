@@ -459,7 +459,7 @@ impl Sbbf {
     /// Fold the bloom filter once, halving its size by merging adjacent block pairs.
     ///
     /// This implements an elementary folding operation for Split Block Bloom
-    /// Filters<sup>[1]</sup>. Each pair of adjacent blocks is combined via bitwise OR:
+    /// Filters. Each pair of adjacent blocks is combined via bitwise OR:
     ///
     /// ```text
     /// folded[i] = blocks[2*i] | blocks[2*i + 1]    for 0 <= i < num_blocks/2
@@ -491,7 +491,10 @@ impl Sbbf {
     /// Panics if the filter has fewer than 2 blocks.
     fn fold_once(&mut self) {
         let len = self.0.len();
-        assert!(len >= 2, "Cannot fold a bloom filter with fewer than 2 blocks");
+        assert!(
+            len >= 2,
+            "Cannot fold a bloom filter with fewer than 2 blocks"
+        );
         let half = len / 2;
         for i in 0..half {
             for j in 0..8 {
@@ -529,7 +532,7 @@ impl Sbbf {
 
     /// Fold the bloom filter down to the smallest size that still meets the target FPP.
     ///
-    /// Repeatedly halves the filter by merging adjacent block pairs (see [`Self::fold_once`]),
+    /// Repeatedly halves the filter by merging adjacent block pairs (see `fold_once`),
     /// stopping when the next fold would cause the estimated FPP to exceed `target_fpp`, or
     /// when the filter reaches the minimum size of 1 block (32 bytes).
     ///
@@ -798,7 +801,10 @@ mod tests {
         // Fold several times
         let original_blocks = sbbf.num_blocks();
         sbbf.fold_to_target_fpp(0.05);
-        assert!(sbbf.num_blocks() < original_blocks, "should have folded at least once");
+        assert!(
+            sbbf.num_blocks() < original_blocks,
+            "should have folded at least once"
+        );
 
         // All inserted values must still be found (no false negatives)
         for v in &values {
