@@ -12,9 +12,8 @@ cargo miri setup
 cargo clean
 
 echo "Starting Arrow MIRI run..."
-cargo miri nextest run -p arrow-buffer
-cargo miri nextest run -p arrow-data --features ffi
-cargo miri nextest run -p arrow-schema --features ffi
-cargo miri nextest run -p arrow-ord
-cargo miri nextest run -p arrow-array
-cargo miri nextest run -p arrow-arith
+cargo miri nextest run \
+    -p arrow-buffer -p arrow-data \
+    -p arrow-schema -p arrow-ord \
+    -p arrow-array -p arrow-arith \
+    --features ffi --no-fail-fast
