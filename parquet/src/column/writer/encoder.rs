@@ -19,7 +19,7 @@ use bytes::Bytes;
 use half::f16;
 
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
-use crate::bloom_filter::Sbbf;
+use crate::bloom_filter::{Sbbf, num_of_bits_from_ndv_fpp};
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
 };
@@ -27,7 +27,7 @@ use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
 use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties};
+use crate::file::properties::{EnabledStatistics, WriterProperties, DEFAULT_MAX_ROW_GROUP_ROW_COUNT};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
@@ -138,6 +138,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     min_value: Option<T::T>,
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
+    bloom_filter_target_fpp: Option<f64>,
     variable_length_bytes: Option<i64>,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
@@ -187,7 +188,11 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     type Values = [T::T];
 
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
-        self.bloom_filter.take()
+        let mut sbbf = self.bloom_filter.take()?;
+        if let Some(target_fpp) = self.bloom_filter_target_fpp {
+            sbbf.fold_to_target_fpp(target_fpp);
+        }
+        Some(sbbf)
     }
 
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
@@ -205,10 +210,30 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
-        let bloom_filter = props
-            .bloom_filter_properties(descr.path())
-            .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
-            .transpose()?;
+        let (bloom_filter, bloom_filter_target_fpp) =
+            match props.bloom_filter_properties(descr.path()) {
+                Some(bf_props) => match bf_props.ndv {
+                    Some(ndv) => {
+                        // Fixed-size mode: size based on explicit NDV (legacy behavior)
+                        (Some(Sbbf::new_with_ndv_fpp(ndv, bf_props.fpp)?), None)
+                    }
+                    None => {
+                        // Folding mode: allocate large, fold down at flush
+                        let max_bytes = bf_props.max_bytes.unwrap_or_else(|| {
+                            let row_count = props
+                                .max_row_group_row_count()
+                                .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT)
+                                as u64;
+                            num_of_bits_from_ndv_fpp(row_count, bf_props.fpp) / 8
+                        });
+                        (
+                            Some(Sbbf::new_with_num_of_bytes(max_bytes)),
+                            Some(bf_props.fpp),
+                        )
+                    }
+                },
+                None => (None, None),
+            };
 
         let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
@@ -219,6 +244,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             num_values: 0,
             statistics_enabled,
             bloom_filter,
+            bloom_filter_target_fpp,
             min_value: None,
             max_value: None,
             variable_length_bytes: None,

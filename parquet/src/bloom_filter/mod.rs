@@ -249,7 +249,7 @@ fn optimal_num_of_bytes(num_bytes: usize) -> usize {
 // we have m = - k * n / ln(1 - fpp ^ (1 / k))
 // where k = number of hash functions, m = number of bits, n = number of distinct values
 #[inline]
-fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
+pub(crate) fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
     let num_bits = -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln();
     num_bits as usize
 }
@@ -431,6 +431,68 @@ impl Sbbf {
         self.0.capacity() * std::mem::size_of::<Block>()
     }
 
+    /// Returns the number of blocks in this bloom filter.
+    pub fn num_blocks(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Fold the bloom filter once by merging adjacent block pairs via bitwise OR,
+    /// halving the filter size. Block[2i] and Block[2i+1] are merged into a single block
+    /// at position [i] in the folded filter. This preserves correctness because
+    /// `hash_to_block_index` maps to `floor(original_index / 2)` when `num_blocks` is halved.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the filter has fewer than 2 blocks.
+    fn fold_once(&mut self) {
+        let len = self.0.len();
+        assert!(len >= 2, "Cannot fold a bloom filter with fewer than 2 blocks");
+        let half = len / 2;
+        for i in 0..half {
+            for j in 0..8 {
+                self.0[i].0[j] = self.0[2 * i].0[j] | self.0[2 * i + 1].0[j];
+            }
+        }
+        self.0.truncate(half);
+    }
+
+    /// Estimate the FPP that would result from folding once, without mutating the filter.
+    ///
+    /// SBBF checks are per-block: a query hashes to one block, then checks 8 bits within it.
+    /// The FPP is therefore the average of per-block FPPs, not a function of global fill.
+    /// For each merged block pair (2i, 2i+1), we compute `(block_fill)^8` and average.
+    fn estimated_fpp_after_fold(&self) -> f64 {
+        let half = self.0.len() / 2;
+        let mut total_fpp = 0.0;
+        for i in 0..half {
+            let mut set_bits: u32 = 0;
+            for j in 0..8 {
+                set_bits += (self.0[2 * i].0[j] | self.0[2 * i + 1].0[j]).count_ones();
+            }
+            let block_fill = set_bits as f64 / 256.0;
+            total_fpp += block_fill.powi(8);
+        }
+        total_fpp / half as f64
+    }
+
+    /// Fold the bloom filter down until reaching the target false positive probability.
+    ///
+    /// Repeatedly halves the filter by OR-ing the upper half into the lower half, stopping
+    /// when the next fold would cause the estimated FPP to exceed `target_fpp`, or when the
+    /// filter reaches the minimum size of 1 block (32 bytes).
+    ///
+    /// This is useful when a bloom filter was allocated conservatively large and needs to be
+    /// compacted after all values have been inserted. Folding preserves all set bits, so there
+    /// are never false negatives — only a controlled increase in false positive probability.
+    pub fn fold_to_target_fpp(&mut self, target_fpp: f64) {
+        while self.0.len() >= 2 {
+            if self.estimated_fpp_after_fold() > target_fpp {
+                break;
+            }
+            self.fold_once();
+        }
+    }
+
     /// Reads a Sbff from Thrift encoded bytes
     ///
     /// # Examples
@@ -601,6 +663,83 @@ mod tests {
         ] {
             assert_eq!(*num_bits, num_of_bits_from_ndv_fpp(*ndv, *fpp) as u64);
         }
+    }
+
+    #[test]
+    fn test_fold_once_halves_block_count() {
+        let mut sbbf = Sbbf::new_with_num_of_bytes(1024); // 32 blocks
+        assert_eq!(sbbf.num_blocks(), 32);
+        sbbf.fold_once();
+        assert_eq!(sbbf.num_blocks(), 16);
+        sbbf.fold_once();
+        assert_eq!(sbbf.num_blocks(), 8);
+    }
+
+    #[test]
+    fn test_fold_preserves_inserted_values() {
+        // Create a large filter, insert values, fold, verify no false negatives
+        let mut sbbf = Sbbf::new_with_num_of_bytes(32 * 1024); // 32KB = 1024 blocks
+        let values: Vec<String> = (0..1000).map(|i| format!("value_{i}")).collect();
+        for v in &values {
+            sbbf.insert(v.as_str());
+        }
+
+        // Fold several times
+        let original_blocks = sbbf.num_blocks();
+        sbbf.fold_to_target_fpp(0.05);
+        assert!(sbbf.num_blocks() < original_blocks, "should have folded at least once");
+
+        // All inserted values must still be found (no false negatives)
+        for v in &values {
+            assert!(
+                sbbf.check(v.as_str()),
+                "Value '{}' missing after folding (false negative!)",
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn test_fold_to_target_fpp_stops_before_exceeding_target() {
+        let mut sbbf = Sbbf::new_with_num_of_bytes(64 * 1024); // 64KB
+        // Insert enough values to set some bits
+        for i in 0..5000 {
+            sbbf.insert(&i);
+        }
+
+        let target_fpp = 0.01;
+        sbbf.fold_to_target_fpp(target_fpp);
+
+        // After folding, the estimated FPP should be at or below target
+        // (the current state should not exceed target — we stopped before that would happen)
+        let total_bits = (sbbf.num_blocks() * 256) as f64;
+        let set_bits: u64 = sbbf
+            .0
+            .iter()
+            .flat_map(|b| b.0.iter())
+            .map(|w| w.count_ones() as u64)
+            .sum();
+        let fill = set_bits as f64 / total_bits;
+        let current_fpp = fill.powi(8);
+        assert!(
+            current_fpp <= target_fpp,
+            "FPP {current_fpp} exceeds target {target_fpp}"
+        );
+    }
+
+    #[test]
+    fn test_fold_empty_filter_folds_to_minimum() {
+        // An empty filter has fill=0, so estimated FPP is always 0 — should fold all the way down
+        let mut sbbf = Sbbf::new_with_num_of_bytes(1024); // 32 blocks
+        sbbf.fold_to_target_fpp(0.01);
+        assert_eq!(sbbf.num_blocks(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot fold a bloom filter with fewer than 2 blocks")]
+    fn test_fold_once_panics_at_minimum_size() {
+        let mut sbbf = Sbbf::new_with_num_of_bytes(32); // 1 block (minimum)
+        sbbf.fold_once();
     }
 
     #[test]
