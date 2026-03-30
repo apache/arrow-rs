@@ -52,7 +52,7 @@ pub const DEFAULT_CREATED_BY: &str = concat!("parquet-rs version ", env!("CARGO_
 /// Default value for [`WriterProperties::column_index_truncate_length`]
 pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`BloomFilterProperties::fpp`]
-pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.01;
+pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
 /// Default value for [`BloomFilterProperties::ndv`]
 #[deprecated(note = "NDV is now optional; bloom filters use folding mode by default")]
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
