@@ -897,4 +897,197 @@ mod tests {
             );
         }
     }
+
+    /*
+        Ok, so the following is trying to prove in simple terms that folding an SBBF and
+        building a fresh smaller SBBF from scratch prodcues the exact same bits
+
+        If you insert the same values into a 512-block filter and fold it to 256 blocks,
+        you get a bit-for-bit identical result to just inserting those values into a
+        256-block filter directly. The fold doesn't lose information or scramble anything,
+        it's like you had known the right size all along
+
+        This works because of the 2 lemmas:
+        1. when you half the filter, each hash's block index divides cleanly by 2
+        so the hash that went to block `i` in the big filter goes to block `i/2` in the small one
+        which is exactly where the fold puts it
+        > this is trivial since floor(x/2) == floor(floor(x) / 2) is a basic math fact
+
+        2. the bit pattern set _within_ a block depends only on the lower 32 bits of the hash,
+        which doesn't change with filter size. So the same bits get set regardless!
+        > structually trivial, mask() takes a u32 and uses only the SALT constants..
+
+
+        When you combine it together, every hash sets the same bits in the same destination block
+        whether you fold or build fresh. Therefore the filters are bit-identical
+    */
+    #[test]
+    fn test_sbbf_folded_equals_fresh() {
+        let values = (0..5000).map(|i| format!("elem_{i}")).collect::<Vec<_>>();
+        let hashes = values
+            .iter()
+            .map(|v| hash_as_bytes(v.as_str()))
+            .collect::<Vec<_>>();
+
+        for num_blocks in [64, 256, 1024] {
+            let half = num_blocks / 2;
+
+            // original filter
+            let mut original = Sbbf::new_with_num_of_bytes(num_blocks * 32);
+            assert_eq!(original.num_blocks(), num_blocks);
+            for &h in &hashes {
+                original.insert_hash(h);
+            }
+
+            for &h in hashes.iter() {
+                let mask = Block::mask(h as u32);
+
+                // step 1: element's block in original
+                let orig_idx = original.hash_to_block_index(h);
+                assert!(orig_idx < num_blocks);
+
+                // step 2 (lemma 1): destination in N/2 filter
+                let fresh_idx = {
+                    let tmp = Sbbf(vec![Block::ZERO; half]);
+                    tmp.hash_to_block_index(h)
+                };
+
+                let folded_idx = orig_idx / 2;
+                assert_eq!(fresh_idx, folded_idx,);
+
+                // step 3 (lemma 2): mask is the same
+                for w in 0..8 {
+                    assert_ne!(original.0[orig_idx].0[w] & mask.0[w], 0,);
+                }
+            }
+
+            // verify the actual blocks match
+            let mut folded = original.clone();
+            folded.fold_once();
+            assert_eq!(folded.num_blocks(), half);
+
+            let mut fresh = Sbbf::new_with_num_of_bytes(half * 32);
+            for &h in &hashes {
+                fresh.insert_hash(h);
+            }
+
+            for j in 0..half {
+                assert_eq!(
+                    folded.0[j].0, fresh.0[j].0,
+                    "Step 4 failed: block {j} differs (N={num_blocks}→{half})"
+                );
+            }
+        }
+    }
+
+    /// show multi-step folding.
+    ///
+    /// You can apply the above inductively, folding k times from N blocks prodcues a filter bit-identical to a fresh N/2^k filter
+    #[test]
+    fn test_multi_step_fold() {
+        let values = (0..3000).map(|i| format!("x_{i}")).collect::<Vec<_>>();
+
+        let mut filter = Sbbf::new_with_num_of_bytes(512 * 32);
+        for v in &values {
+            filter.insert(v.as_str());
+        }
+
+        for expected_blocks in [256, 128, 64, 32, 16, 8, 4, 2, 1] {
+            filter.fold_once();
+            assert_eq!(filter.num_blocks(), expected_blocks);
+
+            let mut fresh = Sbbf::new_with_num_of_bytes(expected_blocks * 32);
+            for v in &values {
+                fresh.insert(v.as_str());
+            }
+            for (fb, rb) in filter.0.iter().zip(fresh.0.iter()) {
+                assert_eq!(fb.0, rb.0,);
+            }
+        }
+    }
+
+    /// test that the fpp estimator's overestimation doesn't cause fold_to_target_fpp
+    /// to produce significantly oversized filters
+    ///
+    /// compare the final size after folding agains tthe theoretical optimal size
+    #[test]
+    fn test_fold_size_vs_optimal_fixed_size() {
+        for (ndv, target_fpp) in [
+            (1000, 0.05),
+            (1000, 0.01),
+            (5000, 0.05),
+            (5000, 0.01),
+            (10000, 0.05),
+        ] {
+            let values = (0..ndv).map(|i| format!("d_{i}")).collect::<Vec<_>>();
+
+            let mut folded = Sbbf::new_with_num_of_bytes(128 * 1024); // 128KB
+            for v in &values {
+                folded.insert(v.as_str());
+            }
+            folded.fold_to_target_fpp(target_fpp);
+
+            let folded_bytes = folded.num_blocks() * 32;
+
+            let optimal = Sbbf::new_with_ndv_fpp(ndv as u64, target_fpp).unwrap();
+            let optimal_bytes = optimal.num_blocks() * 32;
+
+            let ratio = folded_bytes as f64 / optimal_bytes as f64;
+
+            assert_eq!(ratio, 1.0);
+        }
+    }
+
+    /// verify that a folded sbbf has the same empirical fpp as a fresh filter of the same size
+    /// this bridges the bit-identity proof above with the FPP guarantee from the folding paper
+    ///     since the bits are identical, the false-positive rate must be too
+    ///
+    /// we measure fpp empirically by probing with values that were never inserted
+    /// and counting how many are incorrectly marked as present
+    #[test]
+    fn test_folded_fpp_matches_fresh_fpp() {
+        let ndv = 2000;
+        let num_probes = 50_000;
+        let inserted = (0..ndv)
+            .map(|i| format!("ins_{i}"))
+            .collect::<Vec<String>>();
+
+        // probe values that were NOT inserted (different prefix guarantees no overlap)
+        let probes = (0..num_probes)
+            .map(|i| format!("probe_{i}"))
+            .collect::<Vec<String>>();
+
+        // build a large filter and fold it down several times
+        let mut folded = Sbbf::new_with_num_of_bytes(512 * 32); // 512 blocks
+        for v in &inserted {
+            folded.insert(v.as_str());
+        }
+
+        // check FPP at each fold level
+        for expected_blocks in [256, 128, 64, 32, 16, 8, 4, 2, 1] {
+            folded.fold_once();
+            assert_eq!(folded.num_blocks(), expected_blocks);
+
+            // build a fresh filter of the same size with the same values
+            let mut fresh = Sbbf::new_with_num_of_bytes(expected_blocks * 32);
+            for v in &inserted {
+                fresh.insert(v.as_str());
+            }
+
+            // measure empirical FPP on both
+            let mut folded_fp = 0u64;
+            let mut fresh_fp = 0u64;
+            for p in &probes {
+                if folded.check(p.as_str()) {
+                    folded_fp += 1;
+                }
+                if fresh.check(p.as_str()) {
+                    fresh_fp += 1;
+                }
+            }
+
+            // bit-identity means these must be exactly equal
+            assert_eq!(folded_fp, fresh_fp);
+        }
+    }
 }
