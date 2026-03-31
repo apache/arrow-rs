@@ -589,8 +589,8 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
     ///
     /// # Arguments
     /// * `shredded` - If true, element builders produce shredded structs with `value`/`typed_value`
-    ///   fields (for [`crate::shred_variant`]). If false, element builders produce strongly typed
-    ///   arrays directly (for [`crate::variant_get`]).
+    ///   fields (for [`crate::shred_variant()`]). If false, element builders produce strongly typed
+    ///   arrays directly (for [`crate::variant_get()`]).
     pub(crate) fn try_new(
         data_type: &'a DataType,
         cast_options: &'a CastOptions,
@@ -894,8 +894,8 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
     }
 }
 
-/// Element builder for list variants, supporting both typed (for [`crate::variant_get`])
-/// and shredded (for [`crate::shred_variant`]) output modes.
+/// Element builder for list variants, supporting both typed (for [`crate::variant_get()`])
+/// and shredded (for [`crate::shred_variant()`]) output modes.
 enum ListElementBuilder<'a> {
     /// Produces the target array type directly.
     Typed(Box<VariantToArrowRowBuilder<'a>>),
