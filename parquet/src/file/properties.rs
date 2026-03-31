@@ -1225,6 +1225,17 @@ pub struct BloomFilterProperties {
     /// then folded down after insertion to achieve optimal size. A good heuristic is to set
     /// this to the expected number of rows in the row group. If fewer distinct values are
     /// actually written, the filter will be automatically compacted via folding.
+    ///
+    /// Thus the only negative side of overestimating this value is that the bloom filter
+    /// will use more memory during writing than necessary, but it will not affect the final
+    /// bloom filter size on disk.
+    ///
+    /// If you wish to reduce memory usage during writing and are able to make a reasonable estimate
+    /// of the number of distinct values in a row group, it is recommended to set this value explicitly
+    /// rather than relying on the default dynamic sizing based on `max_row_group_row_count`.
+    /// If you do set this value explicitly it is probably best to set it for each column
+    /// individually via [`WriterPropertiesBuilder::set_column_bloom_filter_ndv`] rather than globally,
+    /// since different columns may have different numbers of distinct values.
     pub ndv: Option<u64>,
 }
 
