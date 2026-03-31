@@ -2730,8 +2730,10 @@ impl Skipper {
 mod tests {
     use super::*;
     use crate::codec::AvroFieldBuilder;
-    use crate::schema::{Attributes, ComplexType, Enum as AvroEnum, Field, PrimitiveType, Record, Schema, TypeName};
     use crate::schema::Array as AvroArray;
+    use crate::schema::{
+        Attributes, ComplexType, Enum as AvroEnum, Field, PrimitiveType, Record, Schema, TypeName,
+    };
     use arrow_array::cast::AsArray;
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -5645,8 +5647,20 @@ mod tests {
             doc: None,
             aliases: vec![],
             fields: vec![
-                Field { name: "seconds", r#type: long.clone(), default: None, doc: None, aliases: vec![] },
-                Field { name: "nanos",   r#type: int.clone(),  default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "seconds",
+                    r#type: long.clone(),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "nanos",
+                    r#type: int.clone(),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -5658,8 +5672,20 @@ mod tests {
             doc: None,
             aliases: vec![],
             fields: vec![
-                Field { name: "time", r#type: Schema::TypeName(TypeName::Ref("Timestamp")), default: None, doc: None, aliases: vec![] },
-                Field { name: "code", r#type: int.clone(), default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "time",
+                    r#type: Schema::TypeName(TypeName::Ref("Timestamp")),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "code",
+                    r#type: int.clone(),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -5671,11 +5697,23 @@ mod tests {
             doc: None,
             aliases: vec![],
             fields: vec![
-                Field { name: "ts",     r#type: timestamp_writer, default: None, doc: None, aliases: vec![] },
-                Field { name: "events", r#type: Schema::Complex(ComplexType::Array(AvroArray {
-                    items: Box::new(event_writer),
-                    attributes: Attributes::default(),
-                })), default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "ts",
+                    r#type: timestamp_writer,
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "events",
+                    r#type: Schema::Complex(ComplexType::Array(AvroArray {
+                        items: Box::new(event_writer),
+                        attributes: Attributes::default(),
+                    })),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -5687,8 +5725,20 @@ mod tests {
             doc: None,
             aliases: vec![],
             fields: vec![
-                Field { name: "seconds", r#type: Schema::Union(vec![null.clone(), long.clone()]), default: None, doc: None, aliases: vec![] },
-                Field { name: "nanos",   r#type: Schema::Union(vec![null.clone(), int.clone()]),  default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "seconds",
+                    r#type: Schema::Union(vec![null.clone(), long.clone()]),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "nanos",
+                    r#type: Schema::Union(vec![null.clone(), int.clone()]),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -5699,9 +5749,13 @@ mod tests {
             namespace: None,
             doc: None,
             aliases: vec![],
-            fields: vec![
-                Field { name: "ts", r#type: Schema::Union(vec![null, timestamp_reader]), default: None, doc: None, aliases: vec![] },
-            ],
+            fields: vec![Field {
+                name: "ts",
+                r#type: Schema::Union(vec![null, timestamp_reader]),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
@@ -5710,20 +5764,19 @@ mod tests {
             .build()
             .expect("schema resolution must succeed");
 
-        let mut decoder = Decoder::try_new(field.data_type())
-            .expect("decoder must build");
+        let mut decoder = Decoder::try_new(field.data_type()).expect("decoder must build");
 
         // Encode one writer record:
         //   ts = Timestamp{seconds=100, nanos=5}   — plain longs/ints, no union tags
         //   events = [Event{time=Timestamp{seconds=200, nanos=1}, code=42}]
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_long(100)); // ts.seconds
-        data.extend_from_slice(&encode_avro_int(5));    // ts.nanos
-        data.extend_from_slice(&encode_avro_long(1));   // events: block of 1
+        data.extend_from_slice(&encode_avro_int(5)); // ts.nanos
+        data.extend_from_slice(&encode_avro_long(1)); // events: block of 1
         data.extend_from_slice(&encode_avro_long(200)); // event.time.seconds (plain)
-        data.extend_from_slice(&encode_avro_int(1));    // event.time.nanos   (plain)
-        data.extend_from_slice(&encode_avro_int(42));   // event.code
-        data.extend_from_slice(&encode_avro_long(0));   // events: end-of-array
+        data.extend_from_slice(&encode_avro_int(1)); // event.time.nanos   (plain)
+        data.extend_from_slice(&encode_avro_int(42)); // event.code
+        data.extend_from_slice(&encode_avro_long(0)); // events: end-of-array
 
         let mut cur = AvroCursor::new(&data);
         decoder
@@ -5736,7 +5789,6 @@ mod tests {
         );
     }
 
-
     /// When a Skip field references a named type that has more fields in the writer
     /// schema than in the reader schema, the Skipper must consume all writer fields
     /// including writer-only ones. Here the writer's Timestamp has a third field
@@ -5745,38 +5797,78 @@ mod tests {
     fn test_skip_named_type_ref_with_writer_extra_fields_consumes_all_bytes() {
         let null = Schema::TypeName(TypeName::Primitive(PrimitiveType::Null));
         let long = Schema::TypeName(TypeName::Primitive(PrimitiveType::Long));
-        let int  = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
+        let int = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
 
         // Writer Timestamp has an extra field `tz_offset` that the reader omits
         let timestamp_writer = Schema::Complex(ComplexType::Record(Record {
             name: "Timestamp",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             fields: vec![
-                Field { name: "seconds",   r#type: long.clone(), default: None, doc: None, aliases: vec![] },
-                Field { name: "nanos",     r#type: int.clone(),  default: None, doc: None, aliases: vec![] },
-                Field { name: "tz_offset", r#type: int.clone(),  default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "seconds",
+                    r#type: long.clone(),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "nanos",
+                    r#type: int.clone(),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "tz_offset",
+                    r#type: int.clone(),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
 
         let event_writer = Schema::Complex(ComplexType::Record(Record {
             name: "Event",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "time", r#type: Schema::TypeName(TypeName::Ref("Timestamp")), default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "time",
+                r#type: Schema::TypeName(TypeName::Ref("Timestamp")),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
         let writer_schema = Schema::Complex(ComplexType::Record(Record {
             name: "Root",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             fields: vec![
-                Field { name: "ts",     r#type: timestamp_writer, default: None, doc: None, aliases: vec![] },
-                Field { name: "events", r#type: Schema::Complex(ComplexType::Array(AvroArray {
-                    items: Box::new(event_writer),
-                    attributes: Attributes::default(),
-                })), default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "ts",
+                    r#type: timestamp_writer,
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "events",
+                    r#type: Schema::Complex(ComplexType::Array(AvroArray {
+                        items: Box::new(event_writer),
+                        attributes: Attributes::default(),
+                    })),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -5784,20 +5876,40 @@ mod tests {
         // Reader Timestamp: only seconds and nanos (no tz_offset)
         let timestamp_reader = Schema::Complex(ComplexType::Record(Record {
             name: "Timestamp",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             fields: vec![
-                Field { name: "seconds", r#type: Schema::Union(vec![null.clone(), long.clone()]), default: None, doc: None, aliases: vec![] },
-                Field { name: "nanos",   r#type: Schema::Union(vec![null.clone(), int.clone()]),  default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "seconds",
+                    r#type: Schema::Union(vec![null.clone(), long.clone()]),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "nanos",
+                    r#type: Schema::Union(vec![null.clone(), int.clone()]),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
 
         let reader_schema = Schema::Complex(ComplexType::Record(Record {
             name: "Root",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "ts", r#type: Schema::Union(vec![null, timestamp_reader]), default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "ts",
+                r#type: Schema::Union(vec![null, timestamp_reader]),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
@@ -5806,8 +5918,7 @@ mod tests {
             .build()
             .expect("schema resolution must succeed");
 
-        let mut decoder = Decoder::try_new(field.data_type())
-            .expect("decoder must build");
+        let mut decoder = Decoder::try_new(field.data_type()).expect("decoder must build");
 
         // Encode one writer record:
         //   ts      = Timestamp{seconds=100, nanos=5, tz_offset=3600}
@@ -5815,19 +5926,17 @@ mod tests {
         // The Skipper for `events` must consume ALL three fields per Timestamp,
         // including tz_offset, even though the resolved Timestamp only has two reader fields.
         let mut data = Vec::new();
-        data.extend_from_slice(&encode_avro_long(100));  // ts.seconds
-        data.extend_from_slice(&encode_avro_int(5));     // ts.nanos
-        data.extend_from_slice(&encode_avro_int(3600));  // ts.tz_offset  (writer-only, decoded via writer_fields)
-        data.extend_from_slice(&encode_avro_long(1));    // events: block of 1
-        data.extend_from_slice(&encode_avro_long(200));  // event.time.seconds
-        data.extend_from_slice(&encode_avro_int(1));     // event.time.nanos
-        data.extend_from_slice(&encode_avro_int(7200));  // event.time.tz_offset  (must be skipped!)
-        data.extend_from_slice(&encode_avro_long(0));    // events: end-of-array
+        data.extend_from_slice(&encode_avro_long(100)); // ts.seconds
+        data.extend_from_slice(&encode_avro_int(5)); // ts.nanos
+        data.extend_from_slice(&encode_avro_int(3600)); // ts.tz_offset  (writer-only, decoded via writer_fields)
+        data.extend_from_slice(&encode_avro_long(1)); // events: block of 1
+        data.extend_from_slice(&encode_avro_long(200)); // event.time.seconds
+        data.extend_from_slice(&encode_avro_int(1)); // event.time.nanos
+        data.extend_from_slice(&encode_avro_int(7200)); // event.time.tz_offset  (must be skipped!)
+        data.extend_from_slice(&encode_avro_long(0)); // events: end-of-array
 
         let mut cur = AvroCursor::new(&data);
-        decoder
-            .decode(&mut cur)
-            .expect("decode must not fail");
+        decoder.decode(&mut cur).expect("decode must not fail");
         assert_eq!(
             cur.position(),
             data.len(),
@@ -5841,35 +5950,53 @@ mod tests {
     #[test]
     fn test_skip_nested_struct_record_resolution_no_spurious_nullable_wrapper() {
         let null = Schema::TypeName(TypeName::Primitive(PrimitiveType::Null));
-        let int  = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
+        let int = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
 
         // Writer: InnerRecord { v: int }
         let inner_writer = Schema::Complex(ComplexType::Record(Record {
             name: "InnerRecord",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "v", r#type: int.clone(), default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "v",
+                r#type: int.clone(),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
         // Writer: OuterRecord { inner: InnerRecord }
         let outer_writer = Schema::Complex(ComplexType::Record(Record {
             name: "OuterRecord",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "inner", r#type: inner_writer, default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "inner",
+                r#type: inner_writer,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
         // Writer: Event { data: "OuterRecord" }  (named type ref — will look up registered type)
         let event_writer = Schema::Complex(ComplexType::Record(Record {
             name: "Event",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "data", r#type: Schema::TypeName(TypeName::Ref("OuterRecord")), default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "data",
+                r#type: Schema::TypeName(TypeName::Ref("OuterRecord")),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
@@ -5877,13 +6004,27 @@ mod tests {
         // `events` is omitted from the reader schema → will be skipped.
         let writer_schema = Schema::Complex(ComplexType::Record(Record {
             name: "Root",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             fields: vec![
-                Field { name: "outer",  r#type: outer_writer, default: None, doc: None, aliases: vec![] },
-                Field { name: "events", r#type: Schema::Complex(ComplexType::Array(AvroArray {
-                    items: Box::new(event_writer),
-                    attributes: Attributes::default(),
-                })), default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "outer",
+                    r#type: outer_writer,
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "events",
+                    r#type: Schema::Complex(ComplexType::Array(AvroArray {
+                        items: Box::new(event_writer),
+                        attributes: Attributes::default(),
+                    })),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -5891,30 +6032,48 @@ mod tests {
         // Reader: InnerRecord { v: int }
         let inner_reader = Schema::Complex(ComplexType::Record(Record {
             name: "InnerRecord",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "v", r#type: int.clone(), default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "v",
+                r#type: int.clone(),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
         // Reader: OuterRecord { inner: ["null", InnerRecord] }  — inner wrapped in nullable
         let outer_reader = Schema::Complex(ComplexType::Record(Record {
             name: "OuterRecord",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "inner", r#type: Schema::Union(vec![null.clone(), inner_reader]), default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "inner",
+                r#type: Schema::Union(vec![null.clone(), inner_reader]),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
         // Reader Root: { outer: ["null", OuterRecord] }  — events omitted (Skip)
         let reader_schema = Schema::Complex(ComplexType::Record(Record {
             name: "Root",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "outer", r#type: Schema::Union(vec![null, outer_reader]), default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "outer",
+                r#type: Schema::Union(vec![null, outer_reader]),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
@@ -5923,8 +6082,7 @@ mod tests {
             .build()
             .expect("schema resolution must succeed");
 
-        let mut decoder = Decoder::try_new(field.data_type())
-            .expect("decoder must build");
+        let mut decoder = Decoder::try_new(field.data_type()).expect("decoder must build");
 
         // Encode one writer record (all plain, no union tags anywhere):
         //   outer.inner.v = 42
@@ -5932,15 +6090,13 @@ mod tests {
         // The Skipper for `events` must skip InnerRecord as a plain struct (no union tag),
         // even though the registered OuterRecord has inner with nullability+Record resolution.
         let mut data = Vec::new();
-        data.extend_from_slice(&encode_avro_int(42));   // outer.inner.v
-        data.extend_from_slice(&encode_avro_long(1));   // events: block of 1
-        data.extend_from_slice(&encode_avro_int(7));    // event.data.inner.v (skipped, no union tag)
-        data.extend_from_slice(&encode_avro_long(0));   // events: end-of-array
+        data.extend_from_slice(&encode_avro_int(42)); // outer.inner.v
+        data.extend_from_slice(&encode_avro_long(1)); // events: block of 1
+        data.extend_from_slice(&encode_avro_int(7)); // event.data.inner.v (skipped, no union tag)
+        data.extend_from_slice(&encode_avro_long(0)); // events: end-of-array
 
         let mut cur = AvroCursor::new(&data);
-        decoder
-            .decode(&mut cur)
-            .expect("decode must not fail");
+        decoder.decode(&mut cur).expect("decode must not fail");
         assert_eq!(
             cur.position(),
             data.len(),
@@ -5958,27 +6114,41 @@ mod tests {
         // Writer: SomeRecord { status: StatusEnum{OK, ERROR} }
         let status_writer = Schema::Complex(ComplexType::Enum(AvroEnum {
             name: "StatusEnum",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             symbols: vec!["OK", "ERROR"],
             default: None,
             attributes: Attributes::default(),
         }));
         let some_record_writer = Schema::Complex(ComplexType::Record(Record {
             name: "SomeRecord",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "status", r#type: status_writer, default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "status",
+                r#type: status_writer,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
         // Writer: Event { data: "SomeRecord" }  (named type ref — looks up registered type)
         let event_writer = Schema::Complex(ComplexType::Record(Record {
             name: "Event",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "data", r#type: Schema::TypeName(TypeName::Ref("SomeRecord")), default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "data",
+                r#type: Schema::TypeName(TypeName::Ref("SomeRecord")),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
@@ -5986,13 +6156,27 @@ mod tests {
         // `events` is omitted from the reader schema → will be skipped.
         let writer_schema = Schema::Complex(ComplexType::Record(Record {
             name: "Root",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             fields: vec![
-                Field { name: "outer",  r#type: some_record_writer, default: None, doc: None, aliases: vec![] },
-                Field { name: "events", r#type: Schema::Complex(ComplexType::Array(AvroArray {
-                    items: Box::new(event_writer),
-                    attributes: Attributes::default(),
-                })), default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "outer",
+                    r#type: some_record_writer,
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "events",
+                    r#type: Schema::Complex(ComplexType::Array(AvroArray {
+                        items: Box::new(event_writer),
+                        attributes: Attributes::default(),
+                    })),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -6000,27 +6184,41 @@ mod tests {
         // Reader: SomeRecord { status: ["null", StatusEnum{ERROR, OK}] }  (reordered + nullable)
         let status_reader = Schema::Complex(ComplexType::Enum(AvroEnum {
             name: "StatusEnum",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             symbols: vec!["ERROR", "OK"],
             default: None,
             attributes: Attributes::default(),
         }));
         let some_record_reader = Schema::Complex(ComplexType::Record(Record {
             name: "SomeRecord",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "status", r#type: Schema::Union(vec![null, status_reader]), default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "status",
+                r#type: Schema::Union(vec![null, status_reader]),
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
         // Reader Root: { outer: SomeRecord }  — events omitted (Skip)
         let reader_schema = Schema::Complex(ComplexType::Record(Record {
             name: "Root",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "outer", r#type: some_record_reader, default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "outer",
+                r#type: some_record_reader,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
@@ -6029,8 +6227,7 @@ mod tests {
             .build()
             .expect("schema resolution must succeed");
 
-        let mut decoder = Decoder::try_new(field.data_type())
-            .expect("decoder must build");
+        let mut decoder = Decoder::try_new(field.data_type()).expect("decoder must build");
 
         // Encode one writer record (all plain, no union tags anywhere):
         //   outer.status = OK (writer index 0)
@@ -6041,15 +6238,13 @@ mod tests {
         // for the inner value, reading into the end-of-array marker and leaving the cursor
         // at the wrong position (or causing an EOF error).
         let mut data = Vec::new();
-        data.extend_from_slice(&encode_avro_int(0));   // outer.status: OK = writer index 0
-        data.extend_from_slice(&encode_avro_long(1));  // events: block of 1
-        data.extend_from_slice(&encode_avro_int(1));   // event.data.status: ERROR = writer index 1 (skipped)
-        data.extend_from_slice(&encode_avro_long(0));  // events: end-of-array
+        data.extend_from_slice(&encode_avro_int(0)); // outer.status: OK = writer index 0
+        data.extend_from_slice(&encode_avro_long(1)); // events: block of 1
+        data.extend_from_slice(&encode_avro_int(1)); // event.data.status: ERROR = writer index 1 (skipped)
+        data.extend_from_slice(&encode_avro_long(0)); // events: end-of-array
 
         let mut cur = AvroCursor::new(&data);
-        decoder
-            .decode(&mut cur)
-            .expect("decode must not fail");
+        decoder.decode(&mut cur).expect("decode must not fail");
         assert_eq!(
             cur.position(),
             data.len(),
@@ -6065,15 +6260,29 @@ mod tests {
     fn test_skip_nullable_named_type_ref_union_not_stripped_of_nullable_wrapper() {
         let null = Schema::TypeName(TypeName::Primitive(PrimitiveType::Null));
         let long = Schema::TypeName(TypeName::Primitive(PrimitiveType::Long));
-        let int  = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
+        let int = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
 
         // Writer Timestamp: plain {seconds: long, nanos: int}
         let timestamp_writer = Schema::Complex(ComplexType::Record(Record {
             name: "Timestamp",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             fields: vec![
-                Field { name: "seconds", r#type: long.clone(), default: None, doc: None, aliases: vec![] },
-                Field { name: "nanos",   r#type: int.clone(),  default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "seconds",
+                    r#type: long.clone(),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "nanos",
+                    r#type: int.clone(),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -6083,13 +6292,27 @@ mod tests {
         //   extra: ["null", "Timestamp"]     — writer-only genuine nullable union (will be Skipped)
         let writer_schema = Schema::Complex(ComplexType::Record(Record {
             name: "Root",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             fields: vec![
-                Field { name: "ts",    r#type: timestamp_writer, default: None, doc: None, aliases: vec![] },
-                Field { name: "extra", r#type: Schema::Union(vec![
-                    null.clone(),
-                    Schema::TypeName(TypeName::Ref("Timestamp")),
-                ]), default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "ts",
+                    r#type: timestamp_writer,
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "extra",
+                    r#type: Schema::Union(vec![
+                        null.clone(),
+                        Schema::TypeName(TypeName::Ref("Timestamp")),
+                    ]),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -6097,10 +6320,24 @@ mod tests {
         // Reader Timestamp: fields are nullable (writer plain → reader nullable via resolution)
         let timestamp_reader = Schema::Complex(ComplexType::Record(Record {
             name: "Timestamp",
-            namespace: None, doc: None, aliases: vec![],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
             fields: vec![
-                Field { name: "seconds", r#type: Schema::Union(vec![null.clone(), long.clone()]), default: None, doc: None, aliases: vec![] },
-                Field { name: "nanos",   r#type: Schema::Union(vec![null.clone(), int.clone()]),  default: None, doc: None, aliases: vec![] },
+                Field {
+                    name: "seconds",
+                    r#type: Schema::Union(vec![null.clone(), long.clone()]),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
+                Field {
+                    name: "nanos",
+                    r#type: Schema::Union(vec![null.clone(), int.clone()]),
+                    default: None,
+                    doc: None,
+                    aliases: vec![],
+                },
             ],
             attributes: Attributes::default(),
         }));
@@ -6108,10 +6345,16 @@ mod tests {
         // Reader Root: only `ts` (extra is writer-only → will be Skipped)
         let reader_schema = Schema::Complex(ComplexType::Record(Record {
             name: "Root",
-            namespace: None, doc: None, aliases: vec![],
-            fields: vec![
-                Field { name: "ts", r#type: timestamp_reader, default: None, doc: None, aliases: vec![] },
-            ],
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "ts",
+                r#type: timestamp_reader,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
             attributes: Attributes::default(),
         }));
 
@@ -6120,8 +6363,7 @@ mod tests {
             .build()
             .expect("schema resolution must succeed");
 
-        let mut decoder = Decoder::try_new(field.data_type())
-            .expect("decoder must build");
+        let mut decoder = Decoder::try_new(field.data_type()).expect("decoder must build");
 
         // --- Test case 1: extra = null ---
         // Writer encodes:
@@ -6134,8 +6376,8 @@ mod tests {
         // struct fields — corrupting the cursor.
         let mut data_null = Vec::new();
         data_null.extend_from_slice(&encode_avro_long(100)); // ts.seconds
-        data_null.extend_from_slice(&encode_avro_int(5));    // ts.nanos
-        data_null.push(0x00);                                // extra: union tag 0 = null
+        data_null.extend_from_slice(&encode_avro_int(5)); // ts.nanos
+        data_null.push(0x00); // extra: union tag 0 = null
 
         let mut cur = AvroCursor::new(&data_null);
         decoder
@@ -6156,10 +6398,10 @@ mod tests {
         // The Skipper for `extra` must read the union tag byte, then skip the Timestamp payload.
         let mut data_nonnull = Vec::new();
         data_nonnull.extend_from_slice(&encode_avro_long(100)); // ts.seconds
-        data_nonnull.extend_from_slice(&encode_avro_int(5));    // ts.nanos
-        data_nonnull.extend_from_slice(&encode_avro_int(1));    // extra: union tag zigzag(1)=0x02
+        data_nonnull.extend_from_slice(&encode_avro_int(5)); // ts.nanos
+        data_nonnull.extend_from_slice(&encode_avro_int(1)); // extra: union tag zigzag(1)=0x02
         data_nonnull.extend_from_slice(&encode_avro_long(200)); // extra.seconds
-        data_nonnull.extend_from_slice(&encode_avro_int(3));    // extra.nanos
+        data_nonnull.extend_from_slice(&encode_avro_int(3)); // extra.nanos
 
         let mut cur2 = AvroCursor::new(&data_nonnull);
         decoder
