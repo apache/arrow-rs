@@ -17,7 +17,9 @@
 
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::encoder::{ColumnValueEncoder, DataPageValues, DictionaryPage};
+use crate::column::writer::encoder::{
+    ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
+};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
@@ -423,7 +425,7 @@ pub struct ByteArrayEncoder {
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
     bloom_filter: Option<Sbbf>,
-    bloom_filter_target_fpp: Option<f64>,
+    bloom_filter_target_fpp: f64,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
 
@@ -432,9 +434,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     type Values = dyn Array;
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         let mut sbbf = self.bloom_filter.take()?;
-        if let Some(target_fpp) = self.bloom_filter_target_fpp {
-            sbbf.fold_to_target_fpp(target_fpp);
-        }
+        sbbf.fold_to_target_fpp(self.bloom_filter_target_fpp);
         Some(sbbf)
     }
 
@@ -448,15 +448,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let fallback = FallbackEncoder::new(descr, props)?;
 
-        let (bloom_filter, bloom_filter_target_fpp) =
-            match props.bloom_filter_properties(descr.path()) {
-                Some(bf_props) => {
-                    let (sbbf, target_fpp) =
-                        Sbbf::from_properties(bf_props, props.max_row_group_row_count())?;
-                    (Some(sbbf), target_fpp)
-                }
-                None => (None, None),
-            };
+        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(props, descr)?;
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 

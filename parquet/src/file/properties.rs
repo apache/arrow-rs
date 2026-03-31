@@ -54,8 +54,7 @@ pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`BloomFilterProperties::fpp`]
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
 /// Default value for [`BloomFilterProperties::ndv`]
-#[deprecated(note = "NDV is now optional; bloom filters use folding mode by default")]
-pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
+pub const DEFAULT_BLOOM_FILTER_NDV: u64 = DEFAULT_MAX_ROW_GROUP_ROW_COUNT as u64;
 /// Default values for [`WriterProperties::statistics_truncate_length`]
 pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`WriterProperties::offset_index_disabled`]
@@ -997,11 +996,13 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default number of distinct values (ndv) for bloom filter for all columns.
+    /// Sets default maximum expected number of distinct values (ndv) for bloom filter
+    /// for all columns (defaults to [`DEFAULT_BLOOM_FILTER_NDV`]).
     ///
-    /// When set, this activates fixed-size mode: the bloom filter is sized exactly for
-    /// the given NDV at the configured FPP, with no folding. When not set (default),
-    /// the bloom filter uses folding mode instead.
+    /// The bloom filter is initially sized for this many distinct values at the
+    /// configured FPP, then folded down after all values are inserted to achieve
+    /// optimal size. A good heuristic is to set this to the expected number of rows
+    /// in the row group.
     ///
     /// Implicitly enables bloom writing, as if [`set_bloom_filter_enabled`] had
     /// been called.
@@ -1009,26 +1010,6 @@ impl WriterPropertiesBuilder {
     /// [`set_bloom_filter_enabled`]: Self::set_bloom_filter_enabled
     pub fn set_bloom_filter_ndv(mut self, value: u64) -> Self {
         self.default_column_properties.set_bloom_filter_ndv(value);
-        self
-    }
-
-    /// Sets the default maximum initial allocation size in bytes for bloom filter folding mode
-    /// for all columns.
-    ///
-    /// When bloom filters use folding mode (no explicit NDV), this controls the initial
-    /// allocation size. The filter will be folded down at flush time to meet the target FPP.
-    /// If not set, the initial size is derived from `max_row_group_row_count` and `fpp`.
-    ///
-    /// The value will be rounded up to the next power of two, bounded by
-    /// [`BITSET_MIN_LENGTH`](crate::bloom_filter::BITSET_MIN_LENGTH) and
-    /// [`BITSET_MAX_LENGTH`](crate::bloom_filter::BITSET_MAX_LENGTH).
-    ///
-    /// Implicitly enables bloom writing, as if [`set_bloom_filter_enabled`] had been called.
-    ///
-    /// [`set_bloom_filter_enabled`]: Self::set_bloom_filter_enabled
-    pub fn set_bloom_filter_max_bytes(mut self, value: usize) -> Self {
-        self.default_column_properties
-            .set_bloom_filter_max_bytes(value);
         self
     }
 
@@ -1137,15 +1118,6 @@ impl WriterPropertiesBuilder {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
         self
     }
-
-    /// Sets the maximum initial allocation size in bytes for bloom filter folding mode
-    /// for a specific column.
-    ///
-    /// Takes precedence over [`Self::set_bloom_filter_max_bytes`].
-    pub fn set_column_bloom_filter_max_bytes(mut self, col: ColumnPath, value: usize) -> Self {
-        self.get_mut_props(col).set_bloom_filter_max_bytes(value);
-        self
-    }
 }
 
 impl From<WriterProperties> for WriterPropertiesBuilder {
@@ -1225,15 +1197,12 @@ impl Default for EnabledStatistics {
 
 /// Controls the bloom filter to be computed by the writer.
 ///
-/// Two modes are supported:
+/// The bloom filter is initially sized for `ndv` distinct values at the given `fpp`, then
+/// automatically folded down after all values are inserted to achieve optimal size while
+/// maintaining the target `fpp`. See [`Sbbf::fold_to_target_fpp`] for details on the
+/// folding algorithm.
 ///
-/// - **Fixed-size mode**: When `ndv` is set to `Some(n)`, the bloom filter is sized based on `ndv`
-///   and `fpp` at allocation time. This is the legacy behavior.
-///
-/// - **Folding mode** (default): When `ndv` is `None`, a conservatively large bloom filter is
-///   allocated (sized for worst-case NDV = max row group rows, or `max_bytes` if set), then
-///   folded down at flush time to meet the target `fpp`. This eliminates the need to guess NDV
-///   upfront and produces optimally-sized filters automatically.
+/// [`Sbbf::fold_to_target_fpp`]: crate::bloom_filter::Sbbf::fold_to_target_fpp
 #[derive(Debug, Clone, PartialEq)]
 pub struct BloomFilterProperties {
     /// False positive probability. This should be always between 0 and 1 exclusive. Defaults to [`DEFAULT_BLOOM_FILTER_FPP`].
@@ -1242,24 +1211,21 @@ pub struct BloomFilterProperties {
     ///
     /// The bloom filter data structure is a trade of between disk and memory space versus fpp, the
     /// smaller the fpp, the more memory and disk space is required, thus setting it to a reasonable value
-    /// e.g. 0.1, 0.01, or 0.001 is recommended.
+    /// e.g. 0.1, 0.05, or 0.001 is recommended.
+    ///
+    /// This value also serves as the target FPP for bloom filter folding: after all values
+    /// are inserted, the filter is folded down to the smallest size that still meets this FPP.
     pub fpp: f64,
-    /// Number of distinct values. When set to `Some(n)`, the bloom filter is sized exactly for
-    /// `n` distinct values at the given `fpp` (fixed-size mode). When `None` (default), the
-    /// filter uses folding mode instead.
+    /// Maximum expected number of distinct values. When `None` (default), the bloom filter
+    /// is sized based on the row group's `max_row_group_row_count` at runtime.
     ///
     /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_ndv`].
     ///
-    /// Usage of bloom filter is most beneficial for columns with large cardinality, so a good heuristic
-    /// is to set ndv to the number of rows. However, it can reduce disk size if you know in advance a smaller
-    /// number of distinct values.
+    /// The bloom filter is initially sized for this many distinct values at the given `fpp`,
+    /// then folded down after insertion to achieve optimal size. A good heuristic is to set
+    /// this to the expected number of rows in the row group. If fewer distinct values are
+    /// actually written, the filter will be automatically compacted via folding.
     pub ndv: Option<u64>,
-    /// Maximum initial allocation size in bytes for folding mode. When `None` (default), the
-    /// initial size is derived from `max_row_group_row_count` and `fpp`. Only used when `ndv`
-    /// is `None`.
-    ///
-    /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_max_bytes`].
-    pub max_bytes: Option<usize>,
 }
 
 impl Default for BloomFilterProperties {
@@ -1267,7 +1233,6 @@ impl Default for BloomFilterProperties {
         BloomFilterProperties {
             fpp: DEFAULT_BLOOM_FILTER_FPP,
             ndv: None,
-            max_bytes: None,
         }
     }
 }
@@ -1364,20 +1329,12 @@ impl ColumnProperties {
             .fpp = value;
     }
 
-    /// Sets the number of distinct (unique) values for bloom filter for this column, and implicitly
-    /// enables bloom filter if not previously enabled. This activates fixed-size mode (no folding).
+    /// Sets the maximum expected number of distinct (unique) values for bloom filter for this
+    /// column, and implicitly enables bloom filter if not previously enabled.
     fn set_bloom_filter_ndv(&mut self, value: u64) {
         self.bloom_filter_properties
             .get_or_insert_with(Default::default)
             .ndv = Some(value);
-    }
-
-    /// Sets the maximum initial allocation size in bytes for bloom filter folding mode, and
-    /// implicitly enables bloom filter if not previously enabled.
-    fn set_bloom_filter_max_bytes(&mut self, value: usize) {
-        self.bloom_filter_properties
-            .get_or_insert_with(Default::default)
-            .max_bytes = Some(value);
     }
 
     /// Returns optional encoding for this column.
@@ -1723,7 +1680,6 @@ mod tests {
                 Some(&BloomFilterProperties {
                     fpp: 0.1,
                     ndv: Some(100),
-                    max_bytes: None,
                 })
             );
         }
@@ -1762,7 +1718,6 @@ mod tests {
             Some(&BloomFilterProperties {
                 fpp: DEFAULT_BLOOM_FILTER_FPP,
                 ndv: None,
-                max_bytes: None,
             })
         );
     }
@@ -1806,7 +1761,6 @@ mod tests {
             Some(&BloomFilterProperties {
                 fpp: DEFAULT_BLOOM_FILTER_FPP,
                 ndv: Some(100),
-                max_bytes: None,
             })
         );
         assert_eq!(
@@ -1817,7 +1771,6 @@ mod tests {
             Some(&BloomFilterProperties {
                 fpp: 0.1,
                 ndv: None,
-                max_bytes: None,
             })
         );
     }

@@ -82,7 +82,6 @@ use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
-use crate::file::properties::{BloomFilterProperties, DEFAULT_MAX_ROW_GROUP_ROW_COUNT};
 use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
@@ -205,14 +204,12 @@ impl std::ops::IndexMut<usize> for Block {
 /// parallel bit manipulation. When checking membership, only one block is accessed per query,
 /// eliminating the cache-miss penalty of standard Bloom filters.
 ///
-/// ## Two sizing modes
+/// ## Sizing and folding
 ///
-/// - **Fixed-size mode**: Created via [`Sbbf::new_with_ndv_fpp`] when the number of distinct
-///   values (NDV) is known. The filter is sized exactly for the given NDV and FPP.
-///
-/// - **Folding mode**: Created via [`Sbbf::new_with_num_of_bytes`] at a conservatively large
-///   size, then compacted after all values are inserted by calling [`Sbbf::fold_to_target_fpp`].
-///   This eliminates the need to know NDV upfront.
+/// Filters are initially sized for a maximum expected number of distinct values (NDV) via
+/// [`Sbbf::new_with_ndv_fpp`]. After all values are inserted, the filter is compacted by
+/// calling [`Sbbf::fold_to_target_fpp`], which folds the filter down to the smallest size
+/// that still meets the target false positive probability.
 ///
 /// The creation of this structure is based on the [`crate::file::properties::BloomFilterProperties`]
 /// struct set via [`crate::file::properties::WriterProperties`] and is thus hidden by default.
@@ -276,34 +273,6 @@ pub(crate) fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
 }
 
 impl Sbbf {
-    /// Create a bloom filter from [`BloomFilterProperties`], returning the filter and an
-    /// optional target FPP for folding mode.
-    ///
-    /// | `ndv` | `max_bytes` | Behavior |
-    /// |-------|-------------|----------|
-    /// | Set   | _           | Fixed-size filter sized for that NDV (legacy). Returns `None` for FPP. |
-    /// | None  | Set         | Filter of `max_bytes`, folded at flush via [`Sbbf::fold_to_target_fpp`]. |
-    /// | None  | None        | Filter sized for `max_distinct_items` (default: [`DEFAULT_MAX_ROW_GROUP_ROW_COUNT`]) items at the given FPP, folded at flush. |
-    pub fn from_properties(
-        props: &BloomFilterProperties,
-        max_distinct_items: Option<usize>,
-    ) -> Result<(Self, Option<f64>)> {
-        match props.ndv {
-            Some(ndv) => {
-                // Fixed-size mode: size based on explicit NDV (legacy behavior)
-                Ok((Self::new_with_ndv_fpp(ndv, props.fpp)?, None))
-            }
-            None => {
-                // Folding mode: allocate large, fold down at flush
-                let max_bytes = props.max_bytes.unwrap_or_else(|| {
-                    let ndv = max_distinct_items.unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT) as u64;
-                    num_of_bits_from_ndv_fpp(ndv, props.fpp) / 8
-                });
-                Ok((Self::new_with_num_of_bytes(max_bytes), Some(props.fpp)))
-            }
-        }
-    }
-
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
     /// Will return an error if `fpp` is greater than or equal to 1.0 or less than 0.0.
     pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Result<Self, ParquetError> {
