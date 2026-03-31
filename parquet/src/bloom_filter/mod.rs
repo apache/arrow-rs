@@ -82,6 +82,7 @@ use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
+use crate::file::properties::{BloomFilterProperties, DEFAULT_MAX_ROW_GROUP_ROW_COUNT};
 use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
@@ -275,6 +276,33 @@ pub(crate) fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
 }
 
 impl Sbbf {
+    /// Create a bloom filter from [`BloomFilterProperties`], returning the filter and an
+    /// optional target FPP for folding mode.
+    ///
+    /// When `ndv` is set, returns a fixed-size filter sized for that NDV (legacy behavior).
+    /// When `ndv` is `None`, returns a large filter that should be folded down at flush time
+    /// using [`Sbbf::fold_to_target_fpp`] with the returned target FPP.
+    pub fn from_properties(
+        props: &BloomFilterProperties,
+        max_row_group_row_count: Option<usize>,
+    ) -> Result<(Self, Option<f64>)> {
+        match props.ndv {
+            Some(ndv) => {
+                // Fixed-size mode: size based on explicit NDV (legacy behavior)
+                Ok((Self::new_with_ndv_fpp(ndv, props.fpp)?, None))
+            }
+            None => {
+                // Folding mode: allocate large, fold down at flush
+                let max_bytes = props.max_bytes.unwrap_or_else(|| {
+                    let row_count =
+                        max_row_group_row_count.unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT) as u64;
+                    num_of_bits_from_ndv_fpp(row_count, props.fpp) / 8
+                });
+                Ok((Self::new_with_num_of_bytes(max_bytes), Some(props.fpp)))
+            }
+        }
+    }
+
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
     /// Will return an error if `fpp` is greater than or equal to 1.0 or less than 0.0.
     pub fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Result<Self, ParquetError> {
@@ -467,10 +495,6 @@ impl Sbbf {
     ///
     /// ## Why adjacent pairs (not halves)?
     ///
-    /// Standard Bloom filter folding merges the two halves (`B[i] | B[i + m/2]`) because
-    /// standard filters use modular hashing: `index = h(x) mod m`, so `h(x) mod (m/2)`
-    /// maps index `i` and index `i + m/2` to the same position.
-    ///
     /// SBBFs use **multiplicative** hashing for block selection:
     ///
     /// ```text
@@ -478,8 +502,11 @@ impl Sbbf {
     /// ```
     ///
     /// When `num_blocks` is halved, the new index becomes `floor(original_index / 2)`.
-    /// Therefore blocks `2i` and `2i+1` (not `i` and `i + N/2`) map to the same position `i`
-    /// in the folded filter.
+    /// Therefore blocks `2i` and `2i+1` map to the same position `i` in the folded filter.
+    ///
+    /// This differs from standard Bloom filter folding, which merges the two halves
+    /// (`B[i] | B[i + m/2]`) because standard filters use modular hashing where
+    /// `h(x) mod (m/2)` maps indices `i` and `i + m/2` to the same position.
     ///
     /// ## References
     ///
@@ -494,6 +521,10 @@ impl Sbbf {
         assert!(
             len >= 2,
             "Cannot fold a bloom filter with fewer than 2 blocks"
+        );
+        assert!(
+            len % 2 == 0,
+            "Cannot fold a bloom filter with an odd number of blocks"
         );
         let half = len / 2;
         for i in 0..half {
@@ -518,13 +549,13 @@ impl Sbbf {
     /// by computing `(block[2i] | block[2i+1]).count_ones()` without actually mutating the filter.
     fn estimated_fpp_after_fold(&self) -> f64 {
         let half = self.0.len() / 2;
-        let mut total_fpp = 0.0;
+        let mut total_fpp: f64 = 0.0;
         for i in 0..half {
             let mut set_bits: u32 = 0;
             for j in 0..8 {
                 set_bits += (self.0[2 * i].0[j] | self.0[2 * i + 1].0[j]).count_ones();
             }
-            let block_fill = set_bits as f64 / 256.0;
+            let block_fill = f64::from(set_bits) / 256.0;
             total_fpp += block_fill.powi(8);
         }
         total_fpp / half as f64
@@ -982,7 +1013,7 @@ mod tests {
 
     /// show multi-step folding.
     ///
-    /// You can apply the above inductively, folding k times from N blocks prodcues a filter bit-identical to a fresh N/2^k filter
+    /// You can apply the above inductively, folding k times from N blocks produces a filter bit-identical to a fresh N/2^k filter
     #[test]
     fn test_multi_step_fold() {
         let values = (0..3000).map(|i| format!("x_{i}")).collect::<Vec<_>>();

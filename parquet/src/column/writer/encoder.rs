@@ -19,7 +19,7 @@ use bytes::Bytes;
 use half::f16;
 
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
-use crate::bloom_filter::{Sbbf, num_of_bits_from_ndv_fpp};
+use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
 };
@@ -27,9 +27,7 @@ use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
 use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{
-    DEFAULT_MAX_ROW_GROUP_ROW_COUNT, EnabledStatistics, WriterProperties,
-};
+use crate::file::properties::{EnabledStatistics, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
@@ -214,26 +212,11 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         let (bloom_filter, bloom_filter_target_fpp) =
             match props.bloom_filter_properties(descr.path()) {
-                Some(bf_props) => match bf_props.ndv {
-                    Some(ndv) => {
-                        // Fixed-size mode: size based on explicit NDV (legacy behavior)
-                        (Some(Sbbf::new_with_ndv_fpp(ndv, bf_props.fpp)?), None)
-                    }
-                    None => {
-                        // Folding mode: allocate large, fold down at flush
-                        let max_bytes = bf_props.max_bytes.unwrap_or_else(|| {
-                            let row_count = props
-                                .max_row_group_row_count()
-                                .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT)
-                                as u64;
-                            num_of_bits_from_ndv_fpp(row_count, bf_props.fpp) / 8
-                        });
-                        (
-                            Some(Sbbf::new_with_num_of_bytes(max_bytes)),
-                            Some(bf_props.fpp),
-                        )
-                    }
-                },
+                Some(bf_props) => {
+                    let (sbbf, target_fpp) =
+                        Sbbf::from_properties(bf_props, props.max_row_group_row_count())?;
+                    (Some(sbbf), target_fpp)
+                }
                 None => (None, None),
             };
 
