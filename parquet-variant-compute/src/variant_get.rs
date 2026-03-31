@@ -213,9 +213,20 @@ fn shredded_get_path(
         return Ok(shredded);
     }
 
-    // Structs are special. Recurse into each field separately, hoping to follow the shredding even
-    // further, and build up the final struct from those individually shredded results.
+    // Structs are special.
+    //
+    // For fully unshredded targets (`typed_value` absent), delegate to the row builder so we
+    // preserve struct-level cast semantics:
+    // - safe mode: non-object rows become NULL structs
+    // - strict mode: non-object rows raise a cast error
+    //
+    // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
+    // separately to take advantage of deeper shredding in child fields.
     if let DataType::Struct(fields) = as_field.data_type() {
+        if target.typed_value_field().is_none() {
+            return shred_basic_variant(target, VariantPath::default(), Some(as_field));
+        }
+
         let children = fields
             .iter()
             .map(|field| {
@@ -3070,10 +3081,8 @@ mod test {
         assert!(struct_result.is_null(3));
     }
 
-    /// Test that demonstrates the actual struct row builder gap
-    /// This test should fail because it hits unshredded nested structs
     #[test]
-    fn test_struct_row_builder_gap_demonstration() {
+    fn test_struct_row_builder_handles_unshredded_nested_structs() {
         // Create completely unshredded JSON variant (no typed_value at all)
         let json_strings = vec![
             r#"{"outer": {"inner": 42}}"#,
@@ -3082,7 +3091,7 @@ mod test {
         let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
         let variant_array = json_to_variant(&string_array).unwrap();
 
-        // Request nested struct - this should fail at the row builder level
+        // Request nested struct
         let inner_fields = Fields::from(vec![Field::new("inner", DataType::Int32, true)]);
         let inner_struct_type = DataType::Struct(inner_fields);
         let outer_fields = Fields::from(vec![Field::new("outer", inner_struct_type, true)]);
@@ -3095,12 +3104,97 @@ mod test {
         };
 
         let variant_array_ref = ArrayRef::from(variant_array);
-        let result = variant_get(&variant_array_ref, options);
+        let result = variant_get(&variant_array_ref, options).unwrap();
 
-        // Should fail with NotYetImplemented when the row builder tries to handle struct type
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert!(error.to_string().contains("Not yet implemented"));
+        let outer_struct = result.as_struct();
+        assert_eq!(outer_struct.len(), 2);
+        assert_eq!(outer_struct.num_columns(), 1);
+
+        let inner_struct = outer_struct.column(0).as_struct();
+        assert_eq!(inner_struct.num_columns(), 1);
+
+        let inner_values = inner_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(inner_values.value(0), 42);
+        assert_eq!(inner_values.value(1), 100);
+    }
+
+    #[test]
+    fn test_unshredded_struct_safe_cast_non_object_rows_are_null() {
+        let json_strings = vec![r#"{"a": 1, "b": 2}"#, "123", "{}"];
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
+        let variant_array_ref = ArrayRef::from(json_to_variant(&string_array).unwrap());
+
+        let struct_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new(
+                "result",
+                DataType::Struct(struct_fields),
+                true,
+            ))),
+            cast_options: CastOptions::default(),
+        };
+
+        let result = variant_get(&variant_array_ref, options).unwrap();
+        let struct_result = result.as_struct();
+        let field_a = struct_result
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        let field_b = struct_result
+            .column(1)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+
+        // Row 0 is an object, so the struct row is valid with extracted fields.
+        assert!(!struct_result.is_null(0));
+        assert_eq!(field_a.value(0), 1);
+        assert_eq!(field_b.value(0), 2);
+
+        // Row 1 is a scalar, so safe struct cast should produce a NULL struct row.
+        assert!(struct_result.is_null(1));
+        assert!(field_a.is_null(1));
+        assert!(field_b.is_null(1));
+
+        // Row 2 is an empty object, so the struct row is valid with missing fields as NULL.
+        assert!(!struct_result.is_null(2));
+        assert!(field_a.is_null(2));
+        assert!(field_b.is_null(2));
+    }
+
+    #[test]
+    fn test_unshredded_struct_strict_cast_non_object_errors() {
+        let json_strings = vec![r#"{"a": 1, "b": 2}"#, "123"];
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
+        let variant_array_ref = ArrayRef::from(json_to_variant(&string_array).unwrap());
+
+        let struct_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new(
+                "result",
+                DataType::Struct(struct_fields),
+                true,
+            ))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let err = variant_get(&variant_array_ref, options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to extract struct from variant")
+        );
     }
 
     /// Create comprehensive shredded variant with diverse null patterns and empty objects
@@ -4174,6 +4268,59 @@ mod test {
                     .contains("Failed to extract primitive of type Int64")
             );
         }
+    }
+
+    #[test]
+    fn test_variant_get_list_like_unsafe_cast_preserves_null_elements() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec![r#"[1, null, 3]"#]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                true,
+            ))))
+            .with_cast_options(cast_options);
+
+        let result = variant_get(&variant_array, options).unwrap();
+        let element_struct = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        let value = element_struct
+            .column_by_name("value")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+        let typed_value = element_struct
+            .column_by_name("typed_value")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+
+        assert_eq!(typed_value.len(), 3);
+        assert_eq!(typed_value.value(0), 1);
+        assert!(typed_value.is_null(1));
+        assert_eq!(typed_value.value(2), 3);
+
+        assert!(value.is_null(0));
+        assert!(value.is_valid(1));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value.value(1)),
+            Variant::Null
+        );
+        assert!(value.is_null(2));
     }
 
     #[test]
