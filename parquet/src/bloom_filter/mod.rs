@@ -279,12 +279,14 @@ impl Sbbf {
     /// Create a bloom filter from [`BloomFilterProperties`], returning the filter and an
     /// optional target FPP for folding mode.
     ///
-    /// When `ndv` is set, returns a fixed-size filter sized for that NDV (legacy behavior).
-    /// When `ndv` is `None`, returns a large filter that should be folded down at flush time
-    /// using [`Sbbf::fold_to_target_fpp`] with the returned target FPP.
+    /// | `ndv` | `max_bytes` | Behavior |
+    /// |-------|-------------|----------|
+    /// | Set   | _           | Fixed-size filter sized for that NDV (legacy). Returns `None` for FPP. |
+    /// | None  | Set         | Filter of `max_bytes`, folded at flush via [`Sbbf::fold_to_target_fpp`]. |
+    /// | None  | None        | Filter sized for `max_distinct_items` (default: [`DEFAULT_MAX_ROW_GROUP_ROW_COUNT`]) items at the given FPP, folded at flush. |
     pub fn from_properties(
         props: &BloomFilterProperties,
-        max_row_group_row_count: Option<usize>,
+        max_distinct_items: Option<usize>,
     ) -> Result<(Self, Option<f64>)> {
         match props.ndv {
             Some(ndv) => {
@@ -294,9 +296,8 @@ impl Sbbf {
             None => {
                 // Folding mode: allocate large, fold down at flush
                 let max_bytes = props.max_bytes.unwrap_or_else(|| {
-                    let row_count =
-                        max_row_group_row_count.unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT) as u64;
-                    num_of_bits_from_ndv_fpp(row_count, props.fpp) / 8
+                    let ndv = max_distinct_items.unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT) as u64;
+                    num_of_bits_from_ndv_fpp(ndv, props.fpp) / 8
                 });
                 Ok((Self::new_with_num_of_bytes(max_bytes), Some(props.fpp)))
             }
