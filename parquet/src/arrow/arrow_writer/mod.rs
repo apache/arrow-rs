@@ -3148,12 +3148,31 @@ mod tests {
         );
     }
 
+    /// Test that bloom filter folding produces correct results even when
+    /// the configured NDV differs significantly from actual NDV.
+    /// A large NDV means a larger initial filter that gets folded down;
+    /// a small NDV means a smaller initial filter.
     #[test]
-    fn i32_column_bloom_filter_fixed_size() {
+    fn i32_column_bloom_filter_fixed_ndv() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
+
+        // NDV much larger than actual distinct values — tests folding a large filter down
+        let mut options = RoundTripOptions::new(array.clone(), false);
+        options.bloom_filter = true;
+        options.bloom_filter_ndv = Some(1_000_000);
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            (0..SMALL_SIZE as i32).collect(),
+            (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
+
+        // NDV smaller than actual distinct values — tests the underestimate path
         let mut options = RoundTripOptions::new(array, false);
         options.bloom_filter = true;
-        options.bloom_filter_ndv = Some(SMALL_SIZE as u64);
+        options.bloom_filter_ndv = Some(10);
 
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
