@@ -105,7 +105,7 @@ fn make_typed_variant_to_arrow_row_builder<'a>(
         | DataType::LargeListView(_)
         | DataType::FixedSizeList(..)) => {
             let builder =
-                ArrayVariantToArrowRowBuilder::try_new(data_type, cast_options, capacity)?;
+                ArrayVariantToArrowRowBuilder::try_new(data_type, cast_options, capacity, false)?;
             Ok(Array(builder))
         }
         data_type => {
@@ -585,10 +585,17 @@ impl<'a> StructVariantToArrowRowBuilder<'a> {
 }
 
 impl<'a> ArrayVariantToArrowRowBuilder<'a> {
+    /// Creates a new list builder for the given data type.
+    ///
+    /// # Arguments
+    /// * `shredded` - If true, element builders produce shredded structs with `value`/`typed_value`
+    ///   fields (for [`crate::shred_variant`]). If false, element builders produce strongly typed
+    ///   arrays directly (for [`crate::variant_get`]).
     pub(crate) fn try_new(
         data_type: &'a DataType,
         cast_options: &'a CastOptions,
         capacity: usize,
+        shredded: bool,
     ) -> Result<Self> {
         use ArrayVariantToArrowRowBuilder::*;
 
@@ -600,6 +607,7 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
                     $field.data_type(),
                     cast_options,
                     capacity,
+                    shredded,
                 )?)
             };
         }
@@ -886,13 +894,45 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
     }
 }
 
+/// Element builder for list variants, supporting both typed (for [`crate::variant_get`])
+/// and shredded (for [`crate::shred_variant`]) output modes.
+enum ListElementBuilder<'a> {
+    /// Produces the target array type directly.
+    Typed(Box<VariantToArrowRowBuilder<'a>>),
+    /// Produces a shredded struct with `value` and `typed_value` fields.
+    Shredded(Box<VariantToShreddedVariantRowBuilder<'a>>),
+}
+
+impl<'a> ListElementBuilder<'a> {
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+        match self {
+            Self::Typed(b) => b.append_value(value),
+            Self::Shredded(b) => b.append_value(value),
+        }
+    }
+
+    fn finish(self) -> Result<ArrayRef> {
+        match self {
+            Self::Typed(b) => b.finish(),
+            Self::Shredded(b) => {
+                let (value, typed_value, nulls) = b.finish()?;
+                Ok(ArrayRef::from(ShreddedVariantFieldArray::from_parts(
+                    Some(value),
+                    Some(typed_value),
+                    nulls,
+                )))
+            }
+        }
+    }
+}
+
 pub(crate) struct VariantToListArrowRowBuilder<'a, O, const IS_VIEW: bool>
 where
     O: OffsetSizeTrait + ArrowNativeTypeOp,
 {
     field: FieldRef,
     offsets: Vec<O>,
-    element_builder: Box<VariantToShreddedVariantRowBuilder<'a>>,
+    element_builder: ListElementBuilder<'a>,
     nulls: NullBufferBuilder,
     current_offset: O,
     cast_options: &'a CastOptions<'a>,
@@ -907,6 +947,7 @@ where
         element_data_type: &'a DataType,
         cast_options: &'a CastOptions,
         capacity: usize,
+        shredded: bool,
     ) -> Result<Self> {
         if capacity >= isize::MAX as usize {
             return Err(ArrowError::ComputeError(
@@ -915,16 +956,24 @@ where
         }
         let mut offsets = Vec::with_capacity(capacity + 1);
         offsets.push(O::ZERO);
-        let element_builder = make_variant_to_shredded_variant_arrow_row_builder(
-            element_data_type,
-            cast_options,
-            capacity,
-            false,
-        )?;
+        let element_builder = if shredded {
+            let builder = make_variant_to_shredded_variant_arrow_row_builder(
+                element_data_type,
+                cast_options,
+                capacity,
+                false,
+            )?;
+            ListElementBuilder::Shredded(Box::new(builder))
+        } else {
+            let builder =
+                make_typed_variant_to_arrow_row_builder(element_data_type, cast_options, capacity)?;
+            ListElementBuilder::Typed(Box::new(builder))
+        };
+
         Ok(Self {
             field,
             offsets,
-            element_builder: Box::new(element_builder),
+            element_builder,
             nulls: NullBufferBuilder::new(capacity),
             current_offset: O::ZERO,
             cast_options,
@@ -960,9 +1009,7 @@ where
     }
 
     fn finish(mut self) -> Result<ArrayRef> {
-        let (value, typed_value, nulls) = self.element_builder.finish()?;
-        let element_array =
-            ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
+        let element_array: ArrayRef = self.element_builder.finish()?;
         let field = Arc::new(
             self.field
                 .as_ref()
@@ -981,7 +1028,7 @@ where
                 field,
                 ScalarBuffer::from(self.offsets),
                 ScalarBuffer::from(sizes),
-                ArrayRef::from(element_array),
+                element_array,
                 self.nulls.finish(),
             );
             Ok(Arc::new(list_view_array))
@@ -989,7 +1036,7 @@ where
             let list_array = GenericListArray::<O>::new(
                 field,
                 OffsetBuffer::<O>::new(ScalarBuffer::from(self.offsets)),
-                ArrayRef::from(element_array),
+                element_array,
                 self.nulls.finish(),
             );
             Ok(Arc::new(list_array))

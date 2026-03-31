@@ -270,6 +270,7 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
                 data_type,
                 cast_options,
                 capacity,
+                true,
             )?,
         })
     }
