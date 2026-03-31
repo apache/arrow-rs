@@ -3053,4 +3053,43 @@ mod tests {
         assert_eq!(run_array.len(), 3);
         assert_eq!(run_array.run_ends().values(), &[2i16, 3]);
     }
+
+    #[test]
+    fn test_read_nested_run_end_encoded() {
+        let buf = r#"
+        {"a": "x"}
+        {"a": "x"}
+        {"a": "y"}
+        "#;
+
+        // The outer REE compresses whole rows, while the inner REE compresses the
+        // repeated string values produced by decoding those rows.
+        let inner_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let outer_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", inner_type, true)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("a", outer_type, true)]));
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0);
+        let outer = col.as_run::<arrow_array::types::Int64Type>();
+        // Three logical rows compress to two outer runs: ["x", "x"] and ["y"].
+        assert_eq!(outer.len(), 3);
+        assert_eq!(outer.run_ends().values(), &[2, 3]);
+
+        let nested = outer.values().as_run::<arrow_array::types::Int64Type>();
+        // The physical values of the outer REE are themselves a two-element REE.
+        assert_eq!(nested.len(), 2);
+        assert_eq!(nested.run_ends().values(), &[1, 2]);
+
+        let nested_values = nested.values().as_string::<i32>();
+        assert_eq!(nested_values.len(), 2);
+        assert_eq!(nested_values.value(0), "x");
+        assert_eq!(nested_values.value(1), "y");
+    }
 }
