@@ -409,6 +409,7 @@ where
     Ok(Arc::new(output_array))
 }
 
+#[inline]
 fn cast_single_string_to_boolean(
     value: &str,
     cast_options: &CastOptions,

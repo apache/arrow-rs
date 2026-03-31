@@ -789,17 +789,17 @@ impl<'m, 'v> Variant<'m, 'v> {
         T: NumCast + Default,
     {
         match *self {
-            Variant::BooleanFalse => single_bool_to_numeric::<T>(false),
-            Variant::BooleanTrue => single_bool_to_numeric::<T>(true),
-            Variant::Int8(i) => num_cast::<_, T>(i),
-            Variant::Int16(i) => num_cast::<_, T>(i),
-            Variant::Int32(i) => num_cast::<_, T>(i),
-            Variant::Int64(i) => num_cast::<_, T>(i),
-            Variant::Float(f) => num_cast::<_, T>(f),
-            Variant::Double(d) => num_cast::<_, T>(d),
-            Variant::Decimal4(d) if d.scale() == 0 => num_cast::<_, T>(d.integer()),
-            Variant::Decimal8(d) if d.scale() == 0 => num_cast::<_, T>(d.integer()),
-            Variant::Decimal16(d) if d.scale() == 0 => num_cast::<_, T>(d.integer()),
+            Variant::BooleanFalse => single_bool_to_numeric(false),
+            Variant::BooleanTrue => single_bool_to_numeric(true),
+            Variant::Int8(i) => num_cast(i),
+            Variant::Int16(i) => num_cast(i),
+            Variant::Int32(i) => num_cast(i),
+            Variant::Int64(i) => num_cast(i),
+            Variant::Float(f) => num_cast(f),
+            Variant::Double(d) => num_cast(d),
+            Variant::Decimal4(d) if d.scale() == 0 => num_cast(d.integer()),
+            Variant::Decimal8(d) if d.scale() == 0 => num_cast(d.integer()),
+            Variant::Decimal16(d) if d.scale() == 0 => num_cast(d.integer()),
             _ => None,
         }
     }
@@ -1263,7 +1263,6 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v5 = Variant::from("hello!");
     /// assert_eq!(v5.as_f32(), None);
     /// ```
-    #[allow(clippy::cast_possible_truncation)]
     pub fn as_f32(&self) -> Option<f32> {
         self.as_num()
     }
@@ -1543,8 +1542,7 @@ impl From<u8> for Variant<'_, '_> {
         if let Ok(value) = i8::try_from(value) {
             Variant::Int8(value)
         } else {
-            // It will always fit in i16 because u8 max is 255 and i16 max is 32767
-            Variant::Int16(num_cast(value).unwrap())
+            Variant::Int16(num_cast(value).unwrap()) // u8 -> i16 is infallible
         }
     }
 }
@@ -1555,8 +1553,7 @@ impl From<u16> for Variant<'_, '_> {
         if let Ok(value) = i16::try_from(value) {
             Variant::Int16(value)
         } else {
-            // It will always fit in i32 because u16 max is 65535 and i32 max is 2147483647
-            Variant::Int32(num_cast(value).unwrap())
+            Variant::Int32(num_cast(value).unwrap()) // u16 -> i32 is infallible
         }
     }
 }
@@ -1566,8 +1563,7 @@ impl From<u32> for Variant<'_, '_> {
         if let Ok(value) = i32::try_from(value) {
             Variant::Int32(value)
         } else {
-            // It will always fit in i64 because u32 max is 4294967295 and i64 max is 9223372036854775807
-            Variant::Int64(num_cast(value).unwrap())
+            Variant::Int64(num_cast(value).unwrap()) // u32 -> i64 is infallible
         }
     }
 }
