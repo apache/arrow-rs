@@ -106,7 +106,7 @@ mod tests {
         let data: BinaryArray = (0..len)
             .map(|_| {
                 let len = rng.random_range(0..16);
-                Some((0..len).map(|_| rng.random()).collect::<Vec<u8>>())
+                Some((0..len).map(|_| rng.random::<u8>()).collect::<Vec<u8>>())
             })
             .collect();
 

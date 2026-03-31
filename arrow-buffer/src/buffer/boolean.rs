@@ -23,7 +23,7 @@ use crate::{
     buffer_bin_xor,
 };
 
-use std::ops::{BitAnd, BitOr, BitXor, Not};
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 ///
@@ -66,6 +66,27 @@ use std::ops::{BitAnd, BitOr, BitXor, Not};
 ///
 /// Note that the bits marked `?` are not logically part of the mask and may
 /// contain either `0` or `1`
+///
+/// # Bitwise Operations
+///
+/// `BooleanBuffer` implements the standard bitwise traits for creating a new
+/// buffer ([`BitAnd`], [`BitOr`], [`BitXor`], [`Not`]) as well as the assign variants
+/// for updating an existing buffer in place when possible ([`BitAndAssign`],
+/// [`BitOrAssign`], [`BitXorAssign`]).
+///
+/// ```
+/// # use arrow_buffer::BooleanBuffer;
+/// let mut left = BooleanBuffer::from(&[true, false, true, true] as &[bool]);
+/// let right = BooleanBuffer::from(&[true, true, false, true] as &[bool]);
+///
+/// // Create a new buffer by applying bitwise AND
+/// let anded = &left & &right;
+/// assert_eq!(anded, BooleanBuffer::from(&[true, false, false, true] as &[bool]));
+///
+/// // Update `left` in place by applying bitwise AND in place
+/// left &= &right;
+/// assert_eq!(left, BooleanBuffer::from(&[true, false, false, true] as &[bool]));
+/// ```
 ///
 /// # See Also
 /// * [`BooleanBufferBuilder`] for building [`BooleanBuffer`] instances
@@ -269,7 +290,8 @@ impl BooleanBuffer {
     ///   on the relevant bits; the input `u64` values may contain irrelevant bits
     ///   and may be processed differently on different endian architectures.
     /// * `op` may be called with input bits outside the requested range.
-    /// * The returned `BooleanBuffer` always has zero offset.
+    /// * Returned `BooleanBuffer` may have non zero offset
+    /// * Returned `BooleanBuffer` may have bits set outside the requested range
     ///
     /// # See Also
     /// - [`BooleanBuffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
@@ -284,19 +306,28 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///   &left, 0, &right, 0, 12, |a, b| a & b
     /// );
-    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8]);
+    /// assert_eq!(result.len(), 12);
+    /// for i in 0..12 {
+    ///     assert_eq!(result.value(i), left.as_slice()[i / 8] >> (i % 8) & 1 == 1
+    ///         && right.as_slice()[i / 8] >> (i % 8) & 1 == 1);
+    /// }
     /// ```
     ///
     /// # Example: Create new [`BooleanBuffer`] from bitwise `OR` of two byte slices
     /// ```
-    /// # use arrow_buffer::BooleanBuffer;
+    /// # use arrow_buffer::{BooleanBuffer, bit_util};
     /// let left = [0b11001100u8, 0b10111010u8];
     /// let right = [0b10101010u8, 0b11011100u8];
     /// // OR of bits 4..16 from left and bits 0..12 from right
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///  &left, 4, &right, 0, 12, |a, b| a | b
     /// );
-    /// assert_eq!(result.inner().as_slice(), &[0b10101110u8, 0b00001111u8]);
+    /// assert_eq!(result.len(), 12);
+    /// for i in 0..12 {
+    ///     let l = bit_util::get_bit(&left, 4 + i);
+    ///     let r = bit_util::get_bit(&right, i);
+    ///     assert_eq!(result.value(i), l | r);
+    /// }
     /// ```
     pub fn from_bitwise_binary_op<F>(
         left: impl AsRef<[u8]>,
@@ -311,39 +342,74 @@ impl BooleanBuffer {
     {
         let left = left.as_ref();
         let right = right.as_ref();
-        // try fast path for aligned input
-        // If the underlying buffers are aligned to u64 we can apply the operation directly on the u64 slices
-        // to improve performance.
-        if left_offset_in_bits & 0x7 == 0 && right_offset_in_bits & 0x7 == 0 {
-            // align to byte boundary
-            let left = &left[left_offset_in_bits / 8..];
-            let right = &right[right_offset_in_bits / 8..];
 
-            unsafe {
-                let (left_prefix, left_u64s, left_suffix) = left.align_to::<u64>();
-                let (right_prefix, right_u64s, right_suffix) = right.align_to::<u64>();
-                // if there is no prefix or suffix, both buffers are aligned and
-                // we can do the operation directly on u64s.
-                // TODO: consider `slice::as_chunks` and `u64::from_le_bytes` when MSRV reaches 1.88.
-                // https://github.com/apache/arrow-rs/pull/9022#discussion_r2639949361
-                if left_prefix.is_empty()
-                    && right_prefix.is_empty()
-                    && left_suffix.is_empty()
-                    && right_suffix.is_empty()
-                {
-                    let result_u64s = left_u64s
+        // When both offsets share the same sub-64-bit alignment, we can
+        // align both to 64-bit boundaries and zip u64s directly,
+        // avoiding BitChunks bit-shifting entirely.
+        if left_offset_in_bits % 64 == right_offset_in_bits % 64 {
+            let bit_offset = left_offset_in_bits % 64;
+            let left_end = left_offset_in_bits + len_in_bits;
+            let right_end = right_offset_in_bits + len_in_bits;
+
+            let left_aligned = left_offset_in_bits & !63;
+            let right_aligned = right_offset_in_bits & !63;
+
+            let left_end_bytes = (bit_util::ceil(left_end, 64) * 8).min(left.len());
+            let right_end_bytes = (bit_util::ceil(right_end, 64) * 8).min(right.len());
+
+            let left_slice = &left[left_aligned / 8..left_end_bytes];
+            let right_slice = &right[right_aligned / 8..right_end_bytes];
+
+            let (lp, left_u64s, ls) = unsafe { left_slice.align_to::<u64>() };
+            let (rp, right_u64s, rs) = unsafe { right_slice.align_to::<u64>() };
+
+            match (lp, ls, rp, rs) {
+                ([], [], [], []) => {
+                    let result_u64s: Vec<u64> = left_u64s
                         .iter()
                         .zip(right_u64s.iter())
                         .map(|(l, r)| op(*l, *r))
-                        .collect::<Vec<u64>>();
-                    return BooleanBuffer {
-                        buffer: Buffer::from(result_u64s),
-                        bit_offset: 0,
-                        bit_len: len_in_bits,
-                    };
+                        .collect();
+                    return BooleanBuffer::new(result_u64s.into(), bit_offset, len_in_bits);
                 }
+                ([], left_suf, [], right_suf) => {
+                    let left_iter = left_u64s
+                        .iter()
+                        .cloned()
+                        .chain((!left_suf.is_empty()).then(|| read_u64(left_suf)));
+                    let right_iter = right_u64s
+                        .iter()
+                        .cloned()
+                        .chain((!right_suf.is_empty()).then(|| read_u64(right_suf)));
+                    let result_u64s: Vec<u64> =
+                        left_iter.zip(right_iter).map(|(l, r)| op(l, r)).collect();
+                    return BooleanBuffer::new(result_u64s.into(), bit_offset, len_in_bits);
+                }
+                _ => {}
             }
+
+            // Memory not u64-aligned, use chunks_exact fallback
+            let left_chunks = left_slice.chunks_exact(8);
+            let left_rem = left_chunks.remainder();
+            let right_chunks = right_slice.chunks_exact(8);
+            let right_rem = right_chunks.remainder();
+
+            let left_iter = left_chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+            let right_iter = right_chunks.map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+
+            let result_u64s: Vec<u64> = if left_rem.is_empty() && right_rem.is_empty() {
+                left_iter.zip(right_iter).map(|(l, r)| op(l, r)).collect()
+            } else {
+                left_iter
+                    .chain(Some(read_u64(left_rem)))
+                    .zip(right_iter.chain(Some(read_u64(right_rem))))
+                    .map(|(l, r)| op(l, r))
+                    .collect()
+            };
+            return BooleanBuffer::new(result_u64s.into(), bit_offset, len_in_bits);
         }
+
+        // Different sub-64-bit alignments: bit-shifting unavoidable
         let left_chunks = BitChunks::new(left, left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right, right_offset_in_bits, len_in_bits);
 
@@ -458,7 +524,7 @@ impl BooleanBuffer {
         }
     }
 
-    /// Returns a [`Buffer`] containing the sliced contents of this [`BooleanBuffer`]
+    /// Returns a new [`Buffer`] containing the sliced contents of this [`BooleanBuffer`]
     ///
     /// Equivalent to `self.buffer.bit_slice(self.offset, self.len)`
     pub fn sliced(&self) -> Buffer {
@@ -487,6 +553,57 @@ impl BooleanBuffer {
     /// Note: this does not account for offset and length of this [`BooleanBuffer`]
     pub fn into_inner(self) -> Buffer {
         self.buffer
+    }
+
+    /// Claim memory used by this buffer in the provided memory pool.
+    ///
+    /// See [`Buffer::claim`] for details.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        self.buffer.claim(pool);
+    }
+
+    /// Apply a bitwise binary operation to `self`.
+    ///
+    /// If the underlying buffer is uniquely owned, reuses the allocation
+    /// and updates the bytes in place. If the underlying buffer is shared,
+    /// returns a newly allocated buffer.
+    ///
+    /// # API Notes
+    ///
+    /// If the buffer is reused, the result preserves the existing offset, which
+    /// may be non-zero.
+    fn bitwise_bin_op_assign<F>(&mut self, rhs: &BooleanBuffer, op: F)
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        assert_eq!(self.bit_len, rhs.bit_len);
+        // Try to mutate in place if the buffer is uniquely owned
+        let buffer = std::mem::take(&mut self.buffer);
+        match buffer.into_mutable() {
+            Ok(mut buf) => {
+                bit_util::apply_bitwise_binary_op(
+                    &mut buf,
+                    self.bit_offset,
+                    &rhs.buffer,
+                    rhs.bit_offset,
+                    self.bit_len,
+                    op,
+                );
+                self.buffer = buf.into();
+            }
+            Err(buf) => {
+                self.buffer = buf;
+                *self = BooleanBuffer::from_bitwise_binary_op(
+                    self.values(),
+                    self.bit_offset,
+                    rhs.values(),
+                    rhs.bit_offset,
+                    self.bit_len,
+                    op,
+                );
+            }
+        }
     }
 
     /// Returns an iterator over the bits in this [`BooleanBuffer`]
@@ -572,6 +689,24 @@ impl BitXor<&BooleanBuffer> for &BooleanBuffer {
             bit_offset: 0,
             bit_len: self.bit_len,
         }
+    }
+}
+
+impl BitAndAssign<&BooleanBuffer> for BooleanBuffer {
+    fn bitand_assign(&mut self, rhs: &BooleanBuffer) {
+        self.bitwise_bin_op_assign(rhs, |a, b| a & b);
+    }
+}
+
+impl BitOrAssign<&BooleanBuffer> for BooleanBuffer {
+    fn bitor_assign(&mut self, rhs: &BooleanBuffer) {
+        self.bitwise_bin_op_assign(rhs, |a, b| a | b);
+    }
+}
+
+impl BitXorAssign<&BooleanBuffer> for BooleanBuffer {
+    fn bitxor_assign(&mut self, rhs: &BooleanBuffer) {
+        self.bitwise_bin_op_assign(rhs, |a, b| a ^ b);
     }
 }
 
@@ -722,6 +857,47 @@ mod tests {
     }
 
     #[test]
+    fn test_boolean_bitand_assign_shared_and_unshared() {
+        let rhs = BooleanBuffer::from(&[true, true, false, true, false, true][..]);
+        let original = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+
+        let mut unshared = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+        unshared &= &rhs;
+
+        let mut shared = original.clone();
+        let _shared_owner = shared.clone();
+        shared &= &rhs;
+
+        let expected = &original & &rhs;
+        assert_eq!(unshared, expected);
+        assert_eq!(shared, expected);
+    }
+
+    #[test]
+    fn test_boolean_bitor_assign() {
+        let rhs = BooleanBuffer::from(&[true, true, false, true, false, true][..]);
+        let original = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+
+        let mut actual = original.clone();
+        actual |= &rhs;
+
+        let expected = &original | &rhs;
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_boolean_bitxor_assign() {
+        let rhs = BooleanBuffer::from(&[true, true, false, true, false, true][..]);
+        let original = BooleanBuffer::from(&[true, false, true, true, true, false][..]);
+
+        let mut actual = original.clone();
+        actual ^= &rhs;
+
+        let expected = &original ^ &rhs;
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_boolean_not() {
         let offset = 0;
         let len = 40;
@@ -861,6 +1037,127 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_from_bitwise_binary_op_same_mod_64_unaligned_fallback() {
+        // Exercise the shared-alignment fast path when both inputs are misaligned in memory,
+        // forcing the chunks_exact fallback instead of align_to::<u64>().
+        let left_bytes = [
+            0,           // dropped so `&left_bytes[1..]` is not u64-aligned in memory
+            0b1101_0010, // logical left bits start at bit 3 of this byte
+            0b0110_1101,
+            0b1010_0111,
+            0b0001_1110,
+            0b1110_0001,
+            0b0101_1010,
+            0b1001_0110,
+            0b0011_1100,
+            0b1011_0001,
+            0b0100_1110,
+            0b1100_0011,
+            0b0111_1000,
+        ];
+        let right_bytes = [
+            0,           // dropped so `&right_bytes[1..]` is not u64-aligned in memory
+            0b1010_1100, // logical right bits start at bit 67 == bit 3 of the second 64-bit block
+            0b0101_0011,
+            0b1111_0000,
+            0b0011_1010,
+            0b1000_1111,
+            0b0110_0101,
+            0b1101_1000,
+            0b0001_0111,
+            0b1110_0100,
+            0b0010_1101,
+            0b1001_1010,
+            0b0111_0001,
+        ];
+
+        let left = &left_bytes[1..];
+        let right = &right_bytes[1..];
+
+        let left_offset = 3;
+        let right_offset = 67; // same mod 64 as left_offset, so this takes the shared-alignment path
+        let len = 24; // leaves a partial trailing chunk, so this covers the non-empty remainder branch
+
+        let result = BooleanBuffer::from_bitwise_binary_op(
+            left,
+            left_offset,
+            right,
+            right_offset,
+            len,
+            |a, b| a & b,
+        );
+        let expected = (0..len)
+            .map(|i| {
+                bit_util::get_bit(left, left_offset + i)
+                    & bit_util::get_bit(right, right_offset + i)
+            })
+            .collect::<BooleanBuffer>();
+
+        assert_eq!(result, expected);
+        assert_eq!(result.offset(), left_offset % 64);
+    }
+
+    #[test]
+    fn test_from_bitwise_binary_op_same_mod_64_unaligned_fallback_no_remainder() {
+        // Force the chunks_exact fallback with an exact 8-byte chunk so both remainders are empty.
+        let left_bytes = [
+            0,           // dropped so `&left_bytes[1..]` is not u64-aligned in memory
+            0b1010_1100, // logical left bits start at bit 3 of this byte
+            0b0110_1001,
+            0b1101_0011,
+            0b0001_1110,
+            0b1110_0101,
+            0b0101_1000,
+            0b1001_0111,
+            0b0011_1101,
+        ];
+        let right_bytes = [
+            0,           // dropped so `&right_bytes[1..]` is not u64-aligned in memory
+            0b0111_0010, // logical right bits start at bit 67 == bit 3 of the second 64-bit block
+            0b1010_1001,
+            0b0101_1110,
+            0b1100_0011,
+            0b0011_1011,
+            0b1000_1110,
+            0b1111_0001,
+            0b0100_1101,
+            0b1011_0110,
+            0b0001_1011,
+            0b1101_0100,
+            0b0110_0011,
+            0b1001_1110,
+            0b0010_1001,
+            0b1110_0110,
+            0b0101_0001,
+        ];
+
+        let left = &left_bytes[1..];
+        let right = &right_bytes[1..];
+
+        let left_offset = 3;
+        let right_offset = 67; // same mod 64 as left_offset, so this takes the shared-alignment path
+        let len = 61; // 3 + 61 = 64, so the aligned slices are exactly one 8-byte chunk with empty remainders
+
+        let result = BooleanBuffer::from_bitwise_binary_op(
+            left,
+            left_offset,
+            right,
+            right_offset,
+            len,
+            |a, b| a | b,
+        );
+        let expected = (0..len)
+            .map(|i| {
+                bit_util::get_bit(left, left_offset + i)
+                    | bit_util::get_bit(right, right_offset + i)
+            })
+            .collect::<BooleanBuffer>();
+
+        assert_eq!(result, expected);
+        assert_eq!(result.offset(), left_offset % 64);
     }
 
     #[test]
