@@ -1009,7 +1009,7 @@ mod tests {
     /// test that the fpp estimator's overestimation doesn't cause fold_to_target_fpp
     /// to produce significantly oversized filters
     ///
-    /// compare the final size after folding agains tthe theoretical optimal size
+    /// compare the final size after folding against the theoretical optimal size
     #[test]
     fn test_fold_size_vs_optimal_fixed_size() {
         for (ndv, target_fpp) in [
