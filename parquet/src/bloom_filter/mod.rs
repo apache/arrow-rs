@@ -900,7 +900,7 @@ mod tests {
 
     /*
         Ok, so the following is trying to prove in simple terms that folding an SBBF and
-        building a fresh smaller SBBF from scratch prodcues the exact same bits
+        building a fresh smaller SBBF from scratch produces the exact same bits
 
         If you insert the same values into a 512-block filter and fold it to 256 blocks,
         you get a bit-for-bit identical result to just inserting those values into a
