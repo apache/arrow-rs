@@ -19,10 +19,12 @@ use crate::errors::AvroError;
 use crate::reader::async_reader::AsyncFileReader;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::{FutureExt, TryFutureExt};
+use futures::stream::BoxStream;
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use object_store::ObjectStore;
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
+use object_store::{GetOptions, GetRange, ObjectStore};
 use std::error::Error;
 use std::ops::Range;
 use std::sync::Arc;
@@ -62,12 +64,12 @@ impl AvroObjectReader {
 
     fn spawn<F, O, E>(&self, f: F) -> BoxFuture<'_, Result<O, AvroError>>
     where
-        F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxFuture<'a, Result<O, E>>
-            + Send
-            + 'static,
+        F: FnOnce(Arc<dyn ObjectStore>, Path) -> BoxFuture<'static, Result<O, E>> + Send + 'static,
         O: Send + 'static,
         E: Error + Send + 'static,
     {
+        let path = self.path.clone();
+        let store = Arc::clone(&self.store);
         match &self.runtime {
             Some(handle) => {
                 let path = self.path.clone();
@@ -95,6 +97,33 @@ impl AsyncFileReader for AvroObjectReader {
         self.spawn(|store, path| async move { store.get_range(path, range).await }.boxed())
     }
 
+    fn get_stream(
+        &mut self,
+        range: Range<u64>,
+    ) -> BoxFuture<'_, Result<BoxStream<'_, Result<Bytes, AvroError>>, AvroError>> {
+        // FIXME: can't use self.spawn here because of the signature of the returned stream.
+        // The signature has to be this way to work with the generic implementation
+        // for AsyncRead + AsyncSeek types.
+        async move {
+            let options = GetOptions {
+                range: Some(GetRange::Bounded(range)),
+                ..Default::default()
+            };
+
+            let get_result = self
+                .store
+                .get_opts(&self.path, options)
+                .await
+                .map_err(|e| ArrowError::from_external_error(Box::new(e)))?;
+            let stream = get_result
+                .into_stream()
+                .map_err(|e| ArrowError::from_external_error(Box::new(e)))
+                .boxed();
+            Ok(stream)
+        }
+        .boxed()
+    }
+
     fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
@@ -102,6 +131,6 @@ impl AsyncFileReader for AvroObjectReader {
     where
         Self: Send,
     {
-        self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
+        self.spawn(|store, path| async move { store.get_ranges(&path, &ranges).await }.boxed())
     }
 }
