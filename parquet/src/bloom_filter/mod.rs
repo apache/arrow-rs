@@ -602,15 +602,14 @@ impl Sbbf {
     ///
     /// ## Implementation
     ///
-    /// Each iteration does two passes over the block pairs:
-    /// 1. **Read-only FPP estimate**: OR each pair into a stack-local `Block`, popcount it,
-    ///    and accumulate the per-block FPP. If the estimated FPP exceeds the target, stop.
-    /// 2. **In-place fold**: OR pairs and write results to the first half of the existing Vec,
-    ///    then truncate. This reuses the existing allocation — no heap allocation per fold level.
-    ///
-    /// The data from pass 1 remains hot in CPU cache for pass 2. Separating the OR from the
-    /// popcount (via `Block::count_ones`) allows the compiler to emit batched SIMD popcount
-    /// instructions.
+    /// Uses a two-phase approach:
+    /// 1. **Tree reduction**: Simulate merges in a scratch buffer to determine how many
+    ///    folds are safe. This reads the original data once, then works on progressively
+    ///    smaller scratch — total work O(N). At each level, the FPP is estimated via
+    ///    popcount of the merged blocks.
+    /// 2. **Single in-place fold**: Once the target fold count is known, merge groups of
+    ///    `2^num_folds` adjacent blocks in a single pass over the original data, then
+    ///    truncate. This avoids re-reading the data at each fold level.
     ///
     /// ## Correctness
     ///
@@ -623,16 +622,58 @@ impl Sbbf {
     /// - Sailhan, F. & Stehr, M-O. "Folding and Unfolding Bloom Filters",
     ///   IEEE iThings 2012. <https://doi.org/10.1109/GreenCom.2012.16>
     pub fn fold_to_target_fpp(&mut self, target_fpp: f64) {
-        while self.0.len() >= 2 {
-            // Pass 1: Read-only FPP estimate. If the fold would exceed the
-            // target FPP, stop before mutating the filter.
-            if self.estimated_fpp_after_fold() > target_fpp {
+        let len = self.0.len();
+        if len < 2 {
+            return;
+        }
+
+        // Phase 1: Determine how many folds are safe by simulating merges
+        // in a scratch buffer. This reads the original data once, then works
+        // on progressively smaller scratch — total work O(N).
+        let mut scratch: Vec<Block> = self.0.chunks_exact(2).map(|p| p[0] | p[1]).collect();
+        let mut num_folds = 0u32;
+
+        loop {
+            // Check FPP at this fold level
+            let num_blocks = scratch.len() as f64;
+            let mut total_fpp: f64 = 0.0;
+            for block in &scratch {
+                let set_bits = block.count_ones();
+                let block_fill = f64::from(set_bits) / 256.0;
+                total_fpp += block_fill.powi(8);
+            }
+            if total_fpp / num_blocks > target_fpp {
                 break;
             }
-            // Pass 2: In-place fold. The block pairs are still hot in cache from
-            // the estimate pass. Reuses the existing Vec allocation.
-            self.fold_once();
+            num_folds += 1;
+            if scratch.len() < 2 {
+                break;
+            }
+            // Merge scratch pairwise for next level
+            let new_len = scratch.len() / 2;
+            for i in 0..new_len {
+                scratch[i] = scratch[2 * i] | scratch[2 * i + 1];
+            }
+            scratch.truncate(new_len);
         }
+        drop(scratch);
+
+        if num_folds == 0 {
+            return;
+        }
+
+        // Phase 2: Single in-place fold to the target level.
+        let group_size = 1usize << num_folds;
+        let new_len = len / group_size;
+        for i in 0..new_len {
+            let start = i * group_size;
+            let mut merged = self.0[start];
+            for j in 1..group_size {
+                merged = merged | self.0[start + j];
+            }
+            self.0[i] = merged;
+        }
+        self.0.truncate(new_len);
     }
 
     /// Reads a Sbff from Thrift encoded bytes
