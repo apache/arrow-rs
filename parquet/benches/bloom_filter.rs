@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use parquet::bloom_filter::Sbbf;
 
 /// Build a bloom filter sized for `initial_ndv` at `fpp`, insert `num_values` distinct values,
@@ -39,20 +39,16 @@ fn bench_fold_to_target_fpp(c: &mut Criterion) {
         let filter = build_filter(initial_ndv, fpp, num_values);
         let num_blocks = filter.num_blocks();
         group.throughput(Throughput::Elements(num_blocks as u64));
-        group.bench_with_input(
-            BenchmarkId::new("ndv", num_values),
-            &filter,
-            |b, filter| {
-                b.iter_batched(
-                    || filter.clone(),
-                    |mut f| {
-                        f.fold_to_target_fpp(fpp);
-                        f
-                    },
-                    criterion::BatchSize::SmallInput,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("ndv", num_values), &filter, |b, filter| {
+            b.iter_batched(
+                || filter.clone(),
+                |mut f| {
+                    f.fold_to_target_fpp(fpp);
+                    f
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
     }
     group.finish();
 }

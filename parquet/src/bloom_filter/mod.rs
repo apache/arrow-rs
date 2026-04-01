@@ -203,8 +203,8 @@ impl std::ops::BitOr for Block {
     #[inline]
     fn bitor(self, rhs: Self) -> Self {
         let mut result = [0u32; 8];
-        for i in 0..8 {
-            result[i] = self.0[i] | rhs.0[i];
+        for (i, item) in result.iter_mut().enumerate() {
+            *item = self.0[i] | rhs.0[i];
         }
         Self(result)
     }
