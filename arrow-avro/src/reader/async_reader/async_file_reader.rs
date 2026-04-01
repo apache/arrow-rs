@@ -98,7 +98,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             let ranged_reader = self.take(range.end - range.start);
             let stream = ReaderStream::new(ranged_reader)
-                .map_err(ArrowError::from)
+                .map_err(AvroError::from)
                 .boxed();
 
             Ok(stream)

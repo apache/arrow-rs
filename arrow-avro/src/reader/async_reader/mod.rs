@@ -26,9 +26,8 @@ use crate::reader::block::{BlockDecoder, BlockDecoderState};
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef};
 use bytes::{Bytes, BytesMut};
-use futures::future::{BoxFuture, BoxStream};
-use futures::{FutureExt, Stream, StreamExt};
-use std::mem;
+use futures::{Stream, StreamExt, stream::BoxStream};
+use std::marker::PhantomData;
 use std::ops::Range;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -42,7 +41,6 @@ pub use builder::{ReaderBuilder, read_header_info};
 #[cfg(feature = "object_store")]
 mod store;
 
-use crate::errors::AvroError;
 #[cfg(feature = "object_store")]
 pub use store::AvroObjectReader;
 
@@ -311,6 +309,7 @@ fn make_stream<R: AsyncFileReader + Unpin + Send + 'static>(
 /// ```
 pub struct AsyncAvroFileReader<R> {
     inner: BoxStream<'static, Result<RecordBatch, ArrowError>>,
+    schema: SchemaRef,
     _phantom: PhantomData<R>,
 }
 
@@ -318,6 +317,13 @@ impl<R> AsyncAvroFileReader<R> {
     /// Returns a builder for a new [`Self`], allowing some optional parameters.
     pub fn builder(reader: R, file_size: u64, batch_size: usize) -> ReaderBuilder<R> {
         ReaderBuilder::new(reader, file_size, batch_size)
+    }
+
+    /// Returns the Arrow schema for batches produced by this reader.
+    ///
+    /// The schema is determined by the writer schema in the file and the reader schema provided to the builder.
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }
 
@@ -331,6 +337,7 @@ impl<R: AsyncFileReader + Unpin + Send + 'static> AsyncAvroFileReader<R> {
         sync_marker: [u8; 16],
         finished: bool,
     ) -> Self {
+        let schema = decoder.schema();
         let inner: BoxStream<'static, Result<RecordBatch, ArrowError>> = if finished {
             Box::pin(futures::stream::empty())
         } else {
@@ -348,6 +355,7 @@ impl<R: AsyncFileReader + Unpin + Send + 'static> AsyncAvroFileReader<R> {
         };
         Self {
             inner,
+            schema,
             _phantom: PhantomData,
         }
     }
@@ -365,6 +373,7 @@ impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
 mod tests {
     use super::*;
     use crate::codec::Tz;
+    use crate::errors::AvroError;
     use crate::schema::{
         AVRO_NAME_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AvroSchema, SCHEMA_METADATA_KEY,
     };
@@ -374,7 +383,6 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use futures::future::BoxFuture;
     use futures::{FutureExt, StreamExt, TryStreamExt};
-    use object_store::ObjectStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{ObjectStore, ObjectStoreExt};
@@ -1802,7 +1810,7 @@ mod tests {
     }
 
     impl AsyncFileReader for ChunkedReader {
-        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ArrowError>> {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
             let slice = self.data.slice(range.start as usize..range.end as usize);
             async move { Ok(slice) }.boxed()
         }
@@ -1814,7 +1822,7 @@ mod tests {
             let range_data = self.data.slice(range.start as usize..range.end as usize);
             let chunk_size = self.chunk_size;
 
-            let mut chunks: Vec<Result<Bytes, ArrowError>> = Vec::new();
+            let mut chunks: Vec<Result<Bytes, AvroError>> = Vec::new();
             let mut pos = 0;
             let len = range_data.len();
             while pos < len {

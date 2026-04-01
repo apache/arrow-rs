@@ -17,7 +17,6 @@
 
 use crate::codec::{AvroFieldBuilder, Tz};
 use crate::errors::AvroError;
-use crate::reader::async_reader::ReaderState;
 use crate::reader::header::{Header, HeaderDecoder, HeaderInfo};
 use crate::reader::record::RecordDecoder;
 use crate::reader::{AsyncAvroFileReader, AsyncFileReader, Decoder};
@@ -273,12 +272,12 @@ impl<R: AsyncFileReader + Unpin + Send + 'static> ReaderBuilder<R> {
 
         // Determine if there is actually data to fetch, note that we subtract the header len from range.start,
         // so we need to check if range.end == header_len to see if there's no data after the header
-        let finished = range.start == range.end || self.header_len == range.end;
-        let codec = self.header.compression()?;
-        let sync_marker = self.header.sync();
+        let finished = range.start == range.end || header_len == range.end;
+        let codec = header_info.compression()?;
+        let sync_marker = header_info.sync();
 
         Ok(AsyncAvroFileReader::new(
-            self.inner.reader,
+            self.reader,
             range,
             self.file_size,
             decoder,

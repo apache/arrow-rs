@@ -21,10 +21,8 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
-use object_store::ObjectStore;
-use object_store::ObjectStoreExt;
 use object_store::path::Path;
-use object_store::{GetOptions, GetRange, ObjectStore};
+use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
 use std::error::Error;
 use std::ops::Range;
 use std::sync::Arc;
@@ -64,12 +62,12 @@ impl AvroObjectReader {
 
     fn spawn<F, O, E>(&self, f: F) -> BoxFuture<'_, Result<O, AvroError>>
     where
-        F: FnOnce(Arc<dyn ObjectStore>, Path) -> BoxFuture<'static, Result<O, E>> + Send + 'static,
+        F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxFuture<'a, Result<O, E>>
+            + Send
+            + 'static,
         O: Send + 'static,
         E: Error + Send + 'static,
     {
-        let path = self.path.clone();
-        let store = Arc::clone(&self.store);
         match &self.runtime {
             Some(handle) => {
                 let path = self.path.clone();
@@ -114,10 +112,10 @@ impl AsyncFileReader for AvroObjectReader {
                 .store
                 .get_opts(&self.path, options)
                 .await
-                .map_err(|e| ArrowError::from_external_error(Box::new(e)))?;
+                .map_err(|e| AvroError::External(Box::new(e)))?;
             let stream = get_result
                 .into_stream()
-                .map_err(|e| ArrowError::from_external_error(Box::new(e)))
+                .map_err(|e| AvroError::External(Box::new(e)))
                 .boxed();
             Ok(stream)
         }
@@ -131,6 +129,6 @@ impl AsyncFileReader for AvroObjectReader {
     where
         Self: Send,
     {
-        self.spawn(|store, path| async move { store.get_ranges(&path, &ranges).await }.boxed())
+        self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
     }
 }
