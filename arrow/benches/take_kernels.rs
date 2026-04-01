@@ -195,14 +195,26 @@ fn add_benchmark(c: &mut Criterion) {
 
     let values = create_fsb_array(1024, 0.0, 12);
     let indices = create_random_index(1024, 0.0);
-    c.bench_function("take primitive fsb value len: 12, indices: 1024", |b| {
+    c.bench_function("take fsb value len: 12, indices: 1024", |b| {
         b.iter(|| bench_take(&values, &indices))
     });
 
     let values = create_fsb_array(1024, 0.5, 12);
     let indices = create_random_index(1024, 0.0);
+    c.bench_function("take fsb value len: 12, null values, indices: 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_fsb_array(1024, 0.0, 16);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take fsb value optimized len: 16, indices: 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_fsb_array(1024, 0.5, 16);
+    let indices = create_random_index(1024, 0.0);
     c.bench_function(
-        "take primitive fsb value len: 12, null values, indices: 1024",
+        "take fsb value optimized len: 16, null values, indices: 1024",
         |b| b.iter(|| bench_take(&values, &indices)),
     );
 }

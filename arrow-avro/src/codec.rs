@@ -84,14 +84,20 @@ pub(crate) enum AvroLiteral {
 /// Contains the necessary information to resolve a writer's record against a reader's record schema.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResolvedRecord {
-    /// Maps a writer's field index to the corresponding reader's field index.
-    /// `None` if the writer's field is not present in the reader's schema.
-    pub(crate) writer_to_reader: Arc<[Option<usize>]>,
+    /// Maps a writer's field index to the field's resolution against the reader's schema.
+    pub(crate) writer_fields: Arc<[ResolvedField]>,
     /// A list of indices in the reader's schema for fields that have a default value.
     pub(crate) default_fields: Arc<[usize]>,
+}
+
+/// Resolution information for record fields in the writer schema.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ResolvedField {
+    /// Resolves to a field indexed in the reader schema.
+    ToReader(usize),
     /// For fields present in the writer's schema but not the reader's, this stores their data type.
     /// This is needed to correctly skip over these fields during deserialization.
-    pub(crate) skip_fields: Arc<[Option<AvroDataType>]>,
+    Skip(AvroDataType),
 }
 
 /// Defines the type of promotion to be applied during schema resolution.
@@ -615,7 +621,7 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
     fn try_from(schema: &Schema<'a>) -> Result<Self, Self::Error> {
         match schema {
             Schema::Complex(ComplexType::Record(r)) => {
-                let mut resolver = Maker::new(false, false);
+                let mut resolver = Maker::new(false, false, Tz::default());
                 let data_type = resolver.make_data_type(schema, None, None)?;
                 Ok(AvroField {
                     data_type,
@@ -636,6 +642,7 @@ pub(crate) struct AvroFieldBuilder<'a> {
     reader_schema: Option<&'a Schema<'a>>,
     use_utf8view: bool,
     strict_mode: bool,
+    tz: Tz,
 }
 
 impl<'a> AvroFieldBuilder<'a> {
@@ -646,6 +653,7 @@ impl<'a> AvroFieldBuilder<'a> {
             reader_schema: None,
             use_utf8view: false,
             strict_mode: false,
+            tz: Tz::default(),
         }
     }
 
@@ -671,11 +679,17 @@ impl<'a> AvroFieldBuilder<'a> {
         self
     }
 
+    /// Sets the timezone representation for timestamps.
+    pub(crate) fn with_tz(mut self, tz: Tz) -> Self {
+        self.tz = tz;
+        self
+    }
+
     /// Build an [`AvroField`] from the builder
     pub(crate) fn build(self) -> Result<AvroField, ArrowError> {
         match self.writer_schema {
             Schema::Complex(ComplexType::Record(r)) => {
-                let mut resolver = Maker::new(self.use_utf8view, self.strict_mode);
+                let mut resolver = Maker::new(self.use_utf8view, self.strict_mode, self.tz);
                 let data_type =
                     resolver.make_data_type(self.writer_schema, self.reader_schema, None)?;
                 Ok(AvroField {
@@ -688,6 +702,36 @@ impl<'a> AvroFieldBuilder<'a> {
                 self.writer_schema
             ))),
         }
+    }
+}
+
+/// Timezone representation for timestamps.
+///
+/// Avro only distinguishes between UTC and local time (no timezone), but Arrow supports
+/// any of the two identifiers of the UTC timezone: "+00:00" and "UTC".
+/// The data types using these time zone IDs behave identically, but are not logically equal.
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
+pub enum Tz {
+    /// Represent Avro `timestamp-*` logical types with "+00:00" timezone ID
+    #[default]
+    OffsetZero,
+    /// Represent Avro `timestamp-*` logical types with "UTC" timezone ID
+    Utc,
+}
+
+impl Tz {
+    /// Returns the string identifier for this timezone representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::OffsetZero => "+00:00",
+            Self::Utc => "UTC",
+        }
+    }
+}
+
+impl Display for Tz {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -726,18 +770,18 @@ pub(crate) enum Codec {
     /// Represents Avro timestamp-millis or local-timestamp-millis logical type
     ///
     /// Maps to Arrow's Timestamp(TimeUnit::Millisecond) data type
-    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
-    TimestampMillis(bool),
+    /// The parameter indicates whether the timestamp has a UTC timezone (Some) or is local time (None)
+    TimestampMillis(Option<Tz>),
     /// Represents Avro timestamp-micros or local-timestamp-micros logical type
     ///
     /// Maps to Arrow's Timestamp(TimeUnit::Microsecond) data type
-    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
-    TimestampMicros(bool),
+    /// The parameter indicates whether the timestamp has a UTC timezone (Some) or is local time (None)
+    TimestampMicros(Option<Tz>),
     /// Represents Avro timestamp-nanos or local-timestamp-nanos logical type
     ///
     /// Maps to Arrow's Timestamp(TimeUnit::Nanosecond) data type
-    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
-    TimestampNanos(bool),
+    /// The parameter indicates whether the timestamp has a UTC timezone (Some) or is local time (None)
+    TimestampNanos(Option<Tz>),
     /// Represents Avro fixed type, maps to Arrow's FixedSizeBinary data type
     /// The i32 parameter indicates the fixed binary size
     Fixed(i32),
@@ -838,15 +882,18 @@ impl Codec {
             Self::Date32 => DataType::Date32,
             Self::TimeMillis => DataType::Time32(TimeUnit::Millisecond),
             Self::TimeMicros => DataType::Time64(TimeUnit::Microsecond),
-            Self::TimestampMillis(is_utc) => {
-                DataType::Timestamp(TimeUnit::Millisecond, is_utc.then(|| "+00:00".into()))
-            }
-            Self::TimestampMicros(is_utc) => {
-                DataType::Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
-            }
-            Self::TimestampNanos(is_utc) => {
-                DataType::Timestamp(TimeUnit::Nanosecond, is_utc.then(|| "+00:00".into()))
-            }
+            Self::TimestampMillis(tz) => DataType::Timestamp(
+                TimeUnit::Millisecond,
+                tz.as_ref().map(|tz| tz.as_str().into()),
+            ),
+            Self::TimestampMicros(tz) => DataType::Timestamp(
+                TimeUnit::Microsecond,
+                tz.as_ref().map(|tz| tz.as_str().into()),
+            ),
+            Self::TimestampNanos(tz) => DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                tz.as_ref().map(|tz| tz.as_str().into()),
+            ),
             Self::Interval => DataType::Interval(IntervalUnit::MonthDayNano),
             Self::Fixed(size) => DataType::FixedSizeBinary(*size),
             Self::Decimal(precision, scale, _size) => {
@@ -1106,12 +1153,15 @@ impl From<&Codec> for UnionFieldKind {
             Codec::Date32 => Self::Date,
             Codec::TimeMillis => Self::TimeMillis,
             Codec::TimeMicros => Self::TimeMicros,
-            Codec::TimestampMillis(true) => Self::TimestampMillisUtc,
-            Codec::TimestampMillis(false) => Self::TimestampMillisLocal,
-            Codec::TimestampMicros(true) => Self::TimestampMicrosUtc,
-            Codec::TimestampMicros(false) => Self::TimestampMicrosLocal,
-            Codec::TimestampNanos(true) => Self::TimestampNanosUtc,
-            Codec::TimestampNanos(false) => Self::TimestampNanosLocal,
+            Codec::TimestampMillis(Some(Tz::OffsetZero)) => Self::TimestampMillisUtc,
+            Codec::TimestampMillis(Some(Tz::Utc)) => Self::TimestampMillisUtc,
+            Codec::TimestampMillis(None) => Self::TimestampMillisLocal,
+            Codec::TimestampMicros(Some(Tz::OffsetZero)) => Self::TimestampMicrosUtc,
+            Codec::TimestampMicros(Some(Tz::Utc)) => Self::TimestampMicrosUtc,
+            Codec::TimestampMicros(None) => Self::TimestampMicrosLocal,
+            Codec::TimestampNanos(Some(Tz::OffsetZero)) => Self::TimestampNanosUtc,
+            Codec::TimestampNanos(Some(Tz::Utc)) => Self::TimestampNanosUtc,
+            Codec::TimestampNanos(None) => Self::TimestampNanosLocal,
             Codec::Interval => Self::Duration,
             Codec::Fixed(_) => Self::Fixed,
             Codec::Decimal(..) => Self::Decimal,
@@ -1332,14 +1382,16 @@ struct Maker<'a> {
     resolver: Resolver<'a>,
     use_utf8view: bool,
     strict_mode: bool,
+    tz: Tz,
 }
 
 impl<'a> Maker<'a> {
-    fn new(use_utf8view: bool, strict_mode: bool) -> Self {
+    fn new(use_utf8view: bool, strict_mode: bool, tz: Tz) -> Self {
         Self {
             resolver: Default::default(),
             use_utf8view,
             strict_mode,
+            tz,
         }
     }
 
@@ -1603,20 +1655,22 @@ impl<'a> Maker<'a> {
                     (Some("time-millis"), c @ Codec::Int32) => *c = Codec::TimeMillis,
                     (Some("time-micros"), c @ Codec::Int64) => *c = Codec::TimeMicros,
                     (Some("timestamp-millis"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMillis(true)
+                        *c = Codec::TimestampMillis(Some(self.tz))
                     }
                     (Some("timestamp-micros"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMicros(true)
+                        *c = Codec::TimestampMicros(Some(self.tz))
                     }
                     (Some("local-timestamp-millis"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMillis(false)
+                        *c = Codec::TimestampMillis(None)
                     }
                     (Some("local-timestamp-micros"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMicros(false)
+                        *c = Codec::TimestampMicros(None)
                     }
-                    (Some("timestamp-nanos"), c @ Codec::Int64) => *c = Codec::TimestampNanos(true),
+                    (Some("timestamp-nanos"), c @ Codec::Int64) => {
+                        *c = Codec::TimestampNanos(Some(self.tz))
+                    }
                     (Some("local-timestamp-nanos"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampNanos(false)
+                        *c = Codec::TimestampNanos(None)
                     }
                     (Some("uuid"), c @ Codec::Utf8) => {
                         // Map Avro string+logicalType=uuid into the UUID Codec,
@@ -1715,7 +1769,7 @@ impl<'a> Maker<'a> {
                         .and_then(|v| v.as_str())
                     {
                         if unit == "nanosecond" {
-                            field.codec = Codec::TimestampNanos(false);
+                            field.codec = Codec::TimestampNanos(Some(self.tz));
                         }
                     }
                 }
@@ -2281,24 +2335,27 @@ impl<'a> Maker<'a> {
                 data_type: dt,
             });
         }
-        // Build skip_fields in writer order; pre-size and push.
-        let mut skip_fields: Vec<Option<AvroDataType>> =
-            Vec::with_capacity(writer_record.fields.len());
-        for (writer_index, writer_field) in writer_record.fields.iter().enumerate() {
-            if writer_to_reader[writer_index].is_some() {
-                skip_fields.push(None);
-            } else {
-                skip_fields.push(Some(self.parse_type(&writer_field.r#type, writer_ns)?));
-            }
-        }
+        // Build writer field map.
+        let writer_fields = writer_record
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(writer_index, writer_field)| {
+                if let Some(reader_index) = writer_to_reader[writer_index] {
+                    Ok(ResolvedField::ToReader(reader_index))
+                } else {
+                    let dt = self.parse_type(&writer_field.r#type, writer_ns)?;
+                    Ok(ResolvedField::Skip(dt))
+                }
+            })
+            .collect::<Result<_, ArrowError>>()?;
         let resolved = AvroDataType::new_with_resolution(
             Codec::Struct(Arc::from(reader_fields)),
             reader_md,
             None,
             Some(ResolutionInfo::Record(ResolvedRecord {
-                writer_to_reader: Arc::from(writer_to_reader),
+                writer_fields,
                 default_fields: Arc::from(default_fields),
-                skip_fields: Arc::from(skip_fields),
             })),
         );
         // Register a resolved record by reader name+namespace for potential named type refs.
@@ -2336,7 +2393,7 @@ mod tests {
     fn resolve_promotion(writer: PrimitiveType, reader: PrimitiveType) -> AvroDataType {
         let writer_schema = Schema::TypeName(TypeName::Primitive(writer));
         let reader_schema = Schema::TypeName(TypeName::Primitive(reader));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("promotion should resolve")
@@ -2353,7 +2410,7 @@ mod tests {
     fn test_date_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "date");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::Date32));
@@ -2363,7 +2420,7 @@ mod tests {
     fn test_time_millis_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "time-millis");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::TimeMillis));
@@ -2373,7 +2430,7 @@ mod tests {
     fn test_time_micros_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "time-micros");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::TimeMicros));
@@ -2381,42 +2438,77 @@ mod tests {
 
     #[test]
     fn test_timestamp_millis_logical_type() {
-        let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-millis");
+        for tz in [Tz::OffsetZero, Tz::Utc] {
+            let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-millis");
 
-        let mut maker = Maker::new(false, false);
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+            let mut maker = Maker::new(false, false, tz);
+            let result = maker.make_data_type(&schema, None, None).unwrap();
 
-        assert!(matches!(result.codec, Codec::TimestampMillis(true)));
+            let Codec::TimestampMillis(Some(actual_tz)) = result.codec else {
+                panic!("Expected TimestampMillis codec");
+            };
+            assert_eq!(actual_tz, tz);
+        }
     }
 
     #[test]
     fn test_timestamp_micros_logical_type() {
-        let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-micros");
+        for tz in [Tz::OffsetZero, Tz::Utc] {
+            let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-micros");
 
-        let mut maker = Maker::new(false, false);
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+            let mut maker = Maker::new(false, false, tz);
+            let result = maker.make_data_type(&schema, None, None).unwrap();
 
-        assert!(matches!(result.codec, Codec::TimestampMicros(true)));
+            let Codec::TimestampMicros(Some(actual_tz)) = result.codec else {
+                panic!("Expected TimestampMicros codec");
+            };
+            assert_eq!(actual_tz, tz);
+        }
+    }
+
+    #[test]
+    fn test_timestamp_nanos_logical_type() {
+        for tz in [Tz::OffsetZero, Tz::Utc] {
+            let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-nanos");
+
+            let mut maker = Maker::new(false, false, tz);
+            let result = maker.make_data_type(&schema, None, None).unwrap();
+
+            let Codec::TimestampNanos(Some(actual_tz)) = result.codec else {
+                panic!("Expected TimestampNanos codec");
+            };
+            assert_eq!(actual_tz, tz);
+        }
     }
 
     #[test]
     fn test_local_timestamp_millis_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-millis");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
-        assert!(matches!(result.codec, Codec::TimestampMillis(false)));
+        assert!(matches!(result.codec, Codec::TimestampMillis(None)));
     }
 
     #[test]
     fn test_local_timestamp_micros_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-micros");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
-        assert!(matches!(result.codec, Codec::TimestampMicros(false)));
+        assert!(matches!(result.codec, Codec::TimestampMicros(None)));
+    }
+
+    #[test]
+    fn test_local_timestamp_nanos_logical_type() {
+        let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-nanos");
+
+        let mut maker = Maker::new(false, false, Tz::default());
+        let result = maker.make_data_type(&schema, None, None).unwrap();
+
+        assert!(matches!(result.codec, Codec::TimestampNanos(None)));
     }
 
     #[test]
@@ -2465,7 +2557,7 @@ mod tests {
     fn test_unknown_logical_type_added_to_metadata() {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "custom-type");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert_eq!(
@@ -2478,7 +2570,7 @@ mod tests {
     fn test_string_with_utf8view_enabled() {
         let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
-        let mut maker = Maker::new(true, false);
+        let mut maker = Maker::new(true, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::Utf8View));
@@ -2488,7 +2580,7 @@ mod tests {
     fn test_string_without_utf8view_enabled() {
         let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::Utf8));
@@ -2517,7 +2609,7 @@ mod tests {
 
         let schema = Schema::Complex(ComplexType::Record(record));
 
-        let mut maker = Maker::new(true, false);
+        let mut maker = Maker::new(true, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         if let Codec::Struct(fields) = &result.codec {
@@ -2535,7 +2627,7 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
         ]);
 
-        let mut maker = Maker::new(false, true);
+        let mut maker = Maker::new(false, true, Tz::default());
         let result = maker.make_data_type(&schema, None, None);
 
         assert!(result.is_err());
@@ -2623,7 +2715,7 @@ mod tests {
     fn test_resolve_illegal_promotion_double_to_float_errors() {
         let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Double));
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Float));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&writer_schema, Some(&reader_schema), None);
         assert!(result.is_err());
         match result {
@@ -2644,7 +2736,7 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Double)),
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(result.codec, Codec::Float64));
         assert_eq!(
@@ -2669,7 +2761,7 @@ mod tests {
             mk_primitive(PrimitiveType::Long),
         ]);
         let reader = mk_primitive(PrimitiveType::Bytes);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(dt.codec(), Codec::Binary));
         let resolved = match dt.resolution {
@@ -2693,7 +2785,7 @@ mod tests {
             mk_primitive(PrimitiveType::Long),
             mk_primitive(PrimitiveType::Double),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         let resolved = match dt.resolution {
             Some(ResolutionInfo::Union(u)) => u,
@@ -2714,7 +2806,7 @@ mod tests {
             mk_primitive(PrimitiveType::Long),
             mk_primitive(PrimitiveType::String),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         let resolved = match dt.resolution {
             Some(ResolutionInfo::Union(u)) => u,
@@ -2771,7 +2863,7 @@ mod tests {
             })),
             mk_primitive(PrimitiveType::String),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Default::default());
         let dt = maker
             .make_data_type(&writer, Some(&reader), None)
             .expect("resolution should succeed");
@@ -2792,16 +2884,13 @@ mod tests {
         };
         match resolution {
             ResolutionInfo::Record(ResolvedRecord {
-                writer_to_reader,
+                writer_fields,
                 default_fields,
-                skip_fields,
             }) => {
-                assert_eq!(writer_to_reader.len(), 1);
-                assert_eq!(writer_to_reader[0], Some(0));
+                assert_eq!(writer_fields.len(), 1);
+                assert_eq!(writer_fields[0], ResolvedField::ToReader(0));
                 assert_eq!(default_fields.len(), 1);
                 assert_eq!(default_fields[0], 1);
-                assert_eq!(skip_fields.len(), 1);
-                assert_eq!(skip_fields[0], None);
             }
             other => panic!("unexpected resolution {other:?}"),
         }
@@ -2871,7 +2960,7 @@ mod tests {
             })),
             mk_primitive(PrimitiveType::String),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Default::default());
         let dt = maker
             .make_data_type(&writer, Some(&reader), None)
             .expect("resolution should succeed");
@@ -2888,16 +2977,13 @@ mod tests {
         };
         match resolution {
             ResolutionInfo::Record(ResolvedRecord {
-                writer_to_reader,
+                writer_fields,
                 default_fields,
-                skip_fields,
             }) => {
-                assert_eq!(writer_to_reader.len(), 1);
-                assert_eq!(writer_to_reader[0], Some(0));
+                assert_eq!(writer_fields.len(), 1);
+                assert_eq!(writer_fields[0], ResolvedField::ToReader(0));
                 assert_eq!(default_fields.len(), 1);
                 assert_eq!(default_fields[0], 1);
-                assert_eq!(skip_fields.len(), 1);
-                assert_eq!(skip_fields[0], None);
             }
             other => panic!("unexpected resolution {other:?}"),
         }
@@ -2929,7 +3015,7 @@ mod tests {
             mk_primitive(PrimitiveType::String),
             mk_primitive(PrimitiveType::Null),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(dt.codec(), Codec::Utf8));
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
@@ -2957,7 +3043,7 @@ mod tests {
             mk_primitive(PrimitiveType::Double),
             mk_primitive(PrimitiveType::Null),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(dt.codec(), Codec::Float64));
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
@@ -2979,7 +3065,7 @@ mod tests {
     fn test_resolve_type_promotion() {
         let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Long));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
@@ -3016,7 +3102,7 @@ mod tests {
 
         let schema: Schema = serde_json::from_str(schema_str).unwrap();
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let avro_data_type = maker.make_data_type(&schema, None, None).unwrap();
 
         if let Codec::Struct(fields) = avro_data_type.codec() {
@@ -3096,7 +3182,7 @@ mod tests {
 
         let schema: Schema = serde_json::from_str(schema_str).unwrap();
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let avro_data_type = maker.make_data_type(&schema, None, None).unwrap();
 
         if let Codec::Struct(fields) = avro_data_type.codec() {
@@ -3152,7 +3238,7 @@ mod tests {
     fn test_resolve_from_writer_and_reader_defaults_root_name_for_non_record_reader() {
         let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let data_type = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("resolution should succeed");
@@ -3286,13 +3372,12 @@ mod tests {
             .parse_and_store_default(&serde_json::json!(1_000_000))
             .unwrap();
         assert_eq!(ltm, AvroLiteral::Long(1_000_000));
-        let mut dt_ts_milli = AvroDataType::new(Codec::TimestampMillis(true), HashMap::new(), None);
+        let mut dt_ts_milli = AvroDataType::new(Codec::TimestampMillis(None), HashMap::new(), None);
         let l1 = dt_ts_milli
             .parse_and_store_default(&serde_json::json!(123))
             .unwrap();
         assert_eq!(l1, AvroLiteral::Long(123));
-        let mut dt_ts_micro =
-            AvroDataType::new(Codec::TimestampMicros(false), HashMap::new(), None);
+        let mut dt_ts_micro = AvroDataType::new(Codec::TimestampMicros(None), HashMap::new(), None);
         let l2 = dt_ts_micro
             .parse_and_store_default(&serde_json::json!(456))
             .unwrap();
@@ -3531,7 +3616,7 @@ mod tests {
                 additional: r_add,
             },
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
@@ -3560,7 +3645,7 @@ mod tests {
             ])),
             attributes: Attributes::default(),
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
@@ -3592,7 +3677,7 @@ mod tests {
             size: 16,
             attributes: Attributes::default(),
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
@@ -3612,7 +3697,7 @@ mod tests {
                 additional: Default::default(),
             },
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Default::default());
         let dt = maker.make_data_type(&schema, None, None).unwrap();
         assert!(matches!(dt.codec(), Codec::IntervalMonthDayNano));
         assert_eq!(
@@ -3693,7 +3778,7 @@ mod tests {
             ],
             attributes: Attributes::default(),
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
             .make_data_type(&writer, Some(&reader), None)
             .expect("record resolution");
@@ -3714,11 +3799,18 @@ mod tests {
             Some(ResolutionInfo::Record(ref r)) => r.clone(),
             other => panic!("expected record resolution, got {other:?}"),
         };
-        assert_eq!(rec.writer_to_reader.as_ref(), &[Some(1), None, Some(0)]);
+        assert!(matches!(
+            &rec.writer_fields[..],
+            &[
+                ResolvedField::ToReader(1),
+                ResolvedField::Skip(_),
+                ResolvedField::ToReader(0),
+            ]
+        ));
         assert_eq!(rec.default_fields.as_ref(), &[2usize, 3usize]);
-        assert!(rec.skip_fields[0].is_none());
-        assert!(rec.skip_fields[2].is_none());
-        let skip1 = rec.skip_fields[1].as_ref().expect("skip field present");
+        let ResolvedField::Skip(skip1) = &rec.writer_fields[1] else {
+            panic!("should skip field 1")
+        };
         assert!(matches!(skip1.codec(), Codec::Utf8));
         let name_md = &fields[2].data_type().metadata;
         assert_eq!(
@@ -3767,7 +3859,7 @@ mod tests {
         };
         let writer_schema = Schema::Complex(ComplexType::Record(writer_record));
         let reader_schema = Schema::Complex(ComplexType::Record(reader_record));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("record alias resolution should succeed");
@@ -3799,7 +3891,7 @@ mod tests {
         };
         let writer_schema = Schema::Complex(ComplexType::Enum(writer_enum));
         let reader_schema = Schema::Complex(ComplexType::Enum(reader_enum));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("enum alias resolution should succeed");
@@ -3823,7 +3915,7 @@ mod tests {
         };
         let writer_schema = Schema::Complex(ComplexType::Fixed(writer_fixed));
         let reader_schema = Schema::Complex(ComplexType::Fixed(reader_fixed));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("fixed alias resolution should succeed");

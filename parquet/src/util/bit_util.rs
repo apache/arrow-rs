@@ -659,9 +659,15 @@ impl BitReader {
     ///
     /// Returns `None` if there's not enough bytes in the stream. `Some` otherwise.
     pub fn get_vlq_int(&mut self) -> Option<i64> {
+        // Align to byte boundary once, then read bytes directly
+        self.byte_offset = self.get_byte_offset();
+        self.bit_offset = 0;
+
+        let buf = &self.buffer[self.byte_offset..];
         let mut shift = 0;
         let mut v: i64 = 0;
-        while let Some(byte) = self.get_aligned::<u8>(1) {
+
+        for (i, &byte) in buf.iter().enumerate() {
             v |= ((byte & 0x7F) as i64) << shift;
             shift += 7;
             assert!(
@@ -669,6 +675,7 @@ impl BitReader {
                 "Num of bytes exceed MAX_VLQ_BYTE_LEN ({MAX_VLQ_BYTE_LEN})"
             );
             if byte & 0x80 == 0 {
+                self.byte_offset += i + 1;
                 return Some(v);
             }
         }
