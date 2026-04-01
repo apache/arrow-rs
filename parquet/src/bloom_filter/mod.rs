@@ -531,7 +531,8 @@ impl Sbbf {
         total_fpp / half as f64
     }
 
-    /// Fold the bloom filter down to the smallest size that still meets the target FPP.
+    /// Fold the bloom filter down to the smallest size that still meets the target FPP 
+    /// (False Positive Percentage)
     ///
     /// Repeatedly halves the filter by merging adjacent block pairs (see `fold_once`),
     /// stopping when the next fold would cause the estimated FPP to exceed `target_fpp`, or
