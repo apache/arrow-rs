@@ -149,6 +149,24 @@ fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     Ok(())
 }
 
+fn extract_arrow_c_array_capsules<'py>(
+    value: &Bound<'py, PyAny>,
+) -> PyResult<(Bound<'py, PyCapsule>, Bound<'py, PyCapsule>)> {
+    let tuple = value.call_method0("__arrow_c_array__")?;
+
+    if !tuple.is_instance_of::<PyTuple>() {
+        return Err(PyTypeError::new_err(
+            "Expected __arrow_c_array__ to return a tuple of (schema, array) capsules.",
+        ));
+    }
+
+    tuple.extract().map_err(|_| {
+        PyTypeError::new_err(
+            "Expected __arrow_c_array__ to return a tuple of (schema, array) capsules.",
+        )
+    })
+}
+
 impl FromPyArrow for DataType {
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
         // Newer versions of PyArrow as well as other libraries with Arrow data implement this
@@ -245,8 +263,7 @@ impl FromPyArrow for ArrayData {
         // method, so prefer it over _export_to_c.
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
         if value.hasattr("__arrow_c_array__")? {
-            let (schema_capsule, array_capsule) =
-                value.call_method0("__arrow_c_array__")?.extract()?;
+            let (schema_capsule, array_capsule) = extract_arrow_c_array_capsules(value)?;
 
             validate_pycapsule(&schema_capsule, "arrow_schema")?;
             validate_pycapsule(&array_capsule, "arrow_array")?;
@@ -324,8 +341,7 @@ impl FromPyArrow for RecordBatch {
         // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
 
         if value.hasattr("__arrow_c_array__")? {
-            let (schema_capsule, array_capsule) =
-                value.call_method0("__arrow_c_array__")?.extract()?;
+            let (schema_capsule, array_capsule) = extract_arrow_c_array_capsules(value)?;
 
             validate_pycapsule(&schema_capsule, "arrow_schema")?;
             validate_pycapsule(&array_capsule, "arrow_array")?;
