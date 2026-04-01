@@ -555,7 +555,7 @@ impl Sbbf {
     /// Separating the OR from the popcount lets the compiler emit vectorized popcount
     /// instructions (e.g., `cnt.16b` on ARM NEON) instead of per-word scalar popcount.
     fn estimated_fpp_after_fold(&self) -> f64 {
-        let half = self.0.len() / 2;
+        let half = self.0.len() as f64 / 2.0;
         let mut total_fpp: f64 = 0.0;
         for pair in self.0.chunks_exact(2) {
             let merged = pair[0] | pair[1];
@@ -563,7 +563,7 @@ impl Sbbf {
             let block_fill = f64::from(set_bits) / 256.0;
             total_fpp += block_fill.powi(8);
         }
-        total_fpp / half as f64
+        total_fpp / half
     }
 
     /// Fold the bloom filter down to the smallest size that still meets the target FPP
