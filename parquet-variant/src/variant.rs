@@ -154,6 +154,24 @@ impl Deref for ShortString<'_> {
 /// [specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 /// [Variant Shredding specification]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md
 ///
+/// # Casting Semantics
+///
+/// Scalar conversion semantics intentionally follow Arrow cast behavior where applicable.
+/// Conversions in this module delegate to Arrow compute cast helpers such as
+/// [`num_cast`], [`cast_num_to_bool`], [`single_bool_to_numeric`], and
+/// [`cast_single_string_to_boolean_default`].
+///
+/// - [`Self::as_boolean`] accepts boolean, numeric, and string variants.
+///   Numeric zero maps to `false`; non-zero maps to `true`. String parsing follows
+///   Arrow UTF8-to-boolean cast rules.
+/// - Numeric accessors such as [`Self::as_int8`], [`Self::as_int64`], [`Self::as_u8`],
+///   [`Self::as_u64`], [`Self::as_f16`], [`Self::as_f32`], and [`Self::as_f64`] accept
+///   boolean and numeric variants (integers, floating-point, and decimals with scale `0`).
+///   They return `None` when conversion is not possible.
+/// - Decimal accessors such as [`Self::as_decimal4`], [`Self::as_decimal8`], and
+///   [`Self::as_decimal16`] accept compatible decimal variants and integer variants.
+///   They return `None` when conversion is not possible.
+///
 /// # Examples:
 ///
 /// ## Creating `Variant` from Rust Types
