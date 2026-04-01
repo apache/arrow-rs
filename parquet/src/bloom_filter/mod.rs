@@ -528,8 +528,9 @@ impl Sbbf {
             len >= 2,
             "Cannot fold a bloom filter with fewer than 2 blocks"
         );
-        assert!(
-            len % 2 == 0,
+        assert_eq!(
+            len % 2,
+            0,
             "Cannot fold a bloom filter with an odd number of blocks"
         );
         let half = len / 2;
@@ -555,7 +556,11 @@ impl Sbbf {
     /// Separating the OR from the popcount lets the compiler emit vectorized popcount
     /// instructions (e.g., `cnt.16b` on ARM NEON) instead of per-word scalar popcount.
     fn estimated_fpp_after_fold(&self) -> f64 {
-        let half = self.0.len() as f64 / 2.0;
+        assert_eq!(
+            self.0.len() % 2,
+            0,
+            "Cannot estimate fold FPP for a bloom filter with an odd number of blocks"
+        );
         let mut total_fpp: f64 = 0.0;
         for pair in self.0.chunks_exact(2) {
             let merged = pair[0] | pair[1];
@@ -563,6 +568,7 @@ impl Sbbf {
             let block_fill = f64::from(set_bits) / 256.0;
             total_fpp += block_fill.powi(8);
         }
+        let half = self.0.len() as f64 / 2.0;
         total_fpp / half
     }
 
