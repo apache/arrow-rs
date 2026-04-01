@@ -303,7 +303,7 @@ fn optimal_num_of_bytes(num_bytes: usize) -> usize {
 // we have m = - k * n / ln(1 - fpp ^ (1 / k))
 // where k = number of hash functions, m = number of bits, n = number of distinct values
 #[inline]
-pub(crate) fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
+fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
     let num_bits = -8.0 * ndv as f64 / (1.0 - fpp.powf(1.0 / 8.0)).ln();
     num_bits as usize
 }
@@ -490,90 +490,8 @@ impl Sbbf {
         self.0.len()
     }
 
-    /// Fold the bloom filter once, halving its size by merging adjacent block pairs.
-    ///
-    /// This implements an elementary folding operation for Split Block Bloom
-    /// Filters. Each pair of adjacent blocks is combined via bitwise OR:
-    ///
-    /// ```text
-    /// folded[i] = blocks[2*i] | blocks[2*i + 1]    for 0 <= i < num_blocks/2
-    /// ```
-    ///
-    /// ## Why adjacent pairs (not halves)?
-    ///
-    /// SBBFs use **multiplicative** hashing for block selection:
-    ///
-    /// ```text
-    /// block_index = ((hash >> 32) * num_blocks) >> 32
-    /// ```
-    ///
-    /// When `num_blocks` is halved, the new index becomes `floor(original_index / 2)`.
-    /// Therefore blocks `2i` and `2i+1` map to the same position `i` in the folded filter.
-    ///
-    /// This differs from standard Bloom filter folding, which merges the two halves
-    /// (`B[i] | B[i + m/2]`) because standard filters use modular hashing where
-    /// `h(x) mod (m/2)` maps indices `i` and `i + m/2` to the same position.
-    ///
-    /// ## References
-    ///
-    /// 1. Sailhan, F. & Stehr, M-O. "Folding and Unfolding Bloom Filters",
-    ///    IEEE iThings 2012. <https://doi.org/10.1109/GreenCom.2012.16>
-    ///
-    /// # Panics
-    ///
-    /// Panics if the filter has fewer than 2 blocks.
-    fn fold_once(&mut self) {
-        let len = self.0.len();
-        assert!(
-            len >= 2,
-            "Cannot fold a bloom filter with fewer than 2 blocks"
-        );
-        assert_eq!(
-            len % 2,
-            0,
-            "Cannot fold a bloom filter with an odd number of blocks"
-        );
-        let half = len / 2;
-        for i in 0..half {
-            // Copy both blocks to stack locals before writing. This eliminates
-            // aliasing between self.0[i] and self.0[2*i], allowing the compiler
-            // to vectorize the OR into SIMD instructions.
-            let merged = self.0[2 * i] | self.0[2 * i + 1];
-            self.0[i] = merged;
-        }
-        self.0.truncate(half);
-    }
-
-    /// Estimate the FPP that would result from folding once, without mutating the filter.
-    ///
-    /// SBBF membership checks are per-block (`k=8` bit checks within one 256-bit block),
-    /// so FPP is the average per-block false positive probability:
-    ///
-    /// ```text
-    /// FPP = (1 / num_blocks) * sum_i (set_bits_in_block_i / 256)^8
-    /// ```
-    ///
-    /// Separating the OR from the popcount lets the compiler emit vectorized popcount
-    /// instructions (e.g., `cnt.16b` on ARM NEON) instead of per-word scalar popcount.
-    fn estimated_fpp_after_fold(&self) -> f64 {
-        assert_eq!(
-            self.0.len() % 2,
-            0,
-            "Cannot estimate fold FPP for a bloom filter with an odd number of blocks"
-        );
-        let mut total_fpp: f64 = 0.0;
-        for pair in self.0.chunks_exact(2) {
-            let merged = pair[0] | pair[1];
-            let set_bits = merged.count_ones();
-            let block_fill = f64::from(set_bits) / 256.0;
-            total_fpp += block_fill.powi(8);
-        }
-        let half = self.0.len() as f64 / 2.0;
-        total_fpp / half
-    }
-
     /// Fold the bloom filter down to the smallest size that still meets the target FPP
-    /// (False Positive Percentage)
+    /// (False Positive Percentage).
     ///
     /// Repeatedly halves the filter by merging adjacent block pairs via bitwise OR,
     /// stopping when the next fold would cause the estimated FPP to exceed `target_fpp`, or
@@ -594,22 +512,9 @@ impl Sbbf {
     /// folded[i] = blocks[2*i] | blocks[2*i + 1]
     /// ```
     ///
-    /// The FPP after a fold is estimated as the average per-block false positive probability:
-    ///
-    /// ```text
-    /// FPP = (1/b) * sum_i (set_bits_in_block_i / 256)^8
-    /// ```
-    ///
-    /// ## Implementation
-    ///
-    /// Uses a two-phase approach:
-    /// 1. **Tree reduction**: Simulate merges in a scratch buffer to determine how many
-    ///    folds are safe. This reads the original data once, then works on progressively
-    ///    smaller scratch — total work O(N). At each level, the FPP is estimated via
-    ///    popcount of the merged blocks.
-    /// 2. **Single in-place fold**: Once the target fold count is known, merge groups of
-    ///    `2^num_folds` adjacent blocks in a single pass over the original data, then
-    ///    truncate. This avoids re-reading the data at each fold level.
+    /// This differs from standard Bloom filter folding, which merges the two halves
+    /// (`B[i] | B[i + m/2]`) because standard filters use modular hashing where
+    /// `h(x) mod (m/2)` maps indices `i` and `i + m/2` to the same position.
     ///
     /// ## Correctness
     ///
@@ -622,19 +527,34 @@ impl Sbbf {
     /// - Sailhan, F. & Stehr, M-O. "Folding and Unfolding Bloom Filters",
     ///   IEEE iThings 2012. <https://doi.org/10.1109/GreenCom.2012.16>
     pub fn fold_to_target_fpp(&mut self, target_fpp: f64) {
+        let num_folds = self.num_folds_for_target_fpp(target_fpp);
+        if num_folds > 0 {
+            self.fold_n(num_folds);
+        }
+    }
+
+    /// Determine how many folds can be applied without exceeding `target_fpp`.
+    ///
+    /// Simulates merges via a tree reduction on a scratch buffer: reads the original
+    /// data once (into pairwise-OR'd scratch), then works on progressively smaller
+    /// scratch — total work O(N).
+    ///
+    /// The FPP after a fold is estimated as the average per-block false positive probability.
+    /// SBBF membership checks perform `k=8` bit checks within one 256-bit block, so:
+    ///
+    /// ```text
+    /// FPP = (1/b) * sum_i (set_bits_in_block_i / 256)^8
+    /// ```
+    fn num_folds_for_target_fpp(&self, target_fpp: f64) -> u32 {
         let len = self.0.len();
         if len < 2 {
-            return;
+            return 0;
         }
 
-        // Phase 1: Determine how many folds are safe by simulating merges
-        // in a scratch buffer. This reads the original data once, then works
-        // on progressively smaller scratch — total work O(N).
         let mut scratch: Vec<Block> = self.0.chunks_exact(2).map(|p| p[0] | p[1]).collect();
         let mut num_folds = 0u32;
 
         loop {
-            // Check FPP at this fold level
             let num_blocks = scratch.len() as f64;
             let mut total_fpp: f64 = 0.0;
             for block in &scratch {
@@ -649,21 +569,32 @@ impl Sbbf {
             if scratch.len() < 2 {
                 break;
             }
-            // Merge scratch pairwise for next level
             let new_len = scratch.len() / 2;
             for i in 0..new_len {
                 scratch[i] = scratch[2 * i] | scratch[2 * i + 1];
             }
             scratch.truncate(new_len);
         }
-        drop(scratch);
 
-        if num_folds == 0 {
-            return;
-        }
+        num_folds
+    }
 
-        // Phase 2: Single in-place fold to the target level.
+    /// Fold the filter `num_folds` times in a single pass.
+    ///
+    /// Merges groups of `2^num_folds` adjacent blocks via bitwise OR, producing
+    /// `len / 2^num_folds` output blocks. The original allocation is reused.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `num_folds` is 0 or would reduce the filter below 1 block.
+    fn fold_n(&mut self, num_folds: u32) {
+        assert!(num_folds > 0, "num_folds must be at least 1");
+        let len = self.0.len();
         let group_size = 1usize << num_folds;
+        assert!(
+            group_size <= len,
+            "Cannot fold {num_folds} times: need at least {group_size} blocks, have {len}"
+        );
         let new_len = len / group_size;
         for i in 0..new_len {
             let start = i * group_size;
@@ -849,12 +780,12 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_once_halves_block_count() {
+    fn test_fold_n_halves_block_count() {
         let mut sbbf = Sbbf::new_with_num_of_bytes(1024); // 32 blocks
         assert_eq!(sbbf.num_blocks(), 32);
-        sbbf.fold_once();
+        sbbf.fold_n(1);
         assert_eq!(sbbf.num_blocks(), 16);
-        sbbf.fold_once();
+        sbbf.fold_n(1);
         assert_eq!(sbbf.num_blocks(), 8);
     }
 
@@ -922,10 +853,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Cannot fold a bloom filter with fewer than 2 blocks")]
-    fn test_fold_once_panics_at_minimum_size() {
+    #[should_panic(expected = "Cannot fold 1 times: need at least 2 blocks, have 1")]
+    fn test_fold_n_panics_at_minimum_size() {
         let mut sbbf = Sbbf::new_with_num_of_bytes(32); // 1 block (minimum)
-        sbbf.fold_once();
+        sbbf.fold_n(1);
     }
 
     #[test]
@@ -1032,7 +963,7 @@ mod tests {
 
             // verify the actual blocks match
             let mut folded = original.clone();
-            folded.fold_once();
+            folded.fold_n(1);
             assert_eq!(folded.num_blocks(), half);
 
             let mut fresh = Sbbf::new_with_num_of_bytes(half * 32);
@@ -1062,7 +993,7 @@ mod tests {
         }
 
         for expected_blocks in [256, 128, 64, 32, 16, 8, 4, 2, 1] {
-            filter.fold_once();
+            filter.fold_n(1);
             assert_eq!(filter.num_blocks(), expected_blocks);
 
             let mut fresh = Sbbf::new_with_num_of_bytes(expected_blocks * 32);
@@ -1134,7 +1065,7 @@ mod tests {
 
         // check FPP at each fold level
         for expected_blocks in [256, 128, 64, 32, 16, 8, 4, 2, 1] {
-            folded.fold_once();
+            folded.fold_n(1);
             assert_eq!(folded.num_blocks(), expected_blocks);
 
             // build a fresh filter of the same size with the same values
