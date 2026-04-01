@@ -4309,40 +4309,17 @@ mod test {
             .with_cast_options(cast_options);
 
         let result = variant_get(&variant_array, options).unwrap();
-        let element_struct = result
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap()
+        let list_array = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = list_array
             .values()
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap();
-
-        let value = element_struct
-            .column_by_name("value")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<BinaryViewArray>()
-            .unwrap();
-        let typed_value = element_struct
-            .column_by_name("typed_value")
-            .unwrap()
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
 
-        assert_eq!(typed_value.len(), 3);
-        assert_eq!(typed_value.value(0), 1);
-        assert!(typed_value.is_null(1));
-        assert_eq!(typed_value.value(2), 3);
-
-        assert!(value.is_null(0));
-        assert!(value.is_valid(1));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value.value(1)),
-            Variant::Null
-        );
-        assert!(value.is_null(2));
+        assert_eq!(values.len(), 3);
+        assert_eq!(values.value(0), 1);
+        assert!(values.is_null(1));
+        assert_eq!(values.value(2), 3);
     }
 
     #[test]
