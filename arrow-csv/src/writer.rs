@@ -1063,54 +1063,23 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
     #[test]
     fn test_write_csv_with_lf_terminator() {
-        let schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-            Field::new("c2", DataType::UInt32, false),
-        ]);
-
-        let c1 = StringArray::from(vec!["hello", "world"]);
-        let c2 = PrimitiveArray::<UInt32Type>::from(vec![1, 2]);
-
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
-
-        let mut buf = Vec::new();
-        let mut writer = WriterBuilder::new()
-            .with_line_terminator(Terminator::Any(b'\n'))
-            .build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
-
-        let output = String::from_utf8(buf).unwrap();
+        let output = write_batch_with_terminator(Terminator::Any(b'\n'));
         assert_eq!(output, "c1,c2\nhello,1\nworld,2\n");
     }
 
     #[test]
     fn test_write_csv_with_crlf_terminator() {
-        let schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-            Field::new("c2", DataType::UInt32, false),
-        ]);
-
-        let c1 = StringArray::from(vec!["hello", "world"]);
-        let c2 = PrimitiveArray::<UInt32Type>::from(vec![1, 2]);
-
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
-
-        let mut buf = Vec::new();
-        let mut writer = WriterBuilder::new()
-            .with_line_terminator(Terminator::CRLF)
-            .build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
-
-        let output = String::from_utf8(buf).unwrap();
+        let output = write_batch_with_terminator(Terminator::CRLF);
         assert_eq!(output, "c1,c2\r\nhello,1\r\nworld,2\r\n");
     }
 
     #[test]
     fn test_write_csv_with_any_terminator() {
+        let output = write_batch_with_terminator(Terminator::Any(b'|'));
+        assert_eq!(output, "c1,c2|hello,1|world,2|");
+    }
+
+    fn write_batch_with_terminator(terminator: Terminator) -> String {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, false),
             Field::new("c2", DataType::UInt32, false),
@@ -1124,13 +1093,12 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
         let mut buf = Vec::new();
         let mut writer = WriterBuilder::new()
-            .with_line_terminator(Terminator::Any(b'|'))
+            .with_line_terminator(terminator)
             .build(&mut buf);
         writer.write(&batch).unwrap();
         drop(writer);
 
-        let output = String::from_utf8(buf).unwrap();
-        assert_eq!(output, "c1,c2|hello,1|world,2|");
+        String::from_utf8(buf).unwrap()
     }
 
     #[test]
