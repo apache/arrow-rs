@@ -150,13 +150,13 @@ fn build_wide_values(rows: usize, fields: usize) -> Vec<Value> {
 fn bench_decode_wide_object(c: &mut Criterion) {
     let data = build_wide_json(ROWS, WIDE_FIELDS);
     let schema = build_schema(WIDE_FIELDS);
-    bench_decode_schema(c, "decode_wide_object_i64_json", &data, schema);
+    bench_decode_schema(c, "decode_wide_object_json", &data, schema);
 }
 
 fn bench_serialize_wide_object(c: &mut Criterion) {
     let values = build_wide_values(ROWS, WIDE_FIELDS);
     let schema = build_schema(WIDE_FIELDS);
-    bench_serialize_values(c, "decode_wide_object_i64_serialize", &values, schema);
+    bench_serialize_values(c, "decode_wide_object_serialize", &values, schema);
 }
 
 fn bench_decode_binary(c: &mut Criterion, name: &str, data: &[u8], field: Arc<Field>) {
@@ -296,16 +296,11 @@ fn bench_decode_list(c: &mut Criterion) {
         let schema = Arc::new(Schema::new(vec![Field::new("list", dt, false)]));
         bench_decode_schema(
             c,
-            &format!("decode_short_{label}_i64_json"),
+            &format!("decode_{label}_short_json"),
             &short_data,
             schema.clone(),
         );
-        bench_decode_schema(
-            c,
-            &format!("decode_long_{label}_i64_json"),
-            &long_data,
-            schema,
-        );
+        bench_decode_schema(c, &format!("decode_{label}_long_json"), &long_data, schema);
     }
 }
 
@@ -321,13 +316,13 @@ fn bench_serialize_list(c: &mut Criterion) {
         let schema = Arc::new(Schema::new(vec![Field::new("list", dt, false)]));
         bench_serialize_values(
             c,
-            &format!("decode_short_{label}_i64_serialize"),
+            &format!("decode_{label}_short_serialize"),
             &short_values,
             schema.clone(),
         );
         bench_serialize_values(
             c,
-            &format!("decode_long_{label}_i64_serialize"),
+            &format!("decode_{label}_long_serialize"),
             &long_values,
             schema,
         );
@@ -389,10 +384,10 @@ fn bench_decode_map(c: &mut Criterion) {
     let schema = build_map_schema();
 
     let small_data = build_map_json(ROWS, SMALL_MAP_ENTRIES);
-    bench_decode_schema(c, "decode_small_map_json", &small_data, schema.clone());
+    bench_decode_schema(c, "decode_map_small_json", &small_data, schema.clone());
 
     let large_data = build_map_json(ROWS, LARGE_MAP_ENTRIES);
-    bench_decode_schema(c, "decode_large_map_json", &large_data, schema);
+    bench_decode_schema(c, "decode_map_large_json", &large_data, schema);
 }
 
 fn bench_serialize_map(c: &mut Criterion) {
@@ -401,13 +396,13 @@ fn bench_serialize_map(c: &mut Criterion) {
     let small_values = build_map_values(ROWS, SMALL_MAP_ENTRIES);
     bench_serialize_values(
         c,
-        "decode_small_map_serialize",
+        "decode_map_small_serialize",
         &small_values,
         schema.clone(),
     );
 
     let large_values = build_map_values(ROWS, LARGE_MAP_ENTRIES);
-    bench_serialize_values(c, "decode_large_map_serialize", &large_values, schema);
+    bench_serialize_values(c, "decode_map_large_serialize", &large_values, schema);
 }
 
 fn build_ree_json(rows: usize, run_length: usize) -> Vec<u8> {
@@ -442,10 +437,10 @@ fn bench_decode_ree(c: &mut Criterion) {
     let schema = build_ree_schema();
 
     let short_data = build_ree_json(ROWS, SHORT_REE_RUN_LENGTH);
-    bench_decode_schema(c, "decode_short_ree_runs_json", &short_data, schema.clone());
+    bench_decode_schema(c, "decode_ree_short_json", &short_data, schema.clone());
 
     let long_data = build_ree_json(ROWS, LONG_REE_RUN_LENGTH);
-    bench_decode_schema(c, "decode_long_ree_runs_json", &long_data, schema);
+    bench_decode_schema(c, "decode_ree_long_json", &long_data, schema);
 }
 
 fn bench_serialize_ree(c: &mut Criterion) {
@@ -454,13 +449,13 @@ fn bench_serialize_ree(c: &mut Criterion) {
     let short_values = build_ree_values(ROWS, SHORT_REE_RUN_LENGTH);
     bench_serialize_values(
         c,
-        "decode_short_ree_runs_serialize",
+        "decode_ree_short_serialize",
         &short_values,
         schema.clone(),
     );
 
     let long_values = build_ree_values(ROWS, LONG_REE_RUN_LENGTH);
-    bench_serialize_values(c, "decode_long_ree_runs_serialize", &long_values, schema);
+    bench_serialize_values(c, "decode_ree_long_serialize", &long_values, schema);
 }
 
 fn bench_schema_inference(c: &mut Criterion) {
