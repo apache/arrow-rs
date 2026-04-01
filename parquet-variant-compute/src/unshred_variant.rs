@@ -76,8 +76,11 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
         if array.is_null(i) {
             value_builder.append_null();
         } else {
-            let metadata_bytes = binary_array_value(metadata.as_ref(), i)
-                .expect("metadata field must be a binary-like array");
+            let metadata_bytes = binary_array_value(metadata.as_ref(), i).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "metadata field must be a binary-like array".to_string(),
+                )
+            })?;
             let metadata = VariantMetadata::new(metadata_bytes);
             let mut value_builder = value_builder.builder_ext(&metadata);
             row_builder.append_row(&mut value_builder, &metadata, i)?;
@@ -330,8 +333,11 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
         if self.value.is_null(index) {
             builder.append_null();
         } else {
-            let value_bytes = binary_array_value(self.value.as_ref(), index)
-                .expect("value field must be a binary-like array");
+            let value_bytes = binary_array_value(self.value.as_ref(), index).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "value field must be a binary-like array".to_string(),
+                )
+            })?;
             let variant = Variant::new_with_metadata(metadata.clone(), value_bytes);
             builder.append_value(variant);
         }
@@ -354,11 +360,17 @@ trait AppendToVariantBuilder: Array {
 macro_rules! handle_unshredded_case {
     ($self:expr, $builder:expr, $metadata:expr, $index:expr, $partial_shredding:expr) => {{
         let value = $self.value.as_ref().filter(|v| v.is_valid($index));
-        let value = value.map(|v| {
-            let bytes = binary_array_value(v.as_ref(), $index)
-                .expect("value field must be a binary-like array");
-            Variant::new_with_metadata($metadata.clone(), bytes)
-        });
+        let value = value
+            .map(|v| {
+                let bytes = binary_array_value(v.as_ref(), $index).ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "value field must be a binary-like array, instead got {}",
+                        v.data_type(),
+                    ))
+                })?;
+                Result::Ok(Variant::new_with_metadata($metadata.clone(), bytes))
+            })
+            .transpose()?;
 
         // If typed_value is null, handle unshredded case and return early
         if $self.typed_value.is_null($index) {

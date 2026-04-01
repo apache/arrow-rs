@@ -51,17 +51,12 @@ pub(crate) fn binary_array_value(array: &dyn Array, index: usize) -> Option<&[u8
     }
 }
 
-/// Returns `true` if the data type is `Binary`, `LargeBinary`, or `BinaryView`.
-fn is_binary_like(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-    )
-}
-
 /// Validates that an array has a binary-like data type.
 fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
-    if is_binary_like(array.data_type()) {
+    if matches!(
+        array.data_type(),
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    ) {
         Ok(())
     } else {
         Err(ArrowError::InvalidArgumentError(format!(
@@ -397,10 +392,19 @@ impl VariantArray {
             }
             // Otherwise fall back to value, if available
             (_, Some(value)) if value.is_valid(index) => {
-                let metadata = binary_array_value(self.metadata.as_ref(), index)
-                    .expect("metadata field must be a binary-like array");
-                let value = binary_array_value(value.as_ref(), index)
-                    .expect("value field must be a binary-like array");
+                let metadata =
+                    binary_array_value(self.metadata.as_ref(), index).ok_or_else(|| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "metadata field must be a binary-like array, instead got {}",
+                            self.metadata.data_type(),
+                        ))
+                    })?;
+                let value = binary_array_value(value.as_ref(), index).ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "value field must be a binary-like array, instead got {}",
+                        value.data_type(),
+                    ))
+                })?;
                 Ok(Variant::new(metadata, value))
             }
             // It is technically invalid for neither value nor typed_value fields to be available,
@@ -983,9 +987,19 @@ fn typed_value_to_variant<'a>(
             let value = array.value(index);
             Ok(Uuid::from_slice(value).unwrap().into()) // unwrap is safe: slice is always 16 bytes
         }
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-            let value = binary_array_value(typed_value.as_ref(), index)
-                .expect("match arm guarantees the array is binary-like");
+        DataType::Binary => {
+            let array = typed_value.as_binary::<i32>();
+            let value = array.value(index);
+            Ok(Variant::from(value))
+        }
+        DataType::LargeBinary => {
+            let array = typed_value.as_binary::<i64>();
+            let value = array.value(index);
+            Ok(Variant::from(value))
+        }
+        DataType::BinaryView => {
+            let array = typed_value.as_binary_view();
+            let value = array.value(index);
             Ok(Variant::from(value))
         }
         DataType::Utf8 => {
