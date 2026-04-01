@@ -604,7 +604,7 @@ impl Sbbf {
             let start = i * group_size;
             let mut merged = self.0[start];
             for j in 1..group_size {
-                merged = merged | self.0[start + j];
+                merged |= self.0[start + j];
             }
             self.0[i] = merged;
         }
