@@ -3172,7 +3172,7 @@ mod tests {
         // NDV smaller than actual distinct values — tests the underestimate path
         let mut options = RoundTripOptions::new(array, false);
         options.bloom_filter = true;
-        options.bloom_filter_ndv = Some(10);
+        options.bloom_filter_ndv = Some(3);
 
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
