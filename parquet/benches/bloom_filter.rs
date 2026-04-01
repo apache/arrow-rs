@@ -79,5 +79,35 @@ fn bench_insert_and_fold(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_fold_to_target_fpp, bench_insert_and_fold);
+fn bench_insert_only(c: &mut Criterion) {
+    let mut group = c.benchmark_group("insert_only");
+
+    let initial_ndv = 1_000_000u64;
+    let fpp = 0.05;
+
+    for num_values in [1_000u64, 10_000, 100_000] {
+        group.throughput(Throughput::Elements(num_values));
+        group.bench_with_input(
+            BenchmarkId::new("values", num_values),
+            &num_values,
+            |b, &num_values| {
+                b.iter(|| {
+                    let mut sbbf = Sbbf::new_with_ndv_fpp(initial_ndv, fpp).unwrap();
+                    for i in 0..num_values {
+                        sbbf.insert(&i);
+                    }
+                    sbbf
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_fold_to_target_fpp,
+    bench_insert_and_fold,
+    bench_insert_only
+);
 criterion_main!(benches);
