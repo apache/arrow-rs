@@ -21,7 +21,7 @@ use std::ops::Range;
 
 use arrow_array::{Array, ArrayRef};
 use arrow_buffer::BooleanBuffer;
-use arrow_schema::{ArrowError, SortOptions};
+use arrow_schema::{ArrowError, DataType, SortOptions};
 
 use crate::cmp::distinct;
 use crate::ord::make_comparator;
@@ -152,13 +152,30 @@ pub fn partition(columns: &[ArrayRef]) -> Result<Partitions, ArrowError> {
     Ok(Partitions(Some(acc)))
 }
 
+/// Returns true if `distinct` (via `compare_op`) can handle this data type.
+///
+/// `compare_op` unwraps at most one level of dictionary, then dispatches on
+/// the leaf type. Anything else (REE, nested dictionary, nested/complex types)
+/// must go through `make_comparator` instead.
+fn supports_distinct(dt: &DataType) -> bool {
+    let leaf = match dt {
+        DataType::Dictionary(_, v) => v.as_ref(),
+        dt => dt,
+    };
+    !leaf.is_nested()
+        && !matches!(
+            leaf,
+            DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
+        )
+}
+
 /// Returns a mask with bits set whenever the value or nullability changes
 fn find_boundaries(v: &dyn Array) -> Result<BooleanBuffer, ArrowError> {
     let slice_len = v.len() - 1;
     let v1 = v.slice(0, slice_len);
     let v2 = v.slice(1, slice_len);
 
-    if !v.data_type().is_nested() {
+    if supports_distinct(v.data_type()) {
         return Ok(distinct(&v1, &v2)?.values().clone());
     }
     // Given that we're only comparing values, null ordering in the input or
@@ -304,6 +321,88 @@ mod tests {
             partition(&input).unwrap().ranges(),
             vec![(0..1), (1..2), (2..4), (4..5), (5..7), (7..8), (8..9)],
         );
+    }
+
+    #[test]
+    fn test_partition_run_end_encoded() {
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let values = StringArray::from(vec!["x", "y", "x"]);
+        let ree = RunArray::try_new(&run_ends, &values).unwrap();
+        // logical: ["x", "x", "y", "x", "x"]
+        let input = vec![Arc::new(ree) as _];
+        assert_eq!(partition(&input).unwrap().ranges(), vec![0..2, 2..3, 3..5],);
+    }
+
+    #[test]
+    fn test_partition_nested_run_end_encoded() {
+        // Inner REE (values of the outer): run_ends [1, 2, 3], values ["x", "y", "x"]
+        // logical length 3: ["x", "y", "x"]
+        let inner_run_ends = Int32Array::from(vec![1, 2, 3]);
+        let inner_values = StringArray::from(vec!["x", "y", "x"]);
+        let inner_ree = RunArray::try_new(&inner_run_ends, &inner_values).unwrap();
+
+        // Outer REE: run_ends [2, 3, 5], values = inner_ree (length 3)
+        // logical: rows 0,1 → inner[0]="x", row 2 → inner[1]="y", rows 3,4 → inner[2]="x"
+        // = ["x", "x", "y", "x", "x"]
+        let outer_run_ends = Int32Array::from(vec![2, 3, 5]);
+        let outer_ree = RunArray::try_new(&outer_run_ends, &inner_ree).unwrap();
+
+        let input = vec![Arc::new(outer_ree) as ArrayRef];
+        assert_eq!(partition(&input).unwrap().ranges(), vec![0..2, 2..3, 3..5]);
+    }
+
+    #[test]
+    fn test_partition_ree_with_dictionary_values() {
+        // Dictionary values: keys [0, 1, 0], dict ["x", "y"] → logical ["x", "y", "x"]
+        let dict_values = StringArray::from(vec!["x", "y"]);
+        let keys = Int32Array::from(vec![0, 1, 0]);
+        let dict = DictionaryArray::try_new(keys, Arc::new(dict_values)).unwrap();
+
+        // REE wrapping dict: run_ends [2, 3, 5] → logical [dict[0], dict[0], dict[1], dict[2], dict[2]]
+        // = ["x", "x", "y", "x", "x"]
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let ree = RunArray::try_new(&run_ends, &dict).unwrap();
+        let input = vec![Arc::new(ree) as ArrayRef];
+        assert_eq!(partition(&input).unwrap().ranges(), vec![0..2, 2..3, 3..5],);
+    }
+
+    #[test]
+    fn test_partition_dictionary() {
+        let values = StringArray::from(vec!["x", "y"]);
+        let keys = Int32Array::from(vec![0, 0, 1, 0, 0]);
+        let dict = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+        // logical: ["x", "x", "y", "x", "x"]
+        let input = vec![Arc::new(dict) as _];
+        assert_eq!(partition(&input).unwrap().ranges(), vec![0..2, 2..3, 3..5],);
+    }
+
+    #[test]
+    fn test_partition_nested_dictionary() {
+        let inner_values = StringArray::from(vec!["x", "y"]);
+        let inner_keys = Int32Array::from(vec![0, 1, 0]);
+        let inner_dict = DictionaryArray::try_new(inner_keys, Arc::new(inner_values)).unwrap();
+
+        // Outer dict keys index into inner dict's logical values: ["x", "y", "x"]
+        // keys [0, 0, 1, 2, 2] → logical ["x", "x", "y", "x", "x"]
+        let outer_keys = Int32Array::from(vec![0, 0, 1, 2, 2]);
+        let outer_dict = DictionaryArray::try_new(outer_keys, Arc::new(inner_dict)).unwrap();
+        let input = vec![Arc::new(outer_dict) as ArrayRef];
+        assert_eq!(partition(&input).unwrap().ranges(), vec![0..2, 2..3, 3..5],);
+    }
+
+    #[test]
+    fn test_partition_dictionary_with_ree_values() {
+        // REE values: run_ends [2, 3], values ["x", "y"] → logical ["x", "x", "y"]
+        let run_ends = Int32Array::from(vec![2, 3]);
+        let str_values = StringArray::from(vec!["x", "y"]);
+        let ree = RunArray::try_new(&run_ends, &str_values).unwrap();
+
+        // Dictionary keys index into the REE's logical values
+        // keys [0, 0, 2, 0, 0] → logical ["x", "x", "y", "x", "x"]
+        let keys = Int32Array::from(vec![0, 0, 2, 0, 0]);
+        let dict = DictionaryArray::try_new(keys, Arc::new(ree)).unwrap();
+        let input = vec![Arc::new(dict) as ArrayRef];
+        assert_eq!(partition(&input).unwrap().ranges(), vec![0..2, 2..3, 3..5],);
     }
 
     #[test]
