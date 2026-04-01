@@ -535,45 +535,49 @@ impl Sbbf {
 
     /// Determine how many folds can be applied without exceeding `target_fpp`.
     ///
-    /// Simulates merges via a tree reduction on a scratch buffer: reads the original
-    /// data once (into pairwise-OR'd scratch), then works on progressively smaller
-    /// scratch — total work O(N).
+    /// Computes the average per-block fill rate in a single pass (no allocation),
+    /// then analytically estimates the FPP at each fold level.
     ///
-    /// The FPP after a fold is estimated as the average per-block false positive probability.
-    /// SBBF membership checks perform `k=8` bit checks within one 256-bit block, so:
+    /// When two blocks with independent fill rate `f` are OR'd, the expected fill
+    /// of the merged block is `1 - (1-f)^2`. After `k` folds (merging `2^k` blocks):
     ///
     /// ```text
-    /// FPP = (1/b) * sum_i (set_bits_in_block_i / 256)^8
+    /// f_k = 1 - (1 - f)^(2^k)
     /// ```
+    ///
+    /// SBBF membership checks perform `k=8` bit checks within one 256-bit block,
+    /// so the estimated FPP at fold level k is `f_k^8`.
     fn num_folds_for_target_fpp(&self, target_fpp: f64) -> u32 {
         let len = self.0.len();
         if len < 2 {
             return 0;
         }
 
-        let mut scratch: Vec<Block> = self.0.chunks_exact(2).map(|p| p[0] | p[1]).collect();
-        let mut num_folds = 0u32;
+        // Single pass: compute average per-block fill rate.
+        let total_set_bits: u64 = self.0.iter().map(|b| u64::from(b.count_ones())).sum();
+        let avg_fill = total_set_bits as f64 / (len as f64 * 256.0);
 
-        loop {
-            let num_blocks = scratch.len() as f64;
-            let mut total_fpp: f64 = 0.0;
-            for block in &scratch {
-                let set_bits = block.count_ones();
-                let block_fill = f64::from(set_bits) / 256.0;
-                total_fpp += block_fill.powi(8);
-            }
-            if total_fpp / num_blocks > target_fpp {
+        // Empty filter: can fold all the way down.
+        if avg_fill == 0.0 {
+            return len.trailing_zeros();
+        }
+
+        // Find max folds where estimated FPP stays within target.
+        // f_k = 1 - (1 - avg_fill)^(2^k), FPP_k = f_k^8
+        let max_folds = len.trailing_zeros(); // log2(len) since len is power of 2
+        let one_minus_f = 1.0 - avg_fill;
+        let mut num_folds = 0u32;
+        let mut one_minus_fk = one_minus_f; // (1-f)^1 initially
+
+        for _ in 0..max_folds {
+            // After one more fold: (1-f)^(2^(k+1)) = ((1-f)^(2^k))^2
+            one_minus_fk = one_minus_fk * one_minus_fk;
+            let fk = 1.0 - one_minus_fk;
+            let estimated_fpp = fk.powi(8);
+            if estimated_fpp > target_fpp {
                 break;
             }
             num_folds += 1;
-            if scratch.len() < 2 {
-                break;
-            }
-            let new_len = scratch.len() / 2;
-            for i in 0..new_len {
-                scratch[i] = scratch[2 * i] | scratch[2 * i + 1];
-            }
-            scratch.truncate(new_len);
         }
 
         num_folds
