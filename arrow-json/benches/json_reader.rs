@@ -63,6 +63,38 @@ fn decode_and_flush(decoder: &mut Decoder, data: &[u8]) {
     }
 }
 
+fn bench_decode_schema(c: &mut Criterion, name: &str, data: &[u8], schema: Arc<Schema>) {
+    let mut group = c.benchmark_group(name);
+    group.throughput(Throughput::Bytes(data.len() as u64));
+    group.sample_size(50);
+    group.measurement_time(std::time::Duration::from_secs(5));
+    group.warm_up_time(std::time::Duration::from_secs(2));
+    group.sampling_mode(SamplingMode::Flat);
+    group.bench_function(BenchmarkId::from_parameter(ROWS), |b| {
+        b.iter(|| {
+            let mut decoder = ReaderBuilder::new(schema.clone())
+                .with_batch_size(BATCH_SIZE)
+                .build_decoder()
+                .unwrap();
+            decode_and_flush(&mut decoder, data);
+        })
+    });
+    group.finish();
+}
+
+fn bench_serialize_values(c: &mut Criterion, name: &str, values: &[Value], schema: Arc<Schema>) {
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            let mut decoder = ReaderBuilder::new(schema.clone())
+                .with_batch_size(BATCH_SIZE)
+                .build_decoder()
+                .unwrap();
+            decoder.serialize(values).unwrap();
+            while let Some(_batch) = decoder.flush().unwrap() {}
+        })
+    });
+}
+
 fn build_schema(field_count: usize) -> Arc<Schema> {
     // Builds a schema with fields named f0..f{field_count-1}, all Int64 and non-nullable.
     let fields: Vec<Field> = (0..field_count)
@@ -175,38 +207,6 @@ fn bench_binary_hex(c: &mut Criterion) {
 
     let view_field = Arc::new(Field::new("item", DataType::BinaryView, false));
     bench_decode_binary(c, "decode_binary_view_hex_json", &binary_data, view_field);
-}
-
-fn bench_decode_schema(c: &mut Criterion, name: &str, data: &[u8], schema: Arc<Schema>) {
-    let mut group = c.benchmark_group(name);
-    group.throughput(Throughput::Bytes(data.len() as u64));
-    group.sample_size(50);
-    group.measurement_time(std::time::Duration::from_secs(5));
-    group.warm_up_time(std::time::Duration::from_secs(2));
-    group.sampling_mode(SamplingMode::Flat);
-    group.bench_function(BenchmarkId::from_parameter(ROWS), |b| {
-        b.iter(|| {
-            let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(BATCH_SIZE)
-                .build_decoder()
-                .unwrap();
-            decode_and_flush(&mut decoder, data);
-        })
-    });
-    group.finish();
-}
-
-fn bench_serialize_values(c: &mut Criterion, name: &str, values: &[Value], schema: Arc<Schema>) {
-    c.bench_function(name, |b| {
-        b.iter(|| {
-            let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(BATCH_SIZE)
-                .build_decoder()
-                .unwrap();
-            decoder.serialize(values).unwrap();
-            while let Some(_batch) = decoder.flush().unwrap() {}
-        })
-    });
 }
 
 fn build_wide_projection_json(rows: usize, total_fields: usize) -> Vec<u8> {
