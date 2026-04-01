@@ -23,21 +23,6 @@ use crate::basic::Encoding;
 use crate::data_type::AsBytes;
 use crate::util::bit_util::{BitWriter, ceil, num_required_bits};
 
-/// Computes max buffer size for level encoder/decoder based on encoding, max
-/// repetition/definition level and number of total buffered values (includes null
-/// values).
-#[allow(dead_code)]
-#[inline]
-pub fn max_buffer_size(encoding: Encoding, max_level: i16, num_buffered_values: usize) -> usize {
-    let bit_width = num_required_bits(max_level as u64);
-    match encoding {
-        Encoding::RLE => RleEncoder::max_buffer_size(bit_width, num_buffered_values),
-        #[allow(deprecated)]
-        Encoding::BIT_PACKED => ceil(num_buffered_values * bit_width as usize, 8),
-        _ => panic!("Unsupported encoding type {encoding}"),
-    }
-}
-
 /// Encoder for definition/repetition levels.
 /// Currently only supports Rle and BitPacked (dev/null) encoding, including v2.
 pub enum LevelEncoder {
@@ -47,45 +32,6 @@ pub enum LevelEncoder {
 }
 
 impl LevelEncoder {
-    /// Creates new level encoder based on encoding, max level and underlying byte buffer.
-    /// For bit packed encoding it is assumed that buffer is already allocated with
-    /// `levels::max_buffer_size` method.
-    ///
-    /// Used to encode levels for Data Page v1.
-    ///
-    /// Panics, if encoding is not supported.
-    #[allow(dead_code)]
-    pub fn v1(encoding: Encoding, max_level: i16, capacity: usize) -> Self {
-        let capacity_bytes = max_buffer_size(encoding, max_level, capacity);
-        let mut buffer = Vec::with_capacity(capacity_bytes);
-        let bit_width = num_required_bits(max_level as u64);
-        match encoding {
-            Encoding::RLE => {
-                // Reserve space for length header
-                buffer.extend_from_slice(&[0; 4]);
-                LevelEncoder::Rle(RleEncoder::new_from_buf(bit_width, buffer))
-            }
-            #[allow(deprecated)]
-            Encoding::BIT_PACKED => {
-                // Here we set full byte buffer without adjusting for num_buffered_values,
-                // because byte buffer will already be allocated with size from
-                // `max_buffer_size()` method.
-                LevelEncoder::BitPacked(bit_width, BitWriter::new_from_buf(buffer))
-            }
-            _ => panic!("Unsupported encoding type {encoding}"),
-        }
-    }
-
-    /// Creates new level encoder based on RLE encoding. Used to encode Data Page v2
-    /// repetition and definition levels.
-    #[allow(dead_code)]
-    pub fn v2(max_level: i16, capacity: usize) -> Self {
-        let capacity_bytes = max_buffer_size(Encoding::RLE, max_level, capacity);
-        let buffer = Vec::with_capacity(capacity_bytes);
-        let bit_width = num_required_bits(max_level as u64);
-        LevelEncoder::RleV2(RleEncoder::new_from_buf(bit_width, buffer))
-    }
-
     /// Creates a new streaming level encoder for Data Page v1.
     ///
     /// Unlike [`v1`](Self::v1), this does not require knowing the number of values
