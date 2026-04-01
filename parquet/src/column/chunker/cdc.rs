@@ -289,27 +289,39 @@ impl ContentDefinedChunker {
         let mut chunks = Vec::new();
         let mut prev_offset: usize = 0;
         let mut prev_value_offset: usize = 0;
-        // Total number of values seen; for non-nested data this equals num_levels.
-        let mut total_values: usize = num_levels;
+        let mut value_offset: usize = 0;
 
         if !has_rep_levels && !has_def_levels {
             // Fastest path: non-nested, non-null data.
+            // Every level corresponds to exactly one non-null value, so
+            // value_offset == level_offset and num_values == num_levels.
+            //
+            // Example: required Int32, array = [10, 20, 30]
+            //   level:         0   1   2
+            //   value_offset:  0   1   2
             for offset in 0..num_levels {
                 roll_value(self, offset);
                 if self.need_new_chunk() {
                     chunks.push(CdcChunk {
                         level_offset: prev_offset,
-                        value_offset: prev_offset,
                         num_levels: offset - prev_offset,
+                        value_offset: prev_offset,
                         num_values: offset - prev_offset,
                     });
                     prev_offset = offset;
                 }
             }
-            // Set the previous value offset to add the last chunk.
             prev_value_offset = prev_offset;
+            value_offset = num_levels;
         } else if !has_rep_levels {
-            // Non-nested data with nulls.
+            // Non-nested data with nulls. value_offset only increments for
+            // non-null values (def == max_def), so it diverges from the
+            // level offset when nulls are present.
+            //
+            // Example: optional Int32, array = [1, null, 2, null, 3]
+            //   def_levels:    [1, 0, 1, 0, 1]
+            //   level:          0  1  2  3  4
+            //   value_offset:   0     1     2  (only increments on def==1)
             let def_levels = def_levels.expect("def_levels required when max_def_level > 0");
             #[allow(clippy::needless_range_loop)]
             for offset in 0..num_levels {
@@ -318,23 +330,56 @@ impl ContentDefinedChunker {
                 if def_level == self.max_def_level {
                     roll_value(self, offset);
                 }
+                // Check boundary before incrementing value_offset so that
+                // num_values reflects only entries in the completed chunk.
                 if self.need_new_chunk() {
                     chunks.push(CdcChunk {
                         level_offset: prev_offset,
-                        value_offset: prev_offset,
                         num_levels: offset - prev_offset,
-                        num_values: offset - prev_offset,
+                        value_offset: prev_value_offset,
+                        num_values: value_offset - prev_value_offset,
                     });
                     prev_offset = offset;
+                    prev_value_offset = value_offset;
+                }
+                if def_level == self.max_def_level {
+                    value_offset += 1;
                 }
             }
-            // Set the previous value offset to add the last chunk.
-            prev_value_offset = prev_offset;
         } else {
-            // Nested data with nulls.
+            // Nested data with nulls. Two counters are needed:
+            //
+            //   leaf_offset: index into the leaf values array for hashing,
+            //     incremented for all leaf slots (def >= repeated_ancestor_def_level),
+            //     including null elements.
+            //
+            //   value_offset: index into non_null_indices for chunk boundaries,
+            //     incremented only for non-null leaf values (def == max_def_level).
+            //
+            // These diverge when nullable elements exist inside lists.
+            //
+            // Example: List<Int32?> with repeated_ancestor_def_level=2, max_def=3
+            //   row 0: [1, null, 2]   (3 leaf slots, 2 non-null)
+            //   row 1: [3]            (1 leaf slot, 1 non-null)
+            //
+            //   leaf array:    [1, null, 2, 3]
+            //   def_levels:    [3,  2,   3, 3]
+            //   rep_levels:    [0,  1,   1, 0]
+            //
+            //   level  def  leaf_offset  value_offset  action
+            //   ─────  ───  ───────────  ────────────  ──────────────────────────
+            //     0     3       0             0        roll_value(0), value++, leaf++
+            //     1     2       1             1        leaf++ only (null element)
+            //     2     3       2             1        roll_value(2), value++, leaf++
+            //     3     3       3             2        roll_value(3), value++, leaf++
+            //
+            // roll_value(2) correctly indexes leaf array position 2 (value "2").
+            // Using value_offset=1 would index position 1 (the null slot).
+            //
+            // Using value_offset for roll_value would hash the wrong array slot.
             let def_levels = def_levels.expect("def_levels required for nested data");
             let rep_levels = rep_levels.expect("rep_levels required for nested data");
-            let mut value_offset: usize = 0;
+            let mut leaf_offset: usize = 0;
 
             for offset in 0..num_levels {
                 let def_level = def_levels[offset];
@@ -343,43 +388,45 @@ impl ContentDefinedChunker {
                 self.roll_level(def_level);
                 self.roll_level(rep_level);
                 if def_level == self.max_def_level {
-                    roll_value(self, value_offset);
+                    roll_value(self, leaf_offset);
                 }
 
+                // Check boundary before incrementing value_offset so that
+                // num_values reflects only entries in the completed chunk.
                 if rep_level == 0 && self.need_new_chunk() {
-                    // If we are at a record boundary and need a new chunk, create one.
                     let levels_to_write = offset - prev_offset;
                     if levels_to_write > 0 {
                         chunks.push(CdcChunk {
                             level_offset: prev_offset,
-                            value_offset: prev_value_offset,
                             num_levels: levels_to_write,
+                            value_offset: prev_value_offset,
                             num_values: value_offset - prev_value_offset,
                         });
                         prev_offset = offset;
                         prev_value_offset = value_offset;
                     }
                 }
-                if def_level >= self.repeated_ancestor_def_level {
-                    // We only increment the value offset if we have a leaf value.
+                if def_level == self.max_def_level {
                     value_offset += 1;
                 }
+                if def_level >= self.repeated_ancestor_def_level {
+                    leaf_offset += 1;
+                }
             }
-            total_values = value_offset;
         }
 
         // Add the last chunk if we have any levels left.
         if prev_offset < num_levels {
             chunks.push(CdcChunk {
                 level_offset: prev_offset,
-                value_offset: prev_value_offset,
                 num_levels: num_levels - prev_offset,
-                num_values: total_values - prev_value_offset,
+                value_offset: prev_value_offset,
+                num_values: value_offset - prev_value_offset,
             });
         }
 
         #[cfg(debug_assertions)]
-        self.validate_chunks(&chunks, num_levels, total_values);
+        self.validate_chunks(&chunks, num_levels, value_offset);
 
         chunks
     }
@@ -626,8 +673,9 @@ mod tests {
         assert_eq!(chunks1.len(), chunks2.len());
         for (a, b) in chunks1.iter().zip(chunks2.iter()) {
             assert_eq!(a.level_offset, b.level_offset);
-            assert_eq!(a.value_offset, b.value_offset);
             assert_eq!(a.num_levels, b.num_levels);
+            assert_eq!(a.value_offset, b.value_offset);
+            assert_eq!(a.num_values, b.num_values);
         }
     }
 
@@ -663,9 +711,12 @@ mod arrow_tests {
     use std::borrow::Borrow;
     use std::sync::Arc;
 
+    use arrow::util::data_gen::create_random_batch;
     use arrow_array::cast::AsArray;
     use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, RecordBatch};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_buffer::Buffer;
+    use arrow_data::ArrayData;
+    use arrow_schema::{DataType, Field, Fields, Schema};
 
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::arrow::arrow_writer::ArrowWriter;
@@ -2152,5 +2203,129 @@ mod arrow_tests {
             &values2[1..],
             "all chunks after the first must be identical"
         );
+    }
+
+    /// Helper to write a batch with CDC and read it back.
+    fn cdc_roundtrip(batch: &RecordBatch) -> RecordBatch {
+        let props = WriterProperties::builder()
+            .set_content_defined_chunking(Some(CdcOptions::default()))
+            .build();
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+        writer.write(batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(buffer))
+            .unwrap()
+            .build()
+            .unwrap();
+        reader.into_iter().next().unwrap().unwrap()
+    }
+
+    /// Regression test for <https://github.com/apache/arrow-rs/issues/9637>
+    ///
+    /// Writing nested list data with CDC enabled panicked with an out-of-bounds
+    /// slice access when null list entries had non-zero child ranges.
+    #[test]
+    fn test_cdc_list_roundtrip() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "_1",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "_2",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Boolean, true))),
+                true,
+            ),
+            Field::new(
+                "_3",
+                DataType::LargeList(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+                true,
+            ),
+        ]));
+        let batch = create_random_batch(schema, 2, 0.25, 0.75).unwrap();
+        assert_eq!(cdc_roundtrip(&batch), batch);
+    }
+
+    /// Test CDC with deeply nested types: List<List<Int32>>, List<Struct<List<Int32>>>
+    #[test]
+    fn test_cdc_deeply_nested_roundtrip() {
+        let inner_field = Field::new_list_field(DataType::Int32, true);
+        let inner_type = DataType::List(Arc::new(inner_field));
+        let outer_field = Field::new_list_field(inner_type.clone(), true);
+        let list_list_type = DataType::List(Arc::new(outer_field));
+
+        let struct_inner_field = Field::new_list_field(DataType::Int32, true);
+        let struct_inner_type = DataType::List(Arc::new(struct_inner_field));
+        let struct_fields = Fields::from(vec![Field::new("a", struct_inner_type, true)]);
+        let struct_type = DataType::Struct(struct_fields);
+        let struct_list_field = Field::new_list_field(struct_type, true);
+        let list_struct_type = DataType::List(Arc::new(struct_list_field));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("list_list", list_list_type, true),
+            Field::new("list_struct_list", list_struct_type, true),
+        ]));
+        let batch = create_random_batch(schema, 200, 0.25, 0.75).unwrap();
+        assert_eq!(cdc_roundtrip(&batch), batch);
+    }
+
+    /// Test CDC with list arrays that have non-empty null segments.
+    ///
+    /// Per the Arrow columnar format spec: "a null value may correspond to a
+    /// non-empty segment in the child array". This test constructs such arrays
+    /// manually and verifies the CDC writer handles them correctly.
+    #[test]
+    fn test_cdc_list_non_empty_null_segments() {
+        // Build List<Int32> where null entries own non-zero child ranges:
+        //   row 0: [1, 2]     offsets[0..2]  valid
+        //   row 1: null        offsets[2..5]  null, but owns 3 child values
+        //   row 2: [6, 7]     offsets[5..7]  valid
+        //   row 3: null        offsets[7..9]  null, but owns 2 child values
+        //   row 4: [10]        offsets[9..10] valid
+        let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let offsets = Buffer::from_iter([0_i32, 2, 5, 7, 9, 10]);
+        let null_bitmap = Buffer::from([0b00010101]); // rows 0, 2, 4 valid
+
+        let list_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        let list_data = unsafe {
+            ArrayData::new_unchecked(
+                list_type.clone(),
+                5,
+                None,
+                Some(null_bitmap),
+                0,
+                vec![offsets],
+                vec![values.to_data()],
+            )
+        };
+        let list_array = arrow_array::make_array(list_data);
+
+        let schema = Arc::new(Schema::new(vec![Field::new("col", list_type, true)]));
+        let batch = RecordBatch::try_new(schema, vec![list_array]).unwrap();
+
+        let read = cdc_roundtrip(&batch);
+        let read_list = read.column(0).as_list::<i32>();
+        assert_eq!(read_list.len(), 5);
+        assert!(read_list.is_valid(0));
+        assert!(read_list.is_null(1));
+        assert!(read_list.is_valid(2));
+        assert!(read_list.is_null(3));
+        assert!(read_list.is_valid(4));
+
+        let get_vals = |i: usize| -> Vec<i32> {
+            read_list
+                .value(i)
+                .as_primitive::<arrow_array::types::Int32Type>()
+                .values()
+                .iter()
+                .copied()
+                .collect()
+        };
+        assert_eq!(get_vals(0), vec![1, 2]);
+        assert_eq!(get_vals(2), vec![6, 7]);
+        assert_eq!(get_vals(4), vec![10]);
     }
 }
