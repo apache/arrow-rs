@@ -490,52 +490,12 @@ fn take_boolean<IndexType: ArrowPrimitiveType>(
     BooleanArray::new(val_buf, null_buf)
 }
 
-/// Copies byte ranges from `src` into a new contiguous buffer.
-///
-/// # Safety
-/// Each `(start, end)` in `ranges` must be in-bounds of `src`, and
-/// `capacity` must equal the total bytes across all ranges.
-unsafe fn copy_byte_ranges(
-    src: &[u8],
-    ranges: &[(usize, usize)],
-    capacity: usize,
-    values: &mut Vec<u8>,
-) {
-    values.reserve(capacity);
-    debug_assert_eq!(
-        ranges.iter().map(|(s, e)| e - s).sum::<usize>(),
-        capacity,
-        "capacity must equal total bytes across all ranges"
-    );
-    let src_len = src.len();
-    let src = src.as_ptr();
-    let mut dst = values.as_mut_ptr();
-    for &(start, end) in ranges {
-        debug_assert!(start <= end, "invalid range: start ({start}) > end ({end})");
-        debug_assert!(
-            end <= src_len,
-            "range end ({end}) out of bounds (src len {src_len})"
-        );
-        let len = end - start;
-        // SAFETY: caller guarantees each (start, end) is in-bounds of `src`.
-        // `dst` advances within the `capacity` bytes we allocated.
-        // The regions don't overlap (src is input, dst is a fresh allocation).
-        unsafe {
-            std::ptr::copy_nonoverlapping(src.add(start), dst, len);
-            dst = dst.add(len);
-        }
-    }
-    // SAFETY: caller guarantees `capacity` == total bytes across all ranges,
-    // so the loop above wrote exactly `capacity` bytes.
-    unsafe { values.set_len(capacity) };
-}
-
 /// `take` implementation for string arrays
 fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     array: &GenericByteArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteArray<T>, ArrowError> {
-    let mut values = Vec::new();
+    let mut values: Vec<u8> = Vec::new();
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(T::Offset::default());
 
@@ -560,15 +520,21 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
             values.reserve(capacity);
 
-            let mut dst = values.as_mut_ptr();
+            let dst = values.spare_capacity_mut();
+            debug_assert!(dst.len() >= capacity);
+            let mut offset = 0;
 
             for index in indices.values() {
                 // SAFETY: in-bounds proven by the first loop's bounds-checked offset access.
-                // dst stays within reserved capacity computed from the same indices.
+                // dst asserted above to include the required capacity.
                 unsafe {
                     let data: &[u8] = array.value_unchecked(index.as_usize()).as_ref();
-                    std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
-                    dst = dst.add(data.len());
+                    std::ptr::copy_nonoverlapping(
+                        data.as_ptr(),
+                        dst[offset..].as_mut_ptr().cast::<u8>(),
+                        data.len(),
+                    );
+                    offset += data.len();
                 }
             }
 
@@ -601,6 +567,9 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 capacity += end - start;
                 offsets[i + 1] = T::Offset::from_usize(capacity)
                     .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
+
+                debug_assert!(end >= start, "invalid range: start ({start}) > end ({end})");
+
                 ranges.push((start, end));
                 last_filled = i + 1;
             }
@@ -610,7 +579,37 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
             offsets[last_filled + 1..].fill(final_offset);
             // Pass 2: copy byte data for all collected ranges.
-            unsafe { copy_byte_ranges(array.value_data(), &ranges, capacity, &mut values) };
+            values.reserve(capacity);
+            debug_assert_eq!(
+                ranges.iter().map(|(s, e)| e - s).sum::<usize>(),
+                capacity,
+                "capacity must equal total bytes across all ranges"
+            );
+
+            let src = array.value_data();
+            let src = src.as_ptr();
+            let dst = values.spare_capacity_mut();
+            debug_assert!(dst.len() >= capacity);
+
+            let mut offset = 0;
+
+            for (start, end) in ranges.into_iter() {
+                let value_len = end - start;
+                // SAFETY: caller guarantees each (start, end) is in-bounds of `src`.
+                // `dst` asserted above to include the required capacity.
+                // The regions don't overlap (src is input, dst is a fresh allocation).
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        src.add(start),
+                        dst[offset..].as_mut_ptr().cast::<u8>(),
+                        value_len,
+                    );
+                    offset += value_len;
+                }
+            }
+            // SAFETY: caller guarantees `capacity` == total bytes across all ranges,
+            // so the loop above wrote exactly `capacity` bytes.
+            unsafe { values.set_len(capacity) };
         }
     };
 
