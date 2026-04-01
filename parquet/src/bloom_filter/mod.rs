@@ -197,6 +197,42 @@ impl std::ops::IndexMut<usize> for Block {
     }
 }
 
+impl std::ops::BitOr for Block {
+    type Output = Self;
+
+    #[inline]
+    fn bitor(self, rhs: Self) -> Self {
+        let mut result = [0u32; 8];
+        for i in 0..8 {
+            result[i] = self.0[i] | rhs.0[i];
+        }
+        Self(result)
+    }
+}
+
+impl std::ops::BitOrAssign for Block {
+    #[inline]
+    fn bitor_assign(&mut self, rhs: Self) {
+        for i in 0..8 {
+            self.0[i] |= rhs.0[i];
+        }
+    }
+}
+
+impl Block {
+    /// Count the total number of set bits across all 8 words.
+    ///
+    /// Computes popcount on each word separately and sums. Keeping the popcount
+    /// separate from the OR allows the compiler to batch SIMD popcount instructions
+    /// (e.g., `cnt.16b` on ARM NEON) instead of interleaving them with OR operations.
+    #[inline]
+    fn count_ones(self) -> u32 {
+        // Written as a fold over the array so the compiler sees 8 independent
+        // popcount operations it can vectorize into cnt.16b + horizontal sum.
+        self.0.iter().map(|w| w.count_ones()).sum()
+    }
+}
+
 /// A split block Bloom filter (SBBF).
 ///
 /// An SBBF partitions its bit space into fixed-size 256-bit (32-byte) blocks, each fitting in a
@@ -498,13 +534,36 @@ impl Sbbf {
         );
         let half = len / 2;
         for i in 0..half {
-            let a = self.0[2 * i]; // Copy to avoid aliasing with self.0[i]
-            let b = self.0[2 * i + 1];
-            for j in 0..8 {
-                self.0[i].0[j] = a.0[j] | b.0[j];
-            }
+            // Copy both blocks to stack locals before writing. This eliminates
+            // aliasing between self.0[i] and self.0[2*i], allowing the compiler
+            // to vectorize the OR into SIMD instructions.
+            let merged = self.0[2 * i] | self.0[2 * i + 1];
+            self.0[i] = merged;
         }
         self.0.truncate(half);
+    }
+
+    /// Estimate the FPP that would result from folding once, without mutating the filter.
+    ///
+    /// SBBF membership checks are per-block (`k=8` bit checks within one 256-bit block),
+    /// so FPP is the average per-block false positive probability:
+    ///
+    /// ```text
+    /// FPP = (1 / num_blocks) * sum_i (set_bits_in_block_i / 256)^8
+    /// ```
+    ///
+    /// Separating the OR from the popcount lets the compiler emit vectorized popcount
+    /// instructions (e.g., `cnt.16b` on ARM NEON) instead of per-word scalar popcount.
+    fn estimated_fpp_after_fold(&self) -> f64 {
+        let half = self.0.len() / 2;
+        let mut total_fpp: f64 = 0.0;
+        for pair in self.0.chunks_exact(2) {
+            let merged = pair[0] | pair[1];
+            let set_bits = merged.count_ones();
+            let block_fill = f64::from(set_bits) / 256.0;
+            total_fpp += block_fill.powi(8);
+        }
+        total_fpp / half as f64
     }
 
     /// Fold the bloom filter down to the smallest size that still meets the target FPP
@@ -535,8 +594,17 @@ impl Sbbf {
     /// FPP = (1/b) * sum_i (set_bits_in_block_i / 256)^8
     /// ```
     ///
-    /// Each iteration computes the folded blocks and their FPP in a single pass. If the
-    /// estimated FPP would exceed the target, the fold is discarded and iteration stops.
+    /// ## Implementation
+    ///
+    /// Each iteration does two passes over the block pairs:
+    /// 1. **Read-only FPP estimate**: OR each pair into a stack-local `Block`, popcount it,
+    ///    and accumulate the per-block FPP. If the estimated FPP exceeds the target, stop.
+    /// 2. **In-place fold**: OR pairs and write results to the first half of the existing Vec,
+    ///    then truncate. This reuses the existing allocation — no heap allocation per fold level.
+    ///
+    /// The data from pass 1 remains hot in CPU cache for pass 2. Separating the OR from the
+    /// popcount (via `Block::count_ones`) allows the compiler to emit batched SIMD popcount
+    /// instructions.
     ///
     /// ## Correctness
     ///
@@ -550,28 +618,14 @@ impl Sbbf {
     ///   IEEE iThings 2012. <https://doi.org/10.1109/GreenCom.2012.16>
     pub fn fold_to_target_fpp(&mut self, target_fpp: f64) {
         while self.0.len() >= 2 {
-            // Compute the folded blocks and estimate FPP in a single pass.
-            // Using a fresh Vec avoids aliasing, enabling auto-vectorization of the
-            // inner [u32; 8] OR loop. chunks_exact(2) eliminates bounds checks.
-            let half = self.0.len() / 2;
-            let mut folded = Vec::with_capacity(half);
-            let mut total_fpp: f64 = 0.0;
-
-            for pair in self.0.chunks_exact(2) {
-                let mut block = Block::ZERO;
-                let mut set_bits: u32 = 0;
-                for j in 0..8 {
-                    block.0[j] = pair[0].0[j] | pair[1].0[j];
-                    set_bits += block.0[j].count_ones();
-                }
-                total_fpp += (f64::from(set_bits) / 256.0).powi(8);
-                folded.push(block);
-            }
-
-            if total_fpp / half as f64 > target_fpp {
+            // Pass 1: Read-only FPP estimate. If the fold would exceed the
+            // target FPP, stop before mutating the filter.
+            if self.estimated_fpp_after_fold() > target_fpp {
                 break;
             }
-            self.0 = folded;
+            // Pass 2: In-place fold. The block pairs are still hot in cache from
+            // the estimate pass. Reuses the existing Vec allocation.
+            self.fold_once();
         }
     }
 
