@@ -39,6 +39,7 @@ all-features = true
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
+arrow-data = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
@@ -55,7 +56,6 @@ ryu = "1.0"
 itoa = "1.0"
 
 [dev-dependencies]
-arrow-data = { workspace = true }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 futures = "0.3"
