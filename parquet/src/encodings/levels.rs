@@ -21,7 +21,7 @@ use super::rle::RleEncoder;
 
 use crate::basic::Encoding;
 use crate::data_type::AsBytes;
-use crate::util::bit_util::{BitWriter, ceil, num_required_bits};
+use crate::util::bit_util::{BitWriter, num_required_bits};
 
 /// Encoder for definition/repetition levels.
 /// Currently only supports Rle and BitPacked (dev/null) encoding, including v2.
