@@ -182,6 +182,8 @@
 experimental!(mod array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
+#[cfg(feature = "page_store")]
+pub mod page_store;
 mod buffer;
 mod decoder;
 
