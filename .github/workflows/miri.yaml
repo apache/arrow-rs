@@ -56,7 +56,8 @@ jobs:
           rustup override set nightly
           cargo miri setup
       - name: Set up nextest
-        uses: taiki-e/install-action@nextest
+        run: |
+          cargo install cargo-nextest --version 0.9.132 --locked
       - name: Run Miri Checks
         env:
           RUST_BACKTRACE: full
