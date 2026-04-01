@@ -498,81 +498,45 @@ impl Sbbf {
         );
         let half = len / 2;
         for i in 0..half {
+            let a = self.0[2 * i]; // Copy to avoid aliasing with self.0[i]
+            let b = self.0[2 * i + 1];
             for j in 0..8 {
-                self.0[i].0[j] = self.0[2 * i].0[j] | self.0[2 * i + 1].0[j];
+                self.0[i].0[j] = a.0[j] | b.0[j];
             }
         }
         self.0.truncate(half);
     }
 
-    /// Estimate the FPP that would result from folding once, without mutating the filter.
-    ///
-    /// Unlike standard Bloom filters where FPP depends on the global fill ratio, SBBF
-    /// membership checks are **per-block**: a query hashes to exactly one block, then checks
-    /// `k=8` bits within that block. The FPP is therefore the **average of per-block FPPs**:
-    ///
-    /// ```text
-    /// FPP = (1 / num_blocks) * sum_i (set_bits_in_block_i / 256)^8
-    /// ```
-    ///
-    /// To project the FPP after a fold, we simulate the merge of each adjacent pair `(2i, 2i+1)`
-    /// by computing `(block[2i] | block[2i+1]).count_ones()` without actually mutating the filter.
-    fn estimated_fpp_after_fold(&self) -> f64 {
-        let half = self.0.len() / 2;
-        let mut total_fpp: f64 = 0.0;
-        for i in 0..half {
-            let mut set_bits: u32 = 0;
-            for j in 0..8 {
-                set_bits += (self.0[2 * i].0[j] | self.0[2 * i + 1].0[j]).count_ones();
-            }
-            let block_fill = f64::from(set_bits) / 256.0;
-            total_fpp += block_fill.powi(8);
-        }
-        total_fpp / half as f64
-    }
-
-    /// Fold the bloom filter down to the smallest size that still meets the target FPP 
+    /// Fold the bloom filter down to the smallest size that still meets the target FPP
     /// (False Positive Percentage)
     ///
-    /// Repeatedly halves the filter by merging adjacent block pairs (see `fold_once`),
+    /// Repeatedly halves the filter by merging adjacent block pairs via bitwise OR,
     /// stopping when the next fold would cause the estimated FPP to exceed `target_fpp`, or
     /// when the filter reaches the minimum size of 1 block (32 bytes).
     ///
-    /// ## Background
+    /// ## How it works
     ///
-    /// Bloom filter folding is a technique for dynamically resizing filters after
-    /// construction. For a standard Bloom filter of size `m` (a power of two), an element
-    /// hashed to index `i = h(x) mod m` would map to `i' = h(x) mod (m/2)` in a filter
-    /// half the size. Since `m` is a power of two, the fold is a bitwise OR of the upper half
-    /// onto the lower half: `B_folded[j] = B[j] | B[j + m/2]`.
-    ///
-    /// ## Adaptation for SBBF
-    ///
-    /// SBBFs use multiplicative hashing for block selection rather than modular arithmetic:
+    /// SBBFs use multiplicative hashing for block selection:
     ///
     /// ```text
     /// block_index = ((hash >> 32) * num_blocks) >> 32
     /// ```
     ///
     /// When `num_blocks` is halved, the new index becomes `floor(original_index / 2)`, so
-    /// blocks `2i` and `2i+1` (not `i` and `i+N/2`) map to the same position. The fold
-    /// therefore merges **adjacent** pairs:
+    /// blocks `2i` and `2i+1` map to the same position. Each fold merges **adjacent** pairs:
     ///
     /// ```text
     /// folded[i] = blocks[2*i] | blocks[2*i + 1]
     /// ```
     ///
-    /// ## FPP estimation
-    ///
-    /// SBBF membership checks are per-block (`k=8` bit checks within one 256-bit block), so
-    /// the FPP is the average of per-block false positive probabilities:
+    /// The FPP after a fold is estimated as the average per-block false positive probability:
     ///
     /// ```text
     /// FPP = (1/b) * sum_i (set_bits_in_block_i / 256)^8
     /// ```
     ///
-    /// Before each fold, we project the post-fold FPP by simulating the block merges. Folding
-    /// stops when the next fold would exceed the target.
+    /// Each iteration computes the folded blocks and their FPP in a single pass. If the
+    /// estimated FPP would exceed the target, the fold is discarded and iteration stops.
     ///
     /// ## Correctness
     ///
@@ -580,32 +544,34 @@ impl Sbbf {
     /// filter remains set in the folded filter (via bitwise OR). The only effect is a controlled
     /// increase in FPP as set bits from different blocks are merged together.
     ///
-    /// ## Typical usage
-    ///
-    /// ```text
-    /// // 1. Allocate large (worst-case NDV = max row group rows)
-    /// let mut sbbf = Sbbf::new_with_num_of_bytes(1_048_576); // 1 MiB
-    ///
-    /// // 2. Insert all values during column writing
-    /// for value in column_values {
-    ///     sbbf.insert(&value);
-    /// }
-    ///
-    /// // 3. Fold down to target FPP before serializing
-    /// sbbf.fold_to_target_fpp(0.05);
-    /// // Filter is now optimally sized for the actual data
-    /// ```
-    ///
     /// ## References
     ///
     /// - Sailhan, F. & Stehr, M-O. "Folding and Unfolding Bloom Filters",
     ///   IEEE iThings 2012. <https://doi.org/10.1109/GreenCom.2012.16>
     pub fn fold_to_target_fpp(&mut self, target_fpp: f64) {
         while self.0.len() >= 2 {
-            if self.estimated_fpp_after_fold() > target_fpp {
+            // Compute the folded blocks and estimate FPP in a single pass.
+            // Using a fresh Vec avoids aliasing, enabling auto-vectorization of the
+            // inner [u32; 8] OR loop. chunks_exact(2) eliminates bounds checks.
+            let half = self.0.len() / 2;
+            let mut folded = Vec::with_capacity(half);
+            let mut total_fpp: f64 = 0.0;
+
+            for pair in self.0.chunks_exact(2) {
+                let mut block = Block::ZERO;
+                let mut set_bits: u32 = 0;
+                for j in 0..8 {
+                    block.0[j] = pair[0].0[j] | pair[1].0[j];
+                    set_bits += block.0[j].count_ones();
+                }
+                total_fpp += (f64::from(set_bits) / 256.0).powi(8);
+                folded.push(block);
+            }
+
+            if total_fpp / half as f64 > target_fpp {
                 break;
             }
-            self.fold_once();
+            self.0 = folded;
         }
     }
 
