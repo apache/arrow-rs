@@ -1239,6 +1239,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         let mut plan_builder = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
+            .with_metrics(metrics.clone())
             .with_row_selection_policy(row_selection_policy)
             .with_scatter_threshold(scatter_threshold);
 
