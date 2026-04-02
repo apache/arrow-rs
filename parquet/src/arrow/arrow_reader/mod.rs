@@ -437,15 +437,14 @@ impl<T> ArrowReaderBuilder<T> {
 
     /// Set a scatter threshold for filter deferral.
     ///
-    /// The threshold is the maximum allowed **selector density**
-    /// (`selector_count / row_count`). If applying a predicate would
-    /// produce a density above this value, its result is deferred.
-    /// For example, `0.25` allows at most 25 selectors per 100 rows.
+    /// The threshold is the maximum allowed **short-run row ratio**
+    /// (`rows_in_short_runs / row_count`). If applying a predicate would
+    /// produce a ratio above this value, and skip selectivity remains low,
+    /// its result is deferred. For example, `0.25` allows at most 25% of rows
+    /// in short runs.
     ///
-    /// A high selector density means many small skip/read transitions,
-    /// which slows subsequent predicate evaluation and data decoding.
-    /// Deferring scattering predicates keeps the selection contiguous
-    /// for intermediate steps.
+    /// This avoids applying highly fragmented low-pruning predicates
+    /// immediately, while preserving useful long skip islands.
     ///
     /// The deferred results are applied at the end via
     /// [`RowSelection::intersection`], so correctness is preserved.
