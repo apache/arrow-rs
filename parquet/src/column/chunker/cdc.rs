@@ -2205,23 +2205,6 @@ mod arrow_tests {
         );
     }
 
-    /// Helper to write a batch with CDC and read it back.
-    fn cdc_roundtrip(batch: &RecordBatch) -> RecordBatch {
-        let props = WriterProperties::builder()
-            .set_content_defined_chunking(Some(CdcOptions::default()))
-            .build();
-        let mut buffer = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
-        writer.write(batch).unwrap();
-        writer.close().unwrap();
-
-        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(buffer))
-            .unwrap()
-            .build()
-            .unwrap();
-        reader.into_iter().next().unwrap().unwrap()
-    }
-
     /// Regression test for <https://github.com/apache/arrow-rs/issues/9637>
     ///
     /// Writing nested list data with CDC enabled panicked with an out-of-bounds
@@ -2245,8 +2228,14 @@ mod arrow_tests {
                 true,
             ),
         ]));
-        let batch = create_random_batch(schema, 2, 0.25, 0.75).unwrap();
-        assert_eq!(cdc_roundtrip(&batch), batch);
+        let batch = create_random_batch(schema, 10_000, 0.25, 0.75).unwrap();
+        write_with_cdc_options(
+            &[&batch],
+            CDC_MIN_CHUNK_SIZE,
+            CDC_MAX_CHUNK_SIZE,
+            None,
+            true,
+        );
     }
 
     /// Test CDC with deeply nested types: List<List<Int32>>, List<Struct<List<Int32>>>
@@ -2268,8 +2257,14 @@ mod arrow_tests {
             Field::new("list_list", list_list_type, true),
             Field::new("list_struct_list", list_struct_type, true),
         ]));
-        let batch = create_random_batch(schema, 200, 0.25, 0.75).unwrap();
-        assert_eq!(cdc_roundtrip(&batch), batch);
+        let batch = create_random_batch(schema, 10_000, 0.25, 0.75).unwrap();
+        write_with_cdc_options(
+            &[&batch],
+            CDC_MIN_CHUNK_SIZE,
+            CDC_MAX_CHUNK_SIZE,
+            None,
+            true,
+        );
     }
 
     /// Test CDC with list arrays that have non-empty null segments.
@@ -2306,7 +2301,14 @@ mod arrow_tests {
         let schema = Arc::new(Schema::new(vec![Field::new("col", list_type, true)]));
         let batch = RecordBatch::try_new(schema, vec![list_array]).unwrap();
 
-        let read = cdc_roundtrip(&batch);
+        let buf = write_with_cdc_options(
+            &[&batch],
+            CDC_MIN_CHUNK_SIZE,
+            CDC_MAX_CHUNK_SIZE,
+            None,
+            true,
+        );
+        let read = concat_batches(&read_batches(&buf));
         let read_list = read.column(0).as_list::<i32>();
         assert_eq!(read_list.len(), 5);
         assert!(read_list.is_valid(0));
