@@ -133,25 +133,22 @@
 //! ```
 //!
 
-use crate::StructMode;
-use crate::reader::binary_array::{
-    BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
-};
 use std::borrow::Cow;
 use std::io::BufRead;
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray;
+use arrow_array::timezone::Tz;
+use arrow_array::types::*;
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader, downcast_integer};
+use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 use chrono::Utc;
 use serde_core::Serialize;
 
-use arrow_array::timezone::Tz;
-use arrow_array::types::*;
-use arrow_array::{RecordBatch, RecordBatchReader, StructArray, downcast_integer, make_array};
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
-pub use schema::*;
-pub use value_iter::ValueIter;
-
+use crate::StructMode;
+use crate::reader::binary_array::{
+    BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
+};
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
 use crate::reader::list_array::{ListArrayDecoder, ListViewArrayDecoder};
@@ -164,6 +161,9 @@ use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
+
+pub use schema::*;
+pub use value_iter::ValueIter;
 
 mod binary_array;
 mod boolean_array;
@@ -669,9 +669,9 @@ impl Decoder {
         self.tape_decoder.clear();
 
         let batch = match self.is_field {
-            true => RecordBatch::try_new(self.schema.clone(), vec![make_array(decoded)])?,
+            true => RecordBatch::try_new(self.schema.clone(), vec![decoded])?,
             false => {
-                RecordBatch::from(StructArray::from(decoded)).with_schema(self.schema.clone())?
+                RecordBatch::from(decoded.as_struct().clone()).with_schema(self.schema.clone())?
             }
         };
 
@@ -681,7 +681,7 @@ impl Decoder {
 
 trait ArrayDecoder: Send {
     /// Decode elements from `tape` starting at the indexes contained in `pos`
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError>;
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError>;
 }
 
 /// Context for decoder creation, containing configuration.
@@ -819,7 +819,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::{
         Array, BooleanArray, Float64Array, GenericListViewArray, ListArray, OffsetSizeTrait,
-        StringArray, StringViewArray,
+        StringArray, StringViewArray, StructArray, make_array,
     };
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
