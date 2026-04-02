@@ -440,8 +440,13 @@ impl<T> ArrowReaderBuilder<T> {
     /// Deferral is considered only when a predicate increases selector
     /// fragmentation. In that case, the result is deferred unless:
     ///
-    /// 1. skip selectivity (`skipped_rows / total_rows`) is at least 10%, and
-    /// 2. long-skip share (`long_skip_rows / skipped_rows`) is at least this
+    /// 1. absolute skip selectivity (`skipped_rows / total_rows`) is at least
+    ///    10%,
+    /// 2. absolute long-skip share (`long_skip_rows / skipped_rows`) is at
+    ///    least this threshold,
+    /// 3. incremental skip selectivity added by the predicate is at least 2%,
+    ///    and
+    /// 4. incremental long-skip share added by the predicate is at least this
     ///    threshold.
     ///
     /// For example, `0.75` means at least 75% of skipped rows must be in long
