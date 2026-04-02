@@ -29,33 +29,22 @@ use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
 
-/// Run length at or below this value is treated as "short" for scatter stats.
-const DEFERRAL_SHORT_RUN_THRESHOLD_ROWS: usize = 16;
 /// Run length at or above this value is treated as "long" for skip-island stats.
-const DEFERRAL_LONG_RUN_THRESHOLD_ROWS: usize = 128;
-/// Avoid deferring when skips are already selective enough to be useful.
-const DEFERRAL_MAX_SKIP_SELECTIVITY: f64 = 0.10;
-/// Avoid deferring when long skip islands are already significant.
-const DEFERRAL_MAX_LONG_SKIP_SHARE: f64 = 0.50;
+const DEFERRAL_LONG_RUN_THRESHOLD_ROWS: usize = 100;
+/// Minimum skip selectivity required to avoid deferral once fragmentation increases.
+const DEFERRAL_SKIP_SELECTIVITY_FLOOR: f64 = 0.10;
 
-/// Histogram-like stats for selector runs, split by select/skip and short/long bins.
+/// Histogram-like stats for selector runs, focused on skipped-row contiguity.
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 struct SelectionRunStats {
     total_rows: usize,
     effective_count: usize,
     skipped_rows: usize,
-    short_select_rows: usize,
-    short_skip_rows: usize,
-    long_select_rows: usize,
     long_skip_rows: usize,
 }
 
 impl SelectionRunStats {
-    fn from_selection(
-        selection: &RowSelection,
-        short_threshold: usize,
-        long_threshold: usize,
-    ) -> Self {
+    fn from_selection(selection: &RowSelection, long_threshold: usize) -> Self {
         selection
             .iter()
             .fold(Self::default(), |mut stats, selector| {
@@ -71,29 +60,15 @@ impl SelectionRunStats {
                     stats.skipped_rows += row_count;
                 }
 
-                let is_short = row_count <= short_threshold;
-                let is_long = row_count >= long_threshold;
-
-                match (selector.skip, is_short, is_long) {
-                    (true, true, _) => stats.short_skip_rows += row_count,
-                    (true, _, true) => stats.long_skip_rows += row_count,
-                    (false, true, _) => stats.short_select_rows += row_count,
-                    (false, _, true) => stats.long_select_rows += row_count,
-                    _ => {}
+                if selector.skip && row_count >= long_threshold {
+                    stats.long_skip_rows += row_count;
                 }
 
                 stats
             })
     }
 
-    fn short_row_ratio(self, row_count: usize) -> f64 {
-        if row_count == 0 {
-            return 0.0;
-        }
-        (self.short_select_rows + self.short_skip_rows) as f64 / row_count as f64
-    }
-
-    fn skip_row_ratio(self, row_count: usize) -> f64 {
+    fn skip_selectivity(self, row_count: usize) -> f64 {
         if row_count == 0 {
             return 0.0;
         }
@@ -116,14 +91,17 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
-    /// Maximum allowed short-run row ratio for applying a predicate result.
+    /// Minimum long-skip-share required for a fragmented predicate result to
+    /// remain applied.
     ///
-    /// When set, if applying a predicate would produce a short-run row ratio
-    /// above this threshold, and skip selectivity remains low, the result is
-    /// deferred into `deferred_selection` instead. For example, `0.25` allows
-    /// at most 25% of rows to fall in short runs before deferring.
+    /// When set, deferral is considered only when a predicate increases
+    /// selector fragmentation. In that case, the result is deferred unless both
+    /// skip selectivity and long-skip share are high enough.
     ///
-    /// `None` disables deferral (all predicates applied immediately).
+    /// This threshold controls the long-skip-share requirement
+    /// (`long_skip_rows / skipped_rows`).
+    ///
+    /// `None` disables deferral (predicate results always stay in the main selection).
     scatter_threshold: Option<f64>,
     /// Accumulated deferred selections, merged via `intersection` at build time.
     deferred_selection: Option<RowSelection>,
@@ -162,19 +140,21 @@ impl ReadPlanBuilder {
 
     /// Set the scatter threshold for filter deferral.
     ///
-    /// The threshold is the maximum allowed **short-run row ratio**
-    /// (`rows_in_short_runs / row_count`). If applying a predicate would
-    /// produce a ratio above this value, and skip selectivity remains low,
-    /// its result is deferred. For example, `0.25` allows at most 25% of rows
-    /// in short runs.
+    /// Deferral is considered only when a predicate increases selector
+    /// fragmentation. In that case, the result is deferred unless:
     ///
-    /// This avoids applying highly fragmented low-pruning predicates
-    /// immediately, while preserving useful long skip islands.
+    /// 1. skip selectivity (`skipped_rows / total_rows`) is at least
+    ///    [`DEFERRAL_SKIP_SELECTIVITY_FLOOR`], and
+    /// 2. long-skip share (`long_skip_rows / skipped_rows`) is at least this
+    ///    threshold.
+    ///
+    /// For example, `0.75` means at least 75% of skipped rows must be in long
+    /// skip runs to avoid deferral.
     ///
     /// The deferred results are merged via [`RowSelection::intersection`] at
     /// build time, so correctness is preserved.
     ///
-    /// `None` disables deferral (all predicates applied immediately).
+    /// `None` disables deferral (predicate results always stay in the main selection).
     pub fn with_scatter_threshold(mut self, threshold: Option<f64>) -> Self {
         self.scatter_threshold = threshold;
         self
@@ -323,14 +303,14 @@ impl ReadPlanBuilder {
     }
 
     /// Returns true when the predicate result should be deferred instead of
-    /// applied immediately.
+    /// kept in the main selection.
     fn should_defer_selection(
         &self,
         absolute: &RowSelection,
         row_count: usize,
         current_selectors: usize,
     ) -> bool {
-        let Some(threshold) = self.scatter_threshold else {
+        let Some(long_skip_share_threshold) = self.scatter_threshold else {
             return false;
         };
 
@@ -343,15 +323,14 @@ impl ReadPlanBuilder {
             return false;
         }
 
-        let stats = SelectionRunStats::from_selection(
-            absolute,
-            DEFERRAL_SHORT_RUN_THRESHOLD_ROWS,
-            DEFERRAL_LONG_RUN_THRESHOLD_ROWS,
-        );
+        let stats = SelectionRunStats::from_selection(absolute, DEFERRAL_LONG_RUN_THRESHOLD_ROWS);
+        let skip_selectivity = stats.skip_selectivity(row_count);
+        let long_skip_share = stats.long_skip_share();
 
-        stats.short_row_ratio(row_count) > threshold
-            && stats.skip_row_ratio(row_count) <= DEFERRAL_MAX_SKIP_SELECTIVITY
-            && stats.long_skip_share() <= DEFERRAL_MAX_LONG_SKIP_SHARE
+        let should_keep_applied = skip_selectivity >= DEFERRAL_SKIP_SELECTIVITY_FLOOR
+            && long_skip_share >= long_skip_share_threshold;
+
+        !should_keep_applied
     }
 
     /// Merge any deferred selection into the main selection.
@@ -534,6 +513,8 @@ impl ReadPlan {
 mod tests {
     use super::*;
 
+    const TEST_LONG_SKIP_SHARE_THRESHOLD: f64 = 0.75;
+
     fn builder_with_selection(selection: RowSelection) -> ReadPlanBuilder {
         ReadPlanBuilder::new(1024).with_selection(Some(selection))
     }
@@ -659,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn test_selection_run_stats_bins_split_skip_and_select() {
+    fn test_selection_run_stats_tracks_skip_selectivity_and_long_skip_share() {
         let selection = RowSelection::from(vec![
             RowSelector::select(4),
             RowSelector::skip(3),
@@ -668,62 +649,96 @@ mod tests {
             RowSelector::select(40),
         ]);
 
-        let stats = SelectionRunStats::from_selection(&selection, 16, 128);
+        let stats = SelectionRunStats::from_selection(&selection, 100);
         assert_eq!(stats.total_rows, 503);
         assert_eq!(stats.effective_count, 5);
         assert_eq!(stats.skipped_rows, 259);
-        assert_eq!(stats.short_select_rows, 4);
-        assert_eq!(stats.short_skip_rows, 3);
-        assert_eq!(stats.long_select_rows, 200);
         assert_eq!(stats.long_skip_rows, 256);
+
+        let eps = 1e-12;
+        assert!((stats.skip_selectivity(503) - (259.0 / 503.0)).abs() < eps);
+        assert!((stats.long_skip_share() - (256.0 / 259.0)).abs() < eps);
     }
 
     #[test]
-    fn test_should_defer_selection_for_fragmented_low_skip() {
-        let builder = ReadPlanBuilder::new(1024).with_scatter_threshold(Some(0.5));
+    fn test_should_not_defer_when_fragmentation_not_increased() {
+        let builder =
+            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
-            RowSelector::select(15),
-            RowSelector::skip(1),
-            RowSelector::select(15),
-            RowSelector::skip(1),
-            RowSelector::select(15),
-            RowSelector::skip(1),
-            RowSelector::select(15),
-            RowSelector::skip(1),
+            RowSelector::select(40),
+            RowSelector::skip(20),
+            RowSelector::select(40),
         ]);
 
-        assert!(builder.should_defer_selection(&absolute, 64, 1));
+        assert!(!builder.should_defer_selection(&absolute, 100, 3));
     }
 
     #[test]
-    fn test_should_not_defer_selection_when_skip_selective() {
-        let builder = ReadPlanBuilder::new(1024).with_scatter_threshold(Some(0.5));
+    fn test_should_not_defer_when_both_non_deferral_gates_pass() {
+        let builder =
+            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
-            RowSelector::select(1),
-            RowSelector::skip(15),
-            RowSelector::select(1),
-            RowSelector::skip(15),
-            RowSelector::select(1),
-            RowSelector::skip(15),
-            RowSelector::select(1),
-            RowSelector::skip(15),
+            RowSelector::select(50),
+            RowSelector::skip(100),
+            RowSelector::select(50),
+            RowSelector::skip(10),
         ]);
 
-        assert!(!builder.should_defer_selection(&absolute, 64, 1));
+        assert!(!builder.should_defer_selection(&absolute, 210, 1));
     }
 
     #[test]
-    fn test_should_not_defer_selection_with_dominant_long_skip_islands() {
-        let builder = ReadPlanBuilder::new(1024).with_scatter_threshold(Some(0.0001));
+    fn test_should_defer_when_only_selectivity_gate_fails() {
+        let builder =
+            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
-            RowSelector::select(600),
-            RowSelector::skip(128),
-            RowSelector::select(600),
-            RowSelector::skip(1),
-            RowSelector::select(600),
+            RowSelector::select(1000),
+            RowSelector::skip(100),
+            RowSelector::select(1000),
         ]);
 
-        // Skip selectivity is low enough to pass, but long skip islands dominate skipped rows.
-        assert!(!builder.should_defer_selection(&absolute, 1929, 1));
+        assert!(builder.should_defer_selection(&absolute, 2100, 1));
+    }
+
+    #[test]
+    fn test_should_defer_when_only_long_skip_share_gate_fails() {
+        let builder =
+            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(20),
+            RowSelector::skip(60),
+            RowSelector::select(20),
+            RowSelector::skip(20),
+        ]);
+
+        assert!(builder.should_defer_selection(&absolute, 120, 1));
+    }
+
+    #[test]
+    fn test_should_defer_when_both_non_deferral_gates_fail() {
+        let builder =
+            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(500),
+            RowSelector::skip(50),
+            RowSelector::select(500),
+            RowSelector::skip(10),
+        ]);
+
+        assert!(builder.should_defer_selection(&absolute, 1060, 1));
+    }
+
+    #[test]
+    fn test_long_run_threshold_counts_exactly_100_rows_as_long() {
+        let builder =
+            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let absolute = RowSelection::from(vec![
+            RowSelector::select(10),
+            RowSelector::skip(100),
+            RowSelector::select(10),
+            RowSelector::skip(20),
+        ]);
+
+        assert!(!builder.should_defer_selection(&absolute, 140, 1));
     }
 }
