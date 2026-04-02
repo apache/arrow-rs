@@ -88,14 +88,16 @@ pub(crate) fn follow_shredded_path_element<'a>(
                 return Ok(missing_path_step());
             };
 
-            // The field might be a VariantArray (StructArray) if shredded,
-            // or it might be a primitive array. Only proceed if it's a StructArray.
-            let Some(struct_array) = field.as_struct_opt() else {
-                // Field exists but is not a StructArray, so it cannot be
-                // followed further. Fall back to the value column if present,
-                // otherwise the path is missing.
-                return Ok(missing_path_step());
-            };
+            // In a shredded variant object, every field must be a struct containing
+            // `value` and/or `typed_value` sub-fields. A non-struct field here indicates
+            // malformed shredded data, so we error out regardless of cast safety mode.
+            let struct_array = field.as_struct_opt().ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Expected shredded variant struct for field '{}', got {}",
+                    name,
+                    field.data_type(),
+                ))
+            })?;
 
             let state = BorrowedShreddingState::try_from(struct_array)?;
             Ok(ShreddedPathStep::Success(state))
@@ -247,32 +249,36 @@ fn shredded_get_path(
                 cast_options,
             )?;
 
-            // When the field is entirely absent in the data, shredded_get_path
-            // returns a NullArray. For variant fields, construct an all-null
-            // VariantArray so the extension metadata is preserved.
-            let child = if is_variant_field && child.data_type() == &DataType::Null {
-                let mut builder = VariantArrayBuilder::new(child.len());
-                for _ in 0..child.len() {
-                    builder.append_null();
-                }
-                let null_variant = builder.build();
-                Arc::new(null_variant.into_inner()) as ArrayRef
-            } else {
-                child
-            };
-
-            // Update field data type to match the actual child array.
-            // Preserve VariantType extension metadata for variant fields so
-            // downstream consumers can recognize them as Variant columns.
-            let mut new_field = field
-                .as_ref()
-                .clone()
-                .with_data_type(child.data_type().clone());
             if is_variant_field {
-                new_field = new_field.with_extension_type(VariantType);
+                // Variant field: the child's actual data type (VariantArray's internal
+                // StructArray) differs from the user's declared type (empty Struct),
+                // so we must update the field's data type and re-attach VariantType.
+                //
+                // When the field is entirely absent, shredded_get_path returns a
+                // NullArray. Construct an all-null VariantArray so the extension
+                // metadata is preserved.
+                let child = if child.data_type() == &DataType::Null {
+                    let mut builder = VariantArrayBuilder::new(child.len());
+                    for _ in 0..child.len() {
+                        builder.append_null();
+                    }
+                    Arc::new(builder.build().into_inner()) as ArrayRef
+                } else {
+                    child
+                };
+                let new_field = field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(child.data_type().clone())
+                    .with_extension_type(VariantType);
+                updated_fields.push(new_field);
+                children.push(child);
+            } else {
+                // Strongly typed field: the child data type already matches the
+                // requested field type, so we can use the field as-is.
+                updated_fields.push(field.as_ref().clone());
+                children.push(child);
             }
-            updated_fields.push(new_field);
-            children.push(child);
         }
 
         let struct_nulls = target.nulls().cloned();
