@@ -87,7 +87,7 @@ mod tests {
         fs::read_dir(dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "page"))
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "page"))
             .count()
     }
 
@@ -162,7 +162,7 @@ mod tests {
         let meta = tmp.path().join("data.parquet");
 
         let batch = sample_batch();
-        let metadata = write_batches(&store, &meta, &[batch.clone()], None).unwrap();
+        let metadata = write_batches(&store, &meta, std::slice::from_ref(&batch), None).unwrap();
 
         assert_eq!(metadata.num_row_groups(), 1);
         assert_eq!(metadata.file_metadata().num_rows(), 5);
@@ -238,7 +238,7 @@ mod tests {
         let meta = tmp.path().join("data.parquet");
 
         let batch = large_batch(1_000_000);
-        write_batches(&store, &meta, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta, std::slice::from_ref(&batch), None).unwrap();
 
         // Must have produced more than one page per column
         assert!(count_page_files(&store) > batch.num_columns());
@@ -331,7 +331,7 @@ mod tests {
         ])
         .unwrap();
 
-        write_batches(&store, &meta, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta, std::slice::from_ref(&batch), None).unwrap();
         let batches = PageStoreReader::try_new(&meta, &store)
             .unwrap()
             .read_batches()
@@ -351,7 +351,7 @@ mod tests {
         )])
         .unwrap();
 
-        write_batches(&store, &meta, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta, std::slice::from_ref(&batch), None).unwrap();
         let batches = PageStoreReader::try_new(&meta, &store)
             .unwrap()
             .read_batches()
@@ -378,7 +378,7 @@ mod tests {
         let batch =
             RecordBatch::try_from_iter(vec![("s", Arc::new(struct_array) as ArrayRef)]).unwrap();
 
-        write_batches(&store, &meta, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta, std::slice::from_ref(&batch), None).unwrap();
         let batches = PageStoreReader::try_new(&meta, &store)
             .unwrap()
             .read_batches()
@@ -403,7 +403,7 @@ mod tests {
         let batch =
             RecordBatch::try_from_iter(vec![("items", Arc::new(list) as ArrayRef)]).unwrap();
 
-        write_batches(&store, &meta, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta, std::slice::from_ref(&batch), None).unwrap();
         let batches = PageStoreReader::try_new(&meta, &store)
             .unwrap()
             .read_batches()
@@ -422,7 +422,7 @@ mod tests {
         let meta = tmp.path().join("data.parquet");
 
         let batch = sample_batch();
-        write_batches(&store, &meta, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta, std::slice::from_ref(&batch), None).unwrap();
 
         let total: usize = PageStoreReader::try_new(&meta, &store)
             .unwrap()
@@ -444,7 +444,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
             .build();
-        write_batches(&store, &meta, &[batch.clone()], Some(props)).unwrap();
+        write_batches(&store, &meta, std::slice::from_ref(&batch), Some(props)).unwrap();
 
         let batches = PageStoreReader::try_new(&meta, &store)
             .unwrap()
@@ -499,10 +499,10 @@ mod tests {
 
         let batch = sample_batch();
 
-        write_batches(&store, &meta_a, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta_a, std::slice::from_ref(&batch), None).unwrap();
         let pages_after_first = count_page_files(&store);
 
-        write_batches(&store, &meta_b, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta_b, std::slice::from_ref(&batch), None).unwrap();
         let pages_after_second = count_page_files(&store);
 
         assert_eq!(pages_after_first, pages_after_second);
@@ -531,7 +531,7 @@ mod tests {
         fs::create_dir_all(meta.parent().unwrap()).unwrap();
 
         let batch = sample_batch();
-        write_batches(&store, &meta, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta, std::slice::from_ref(&batch), None).unwrap();
 
         let batches = PageStoreReader::try_new(&meta, &store)
             .unwrap()
@@ -551,7 +551,7 @@ mod tests {
         for entry in fs::read_dir(&store).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "page") {
+            if path.extension().is_some_and(|ext| ext == "page") {
                 let data = fs::read(&path).unwrap();
                 let hash = blake3::hash(&data);
                 let expected = format!("{}.page", hash.to_hex());
@@ -602,7 +602,7 @@ mod tests {
         let meta = tmp.path().join("data.parquet");
 
         let batch = sample_batch();
-        write_batches(&store, &meta, &[batch.clone()], None).unwrap();
+        write_batches(&store, &meta, std::slice::from_ref(&batch), None).unwrap();
 
         let schema = PageStoreReader::try_new(&meta, &store)
             .unwrap()
@@ -646,7 +646,7 @@ mod tests {
         let first_page = fs::read_dir(&store)
             .unwrap()
             .filter_map(|e| e.ok())
-            .find(|e| e.path().extension().map_or(false, |ext| ext == "page"))
+            .find(|e| e.path().extension().is_some_and(|ext| ext == "page"))
             .unwrap();
         fs::remove_file(first_page.path()).unwrap();
 

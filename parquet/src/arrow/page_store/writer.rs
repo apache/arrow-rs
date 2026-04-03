@@ -196,6 +196,7 @@ fn make_column_writer(
     Ok(crate::arrow::arrow_writer::ArrowColumnWriter { chunk, writer })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_writers_for_type(
     data_type: &ArrowDataType,
     props: &WriterPropertiesPtr,
@@ -446,9 +447,8 @@ impl PageStoreWriter {
         let mut total_byte_size = 0i64;
 
         let mut cumulative_offset: i64 = self.next_page_offset;
-        let mut col_idx = 0usize;
 
-        for chunk in chunks {
+        for (col_idx, chunk) in chunks.into_iter().enumerate() {
             let mut close = chunk.close;
             total_byte_size += close.metadata.uncompressed_size();
 
@@ -479,7 +479,6 @@ impl PageStoreWriter {
                 }
             }
 
-            col_idx += 1;
             cumulative_offset += close.metadata.compressed_size();
 
             column_metadata.push(close.metadata);
