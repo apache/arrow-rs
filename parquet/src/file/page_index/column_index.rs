@@ -275,10 +275,17 @@ impl<T: ParquetValueType> WriteThrift for PrimitiveColumnIndex<T> {
                 .write_thrift_field(writer, 6, last_field_id)?;
         }
         if self.definition_level_histograms.is_some() {
-            self.definition_level_histograms
+            last_field_id = self
+                .definition_level_histograms
                 .as_ref()
                 .unwrap()
                 .write_thrift_field(writer, 7, last_field_id)?;
+        }
+        if self.nan_counts.is_some() {
+            self.nan_counts
+                .as_ref()
+                .unwrap()
+                .write_thrift_field(writer, 8, last_field_id)?;
         }
         writer.write_struct_end()
     }
@@ -458,10 +465,17 @@ impl WriteThrift for ByteArrayColumnIndex {
                 .write_thrift_field(writer, 6, last_field_id)?;
         }
         if self.definition_level_histograms.is_some() {
-            self.definition_level_histograms
+            last_field_id = self
+                .definition_level_histograms
                 .as_ref()
                 .unwrap()
                 .write_thrift_field(writer, 7, last_field_id)?;
+        }
+        if self.nan_counts.is_some() {
+            self.nan_counts
+                .as_ref()
+                .unwrap()
+                .write_thrift_field(writer, 8, last_field_id)?;
         }
         writer.write_struct_end()
     }
