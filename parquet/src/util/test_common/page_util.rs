@@ -75,7 +75,7 @@ impl DataPageBuilderImpl {
         if max_level <= 0 {
             return 0;
         }
-        let mut level_encoder = LevelEncoder::v1_streaming(Encoding::RLE, max_level);
+        let mut level_encoder = LevelEncoder::v1_streaming(max_level);
         level_encoder.put(levels);
         let encoded_levels = level_encoder.consume();
         // Actual encoded bytes (without length offset)

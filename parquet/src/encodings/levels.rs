@@ -19,43 +19,32 @@ use std::mem;
 
 use super::rle::RleEncoder;
 
-use crate::basic::Encoding;
 use crate::data_type::AsBytes;
-use crate::util::bit_util::{BitWriter, num_required_bits};
+use crate::util::bit_util::num_required_bits;
 
 /// Encoder for definition/repetition levels.
 /// Currently only supports Rle and BitPacked (dev/null) encoding, including v2.
 pub enum LevelEncoder {
     Rle(RleEncoder),
     RleV2(RleEncoder),
-    BitPacked(u8, BitWriter),
 }
 
 impl LevelEncoder {
     /// Creates a new streaming level encoder for Data Page v1.
     ///
-    /// Unlike [`v1`](Self::v1), this does not require knowing the number of values
+    /// This does not require knowing the number of values
     /// upfront, making it suitable for incremental encoding where levels are fed in
     /// as they arrive via [`put`](Self::put).
-    pub fn v1_streaming(encoding: Encoding, max_level: i16) -> Self {
+    pub fn v1_streaming(max_level: i16) -> Self {
         let bit_width = num_required_bits(max_level as u64);
-        match encoding {
-            Encoding::RLE => {
-                // Reserve space for length header
-                let buffer = vec![0u8; 4];
-                LevelEncoder::Rle(RleEncoder::new_from_buf(bit_width, buffer))
-            }
-            #[allow(deprecated)]
-            Encoding::BIT_PACKED => {
-                LevelEncoder::BitPacked(bit_width, BitWriter::new_from_buf(Vec::new()))
-            }
-            _ => panic!("Unsupported encoding type {encoding}"),
-        }
+        // Reserve space for length header
+        let buffer = vec![0u8; 4];
+        LevelEncoder::Rle(RleEncoder::new_from_buf(bit_width, buffer))
     }
 
     /// Creates a new streaming RLE level encoder for Data Page v2.
     ///
-    /// Unlike [`v2`](Self::v2), this does not require knowing the number of values
+    /// This does not require knowing the number of values
     /// upfront, making it suitable for incremental encoding where levels are fed in
     /// as they arrive via [`put`](Self::put).
     pub fn v2_streaming(max_level: i16) -> Self {
@@ -80,12 +69,6 @@ impl LevelEncoder {
                     num_encoded += 1;
                 }
             }
-            LevelEncoder::BitPacked(bit_width, ref mut encoder) => {
-                for value in buffer {
-                    encoder.put_value(*value as u64, bit_width as usize);
-                    num_encoded += 1;
-                }
-            }
         }
         num_encoded
     }
@@ -106,7 +89,6 @@ impl LevelEncoder {
                 encoded_data
             }
             LevelEncoder::RleV2(encoder) => encoder.consume(),
-            LevelEncoder::BitPacked(_, encoder) => encoder.consume(),
         }
     }
 
@@ -126,7 +108,6 @@ impl LevelEncoder {
                 f(data)
             }
             LevelEncoder::RleV2(encoder) => f(encoder.flush_buffer()),
-            LevelEncoder::BitPacked(_, encoder) => f(encoder.flush_buffer()),
         };
         match self {
             LevelEncoder::Rle(encoder) => {
@@ -135,7 +116,6 @@ impl LevelEncoder {
                 encoder.skip(mem::size_of::<i32>());
             }
             LevelEncoder::RleV2(encoder) => encoder.clear(),
-            LevelEncoder::BitPacked(_, encoder) => encoder.clear(),
         }
         result
     }
