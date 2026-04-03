@@ -314,7 +314,7 @@ fn cmd_write(
 
     let page_files = std::fs::read_dir(store)?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "page"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "page"))
         .count();
     eprintln!(
         "Page store: {} page file(s) in {}",

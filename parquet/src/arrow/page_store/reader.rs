@@ -110,7 +110,7 @@ impl PageStoreReader {
         )?))
     }
 
-    /// Build a streaming [`ParquetRecordBatchReader`] over the page store.
+    /// Build a streaming `ParquetRecordBatchReader` over the page store.
     ///
     /// Prefer this over [`Self::read_batches`] for large files — batches are
     /// decoded on-demand and only one batch is held in memory at a time.
