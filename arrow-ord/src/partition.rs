@@ -21,9 +21,9 @@ use std::ops::Range;
 
 use arrow_array::{Array, ArrayRef};
 use arrow_buffer::BooleanBuffer;
-use arrow_schema::{ArrowError, DataType, SortOptions};
+use arrow_schema::{ArrowError, SortOptions};
 
-use crate::cmp::distinct;
+use crate::cmp::{distinct, supports_distinct};
 use crate::ord::make_comparator;
 
 /// A computed set of partitions, see [`partition`]
@@ -150,23 +150,6 @@ pub fn partition(columns: &[ArrayRef]) -> Result<Partitions, ArrowError> {
         .try_fold(acc, |acc, c| find_boundaries(c.as_ref()).map(|b| &acc | &b))?;
 
     Ok(Partitions(Some(acc)))
-}
-
-/// Returns true if `distinct` (via `compare_op`) can handle this data type.
-///
-/// `compare_op` unwraps at most one level of dictionary, then dispatches on
-/// the leaf type. Anything else (REE, nested dictionary, nested/complex types)
-/// must go through `make_comparator` instead.
-fn supports_distinct(dt: &DataType) -> bool {
-    let leaf = match dt {
-        DataType::Dictionary(_, v) => v.as_ref(),
-        dt => dt,
-    };
-    !leaf.is_nested()
-        && !matches!(
-            leaf,
-            DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
-        )
 }
 
 /// Returns a mask with bits set whenever the value or nullability changes
