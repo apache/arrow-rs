@@ -77,7 +77,7 @@ fn main() -> parquet::errors::Result<()> {
     let page_files: Vec<_> = std::fs::read_dir(&store_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "page"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "page"))
         .collect();
     println!("Page files in store: {}", page_files.len());
 
