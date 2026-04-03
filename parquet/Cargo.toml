@@ -171,6 +171,11 @@ required-features = ["arrow"]
 path = "./tests/arrow_writer.rs"
 
 [[test]]
+name = "ieee754_nan_interop"
+required-features = ["arrow"]
+path = "./tests/ieee754_nan_interop.rs"
+
+[[test]]
 name = "encryption"
 required-features = ["arrow"]
 path = "./tests/encryption/mod.rs"
