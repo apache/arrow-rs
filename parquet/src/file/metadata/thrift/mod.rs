@@ -208,6 +208,8 @@ fn convert_stats(
                 .transpose()?;
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // Generic nan count for floating point types
+            let nan_count = stats.nan_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
             let old_format = stats.min_value.is_none() && stats.max_value.is_none();
             // Generic min value as bytes.
@@ -288,19 +290,25 @@ fn convert_stats(
                     };
                     FStatistics::int96(min, max, distinct_count, null_count, old_format)
                 }
-                Type::FLOAT => FStatistics::float(
-                    min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::FLOAT => FStatistics::Float(
+                    ValueStatistics::new(
+                        min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count),
                 ),
-                Type::DOUBLE => FStatistics::double(
-                    min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::DOUBLE => FStatistics::Double(
+                    ValueStatistics::new(
+                        min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count),
                 ),
                 Type::BYTE_ARRAY => FStatistics::ByteArray(
                     ValueStatistics::new(
@@ -321,6 +329,7 @@ fn convert_stats(
                         null_count,
                         old_format,
                     )
+                    .with_nan_count(nan_count)
                     .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
                     .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
