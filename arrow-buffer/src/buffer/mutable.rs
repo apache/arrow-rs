@@ -450,7 +450,13 @@ impl MutableBuffer {
 
     /// Clear all existing data from this buffer.
     pub fn clear(&mut self) {
-        self.len = 0
+        self.len = 0;
+        #[cfg(feature = "pool")]
+        {
+            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
+                reservation.resize(self.len);
+            }
+        }
     }
 
     /// Returns the data stored in this buffer as a slice.
@@ -1371,7 +1377,7 @@ mod tests {
             assert_eq!(pool.used(), 40);
 
             // Truncate to zero
-            buffer.truncate(0);
+            buffer.clear();
             assert_eq!(buffer.len(), 0);
             assert_eq!(pool.used(), 0);
         }

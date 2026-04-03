@@ -580,6 +580,9 @@ impl ByteArrayDecoderDictionary {
             return Ok(0);
         }
 
+        // Pre-reserve offsets capacity to avoid per-chunk reallocation
+        output.offsets.reserve(len);
+
         self.decoder.read(len, |keys| {
             output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice())
         })

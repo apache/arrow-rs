@@ -17,6 +17,8 @@
 
 //! Contains writer which writes arrow data into parquet data.
 
+use crate::column::chunker::ContentDefinedChunker;
+
 use bytes::Bytes;
 use std::io::{Read, Write};
 use std::iter::Peekable;
@@ -192,6 +194,9 @@ pub struct ArrowWriter<W: Write> {
 
     /// The maximum size in bytes for a row group, or None for unlimited
     max_row_group_bytes: Option<usize>,
+
+    /// CDC chunkers persisted across row groups (one per leaf column).
+    cdc_chunkers: Option<Vec<ContentDefinedChunker>>,
 }
 
 impl<W: Write + Send> std::fmt::Debug for ArrowWriter<W> {
@@ -261,6 +266,18 @@ impl<W: Write + Send> ArrowWriter<W> {
         let row_group_writer_factory =
             ArrowRowGroupWriterFactory::new(&file_writer, arrow_schema.clone());
 
+        let cdc_chunkers = props_ptr
+            .content_defined_chunking()
+            .map(|opts| {
+                file_writer
+                    .schema_descr()
+                    .columns()
+                    .iter()
+                    .map(|desc| ContentDefinedChunker::new(desc, opts))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+
         Ok(Self {
             writer: file_writer,
             in_progress: None,
@@ -268,6 +285,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             row_group_writer_factory,
             max_row_group_row_count,
             max_row_group_bytes,
+            cdc_chunkers,
         })
     }
 
@@ -383,7 +401,10 @@ impl<W: Write + Send> ArrowWriter<W> {
             }
         }
 
-        in_progress.write(batch)?;
+        match self.cdc_chunkers.as_mut() {
+            Some(chunkers) => in_progress.write_with_chunkers(batch, chunkers)?,
+            None => in_progress.write(batch)?,
+        }
 
         let should_flush = self
             .max_row_group_row_count
@@ -869,20 +890,50 @@ enum ArrowColumnWriterImpl {
 impl ArrowColumnWriter {
     /// Write an [`ArrowLeafColumn`]
     pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
+        self.write_internal(&col.0)
+    }
+
+    /// Write with content-defined chunking, inserting page flushes at chunk boundaries.
+    fn write_with_chunker(
+        &mut self,
+        col: &ArrowLeafColumn,
+        chunker: &mut ContentDefinedChunker,
+    ) -> Result<()> {
+        let levels = &col.0;
+        let chunks =
+            chunker.get_arrow_chunks(levels.def_levels(), levels.rep_levels(), levels.array())?;
+
+        let num_chunks = chunks.len();
+        for (i, chunk) in chunks.iter().enumerate() {
+            let chunk_levels = levels.slice_for_chunk(chunk);
+            self.write_internal(&chunk_levels)?;
+
+            // Add a page break after each chunk except the last
+            if i + 1 < num_chunks {
+                match &mut self.writer {
+                    ArrowColumnWriterImpl::Column(c) => c.add_data_page()?,
+                    ArrowColumnWriterImpl::ByteArray(c) => c.add_data_page()?,
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_internal(&mut self, levels: &ArrayLevels) -> Result<()> {
         match &mut self.writer {
             ArrowColumnWriterImpl::Column(c) => {
-                let leaf = col.0.array();
+                let leaf = levels.array();
                 match leaf.as_any_dictionary_opt() {
                     Some(dictionary) => {
                         let materialized =
                             arrow_select::take::take(dictionary.values(), dictionary.keys(), None)?;
-                        write_leaf(c, &materialized, &col.0)?
+                        write_leaf(c, &materialized, levels)?
                     }
-                    None => write_leaf(c, leaf, &col.0)?,
+                    None => write_leaf(c, leaf, levels)?,
                 };
             }
             ArrowColumnWriterImpl::ByteArray(c) => {
-                write_primitive(c, col.0.array().as_ref(), &col.0)?;
+                write_primitive(c, levels.array().as_ref(), levels)?;
             }
         }
         Ok(())
@@ -958,7 +1009,26 @@ impl ArrowRowGroupWriter {
         let mut writers = self.writers.iter_mut();
         for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
             for leaf in compute_leaves(field.as_ref(), column)? {
-                writers.next().unwrap().write(&leaf)?
+                writers.next().unwrap().write(&leaf)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_with_chunkers(
+        &mut self,
+        batch: &RecordBatch,
+        chunkers: &mut [ContentDefinedChunker],
+    ) -> Result<()> {
+        self.buffered_rows += batch.num_rows();
+        let mut writers = self.writers.iter_mut();
+        let mut chunkers = chunkers.iter_mut();
+        for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column)? {
+                writers
+                    .next()
+                    .unwrap()
+                    .write_with_chunker(&leaf, chunkers.next().unwrap())?;
             }
         }
         Ok(())

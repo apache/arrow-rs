@@ -15,16 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use arrow_array::{ArrayRef, MapArray, StructArray};
+use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::{ArrowNativeType, OffsetBuffer, ScalarBuffer};
+use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
+
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
-use arrow_buffer::ArrowNativeType;
-use arrow_buffer::buffer::NullBuffer;
-use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType};
 
 pub struct MapArrayDecoder {
-    data_type: DataType,
+    entries_field: FieldRef,
+    key_value_fields: Fields,
+    ordered: bool,
     keys: Box<dyn ArrayDecoder>,
     values: Box<dyn ArrayDecoder>,
     is_nullable: bool,
@@ -36,28 +41,38 @@ impl MapArrayDecoder {
         data_type: &DataType,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
-        let fields = match data_type {
+        let (entries_field, ordered) = match data_type {
             DataType::Map(_, true) => {
                 return Err(ArrowError::NotYetImplemented(
                     "Decoding MapArray with sorted fields".to_string(),
                 ));
             }
-            DataType::Map(f, _) => match f.data_type() {
-                DataType::Struct(fields) if fields.len() == 2 => fields,
-                d => {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "MapArray must contain struct with two fields, got {d}"
-                    )));
-                }
-            },
+            DataType::Map(f, ordered) => (f.clone(), *ordered),
             _ => unreachable!(),
         };
 
-        let keys = ctx.make_decoder(fields[0].data_type(), fields[0].is_nullable())?;
-        let values = ctx.make_decoder(fields[1].data_type(), fields[1].is_nullable())?;
+        let key_value_fields = match entries_field.data_type() {
+            DataType::Struct(fields) if fields.len() == 2 => fields.clone(),
+            d => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "MapArray must contain struct with two fields, got {d}"
+                )));
+            }
+        };
+
+        let keys = ctx.make_decoder(
+            key_value_fields[0].data_type(),
+            key_value_fields[0].is_nullable(),
+        )?;
+        let values = ctx.make_decoder(
+            key_value_fields[1].data_type(),
+            key_value_fields[1].is_nullable(),
+        )?;
 
         Ok(Self {
-            data_type: data_type.clone(),
+            entries_field,
+            key_value_fields,
+            ordered,
             keys,
             values,
             is_nullable,
@@ -66,15 +81,7 @@ impl MapArrayDecoder {
 }
 
 impl ArrayDecoder for MapArrayDecoder {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        let s = match &self.data_type {
-            DataType::Map(f, _) => match f.data_type() {
-                s @ DataType::Struct(_) => s,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        };
-
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut offsets = BufferBuilder::<i32>::new(pos.len() + 1);
         offsets.append(0);
 
@@ -110,34 +117,37 @@ impl ArrayDecoder for MapArrayDecoder {
             }
 
             let offset = i32::from_usize(key_pos.len()).ok_or_else(|| {
-                ArrowError::JsonError(format!("offset overflow decoding {}", self.data_type))
+                ArrowError::JsonError("offset overflow decoding MapArray".to_string())
             })?;
             offsets.append(offset)
         }
 
         assert_eq!(key_pos.len(), value_pos.len());
 
-        let key_data = self.keys.decode(tape, &key_pos)?;
-        let value_data = self.values.decode(tape, &value_pos)?;
+        let key_array = self.keys.decode(tape, &key_pos)?;
+        let value_array = self.values.decode(tape, &value_pos)?;
 
-        let struct_data = ArrayDataBuilder::new(s.clone())
-            .len(key_pos.len())
-            .child_data(vec![key_data, value_data]);
-
-        // Safety:
-        // Valid by construction
-        let struct_data = unsafe { struct_data.build_unchecked() };
+        // SAFETY: fields/arrays match the schema, lengths are equal, no nulls
+        let entries = unsafe {
+            StructArray::new_unchecked_with_length(
+                self.key_value_fields.clone(),
+                vec![key_array, value_array],
+                None,
+                key_pos.len(),
+            )
+        };
 
         let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
+        // SAFETY: offsets are built monotonically starting from 0
+        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets.finish())) };
 
-        let builder = ArrayDataBuilder::new(self.data_type.clone())
-            .len(pos.len())
-            .buffers(vec![offsets.finish()])
-            .nulls(nulls)
-            .child_data(vec![struct_data]);
-
-        // Safety:
-        // Valid by construction
-        Ok(unsafe { builder.build_unchecked() })
+        let array = MapArray::try_new(
+            self.entries_field.clone(),
+            offsets,
+            entries,
+            nulls,
+            self.ordered,
+        )?;
+        Ok(Arc::new(array))
     }
 }

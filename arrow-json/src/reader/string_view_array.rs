@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::Array;
+use std::fmt::Write;
+use std::sync::Arc;
+
+use arrow_array::ArrayRef;
 use arrow_array::builder::GenericByteViewBuilder;
 use arrow_array::types::StringViewType;
-use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
-use std::fmt::Write;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
@@ -39,7 +40,7 @@ impl StringViewArrayDecoder {
 }
 
 impl ArrayDecoder for StringViewArrayDecoder {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let coerce = self.coerce_primitive;
         let mut data_capacity = 0;
         for &p in pos {
@@ -159,7 +160,6 @@ impl ArrayDecoder for StringViewArrayDecoder {
             }
         }
 
-        let array = builder.finish();
-        Ok(array.into_data())
+        Ok(Arc::new(builder.finish()))
     }
 }

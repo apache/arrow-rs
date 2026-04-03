@@ -500,6 +500,9 @@ impl ByteViewArrayDecoderDictionary {
         // then the base_buffer_idx is 5 - 2 = 3
         let base_buffer_idx = output.buffers.len() as u32 - dict.buffers.len() as u32;
 
+        // Pre-reserve output capacity to avoid per-chunk reallocation in extend
+        output.views.reserve(len);
+
         let mut error = None;
         let read = self.decoder.read(len, |keys| {
             if base_buffer_idx == 0 {

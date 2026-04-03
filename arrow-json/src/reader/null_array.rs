@@ -15,21 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use arrow_array::{ArrayRef, NullArray};
+use arrow_schema::ArrowError;
+
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
-use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType};
 
 #[derive(Default)]
 pub struct NullArrayDecoder {}
 
 impl ArrayDecoder for NullArrayDecoder {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         for p in pos {
             if !matches!(tape.get(*p), TapeElement::Null) {
                 return Err(tape.error(*p, "null"));
             }
         }
-        ArrayDataBuilder::new(DataType::Null).len(pos.len()).build()
+        Ok(Arc::new(NullArray::new(pos.len())))
     }
 }

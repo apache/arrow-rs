@@ -179,17 +179,17 @@ impl JsonSerializable for f64 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use crate::writer::JsonArray;
-
     use super::*;
-
+    use crate::writer::JsonArray;
+    use crate::writer::LineDelimited;
     use arrow_array::{
-        ArrayRef, GenericBinaryArray, GenericByteViewArray, RecordBatch, RecordBatchWriter,
-        builder::FixedSizeBinaryBuilder, types::BinaryViewType,
+        ArrayRef, GenericBinaryArray, GenericByteViewArray, GenericListViewArray, RecordBatch,
+        RecordBatchWriter, builder::FixedSizeBinaryBuilder, types::BinaryViewType,
     };
+    use arrow_schema::{DataType, Field, Fields, Schema};
     use serde_json::Value::{Bool, Number as VNumber, String as VString};
+    use std::io::Cursor;
+    use std::sync::Arc;
 
     #[test]
     fn test_arrow_native_type_to_json() {
@@ -216,13 +216,6 @@ mod tests {
 
     #[test]
     fn test_json_roundtrip_structs() {
-        use crate::writer::LineDelimited;
-        use arrow_schema::DataType;
-        use arrow_schema::Field;
-        use arrow_schema::Fields;
-        use arrow_schema::Schema;
-        use std::sync::Arc;
-
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "c1",
@@ -351,5 +344,50 @@ mod tests {
         };
 
         assert_eq!(batch, decoded);
+    }
+
+    fn assert_list_view_roundtrip<O: arrow_array::OffsetSizeTrait>() {
+        let flat_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let flat_dt = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(flat_field);
+
+        let nested_inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let nested_inner_dt = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(nested_inner);
+        let nested_outer = Arc::new(Field::new("item", nested_inner_dt, true));
+        let nested_dt = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(nested_outer);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("flat", flat_dt, true),
+            Field::new("nested", nested_dt, true),
+        ]));
+
+        let input = r#"{"flat":[1,2,3],"nested":[[1,2],[3]]}
+{"flat":[4,null]}
+{}
+{"flat":[6],"nested":[[4,5,6]]}
+{"flat":[]}
+"#
+        .as_bytes();
+
+        let batches: Vec<RecordBatch> = ReaderBuilder::new(schema.clone())
+            .with_batch_size(1024)
+            .build(Cursor::new(input))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let mut output = Vec::new();
+        let mut writer = WriterBuilder::new().build::<_, LineDelimited>(&mut output);
+        for batch in &batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        assert_eq!(input, &output);
+    }
+
+    #[test]
+    fn test_json_roundtrip_list_view() {
+        assert_list_view_roundtrip::<i32>();
+        assert_list_view_roundtrip::<i64>();
     }
 }
