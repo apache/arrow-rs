@@ -1,29 +1,48 @@
+<!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+
 # Parquet Page Store — Deduplication Demo
 
 > **Prototype**: This is an experimental feature exploring content-defined
-> chunking for Parquet.  APIs and file formats may change.
+> chunking for Parquet. APIs and file formats may change.
 
 Demonstrates how Content-Defined Chunking (CDC) enables efficient deduplication
 across multiple versions of a dataset using the Parquet page store writer in
-Apache Arrow Rust.  The deduplication is self-contained in the Parquet writer —
+Apache Arrow Rust. The deduplication is self-contained in the Parquet writer —
 no special storage system is required.
 
 ## What this demo shows
 
 Four common dataset operations are applied to a real-world dataset
 ([OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5)
-conversational data, ~800 MB per file).  Each operation produces a separate
-Parquet file.  Without a page store, storing all four files costs the full sum
-of their sizes.  With the CDC page store, identical pages are stored **exactly
+conversational data, ~800 MB per file). Each operation produces a separate
+Parquet file. Without a page store, storing all four files costs the full sum
+of their sizes. With the CDC page store, identical pages are stored **exactly
 once** — indexed by their BLAKE3 hash — so the four files share most of their
-bytes.  The resulting files can be stored anywhere.
+bytes. The resulting files can be stored anywhere.
 
-| File | Operation |
-|------|-----------|
-| `original.parquet` | Baseline dataset (~996k rows) |
-| `filtered.parquet` | Keep rows where `num_turns ≤ 3` |
+| File                | Operation                              |
+| ------------------- | -------------------------------------- |
+| `original.parquet`  | Baseline dataset (~996k rows)          |
+| `filtered.parquet`  | Keep rows where `num_turns ≤ 3`        |
 | `augmented.parquet` | Original + computed column `num_turns` |
-| `appended.parquet` | Original + 5 000 new rows appended |
+| `appended.parquet`  | Original + 5 000 new rows appended     |
 
 ## Prerequisites
 
@@ -52,6 +71,7 @@ python pipeline.py --skip-prepare --skip-build --skip-ingest  # stats only
 ```
 
 Outputs:
+
 - `page_store_concept.png` — architectural overview of how shared pages work
 - `page_store_savings.png` — side-by-side storage comparison with real numbers
 
@@ -62,7 +82,7 @@ python pipeline.py --file /path/to/your.parquet
 ```
 
 The script requires a `conversations` list column for the filtered and augmented
-variants.  Adapt `pipeline.py` to your own schema as needed.
+variants. Adapt `pipeline.py` to your own schema as needed.
 
 ## Results
 
@@ -70,34 +90,34 @@ Dataset: **OpenHermes-2.5** (short conversations, `num_turns < 10`)
 
 ### Dataset variants
 
-| File | Operation | Rows | Size |
-|------|-----------|------|------|
-| `original.parquet` | Baseline | 996,009 | 782.1 MB |
-| `filtered.parquet` | Keep `num_turns ≤ 3` (removes 0.2% of rows) | 993,862 | 776.8 MB |
-| `augmented.parquet` | Add column `num_turns` | 996,009 | 782.2 MB |
-| `appended.parquet` | Append 5,000 rows | 1,001,009 | 788.6 MB |
-| **Total** | | | **3,129.7 MB** |
+| File                | Operation                                   | Rows      | Size           |
+| ------------------- | ------------------------------------------- | --------- | -------------- |
+| `original.parquet`  | Baseline                                    | 996,009   | 782.1 MB       |
+| `filtered.parquet`  | Keep `num_turns ≤ 3` (removes 0.2% of rows) | 993,862   | 776.8 MB       |
+| `augmented.parquet` | Add column `num_turns`                      | 996,009   | 782.2 MB       |
+| `appended.parquet`  | Append 5,000 rows                           | 1,001,009 | 788.6 MB       |
+| **Total**           |                                             |           | **3,129.7 MB** |
 
 ### Page store results
 
-| Metric | Value |
-|--------|-------|
-| Unique pages stored | 3,400 |
-| Total page references | 15,179 |
-| Page store size | 559.0 MB |
-| Metadata files size | 4.4 MB |
-| **Page store + metadata** | **563.4 MB** |
-| **Storage saved** | **2,566.3 MB (82%)** |
-| **Deduplication ratio** | **5.6×** |
+| Metric                    | Value                |
+| ------------------------- | -------------------- |
+| Unique pages stored       | 3,400                |
+| Total page references     | 15,179               |
+| Page store size           | 559.0 MB             |
+| Metadata files size       | 4.4 MB               |
+| **Page store + metadata** | **563.4 MB**         |
+| **Storage saved**         | **2,566.3 MB (82%)** |
+| **Deduplication ratio**   | **5.6×**             |
 
 ### Per-file page breakdown
 
-| File | Page refs | Unique hashes | New pages | Reused pages |
-|------|-----------|---------------|-----------|--------------|
-| `original.parquet` | 3,782 | 3,100 | 3,100 | 0 |
-| `filtered.parquet` | 3,755 | 3,075 | 222 | 2,853 (92%) |
-| `augmented.parquet` | 3,834 | 3,136 | 36 | 3,100 (98%) |
-| `appended.parquet` | 3,808 | 3,125 | 42 | 3,083 (98%) |
+| File                | Page refs | Unique hashes | New pages | Reused pages |
+| ------------------- | --------- | ------------- | --------- | ------------ |
+| `original.parquet`  | 3,782     | 3,100         | 3,100     | 0            |
+| `filtered.parquet`  | 3,755     | 3,075         | 222       | 2,853 (92%)  |
+| `augmented.parquet` | 3,834     | 3,136         | 36        | 3,100 (98%)  |
+| `appended.parquet`  | 3,808     | 3,125         | 42        | 3,083 (98%)  |
 
 ### Key insights
 
@@ -110,7 +130,7 @@ Dataset: **OpenHermes-2.5** (short conversations, `num_turns < 10`)
 
 3. **Filtering rows** (`filtered`): 92% of pages reused despite row removal.
    Removing just 0.2% of rows barely shifts CDC boundaries — most pages are
-   unchanged.  Heavier filtering (removing 20–50% of rows) would produce more new
+   unchanged. Heavier filtering (removing 20–50% of rows) would produce more new
    pages, as CDC boundaries shift further throughout the file.
 
 4. **Net result**: 4 dataset versions stored for **563 MB instead of 3.1 GB** — an
