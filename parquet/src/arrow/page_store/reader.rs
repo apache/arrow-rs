@@ -28,7 +28,7 @@ use bytes::Bytes;
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef};
 
-use super::{PageStoreManifest, MANIFEST_KEY};
+use super::{MANIFEST_KEY, PageStoreManifest};
 use crate::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
@@ -74,10 +74,7 @@ impl PageStoreReader {
     ///
     /// * `metadata_path` — path to the metadata-only `.parquet` file.
     /// * `store_dir` — directory containing `{hash}.page` blobs.
-    pub fn try_new(
-        metadata_path: impl AsRef<Path>,
-        store_dir: impl Into<PathBuf>,
-    ) -> Result<Self> {
+    pub fn try_new(metadata_path: impl AsRef<Path>, store_dir: impl Into<PathBuf>) -> Result<Self> {
         let store_dir = store_dir.into();
         let file = fs::File::open(metadata_path.as_ref())?;
 
@@ -119,8 +116,7 @@ impl PageStoreReader {
     /// decoded on-demand and only one batch is held in memory at a time.
     pub fn reader(&self) -> Result<crate::arrow::arrow_reader::ParquetRecordBatchReader> {
         let chunk_reader = PageStoreChunkReader::new(self.store_dir.clone(), &self.manifest);
-        let options =
-            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_metadata = ArrowReaderMetadata::try_new(Arc::clone(&self.metadata), options)?;
         ParquetRecordBatchReaderBuilder::new_with_metadata(chunk_reader, arrow_metadata).build()
     }
@@ -150,8 +146,7 @@ impl PageStoreReader {
             crate::errors::ParquetError::General(format!("'{MANIFEST_KEY}' has no value"))
         })?;
 
-        serde_json::from_str(value)
-            .map_err(|e| crate::errors::ParquetError::General(e.to_string()))
+        serde_json::from_str(value).map_err(|e| crate::errors::ParquetError::General(e.to_string()))
     }
 }
 

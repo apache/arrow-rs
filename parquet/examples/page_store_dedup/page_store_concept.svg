@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="792" height="680" viewBox="0 0 792 680">
+<defs>
+<marker markerWidth="4.1" markerHeight="6" viewBox="-0.1 -3 4.1 6" orient="auto" id="ah0">
+<path d="M0,-2.5 L3.5,0 L0,2.5 Z" fill="#4493f8" />
+</marker>
+<marker markerWidth="4.1" markerHeight="6" viewBox="-0.1 -3 4.1 6" orient="auto" id="ah1">
+<path d="M0,-2.5 L3.5,0 L0,2.5 Z" fill="#bc8cff" />
+</marker>
+<marker markerWidth="4.1" markerHeight="6" viewBox="-0.1 -3 4.1 6" orient="auto" id="ah2">
+<path d="M0,-2.5 L3.5,0 L0,2.5 Z" fill="#3fb950" />
+</marker>
+<marker markerWidth="4.1" markerHeight="6" viewBox="-0.1 -3 4.1 6" orient="auto" id="ah3">
+<path d="M0,-2.5 L3.5,0 L0,2.5 Z" fill="#f0883e" />
+</marker>
+</defs>
+<rect x="0" y="0" width="792" height="680" fill="#0f1117" />
+<path d="M0,0 L0,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M40,0 L40,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M80,0 L80,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M120,0 L120,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M160,0 L160,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M200,0 L200,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M240,0 L240,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M280,0 L280,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M320,0 L320,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M360,0 L360,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M400,0 L400,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M440,0 L440,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M480,0 L480,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M520,0 L520,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M560,0 L560,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M600,0 L600,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M640,0 L640,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M680,0 L680,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M720,0 L720,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M760,0 L760,680" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,0 L792,0" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,40 L792,40" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,80 L792,80" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,120 L792,120" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,160 L792,160" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,200 L792,200" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,240 L792,240" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,280 L792,280" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,320 L792,320" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,360 L792,360" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,400 L792,400" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,440 L792,440" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,480 L792,480" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,520 L792,520" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,560 L792,560" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,600 L792,600" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<path d="M0,640 L792,640" stroke="#ffffff" stroke-width="0.18" stroke-opacity="0.04" />
+<text x="396.0" y="32" font-size="22" text-anchor="middle" fill="#f0f6fc" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">Parquet Page Store</text>
+<text x="396.0" y="53" text-anchor="middle" font-family="ui-monospace,'SF Mono',monospace" font-size="11"><tspan fill="#6e7681">Deduplication built into the Arrow Rust Parquet writer using </tspan><tspan fill="#ffffff" font-weight="bold">Content-Defined Chunking</tspan></text>
+<path d="M166.0,63 L626.0,63" stroke="#2a2f3a" stroke-width="1" stroke-opacity="1.0" />
+<path d="M346.0,63 L446.0,63" stroke="#4493f8" stroke-width="2" stroke-opacity="0.45" />
+<text x="208.0" y="84" font-size="9" text-anchor="middle" fill="#6e7681" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">INPUT FILES</text>
+<text x="636.0" y="84" font-size="9" text-anchor="middle" fill="#6e7681" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">PAGE STORE</text>
+<rect x="508" y="94" width="256" height="458" fill="#0d1117" stroke="#2a2f3a" stroke-width="1.5" rx="10" ry="10" />
+<text x="524" y="114" font-size="11" text-anchor="start" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">pages/</text>
+<path d="M520,124 L752,124" stroke="#2a2f3a" stroke-width="1" stroke-opacity="1.0" />
+<rect x="535" y="139" width="62" height="46" fill="#4493f8" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="538" y="142" width="56" height="40" fill="#4493f8" fill-opacity="0.18" stroke="#4493f8" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="566.0" y="167.0" font-size="14" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">A</text>
+<text x="566.0" y="192" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#a3f9a…</text>
+<rect x="605" y="139" width="62" height="46" fill="#4493f8" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="608" y="142" width="56" height="40" fill="#4493f8" fill-opacity="0.18" stroke="#4493f8" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="636.0" y="167.0" font-size="14" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">B</text>
+<text x="636.0" y="192" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#b3f9a…</text>
+<rect x="675" y="139" width="62" height="46" fill="#4493f8" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="678" y="142" width="56" height="40" fill="#4493f8" fill-opacity="0.18" stroke="#4493f8" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="706.0" y="167.0" font-size="14" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">C</text>
+<text x="706.0" y="192" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#c3f9a…</text>
+<rect x="535" y="189" width="62" height="46" fill="#4493f8" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="538" y="192" width="56" height="40" fill="#4493f8" fill-opacity="0.18" stroke="#4493f8" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="566.0" y="217.0" font-size="14" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">D</text>
+<text x="566.0" y="242" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#d3f9a…</text>
+<rect x="605" y="189" width="62" height="46" fill="#4493f8" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="608" y="192" width="56" height="40" fill="#4493f8" fill-opacity="0.18" stroke="#4493f8" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="636.0" y="217.0" font-size="14" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">E</text>
+<text x="636.0" y="242" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#e3f9a…</text>
+<rect x="675" y="189" width="62" height="46" fill="#4493f8" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="678" y="192" width="56" height="40" fill="#4493f8" fill-opacity="0.18" stroke="#4493f8" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="706.0" y="217.0" font-size="14" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">F</text>
+<text x="706.0" y="242" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#f3f9a…</text>
+<rect x="535" y="239" width="62" height="46" fill="#bc8cff" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="538" y="242" width="56" height="40" fill="#bc8cff" fill-opacity="0.18" stroke="#bc8cff" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="566.0" y="267.0" font-size="14" text-anchor="middle" fill="#bc8cff" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">G</text>
+<text x="566.0" y="292" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#g3f9a…</text>
+<rect x="605" y="239" width="62" height="46" fill="#bc8cff" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="608" y="242" width="56" height="40" fill="#bc8cff" fill-opacity="0.18" stroke="#bc8cff" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="636.0" y="267.0" font-size="14" text-anchor="middle" fill="#bc8cff" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">H</text>
+<text x="636.0" y="292" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#h3f9a…</text>
+<rect x="675" y="239" width="62" height="46" fill="#3fb950" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="678" y="242" width="56" height="40" fill="#3fb950" fill-opacity="0.18" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="706.0" y="267.0" font-size="14" text-anchor="middle" fill="#3fb950" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">I</text>
+<text x="706.0" y="292" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#i3f9a…</text>
+<rect x="535" y="289" width="62" height="46" fill="#3fb950" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="538" y="292" width="56" height="40" fill="#3fb950" fill-opacity="0.18" stroke="#3fb950" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="566.0" y="317.0" font-size="14" text-anchor="middle" fill="#3fb950" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">J</text>
+<text x="566.0" y="342" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#j3f9a…</text>
+<rect x="605" y="289" width="62" height="46" fill="#f0883e" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="608" y="292" width="56" height="40" fill="#f0883e" fill-opacity="0.18" stroke="#f0883e" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="636.0" y="317.0" font-size="14" text-anchor="middle" fill="#f0883e" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">K</text>
+<text x="636.0" y="342" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#k3f9a…</text>
+<rect x="675" y="289" width="62" height="46" fill="#f0883e" fill-opacity="0.07" rx="6" ry="6" />
+<rect x="678" y="292" width="56" height="40" fill="#f0883e" fill-opacity="0.18" stroke="#f0883e" stroke-width="1.5" stroke-opacity="0.7" rx="5" ry="5" />
+<text x="706.0" y="317.0" font-size="14" text-anchor="middle" fill="#f0883e" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">L</text>
+<text x="706.0" y="342" font-size="7" text-anchor="middle" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">#l3f9a…</text>
+<rect x="522" y="354" width="228" height="79" fill="#0a0d12" rx="4" ry="4" />
+<text x="532" y="371" font-size="7.5" text-anchor="start" fill="#3d4450" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">.rw-r--r--  158k  a3f9b2e1c04d7f28….page</text>
+<text x="532" y="384" font-size="7.5" text-anchor="start" fill="#3d4450" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">.rw-r--r--  201k  ff22e9640578db3c….page</text>
+<text x="532" y="397" font-size="7.5" text-anchor="start" fill="#3d4450" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">.rw-r--r--  167k  bc8cff3ad19f673d….page</text>
+<text x="532" y="410" font-size="7.5" text-anchor="start" fill="#3d4450" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">.rw-r--r--  148k  4493f8c9b28705f3….page</text>
+<text x="532" y="423" font-size="7.5" text-anchor="start" fill="#3d4450" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">.rw-r--r--  160k  3fb950efa4891422….page</text>
+<path d="M520,470 L752,470" stroke="#2a2f3a" stroke-width="1" stroke-opacity="1.0" />
+<rect x="528.0" y="483" width="11" height="11" fill="#4493f8" fill-opacity="0.85" rx="2" ry="2" />
+<text x="544.0" y="492" font-size="10" text-anchor="start" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">shared by all</text>
+<rect x="652.0" y="483" width="11" height="11" fill="#bc8cff" fill-opacity="0.85" rx="2" ry="2" />
+<text x="668.0" y="492" font-size="10" text-anchor="start" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">filter boundary</text>
+<rect x="528.0" y="505" width="11" height="11" fill="#3fb950" fill-opacity="0.85" rx="2" ry="2" />
+<text x="544.0" y="514" font-size="10" text-anchor="start" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">new column</text>
+<rect x="652.0" y="505" width="11" height="11" fill="#f0883e" fill-opacity="0.85" rx="2" ry="2" />
+<text x="668.0" y="514" font-size="10" text-anchor="start" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">new rows</text>
+<rect x="28" y="94" width="360" height="104" fill="#161b22" stroke="#2a2f3a" stroke-width="1.5" rx="8" ry="8" />
+<rect x="28" y="104" width="3" height="84" fill="#4493f8" fill-opacity="0.85" rx="1" ry="1" />
+<text x="44" y="120" font-size="12" text-anchor="start" fill="#f0f6fc" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">original.parquet</text>
+<text x="44" y="137" font-size="10" text-anchor="start" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">baseline · 996k rows</text>
+<rect x="44" y="160" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="61.0" y="177.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">A</text>
+<rect x="82" y="160" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="99.0" y="177.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">B</text>
+<rect x="120" y="160" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="137.0" y="177.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">C</text>
+<rect x="158" y="160" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="175.0" y="177.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">D</text>
+<rect x="196" y="160" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="213.0" y="177.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">E</text>
+<rect x="234" y="160" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="251.0" y="177.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">F</text>
+<path d="M392,146.0 L504,146.0" stroke="#4493f8" stroke-width="1.8" stroke-opacity="0.55" fill="none" marker-end="url(#ah0)" />
+<rect x="412.0" y="136.0" width="72" height="16" fill="#1c2128" stroke="#4493f8" stroke-width="1" stroke-opacity="0.4" rx="8" ry="8" />
+<text x="448.0" y="148.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">baseline</text>
+<rect x="28" y="212" width="360" height="104" fill="#161b22" stroke="#2a2f3a" stroke-width="1.5" rx="8" ry="8" />
+<rect x="28" y="222" width="3" height="84" fill="#bc8cff" fill-opacity="0.85" rx="1" ry="1" />
+<text x="44" y="238" font-size="12" text-anchor="start" fill="#f0f6fc" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">filtered.parquet</text>
+<text x="44" y="255" font-size="10" text-anchor="start" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">keep num_turns &lt; 3</text>
+<rect x="44" y="278" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="61.0" y="295.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">A</text>
+<rect x="82" y="278" width="34" height="26" fill="#bc8cff" fill-opacity="0.22" stroke="#bc8cff" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="99.0" y="295.0" font-size="9" text-anchor="middle" fill="#bc8cff" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">G</text>
+<rect x="120" y="278" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="137.0" y="295.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">C</text>
+<rect x="158" y="278" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="175.0" y="295.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">D</text>
+<rect x="196" y="278" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="213.0" y="295.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">E</text>
+<rect x="234" y="278" width="34" height="26" fill="#bc8cff" fill-opacity="0.22" stroke="#bc8cff" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="251.0" y="295.0" font-size="9" text-anchor="middle" fill="#bc8cff" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">H</text>
+<path d="M392,264.0 L504,264.0" stroke="#bc8cff" stroke-width="1.8" stroke-opacity="0.55" fill="none" marker-end="url(#ah1)" />
+<rect x="412.0" y="254.0" width="72" height="16" fill="#1c2128" stroke="#bc8cff" stroke-width="1" stroke-opacity="0.4" rx="8" ry="8" />
+<text x="448.0" y="266.0" font-size="9" text-anchor="middle" fill="#bc8cff" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">92% reused</text>
+<rect x="28" y="330" width="360" height="104" fill="#161b22" stroke="#2a2f3a" stroke-width="1.5" rx="8" ry="8" />
+<rect x="28" y="340" width="3" height="84" fill="#3fb950" fill-opacity="0.85" rx="1" ry="1" />
+<text x="44" y="356" font-size="12" text-anchor="start" fill="#f0f6fc" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">augmented.parquet</text>
+<text x="44" y="373" font-size="10" text-anchor="start" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">add num_turns column</text>
+<rect x="44" y="396" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="61.0" y="413.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">A</text>
+<rect x="82" y="396" width="34" height="26" fill="#3fb950" fill-opacity="0.22" stroke="#3fb950" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="99.0" y="413.0" font-size="9" text-anchor="middle" fill="#3fb950" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">I</text>
+<rect x="120" y="396" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="137.0" y="413.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">B</text>
+<rect x="158" y="396" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="175.0" y="413.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">C</text>
+<rect x="196" y="396" width="34" height="26" fill="#3fb950" fill-opacity="0.22" stroke="#3fb950" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="213.0" y="413.0" font-size="9" text-anchor="middle" fill="#3fb950" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">J</text>
+<rect x="234" y="396" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="251.0" y="413.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">D</text>
+<rect x="272" y="396" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="289.0" y="413.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">E</text>
+<rect x="310" y="396" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="327.0" y="413.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">F</text>
+<path d="M392,382.0 L504,382.0" stroke="#3fb950" stroke-width="1.8" stroke-opacity="0.55" fill="none" marker-end="url(#ah2)" />
+<rect x="412.0" y="372.0" width="72" height="16" fill="#1c2128" stroke="#3fb950" stroke-width="1" stroke-opacity="0.4" rx="8" ry="8" />
+<text x="448.0" y="384.0" font-size="9" text-anchor="middle" fill="#3fb950" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">98% reused</text>
+<rect x="28" y="448" width="360" height="104" fill="#161b22" stroke="#2a2f3a" stroke-width="1.5" rx="8" ry="8" />
+<rect x="28" y="458" width="3" height="84" fill="#f0883e" fill-opacity="0.85" rx="1" ry="1" />
+<text x="44" y="474" font-size="12" text-anchor="start" fill="#f0f6fc" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">appended.parquet</text>
+<text x="44" y="491" font-size="10" text-anchor="start" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">append 5 000 rows</text>
+<rect x="44" y="514" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="61.0" y="531.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">A</text>
+<rect x="82" y="514" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="99.0" y="531.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">B</text>
+<rect x="120" y="514" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="137.0" y="531.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">C</text>
+<rect x="158" y="514" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="175.0" y="531.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">D</text>
+<rect x="196" y="514" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="213.0" y="531.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">E</text>
+<rect x="234" y="514" width="34" height="26" fill="#4493f8" fill-opacity="0.22" stroke="#4493f8" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="251.0" y="531.0" font-size="9" text-anchor="middle" fill="#4493f8" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">F</text>
+<rect x="272" y="514" width="34" height="26" fill="#f0883e" fill-opacity="0.22" stroke="#f0883e" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="289.0" y="531.0" font-size="9" text-anchor="middle" fill="#f0883e" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">K</text>
+<rect x="310" y="514" width="34" height="26" fill="#f0883e" fill-opacity="0.22" stroke="#f0883e" stroke-width="1" stroke-opacity="0.55" rx="3" ry="3" />
+<text x="327.0" y="531.0" font-size="9" text-anchor="middle" fill="#f0883e" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">L</text>
+<path d="M392,500.0 L504,500.0" stroke="#f0883e" stroke-width="1.8" stroke-opacity="0.55" fill="none" marker-end="url(#ah3)" />
+<rect x="412.0" y="490.0" width="72" height="16" fill="#1c2128" stroke="#f0883e" stroke-width="1" stroke-opacity="0.4" rx="8" ry="8" />
+<text x="448.0" y="502.0" font-size="9" text-anchor="middle" fill="#f0883e" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">98% reused</text>
+<rect x="28" y="570" width="736" height="82" fill="#0d1117" stroke="#2a2f3a" stroke-width="1.5" rx="8" ry="8" />
+<text x="396.0" y="583" font-size="9" text-anchor="middle" fill="#6e7681" font-weight="bold" font-family="ui-monospace,'SF Mono',monospace">STORAGE COMPARISON</text>
+<text x="152" y="606.0" font-size="10" text-anchor="end" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">Vanilla Parquet</text>
+<rect x="160" y="592" width="372" height="20" fill="#ef5350" fill-opacity="0.22" stroke="#ef5350" stroke-width="1.2" stroke-opacity="0.45" rx="4" ry="4" />
+<text x="542" y="606.0" font-size="10" text-anchor="start" fill="#ef9a9a" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">2,796 MB  (4 independent files)</text>
+<text x="152" y="634.0" font-size="10" text-anchor="end" fill="#6e7681" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">Page Store via CDC</text>
+<rect x="160" y="620" width="115" height="20" fill="#66bb6a" fill-opacity="0.22" stroke="#66bb6a" stroke-width="1.2" stroke-opacity="0.45" rx="4" ry="4" />
+<text x="285" y="634.0" font-size="10" text-anchor="start" fill="#a5d6a7" font-weight="normal" font-family="ui-monospace,'SF Mono',monospace">865 MB  —  69% less  ·  3.2× ratio</text>
+</svg>

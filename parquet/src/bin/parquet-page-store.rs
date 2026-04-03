@@ -41,9 +41,10 @@ use std::path::PathBuf;
 use arrow_array::RecordBatchReader;
 use clap::{Parser, Subcommand, ValueEnum};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::arrow::page_store::{PageStoreReader, PageStoreWriter};
 use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
-use parquet::errors::Result;
+use parquet::errors::{ParquetError, Result};
 use parquet::file::properties::WriterProperties;
 
 #[derive(Debug, Parser)]
@@ -56,12 +57,15 @@ use parquet::file::properties::WriterProperties;
 ///
 /// The workflow has two steps:
 ///
-///   1. `write` — reads regular Parquet files, re-encodes their pages with CDC
+///   1. `write`       — reads regular Parquet files, re-encodes their pages with CDC
 ///      chunking, writes each page as a {hash}.page blob into a shared store
 ///      directory, and produces a lightweight metadata-only Parquet file.
 ///
-///   2. `read`  — given a metadata Parquet file and the store directory,
+///   2. `read`        — given a metadata Parquet file and the store directory,
 ///      reassembles the data and prints it.
+///
+///   3. `reconstruct` — given a metadata Parquet file and the store directory,
+///      writes a self-contained regular Parquet file (no page store dependency).
 ///
 /// Quick start:
 ///
@@ -70,6 +74,9 @@ use parquet::file::properties::WriterProperties;
 ///
 ///   # Read it back
 ///   parquet-page-store read ./meta/data.meta.parquet --store ./pages
+///
+///   # Reconstruct a self-contained Parquet file from the page store
+///   parquet-page-store reconstruct ./meta/data.meta.parquet --store ./pages --output data.parquet
 ///
 ///   # Write several files (pages are deduplicated across them)
 ///   parquet-page-store write a.parquet b.parquet --store ./pages
@@ -137,6 +144,32 @@ enum Command {
         #[clap(short, long)]
         store: PathBuf,
     },
+
+    /// Reconstruct a self-contained Parquet file from a page-store-backed one.
+    ///
+    /// Reads all data from the page store via the metadata file and writes a
+    /// regular Parquet file that has no dependency on the store directory.
+    /// Useful for exporting, verification, or migrating data out of the store.
+    ///
+    /// Example:
+    ///
+    ///   parquet-page-store reconstruct data.meta.parquet --store ./pages --output data.parquet
+    Reconstruct {
+        /// Path to the metadata-only Parquet file.
+        input: PathBuf,
+
+        /// Page store directory containing the .page blobs.
+        #[clap(short, long)]
+        store: PathBuf,
+
+        /// Output path for the reconstructed regular Parquet file.
+        #[clap(short, long)]
+        output: PathBuf,
+
+        /// Compression codec for the output file [default: snappy].
+        #[clap(long, default_value = "snappy")]
+        compression: CompressionArg,
+    },
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -176,11 +209,46 @@ fn main() {
             compression,
         } => cmd_write(&inputs, &store, output.as_deref(), compression),
         Command::Read { input, store } => cmd_read(&input, &store),
+        Command::Reconstruct {
+            input,
+            store,
+            output,
+            compression,
+        } => cmd_reconstruct(&input, &store, &output, compression),
     };
     if let Err(e) = result {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
+}
+
+/// Expand any glob patterns in `inputs` into concrete file paths.
+///
+/// Patterns containing `*` or `?` are expanded using the `glob` crate.
+/// Literal paths (no wildcards) are passed through unchanged.
+/// This lets you write `parquet-page-store write "data/*.parquet"` on any
+/// platform without relying on shell glob expansion.
+fn expand_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut expanded = Vec::new();
+    for input in inputs {
+        let s = input.to_string_lossy();
+        if s.contains('*') || s.contains('?') {
+            let mut matches: Vec<PathBuf> = glob::glob(&s)
+                .map_err(|e| ParquetError::General(format!("invalid glob pattern: {e}")))?
+                .map(|entry| entry.map_err(|e| ParquetError::General(format!("glob error: {e}"))))
+                .collect::<Result<_>>()?;
+            if matches.is_empty() {
+                return Err(ParquetError::General(format!(
+                    "glob pattern matched no files: {s}"
+                )));
+            }
+            matches.sort();
+            expanded.extend(matches);
+        } else {
+            expanded.push(input.clone());
+        }
+    }
+    Ok(expanded)
 }
 
 fn cmd_write(
@@ -192,7 +260,9 @@ fn cmd_write(
     let output_dir = output_dir.unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(output_dir)?;
 
-    for input in inputs {
+    let inputs = expand_inputs(inputs)?;
+
+    for input in &inputs {
         let file = File::open(input)?;
         let reader = ParquetRecordBatchReaderBuilder::try_new(file)?
             .with_batch_size(8192)
@@ -211,8 +281,7 @@ fn cmd_write(
         let mut writer = PageStoreWriter::try_new(store, schema, Some(props))?;
         let mut total_rows = 0usize;
         for batch in reader {
-            let batch =
-                batch.map_err(|e| parquet::errors::ParquetError::General(e.to_string()))?;
+            let batch = batch.map_err(|e| parquet::errors::ParquetError::General(e.to_string()))?;
             total_rows += batch.num_rows();
             writer.write(&batch)?;
         }
@@ -251,6 +320,42 @@ fn cmd_write(
         "Page store: {} page file(s) in {}",
         page_files,
         store.display()
+    );
+
+    Ok(())
+}
+
+fn cmd_reconstruct(
+    input: &PathBuf,
+    store: &PathBuf,
+    output: &PathBuf,
+    compression: CompressionArg,
+) -> Result<()> {
+    let reader = PageStoreReader::try_new(input, store)?;
+    let schema = reader
+        .schema()
+        .map_err(|e| ParquetError::General(e.to_string()))?;
+
+    let props = WriterProperties::builder()
+        .set_compression(compression.to_parquet())
+        .build();
+    let file = File::create(output)?;
+    let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
+
+    let mut total_rows = 0usize;
+    for batch in reader.reader()? {
+        let batch = batch.map_err(|e| ParquetError::General(e.to_string()))?;
+        total_rows += batch.num_rows();
+        writer.write(&batch)?;
+    }
+    let metadata = writer.close()?;
+
+    eprintln!(
+        "{}: {} row(s), {} row group(s) -> {}",
+        input.display(),
+        total_rows,
+        metadata.num_row_groups(),
+        output.display(),
     );
 
     Ok(())

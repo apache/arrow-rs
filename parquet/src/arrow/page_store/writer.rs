@@ -27,12 +27,12 @@ use bytes::Bytes;
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType as ArrowDataType, SchemaRef};
 
-use super::{PageRef, PageStoreManifest, MANIFEST_KEY};
+use super::{MANIFEST_KEY, PageRef, PageStoreManifest};
+use crate::arrow::ArrowSchemaConverter;
 use crate::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnChunkData, ArrowColumnWriterImpl, ArrowRowGroupWriter,
     SharedColumnChunk,
 };
-use crate::arrow::ArrowSchemaConverter;
 use crate::column::chunker::ContentDefinedChunker;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::writer::{GenericColumnWriter, get_column_writer};
@@ -43,7 +43,9 @@ use crate::file::metadata::{
 };
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use crate::file::properties::{CdcOptions, EnabledStatistics, WriterProperties, WriterPropertiesPtr};
+use crate::file::properties::{
+    CdcOptions, EnabledStatistics, WriterProperties, WriterPropertiesPtr,
+};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 
@@ -186,11 +188,7 @@ fn make_column_writer(
     let chunk: SharedColumnChunk = pw.buffer.clone();
 
     let writer = if use_byte_array {
-        ArrowColumnWriterImpl::ByteArray(GenericColumnWriter::new(
-            desc.clone(),
-            props.clone(),
-            pw,
-        ))
+        ArrowColumnWriterImpl::ByteArray(GenericColumnWriter::new(desc.clone(), props.clone(), pw))
     } else {
         ArrowColumnWriterImpl::Column(get_column_writer(desc.clone(), props.clone(), pw))
     };
@@ -238,17 +236,53 @@ fn create_writers_for_type(
         | ArrowDataType::FixedSizeList(f, _)
         | ArrowDataType::ListView(f)
         | ArrowDataType::LargeListView(f) => {
-            create_writers_for_type(f.data_type(), props, leaves, store_dir, page_refs, row_group, col_idx, out)?;
+            create_writers_for_type(
+                f.data_type(),
+                props,
+                leaves,
+                store_dir,
+                page_refs,
+                row_group,
+                col_idx,
+                out,
+            )?;
         }
         ArrowDataType::Struct(fields) => {
             for field in fields {
-                create_writers_for_type(field.data_type(), props, leaves, store_dir, page_refs, row_group, col_idx, out)?;
+                create_writers_for_type(
+                    field.data_type(),
+                    props,
+                    leaves,
+                    store_dir,
+                    page_refs,
+                    row_group,
+                    col_idx,
+                    out,
+                )?;
             }
         }
         ArrowDataType::Map(f, _) => match f.data_type() {
             ArrowDataType::Struct(f) => {
-                create_writers_for_type(f[0].data_type(), props, leaves, store_dir, page_refs, row_group, col_idx, out)?;
-                create_writers_for_type(f[1].data_type(), props, leaves, store_dir, page_refs, row_group, col_idx, out)?;
+                create_writers_for_type(
+                    f[0].data_type(),
+                    props,
+                    leaves,
+                    store_dir,
+                    page_refs,
+                    row_group,
+                    col_idx,
+                    out,
+                )?;
+                create_writers_for_type(
+                    f[1].data_type(),
+                    props,
+                    leaves,
+                    store_dir,
+                    page_refs,
+                    row_group,
+                    col_idx,
+                    out,
+                )?;
             }
             _ => unreachable!("invalid map type"),
         },

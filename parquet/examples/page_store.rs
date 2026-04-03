@@ -87,7 +87,11 @@ fn main() -> parquet::errors::Result<()> {
     let batches = reader.read_batches()?;
 
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-    println!("Read {} batch(es), {} total rows", batches.len(), total_rows);
+    println!(
+        "Read {} batch(es), {} total rows",
+        batches.len(),
+        total_rows
+    );
 
     // Display
     let formatted = pretty_format_batches(&batches).unwrap();
