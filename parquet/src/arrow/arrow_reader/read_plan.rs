@@ -35,10 +35,10 @@ use std::collections::VecDeque;
 /// Run length at or above this value is treated as "long" for skip-island stats.
 const DEFERRAL_LONG_RUN_THRESHOLD_ROWS: usize = 100;
 /// Minimum skip selectivity required to avoid deferral once fragmentation increases.
-const DEFERRAL_SKIP_SELECTIVITY_FLOOR: f64 = 0.10;
+pub const DEFERRAL_SKIP_SELECTIVITY_FLOOR: f64 = 0.10;
 /// Minimum *incremental* skip selectivity required to avoid deferral once
 /// fragmentation increases.
-const DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR: f64 = 0.02;
+pub const DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR: f64 = 0.02;
 
 /// Histogram-like stats for selector runs, focused on skipped-row contiguity.
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
