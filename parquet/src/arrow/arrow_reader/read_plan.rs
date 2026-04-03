@@ -35,10 +35,10 @@ use std::collections::VecDeque;
 /// Run length at or above this value is treated as "long" for skip-island stats.
 const DEFERRAL_LONG_RUN_THRESHOLD_ROWS: usize = 100;
 /// Minimum skip selectivity required to avoid deferral once fragmentation increases.
-pub const DEFERRAL_SKIP_SELECTIVITY_FLOOR: f64 = 0.10;
+const DEFERRAL_SKIP_SELECTIVITY_FLOOR: f64 = 0.10;
 /// Minimum *incremental* skip selectivity required to avoid deferral once
 /// fragmentation increases.
-pub const DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR: f64 = 0.02;
+const DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR: f64 = 0.02;
 
 /// Histogram-like stats for selector runs, focused on skipped-row contiguity.
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
@@ -174,11 +174,11 @@ impl ReadPlanBuilder {
     /// fragmentation. In that case, the result is deferred unless:
     ///
     /// 1. absolute skip selectivity (`skipped_rows / total_rows`) is at least
-    ///    [`DEFERRAL_SKIP_SELECTIVITY_FLOOR`],
+    ///    `DEFERRAL_SKIP_SELECTIVITY_FLOOR` (currently `0.10`),
     /// 2. absolute long-skip share (`long_skip_rows / skipped_rows`) is at least
     ///    this threshold,
     /// 3. incremental skip selectivity added by this predicate is at least
-    ///    [`DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR`], and
+    ///    `DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR` (currently `0.02`), and
     /// 4. incremental long-skip share added by this predicate is at least this
     ///    threshold.
     ///
