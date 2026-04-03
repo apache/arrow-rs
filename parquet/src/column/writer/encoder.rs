@@ -164,9 +164,7 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             // Count NaN values for floating point types
             if self.is_floating_point_column() {
                 let nan_count = slice.iter().filter(|v| is_nan(&self.descr, *v)).count() as u64;
-                if nan_count > 0 {
-                    *self.nan_count.get_or_insert(0) += nan_count;
-                }
+                *self.nan_count.get_or_insert(0) += nan_count;
             }
 
             if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
