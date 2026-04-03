@@ -151,7 +151,9 @@ use crate::reader::binary_array::{
 };
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
-use crate::reader::list_array::{ListArrayDecoder, ListViewArrayDecoder};
+use crate::reader::list_array::{
+    FixedSizeListArrayDecoder, ListArrayDecoder, ListViewArrayDecoder,
+};
 use crate::reader::map_array::MapArrayDecoder;
 use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
@@ -835,6 +837,7 @@ fn make_decoder(
         DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(ctx, data_type, is_nullable)?)),
         DataType::ListView(_) => Ok(Box::new(ListViewArrayDecoder::<i32>::new(ctx, data_type, is_nullable)?)),
         DataType::LargeListView(_) => Ok(Box::new(ListViewArrayDecoder::<i64>::new(ctx, data_type, is_nullable)?)),
+        DataType::FixedSizeList(_, _) => Ok(Box::new(FixedSizeListArrayDecoder::new(ctx, data_type, is_nullable)?)),
         DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(ctx, data_type, is_nullable)?)),
         DataType::Binary => Ok(Box::new(BinaryArrayDecoder::<i32>::default())),
         DataType::LargeBinary => Ok(Box::new(BinaryArrayDecoder::<i64>::default())),
@@ -2309,6 +2312,152 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_list() {
+        let buf = r#"
+        {"a": [1, 2, 3]}
+        {"a": [4, 5, 6]}
+        {"a": [7, 8, 9]}
+        "#;
+
+        let field = Field::new_list_field(DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 3),
+            false,
+        )]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 3);
+        assert_eq!(col.value_length(), 3);
+
+        let values = col.values().as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn test_fixed_size_list_nullable() {
+        let buf = r#"
+        {"a": [1, 2]}
+        {"a": null}
+        {"a": [3, null]}
+        "#;
+
+        let field = Field::new_list_field(DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 2),
+            true,
+        )]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 3);
+        assert!(col.is_valid(0));
+        assert!(col.is_null(1));
+        assert!(col.is_valid(2));
+
+        let values = col.values().as_primitive::<Int32Type>();
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), 2);
+        assert_eq!(values.value(4), 3);
+        assert!(values.is_null(5));
+    }
+
+    #[test]
+    fn test_fixed_size_list_wrong_size() {
+        let buf = r#"{"a": [1, 2, 3]}"#;
+
+        let field = Field::new_list_field(DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 2),
+            false,
+        )]));
+
+        let err = ReaderBuilder::new(schema)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err();
+
+        assert!(err.to_string().contains("expected 2 but got 3"), "{}", err);
+    }
+
+    #[test]
+    fn test_fixed_size_list_nested() {
+        let buf = r#"
+        {"a": [[1, 2], [3, 4]]}
+        {"a": [[5, 6], [7, 8]]}
+        "#;
+
+        let inner_field = Field::new_list_field(DataType::Int32, true);
+        let inner_type = DataType::FixedSizeList(Arc::new(inner_field), 2);
+        let outer_field = Arc::new(Field::new_list_field(inner_type.clone(), true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(outer_field, 2),
+            false,
+        )]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 2);
+        assert_eq!(col.value_length(), 2);
+
+        let inner = col.values().as_fixed_size_list();
+        assert_eq!(inner.len(), 4);
+        assert_eq!(inner.value_length(), 2);
+
+        let values = inner.values().as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn test_fixed_size_list_ignore_type_conflicts() {
+        let field = Field::new("item", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 2),
+            true,
+        )]));
+
+        let json = vec![
+            json!({"a": [1, 2]}),
+            json!({"a": "not a list"}),
+            json!({"a": 42}),
+            json!({"a": [6, 7]}),
+        ];
+
+        let mut decoder = ReaderBuilder::new(schema)
+            .with_ignore_type_conflicts(true)
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&json).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+
+        let col = batch.column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 4);
+        assert!(col.is_valid(0));
+        assert!(col.is_null(1)); // string -> null
+        assert!(col.is_null(2)); // number -> null
+        assert!(col.is_valid(3));
+
+        let values = col.values().as_primitive::<Int32Type>();
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), 2);
+        assert_eq!(values.value(6), 6);
+        assert_eq!(values.value(7), 7);
+    }
+
+    #[test]
     fn test_skip_empty_lines() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
         let builder = ReaderBuilder::new(Arc::new(schema)).with_batch_size(64);
@@ -3257,6 +3406,11 @@ mod tests {
                 false,
             ),
             Field::new(
+                "fixed_size_list",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 2),
+                false,
+            ),
+            Field::new(
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
@@ -3310,6 +3464,11 @@ mod tests {
             Field::new(
                 "array",
                 DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "fixed_size_list",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 2),
                 true,
             ),
             Field::new(
