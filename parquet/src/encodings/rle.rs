@@ -520,7 +520,11 @@ impl RleDecoder {
                                 b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
                             }
                         }
-                        for (b, i) in out_chunks.into_remainder().iter_mut().zip(idx.chunks_exact(8).remainder().iter()) {
+                        for (b, i) in out_chunks
+                            .into_remainder()
+                            .iter_mut()
+                            .zip(idx.chunks_exact(8).remainder().iter())
+                        {
                             b.clone_from(&dict[*i as usize]);
                         }
                     }
