@@ -44,6 +44,8 @@ pub unsafe trait FromBytes: Sized {
     type Buffer: AsMut<[u8]> + Default;
     fn try_from_le_slice(b: &[u8]) -> Result<Self>;
     fn from_le_bytes(bs: Self::Buffer) -> Self;
+    /// Convert directly from a u64 value by truncation, avoiding byte slice copies.
+    fn from_u64(v: u64) -> Self;
 }
 
 macro_rules! from_le_bytes {
@@ -59,12 +61,48 @@ macro_rules! from_le_bytes {
             fn from_le_bytes(bs: Self::Buffer) -> Self {
                 <$ty>::from_le_bytes(bs)
             }
+            #[inline]
+            fn from_u64(v: u64) -> Self {
+                v as Self
+            }
         }
         )*
     };
 }
 
-from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64, f32, f64 }
+from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64 }
+
+// SAFETY: all bit patterns are valid for f32 and f64.
+unsafe impl FromBytes for f32 {
+    const BIT_CAPACITY: usize = 32;
+    type Buffer = [u8; 4];
+    fn try_from_le_slice(b: &[u8]) -> Result<Self> {
+        Ok(Self::from_le_bytes(array_from_slice(b)?))
+    }
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        f32::from_le_bytes(bs)
+    }
+    #[inline]
+    fn from_u64(v: u64) -> Self {
+        f32::from_bits(v as u32)
+    }
+}
+
+// SAFETY: all bit patterns are valid for f64.
+unsafe impl FromBytes for f64 {
+    const BIT_CAPACITY: usize = 64;
+    type Buffer = [u8; 8];
+    fn try_from_le_slice(b: &[u8]) -> Result<Self> {
+        Ok(Self::from_le_bytes(array_from_slice(b)?))
+    }
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        f64::from_le_bytes(bs)
+    }
+    #[inline]
+    fn from_u64(v: u64) -> Self {
+        f64::from_bits(v)
+    }
+}
 
 // SAFETY: the 0000000x bit pattern is always valid for `bool`.
 unsafe impl FromBytes for bool {
@@ -76,6 +114,10 @@ unsafe impl FromBytes for bool {
     }
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         bs[0] != 0
+    }
+    #[inline]
+    fn from_u64(v: u64) -> Self {
+        v != 0
     }
 }
 
@@ -104,6 +146,9 @@ unsafe impl FromBytes for Int96 {
         );
         i
     }
+    fn from_u64(_v: u64) -> Self {
+        unreachable!("Int96 does not support from_u64")
+    }
 }
 
 // SAFETY: BIT_CAPACITY is 0.
@@ -117,6 +162,9 @@ unsafe impl FromBytes for ByteArray {
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         bs.into()
     }
+    fn from_u64(_v: u64) -> Self {
+        unreachable!("ByteArray does not support from_u64")
+    }
 }
 
 // SAFETY: BIT_CAPACITY is 0.
@@ -129,6 +177,9 @@ unsafe impl FromBytes for FixedLenByteArray {
     }
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         bs.into()
+    }
+    fn from_u64(_v: u64) -> Self {
+        unreachable!("FixedLenByteArray does not support from_u64")
     }
 }
 
@@ -445,8 +496,7 @@ impl BitReader {
             }
         }
 
-        // TODO: better to avoid copying here
-        T::try_from_le_slice(v.as_bytes()).ok()
+        Some(T::from_u64(v))
     }
 
     /// Read multiple values from their packed representation where each element is represented
