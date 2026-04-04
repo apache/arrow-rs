@@ -31,7 +31,7 @@ use arrow_array::{
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, NullBuffer};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
 use std::cmp::Ordering;
 use std::ops::Not;
@@ -199,6 +199,20 @@ pub fn distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowE
 /// For comparisons involving nested types see [`crate::ord::make_comparator`]
 pub fn not_distinct(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     compare_op(Op::NotDistinct, lhs, rhs)
+}
+
+/// Returns true if `distinct` (via `compare_op`) can handle this data type.
+///
+/// `compare_op` unwraps at most one level of dictionary, then dispatches on
+/// the leaf type. Anything else (REE, nested dictionary, nested/complex types)
+/// must go through `make_comparator` instead.
+pub(crate) fn supports_distinct(dt: &DataType) -> bool {
+    use arrow_schema::DataType::*;
+    let leaf = match dt {
+        Dictionary(_, v) => v.as_ref(),
+        dt => dt,
+    };
+    !leaf.is_nested() && !matches!(leaf, Dictionary(_, _) | RunEndEncoded(_, _))
 }
 
 /// Perform `op` on the provided `Datum`
@@ -830,6 +844,38 @@ mod tests {
         let expected = BooleanArray::from(vec![false, false, false, true]);
         assert_eq!(not_distinct(&a, &b).unwrap(), expected);
         assert_eq!(not_distinct(&b, &a).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_supports_distinct() {
+        use arrow_schema::{DataType::*, Field};
+
+        assert!(supports_distinct(&Int32));
+        assert!(supports_distinct(&Float64));
+        assert!(supports_distinct(&Utf8));
+        assert!(supports_distinct(&Boolean));
+
+        // One level of dictionary unwrap is supported.
+        assert!(supports_distinct(&Dictionary(
+            Box::new(Int16),
+            Box::new(Utf8),
+        )));
+
+        // REE, nested dictionary, and complex types are not supported.
+        assert!(!supports_distinct(&RunEndEncoded(
+            Arc::new(Field::new("run_ends", Int32, false)),
+            Arc::new(Field::new("values", Int32, true)),
+        )));
+        assert!(!supports_distinct(&Dictionary(
+            Box::new(Int16),
+            Box::new(Dictionary(Box::new(Int8), Box::new(Utf8))),
+        )));
+        assert!(!supports_distinct(&List(Arc::new(Field::new(
+            "item", Int32, true,
+        )))));
+        assert!(!supports_distinct(&Struct(
+            vec![Field::new("a", Int32, true)].into()
+        )));
     }
 
     #[test]

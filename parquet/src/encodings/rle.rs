@@ -177,16 +177,22 @@ impl RleEncoder {
     /// Borrow equivalent of the `consume` method.
     /// Call `clear()` after invoking this method.
     #[inline]
-    #[allow(unused)]
     pub fn flush_buffer(&mut self) -> &[u8] {
         self.flush();
         self.bit_writer.flush_buffer()
     }
 
+    /// Like `flush_buffer`, but returns mutable access to the internal buffer.
+    /// Call `clear()` after invoking this method.
+    #[inline]
+    pub fn flush_buffer_mut(&mut self) -> &mut [u8] {
+        self.flush();
+        self.bit_writer.flush_buffer_mut()
+    }
+
     /// Clears the internal state so this encoder can be reused (e.g., after becoming
     /// full).
     #[inline]
-    #[allow(unused)]
     pub fn clear(&mut self) {
         self.bit_writer.clear();
         self.num_buffered_values = 0;
@@ -194,6 +200,13 @@ impl RleEncoder {
         self.repeat_count = 0;
         self.bit_packed_count = 0;
         self.indicator_byte_pos = -1;
+    }
+
+    /// Advances the buffer by `num_bytes` zero bytes, delegating to the
+    /// underlying [`BitWriter::skip`].
+    #[inline]
+    pub fn skip(&mut self, num_bytes: usize) {
+        self.bit_writer.skip(num_bytes);
     }
 
     /// Flushes all remaining values and return the final byte buffer maintained by the
