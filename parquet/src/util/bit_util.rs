@@ -44,6 +44,15 @@ pub unsafe trait FromBytes: Sized {
     type Buffer: AsMut<[u8]> + Default;
     fn try_from_le_slice(b: &[u8]) -> Result<Self>;
     fn from_le_bytes(bs: Self::Buffer) -> Self;
+}
+
+/// Types that can be decoded from bitpacked representations.
+///
+/// This is implemented for primitive types and bool that can be
+/// directly converted from a u64 value. Types like Int96, ByteArray,
+/// and FixedLenByteArray that cannot be represented in 64 bits do not
+/// implement this trait.
+pub trait FromBitpacked: FromBytes {
     /// Convert directly from a u64 value by truncation, avoiding byte slice copies.
     fn from_u64(v: u64) -> Self;
 }
@@ -61,6 +70,8 @@ macro_rules! from_le_bytes {
             fn from_le_bytes(bs: Self::Buffer) -> Self {
                 <$ty>::from_le_bytes(bs)
             }
+        }
+        impl FromBitpacked for $ty {
             #[inline]
             fn from_u64(v: u64) -> Self {
                 v as Self
@@ -82,6 +93,9 @@ unsafe impl FromBytes for f32 {
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         f32::from_le_bytes(bs)
     }
+}
+
+impl FromBitpacked for f32 {
     #[inline]
     fn from_u64(v: u64) -> Self {
         f32::from_bits(v as u32)
@@ -98,6 +112,9 @@ unsafe impl FromBytes for f64 {
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         f64::from_le_bytes(bs)
     }
+}
+
+impl FromBitpacked for f64 {
     #[inline]
     fn from_u64(v: u64) -> Self {
         f64::from_bits(v)
@@ -115,6 +132,9 @@ unsafe impl FromBytes for bool {
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         bs[0] != 0
     }
+}
+
+impl FromBitpacked for bool {
     #[inline]
     fn from_u64(v: u64) -> Self {
         v != 0
@@ -146,9 +166,6 @@ unsafe impl FromBytes for Int96 {
         );
         i
     }
-    fn from_u64(_v: u64) -> Self {
-        unreachable!("Int96 does not support from_u64")
-    }
 }
 
 // SAFETY: BIT_CAPACITY is 0.
@@ -162,9 +179,6 @@ unsafe impl FromBytes for ByteArray {
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         bs.into()
     }
-    fn from_u64(_v: u64) -> Self {
-        unreachable!("ByteArray does not support from_u64")
-    }
 }
 
 // SAFETY: BIT_CAPACITY is 0.
@@ -177,9 +191,6 @@ unsafe impl FromBytes for FixedLenByteArray {
     }
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         bs.into()
-    }
-    fn from_u64(_v: u64) -> Self {
-        unreachable!("FixedLenByteArray does not support from_u64")
     }
 }
 
@@ -464,7 +475,7 @@ impl BitReader {
     /// Reads a value of type `T` and of size `num_bits`.
     ///
     /// Returns `None` if there's not enough data available. `Some` otherwise.
-    pub fn get_value<T: FromBytes>(&mut self, num_bits: usize) -> Option<T> {
+    pub fn get_value<T: FromBitpacked>(&mut self, num_bits: usize) -> Option<T> {
         assert!(num_bits <= 64);
         assert!(num_bits <= size_of::<T>() * 8);
 
@@ -507,8 +518,8 @@ impl BitReader {
     /// This function panics if
     /// - `num_bits` is larger than the bit-capacity of `T`
     ///
-    pub fn get_batch<T: FromBytes>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
-        assert!(num_bits <= size_of::<T>() * 8);
+    pub fn get_batch<T: FromBitpacked>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
+        debug_assert!(num_bits <= size_of::<T>() * 8);
 
         let mut values_to_read = batch.len();
         let needed_bits = num_bits * values_to_read;
@@ -1074,7 +1085,7 @@ mod tests {
 
     fn test_get_batch_helper<T>(total: usize, num_bits: usize)
     where
-        T: FromBytes + Default + Clone + Debug + Eq,
+        T: FromBitpacked + Default + Clone + Debug + Eq,
     {
         assert!(num_bits <= 64);
         let num_bytes = ceil(num_bits, 8);

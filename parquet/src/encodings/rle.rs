@@ -39,7 +39,7 @@ use std::{cmp, mem::size_of};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::{self, BitReader, BitWriter, FromBytes};
+use crate::util::bit_util::{self, BitReader, BitWriter, FromBitpacked};
 
 /// Maximum groups of 8 values per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
@@ -352,7 +352,7 @@ impl RleDecoder {
     // that damage L1d-cache occupancy. This results in a ~18% performance drop
     #[inline(never)]
     #[allow(unused)]
-    pub fn get<T: FromBytes>(&mut self) -> Result<Option<T>> {
+    pub fn get<T: FromBitpacked>(&mut self) -> Result<Option<T>> {
         assert!(size_of::<T>() <= 8);
 
         while self.rle_left == 0 && self.bit_packed_left == 0 {
@@ -388,7 +388,7 @@ impl RleDecoder {
     }
 
     #[inline(never)]
-    pub fn get_batch<T: FromBytes + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
+    pub fn get_batch<T: FromBitpacked + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
         assert!(size_of::<T>() <= 8);
 
         let mut values_read = 0;
