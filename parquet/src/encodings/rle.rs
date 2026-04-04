@@ -513,8 +513,11 @@ impl RleDecoder {
                         let mut out_chunks = out.chunks_exact_mut(8);
                         let idx_chunks = idx.chunks_exact(8);
                         for (out_chunk, idx_chunk) in out_chunks.by_ref().zip(idx_chunks) {
+                            let max_idx = idx_chunk.iter().copied().max().unwrap_or(0) as usize;
+                            assert!(max_idx < dict.len(), "dictionary index out of bounds");
                             for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
-                                b.clone_from(&dict[*i as usize]);
+                                // SAFETY: max of all indices checked above
+                                b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
                             }
                         }
                         for (b, i) in out_chunks.into_remainder().iter_mut().zip(idx.chunks_exact(8).remainder().iter()) {
