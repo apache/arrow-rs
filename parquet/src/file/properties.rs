@@ -1720,10 +1720,7 @@ mod tests {
             );
             assert_eq!(
                 props.bloom_filter_properties(&ColumnPath::from("col")),
-                Some(&BloomFilterProperties {
-                    fpp: 0.1,
-                    ndv: 100,
-                })
+                Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })
             );
         }
 
