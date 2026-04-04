@@ -53,7 +53,13 @@ pub const DEFAULT_CREATED_BY: &str = concat!("parquet-rs version ", env!("CARGO_
 pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`BloomFilterProperties::fpp`]
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
-/// Default value for [`BloomFilterProperties::ndv`]
+/// Default value for [`BloomFilterProperties::ndv`].
+///
+/// Note: this is only the fallback default used when constructing [`BloomFilterProperties`]
+/// directly. When using [`WriterPropertiesBuilder`], columns with bloom filters enabled
+/// but without an explicit NDV will have their NDV resolved at build time to
+/// [`WriterProperties::max_row_group_row_count`], which may differ from this constant
+/// if the user configured a custom row group size.
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = DEFAULT_MAX_ROW_GROUP_ROW_COUNT as u64;
 /// Default values for [`WriterProperties::statistics_truncate_length`]
 pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
@@ -587,6 +593,18 @@ impl Default for WriterPropertiesBuilder {
 impl WriterPropertiesBuilder {
     /// Finalizes the configuration and returns immutable writer properties struct.
     pub fn build(self) -> WriterProperties {
+        // Resolve bloom filter NDV for columns where it wasn't explicitly set:
+        // default to max_row_group_row_count so the filter is never undersized.
+        let default_ndv = self
+            .max_row_group_row_count
+            .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT) as u64;
+        let mut default_column_properties = self.default_column_properties;
+        default_column_properties.resolve_bloom_filter_ndv(default_ndv);
+        let mut column_properties = self.column_properties;
+        for props in column_properties.values_mut() {
+            props.resolve_bloom_filter_ndv(default_ndv);
+        }
+
         WriterProperties {
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
@@ -597,8 +615,8 @@ impl WriterPropertiesBuilder {
             created_by: self.created_by,
             offset_index_disabled: self.offset_index_disabled,
             key_value_metadata: self.key_value_metadata,
-            default_column_properties: self.default_column_properties,
-            column_properties: self.column_properties,
+            default_column_properties,
+            column_properties,
             sorting_columns: self.sorting_columns,
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
@@ -1216,15 +1234,16 @@ pub struct BloomFilterProperties {
     /// This value also serves as the target FPP for bloom filter folding: after all values
     /// are inserted, the filter is folded down to the smallest size that still meets this FPP.
     pub fpp: f64,
-    /// Maximum expected number of distinct values. When `None` (default), the bloom filter
-    /// is sized based on the row group's `max_row_group_row_count` at runtime.
+    /// Maximum expected number of distinct values. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
     ///
     /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_ndv`].
     ///
-    /// The bloom filter is initially sized for this many distinct values at the given `fpp`,
-    /// then folded down after insertion to achieve optimal size. A good heuristic is to set
-    /// this to the expected number of rows in the row group. If fewer distinct values are
-    /// actually written, the filter will be automatically compacted via folding.
+    /// When not explicitly set via the builder, this defaults to
+    /// [`max_row_group_row_count`](WriterProperties::max_row_group_row_count) (resolved at
+    /// build time). The bloom filter is initially sized for this many distinct values at the
+    /// given `fpp`, then folded down after insertion to achieve optimal size. A good heuristic
+    /// is to set this to the expected number of rows in the row group. If fewer distinct values
+    /// are actually written, the filter will be automatically compacted via folding.
     ///
     /// Thus the only negative side of overestimating this value is that the bloom filter
     /// will use more memory during writing than necessary, but it will not affect the final
@@ -1236,14 +1255,14 @@ pub struct BloomFilterProperties {
     /// If you do set this value explicitly it is probably best to set it for each column
     /// individually via [`WriterPropertiesBuilder::set_column_bloom_filter_ndv`] rather than globally,
     /// since different columns may have different numbers of distinct values.
-    pub ndv: Option<u64>,
+    pub ndv: u64,
 }
 
 impl Default for BloomFilterProperties {
     fn default() -> Self {
         BloomFilterProperties {
             fpp: DEFAULT_BLOOM_FILTER_FPP,
-            ndv: None,
+            ndv: DEFAULT_BLOOM_FILTER_NDV,
         }
     }
 }
@@ -1263,6 +1282,8 @@ struct ColumnProperties {
     write_page_header_statistics: Option<bool>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
+    /// Whether the bloom filter NDV was explicitly set by the user
+    bloom_filter_ndv_is_set: bool,
 }
 
 impl ColumnProperties {
@@ -1345,7 +1366,8 @@ impl ColumnProperties {
     fn set_bloom_filter_ndv(&mut self, value: u64) {
         self.bloom_filter_properties
             .get_or_insert_with(Default::default)
-            .ndv = Some(value);
+            .ndv = value;
+        self.bloom_filter_ndv_is_set = true;
     }
 
     /// Returns optional encoding for this column.
@@ -1392,6 +1414,16 @@ impl ColumnProperties {
     /// Returns the bloom filter properties, or `None` if not enabled
     fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
         self.bloom_filter_properties.as_ref()
+    }
+
+    /// If bloom filter is enabled and NDV was not explicitly set, resolve it to the
+    /// given `default_ndv` (typically derived from `max_row_group_row_count`).
+    fn resolve_bloom_filter_ndv(&mut self, default_ndv: u64) {
+        if !self.bloom_filter_ndv_is_set {
+            if let Some(ref mut bf) = self.bloom_filter_properties {
+                bf.ndv = default_ndv;
+            }
+        }
     }
 }
 
@@ -1690,7 +1722,7 @@ mod tests {
                 props.bloom_filter_properties(&ColumnPath::from("col")),
                 Some(&BloomFilterProperties {
                     fpp: 0.1,
-                    ndv: Some(100),
+                    ndv: 100,
                 })
             );
         }
@@ -1728,7 +1760,7 @@ mod tests {
             props.bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
                 fpp: DEFAULT_BLOOM_FILTER_FPP,
-                ndv: None,
+                ndv: DEFAULT_BLOOM_FILTER_NDV,
             })
         );
     }
@@ -1771,7 +1803,7 @@ mod tests {
                 .bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
                 fpp: DEFAULT_BLOOM_FILTER_FPP,
-                ndv: Some(100),
+                ndv: 100,
             })
         );
         assert_eq!(
@@ -1781,7 +1813,7 @@ mod tests {
                 .bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
                 fpp: 0.1,
-                ndv: None,
+                ndv: DEFAULT_BLOOM_FILTER_NDV,
             })
         );
     }

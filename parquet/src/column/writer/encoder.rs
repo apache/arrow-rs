@@ -27,9 +27,7 @@ use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
 use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{
-    DEFAULT_MAX_ROW_GROUP_ROW_COUNT, EnabledStatistics, WriterProperties,
-};
+use crate::file::properties::{EnabledStatistics, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
@@ -387,24 +385,17 @@ fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace:
     }
 }
 
-/// Creates a bloom filter sized for the column's configured NDV (or the row group size
-/// if NDV is not explicitly set), returning the filter and the target FPP for folding.
+/// Creates a bloom filter sized for the column's configured NDV, returning the filter
+/// and the target FPP for folding.
 pub(crate) fn create_bloom_filter(
     props: &WriterProperties,
     descr: &ColumnDescPtr,
 ) -> Result<(Option<Sbbf>, f64)> {
     match props.bloom_filter_properties(descr.path()) {
-        Some(bf_props) => {
-            let ndv = bf_props.ndv.unwrap_or(
-                props
-                    .max_row_group_row_count()
-                    .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT) as u64,
-            );
-            Ok((
-                Some(Sbbf::new_with_ndv_fpp(ndv, bf_props.fpp)?),
-                bf_props.fpp,
-            ))
-        }
+        Some(bf_props) => Ok((
+            Some(Sbbf::new_with_ndv_fpp(bf_props.ndv, bf_props.fpp)?),
+            bf_props.fpp,
+        )),
         None => Ok((None, 0.0)),
     }
 }
