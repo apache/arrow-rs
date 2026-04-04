@@ -326,22 +326,25 @@ impl ParquetPushDecoder {
         Ok(decode_result)
     }
 
-    /// Push data into the decoder for processing
+    /// Push data into the decoder for processing.
     ///
     /// This is a convenience wrapper around [`Self::push_ranges`] for pushing a
-    /// single range of data.
-    ///
-    /// Note this can be the entire file or just a part of it. If it is part of the file,
-    /// the ranges should correspond to the data ranges requested by the decoder.
-    ///
-    /// See example in [`ParquetPushDecoderBuilder`]
+    /// single range of data. See [`Self::push_ranges`] for details.
     pub fn push_range(&mut self, range: Range<u64>, data: Bytes) -> Result<(), ParquetError> {
         self.push_ranges(vec![range], vec![data])
     }
 
-    /// Push data into the decoder for processing
+    /// Push data into the decoder for processing.
     ///
-    /// This should correspond to the data ranges requested by the decoder
+    /// Each `(range, data)` pair associates a byte range in the Parquet file
+    /// with its contents. The pushed buffers do not need to align with the
+    /// ranges requested by [`DecodeResult::NeedsData`]: they may be smaller
+    /// (the decoder stitches adjacent buffers), larger (e.g. coalesced
+    /// fetches), or even cover offsets not yet requested (prefetch).
+    ///
+    /// The only requirement is that, by the time [`Self::try_decode`] is
+    /// called, the union of all pushed ranges must cover every byte the
+    /// decoder requeted for the current decode step.
     pub fn push_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
@@ -366,13 +369,31 @@ impl ParquetPushDecoder {
         self.state.buffered_bytes()
     }
 
-    /// Clear any staged byte ranges currently buffered for future decode work.
+    /// Release all staged byte ranges currently buffered for future decode
+    /// work.
     ///
-    /// This clears byte ranges still owned by the decoder's internal
+    /// This releases byte ranges still owned by the decoder's internal
     /// `PushBuffers`. It does not affect any data that has already been handed
     /// off to an active [`ParquetRecordBatchReader`].
+    pub fn release_all(&mut self) {
+        self.state.release_all();
+    }
+
+    /// Use [`Self::release_all`] instead.
+    #[deprecated(since = "58.1.0", note = "Use `release_all` instead")]
     pub fn clear_all_ranges(&mut self) {
-        self.state.clear_all_ranges();
+        self.release_all();
+    }
+
+    /// Release all physical buffers that end at or before the given byte offset.
+    ///
+    /// A buffer straddling the offset is trimmed: the portion before `offset`
+    /// is dropped and the suffix is retained (zero-copy via [`Bytes::slice`]).
+    ///
+    /// This does not affect any data that has already been handed off to an
+    /// active [`ParquetRecordBatchReader`].
+    pub fn release_through(&mut self, offset: u64) {
+        self.state.release_through(offset);
     }
 }
 
@@ -583,16 +604,28 @@ impl ParquetDecoderState {
         }
     }
 
-    /// Clear any staged ranges currently buffered in the decoder.
-    fn clear_all_ranges(&mut self) {
+    fn release_all(&mut self) {
         match self {
             ParquetDecoderState::ReadingRowGroup {
                 remaining_row_groups,
-            } => remaining_row_groups.clear_all_ranges(),
+            } => remaining_row_groups.release_all(),
             ParquetDecoderState::DecodingRowGroup {
                 record_batch_reader: _,
                 remaining_row_groups,
-            } => remaining_row_groups.clear_all_ranges(),
+            } => remaining_row_groups.release_all(),
+            ParquetDecoderState::Finished => {}
+        }
+    }
+
+    fn release_through(&mut self, offset: u64) {
+        match self {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            } => remaining_row_groups.release_through(offset),
+            ParquetDecoderState::DecodingRowGroup {
+                record_batch_reader: _,
+                remaining_row_groups,
+            } => remaining_row_groups.release_through(offset),
             ParquetDecoderState::Finished => {}
         }
     }
@@ -691,8 +724,9 @@ mod test {
     /// Releasing staged ranges should free speculative buffers without affecting
     /// the active row group reader.
     #[test]
-    fn test_decoder_clear_all_ranges() {
-        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+    fn test_decoder_release_all() {
+        let metadata = test_file_parquet_metadata();
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(metadata.clone())
             .unwrap()
             .with_batch_size(100)
             .build()
@@ -703,14 +737,16 @@ mod test {
             .unwrap();
         assert_eq!(decoder.buffered_bytes(), test_file_len());
 
-        // The current row group reader is built from the prefetched bytes, but
-        // the speculative full-file range remains staged in the decoder.
+        // Building the InMemoryRowGroup for row group 0 releases buffers up
+        // to that row group's end offset.  The remainder (row group 1 + footer)
+        // is still staged.
         let batch1 = expect_data(decoder.try_decode());
         assert_eq!(batch1, TEST_BATCH.slice(0, 100));
-        assert_eq!(decoder.buffered_bytes(), test_file_len());
+        let rg0_end = metadata.row_group(0).end_offset();
+        assert_eq!(decoder.buffered_bytes(), test_file_len() - rg0_end);
 
-        // All of the buffer is released
-        decoder.clear_all_ranges();
+        // Release everything that remains.
+        decoder.release_all();
         assert_eq!(decoder.buffered_bytes(), 0);
 
         // The active reader still owns the current row group's bytes, so it can
@@ -1164,6 +1200,72 @@ mod test {
         let expected1 = TEST_BATCH.slice(225, 20);
         assert_eq!(batch1, expected1);
 
+        expect_finished(decoder.try_decode());
+    }
+
+    /// Decode the file pushed as fixed-size streaming parts, simulating a
+    /// single GET request that yields part-sized buffers. Part boundaries are
+    /// intentionally misaligned with column chunk / page boundaries.
+    #[test]
+    fn test_decoder_streaming_parts() {
+        let part_size = 512usize; // misaligned with column chunks
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Push the entire file as fixed-size parts.
+        let file_len = TEST_FILE_DATA.len();
+        let mut offset = 0usize;
+        while offset < file_len {
+            let end = (offset + part_size).min(file_len);
+            let range = (offset as u64)..(end as u64);
+            let data = TEST_FILE_DATA.slice(offset..end);
+            decoder.push_range(range, data).unwrap();
+            offset = end;
+        }
+
+        // Decode all row groups — stitching should handle cross-part reads.
+        let batch1 = expect_data(decoder.try_decode());
+        let batch2 = expect_data(decoder.try_decode());
+        expect_finished(decoder.try_decode());
+
+        let all_output = concat_batches(&TEST_BATCH.schema(), &[batch1, batch2]).unwrap();
+        assert_eq!(all_output, *TEST_BATCH);
+    }
+
+    /// Push the entire file, decode the first row group, call `release_through`
+    /// to free its buffers, then decode the second row group.
+    #[test]
+    fn test_decoder_release_through() {
+        let metadata = test_file_parquet_metadata();
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(metadata.clone())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        decoder
+            .push_range(test_file_range(), TEST_FILE_DATA.clone())
+            .unwrap();
+        assert_eq!(decoder.buffered_bytes(), test_file_len());
+
+        // Decode first row group.
+        let batch1 = expect_data(decoder.try_decode());
+        assert_eq!(batch1, TEST_BATCH.slice(0, 200));
+
+        // Free everything up to the end of row group 0.
+        let rg0_end = metadata.row_group(0).end_offset();
+        decoder.release_through(rg0_end);
+        let remaining = decoder.buffered_bytes();
+        assert!(
+            remaining < test_file_len(),
+            "buffered_bytes should have decreased: {remaining} < {}",
+            test_file_len()
+        );
+
+        // Second row group should still be decodable.
+        let batch2 = expect_data(decoder.try_decode());
+        assert_eq!(batch2, TEST_BATCH.slice(200, 200));
         expect_finished(decoder.try_decode());
     }
 

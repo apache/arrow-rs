@@ -23,7 +23,6 @@ use crate::arrow::in_memory_row_group::{ColumnChunkData, FetchRanges, InMemoryRo
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use crate::file::reader::ChunkReader;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use std::ops::Range;
@@ -55,7 +54,7 @@ impl DataRequest {
     }
 
     /// Returns the chunks from the buffers that satisfy this request
-    fn get_chunks(&self, buffers: &PushBuffers) -> Result<Vec<Bytes>, ParquetError> {
+    fn get_chunks(&self, buffers: &mut PushBuffers) -> Result<Vec<Bytes>, ParquetError> {
         self.ranges
             .iter()
             .map(|range| {
@@ -72,10 +71,12 @@ impl DataRequest {
             .collect()
     }
 
-    /// Create a new InMemoryRowGroup, and fill it with provided data
+    /// Create a new InMemoryRowGroup, and fill it with provided data.
     ///
-    /// Assumes that all needed data is present in the buffers
-    /// and clears any explicitly requested ranges
+    /// Assumes that all needed data is present in the buffers.
+    /// Does **not** release any buffers — the caller is responsible for
+    /// calling `PushBuffers::release_through` at the appropriate time
+    /// (typically after all phases for a row group are complete).
     pub fn try_into_in_memory_row_group<'a>(
         self,
         row_group_idx: usize,
@@ -88,7 +89,7 @@ impl DataRequest {
 
         let Self {
             column_chunks,
-            ranges,
+            ranges: _,
             page_start_offsets,
         } = self;
 
@@ -104,9 +105,6 @@ impl DataRequest {
         };
 
         in_memory_row_group.fill_column_chunks(projection, page_start_offsets, chunks);
-
-        // Clear the ranges that were explicitly requested
-        buffers.clear_ranges(&ranges);
 
         Ok(in_memory_row_group)
     }

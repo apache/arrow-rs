@@ -212,9 +212,15 @@ impl RowGroupReaderBuilder {
         self.buffers.buffered_bytes()
     }
 
-    /// Clear any staged ranges currently buffered for future decode work.
-    pub fn clear_all_ranges(&mut self) {
-        self.buffers.clear_all_ranges();
+    /// Release all staged ranges currently buffered for future decode work.
+    pub fn release_all(&mut self) {
+        self.buffers.release_all();
+    }
+
+    /// Release all physical buffers that end at or before `offset`.
+    /// A straddling buffer is trimmed via zero-copy [`Bytes::slice`].
+    pub fn release_through(&mut self, offset: u64) {
+        self.buffers.release_through(offset);
     }
 
     /// take the current state, leaving None in its place.
@@ -269,6 +275,7 @@ impl RowGroupReaderBuilder {
     pub(crate) fn try_build(
         &mut self,
     ) -> Result<DecodeResult<ParquetRecordBatchReader>, ParquetError> {
+        self.buffers.ensure_sorted();
         loop {
             let current_state = self.take_state()?;
             // Try to transition the decoder.
@@ -609,6 +616,12 @@ impl RowGroupReaderBuilder {
                     &self.projection,
                     &mut self.buffers,
                 )?;
+
+                // All data for this row group has been extracted into the
+                // InMemoryRowGroup.  Release physical buffers up to the end
+                // of this row group so streaming IO can reclaim memory.
+                self.buffers
+                    .release_through(self.metadata.row_group(row_group_idx).end_offset());
 
                 let plan = plan_builder.build();
 

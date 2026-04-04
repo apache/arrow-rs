@@ -70,9 +70,15 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.buffered_bytes()
     }
 
-    /// Clear any staged ranges currently buffered for future decode work
-    pub fn clear_all_ranges(&mut self) {
-        self.row_group_reader_builder.clear_all_ranges();
+    /// Release all staged ranges currently buffered for future decode work.
+    pub fn release_all(&mut self) {
+        self.row_group_reader_builder.release_all();
+    }
+
+    /// Release all physical buffers that end at or before `offset`.
+    /// A straddling buffer is trimmed via zero-copy [`Bytes::slice`].
+    pub fn release_through(&mut self, offset: u64) {
+        self.row_group_reader_builder.release_through(offset);
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
