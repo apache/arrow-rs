@@ -22,11 +22,11 @@
 use bytes::Bytes;
 use core::f32;
 use half::f16;
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use arrow::util::test_util::parquet_test_data;
-use arrow_array::{Array, Float16Array, Float32Array, Float64Array, UInt64Array};
-use arrow_schema::Schema;
+use arrow_array::{Array, Float16Array, Float32Array, Float64Array, RecordBatch, UInt64Array};
+use arrow_schema::{DataType, Field, Schema};
 use parquet::{
     arrow::{
         ArrowWriter,
@@ -266,7 +266,173 @@ fn test_ieee754_interop() {
             .expect("validate written metadata");
     }
 
-    fs::write("output.pq", outbuf.clone()).unwrap();
+    //fs::write("output.pq", outbuf.clone()).unwrap();
+
+    // now re-validate the bit we've written
+    let options = ArrowReaderOptions::new()
+        .with_page_index_policy(parquet::file::metadata::PageIndexPolicy::Required);
+    let builder = ArrowReaderBuilder::try_new_with_options(Bytes::from(outbuf), options).unwrap();
+    let file_metadata = builder.metadata().clone();
+    let schema = builder.schema().clone();
+    let parquet_schema = builder.parquet_schema().clone();
+
+    println!("validate from rust output");
+    validate_metadata(file_metadata.as_ref(), schema.as_ref(), &parquet_schema)
+        .expect("validate re-read metadata");
+}
+
+// This test replicates the data produced by the parquet-java code that generated
+// parquet-testing/data/floating_orders_nan_count.parquet
+#[test]
+fn test_ieee754_interop2() {
+    // define schema
+    let schema = Schema::new(vec![
+        Field::new("float_ieee754", DataType::Float32, false),
+        Field::new("double_ieee754", DataType::Float64, false),
+        Field::new("float16_ieee754", DataType::Float16, false),
+    ]);
+    let schema = Arc::new(schema);
+
+    let mut outbuf = Vec::new();
+    {
+        let writer_options = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(10))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut outbuf, schema.clone(), Some(writer_options))
+            .expect("create arrow writer");
+
+        // this only works for non-NaN cases
+        let make_batch = |data: &[f32]| -> RecordBatch {
+            let arr1 = Float32Array::from(data.to_vec());
+            let arr2 = Float64Array::from(data.iter().map(|v| *v as f64).collect::<Vec<_>>());
+            let arr3 =
+                Float16Array::from(data.iter().map(|v| f16::from_f32(*v)).collect::<Vec<_>>());
+
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(arr1), Arc::new(arr2), Arc::new(arr3)],
+            )
+            .unwrap()
+        };
+
+        // batch 1: no NaNs
+        let batch = make_batch(&[-2.0f32, -1.0, -0.0, 0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0]);
+        writer.write(&batch).expect("writing batch1");
+
+        // batch 2: mixed
+        let float_data = vec![
+            FLOAT_NEG_NAN_SMALL,
+            -2.0,
+            FLOAT_NEG_NAN_LARGE,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            FLOAT_NAN_SMALL,
+            3.0,
+            FLOAT_NAN_LARGE,
+        ];
+        let double_data = vec![
+            DOUBLE_NEG_NAN_SMALL,
+            -2.0,
+            DOUBLE_NEG_NAN_LARGE,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            DOUBLE_NAN_SMALL,
+            3.0,
+            DOUBLE_NAN_LARGE,
+        ];
+        let float16_data = vec![
+            FLOAT16_NEG_NAN_SMALL,
+            f16::from_f32(-2.0),
+            FLOAT16_NEG_NAN_LARGE,
+            f16::from_f32(-1.0),
+            f16::from_f32(-0.0),
+            f16::from_f32(0.0),
+            f16::from_f32(1.0),
+            FLOAT16_NAN_SMALL,
+            f16::from_f32(3.0),
+            FLOAT16_NAN_LARGE,
+        ];
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Float32Array::from(float_data)),
+                Arc::new(Float64Array::from(double_data)),
+                Arc::new(Float16Array::from(float16_data)),
+            ],
+        )
+        .unwrap();
+        writer.write(&batch).expect("writing batch2");
+
+        // batch 3: all NaN
+        let float_data = vec![
+            FLOAT_NEG_NAN_SMALL,
+            FLOAT_NEG_NAN_LARGE,
+            FLOAT_NAN_SMALL,
+            FLOAT_NAN_LARGE,
+            FLOAT_NEG_NAN_SMALL,
+            FLOAT_NEG_NAN_LARGE,
+            FLOAT_NAN_SMALL,
+            FLOAT_NAN_LARGE,
+            FLOAT_NEG_NAN_SMALL,
+            FLOAT_NAN_LARGE,
+        ];
+        let double_data = vec![
+            DOUBLE_NEG_NAN_SMALL,
+            DOUBLE_NEG_NAN_LARGE,
+            DOUBLE_NAN_SMALL,
+            DOUBLE_NAN_LARGE,
+            DOUBLE_NEG_NAN_SMALL,
+            DOUBLE_NEG_NAN_LARGE,
+            DOUBLE_NAN_SMALL,
+            DOUBLE_NAN_LARGE,
+            DOUBLE_NEG_NAN_SMALL,
+            DOUBLE_NAN_LARGE,
+        ];
+        let float16_data = vec![
+            FLOAT16_NEG_NAN_SMALL,
+            FLOAT16_NEG_NAN_LARGE,
+            FLOAT16_NAN_SMALL,
+            FLOAT16_NAN_LARGE,
+            FLOAT16_NEG_NAN_SMALL,
+            FLOAT16_NEG_NAN_LARGE,
+            FLOAT16_NAN_SMALL,
+            FLOAT16_NAN_LARGE,
+            FLOAT16_NEG_NAN_SMALL,
+            FLOAT16_NAN_LARGE,
+        ];
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Float32Array::from(float_data)),
+                Arc::new(Float64Array::from(double_data)),
+                Arc::new(Float16Array::from(float16_data)),
+            ],
+        )
+        .unwrap();
+        writer.write(&batch).expect("writing batch3");
+
+        // batch 4: 0 min
+        let batch = make_batch(&[0.0f32, 0.0, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0]);
+        writer.write(&batch).expect("writing batch4");
+
+        // batch 5: -0 max
+        let batch = make_batch(&[
+            -5.0f32, -4.0, -3.0, -2.0, -1.5, -1.0, -0.5, -0.0, -0.0, -0.0,
+        ]);
+        writer.write(&batch).expect("writing batch5");
+
+        let write_meta = writer.close().expect("closing file");
+        let parquet_schema = write_meta.file_metadata().schema_descr();
+        println!("validate writer output");
+        validate_metadata(&write_meta, schema.as_ref(), parquet_schema)
+            .expect("validate written metadata");
+    }
+
+    //fs::write("output2.pq", outbuf.clone()).unwrap();
 
     // now re-validate the bit we've written
     let options = ArrowReaderOptions::new()
