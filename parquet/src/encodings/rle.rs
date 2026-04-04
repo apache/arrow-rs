@@ -519,7 +519,7 @@ impl RleDecoder {
                                 "dictionary index out of bounds"
                             );
                             for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
-                                // SAFETY: max of all indices checked above
+                                // SAFETY: all indices checked above to be in bounds
                                 b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
                             }
                         }
