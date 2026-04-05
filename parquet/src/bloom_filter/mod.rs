@@ -564,6 +564,7 @@ impl Sbbf {
 
         // Find max folds where estimated FPP stays within target.
         // f_k = 1 - (1 - avg_fill)^(2^k), FPP_k = f_k^8
+        assert!(len.is_power_of_two(), "Number of blocks must be a power of 2 for folding");
         let max_folds = len.trailing_zeros(); // log2(len) since len is power of 2
         let one_minus_f = 1.0 - avg_fill;
         let mut num_folds = 0u32;
