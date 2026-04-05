@@ -493,9 +493,10 @@ impl Sbbf {
     /// Fold the bloom filter down to the smallest size that still meets the target FPP
     /// (False Positive Percentage).
     ///
-    /// Repeatedly halves the filter by merging adjacent block pairs via bitwise OR,
-    /// stopping when the next fold would cause the estimated FPP to exceed `target_fpp`, or
-    /// when the filter reaches the minimum size of 1 block (32 bytes).
+    /// Folds the filter by merging groups of adjacent blocks via bitwise OR, where each
+    /// fold level halves the number of blocks. The fold count is chosen as the maximum
+    /// number of folds whose estimated FPP stays within `target_fpp`. The filter stops
+    /// at a minimum size of 1 block (32 bytes).
     ///
     /// ## How it works
     ///
@@ -505,11 +506,13 @@ impl Sbbf {
     /// block_index = ((hash >> 32) * num_blocks) >> 32
     /// ```
     ///
-    /// When `num_blocks` is halved, the new index becomes `floor(original_index / 2)`, so
-    /// blocks `2i` and `2i+1` map to the same position. Each fold merges **adjacent** pairs:
+    /// A single fold halves the block count: when `num_blocks` is halved, the new index
+    /// becomes `floor(original_index / 2)`, so blocks `2i` and `2i+1` map to the same
+    /// position. More generally, `k` folds reduce the block count by `2^k`, merging
+    /// groups of `2^k` adjacent blocks in a single pass:
     ///
     /// ```text
-    /// folded[i] = blocks[2*i] | blocks[2*i + 1]
+    /// folded[i] = blocks[i*2^k] | blocks[i*2^k + 1] | ... | blocks[i*2^k + 2^k - 1]
     /// ```
     ///
     /// This differs from standard Bloom filter folding, which merges the two halves
