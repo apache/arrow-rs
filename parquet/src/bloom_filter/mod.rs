@@ -128,15 +128,28 @@ struct Block([u32; 8]);
 impl Block {
     const ZERO: Block = Block([0; 8]);
 
-    /// takes as its argument a single unsigned 32-bit integer and returns a block in which each
-    /// word has exactly one bit set.
+    /// Produce a block where each of the 8 words has exactly one bit set.
+    ///
+    /// For each word `i` the bit position is derived from `x`:
+    ///
+    /// ```text
+    ///   y = (x wrapping* SALT[i]) >> 27   // top 5 bits → value in 0..31
+    ///   word[i] = 1 << y                  // exactly one bit set per word
+    /// ```
+    ///
+    /// Because only the top 5 bits survive the shift, each word picks one of
+    /// 32 possible bit positions. The eight SALT constants spread the choices
+    /// so different words usually light up different positions.
+    ///
+    /// Key property: the mask depends *only* on `x` (a u32) and the fixed
+    /// SALT constants — it is independent of the filter size. This is why
+    /// folding preserves bit patterns (see Lemma 2 in tests).
     fn mask(x: u32) -> Self {
         let mut result = [0_u32; 8];
         for i in 0..8 {
-            // wrapping instead of checking for overflow
-            let y = x.wrapping_mul(SALT[i]);
-            let y = y >> 27;
-            result[i] = 1 << y;
+            let y = x.wrapping_mul(SALT[i]); // spread bits via multiply
+            let y = y >> 27; // keep top 5 bits → 0..31
+            result[i] = 1 << y; // set exactly that one bit
         }
         Self(result)
     }
@@ -161,7 +174,10 @@ impl Block {
         self
     }
 
-    /// setting every bit in the block that was also set in the result from mask
+    /// OR the mask bits into this block (`block[i] |= mask[i]`).
+    ///
+    /// After insertion the 8 bits chosen by `mask(hash)` are guaranteed set;
+    /// bits previously set by other hashes are preserved.
     fn insert(&mut self, hash: u32) {
         let mask = Self::mask(hash);
         for i in 0..8 {
@@ -169,7 +185,11 @@ impl Block {
         }
     }
 
-    /// returns true when every bit that is set in the result of mask is also set in the block.
+    /// Check membership: returns `true` when *every* bit from `mask(hash)` is
+    /// already set in this block (`block[i] & mask[i] != 0` for all 8 words).
+    ///
+    /// A `true` result means "probably present" (other inserts may have set
+    /// the same bits). A `false` is definitive — the value was never inserted.
     fn check(&self, hash: u32) -> bool {
         let mask = Self::mask(hash);
         for i in 0..8 {
@@ -449,10 +469,27 @@ impl Sbbf {
         Ok(Some(Self::new(&bitset)))
     }
 
+    /// Map a 64-bit hash to a block index in `[0, num_blocks)`.
+    ///
+    /// Uses the "multiply-and-shift" trick (a fast alternative to modulo):
+    ///
+    /// ```text
+    ///   upper32 = hash >> 32           // take the top 32 bits of the hash
+    ///   index   = (upper32 * N) >> 32  // ∈ [0, N)  where N = num_blocks
+    /// ```
+    ///
+    /// Why this matters for folding (Lemma 1): when N is a power of two and
+    /// you halve it to N/2, the index also halves:
+    ///
+    /// ```text
+    ///   index_N   = (upper32 * N)   >> 32
+    ///   index_N/2 = (upper32 * N/2) >> 32 = index_N / 2  (integer division)
+    /// ```
+    ///
+    /// So the block that held hash `h` in the big filter is at `index / 2` in
+    /// the half-sized filter — exactly where `fold` ORs it.
     #[inline]
     fn hash_to_block_index(&self, hash: u64) -> usize {
-        // unchecked_mul is unstable, but in reality this is safe, we'd just use saturating mul
-        // but it will not saturate
         (((hash >> 32).saturating_mul(self.0.len() as u64)) >> 32) as usize
     }
 
@@ -567,7 +604,10 @@ impl Sbbf {
 
         // Find max folds where estimated FPP stays within target.
         // f_k = 1 - (1 - avg_fill)^(2^k), FPP_k = f_k^8
-        assert!(len.is_power_of_two(), "Number of blocks must be a power of 2 for folding");
+        assert!(
+            len.is_power_of_two(),
+            "Number of blocks must be a power of 2 for folding"
+        );
         let max_folds = len.trailing_zeros(); // log2(len) since len is power of 2
         let one_minus_f = 1.0 - avg_fill;
         let mut num_folds = 0u32;
@@ -906,29 +946,42 @@ mod tests {
         }
     }
 
-    /*
-        Ok, so the following is trying to prove in simple terms that folding an SBBF and
-        building a fresh smaller SBBF from scratch produces the exact same bits
-
-        If you insert the same values into a 512-block filter and fold it to 256 blocks,
-        you get a bit-for-bit identical result to just inserting those values into a
-        256-block filter directly. The fold doesn't lose information or scramble anything,
-        it's like you had known the right size all along
-
-        This works because of the 2 lemmas:
-        1. when you half the filter, each hash's block index divides cleanly by 2
-        so the hash that went to block `i` in the big filter goes to block `i/2` in the small one
-        which is exactly where the fold puts it
-        > this is trivial since floor(x/2) == floor(floor(x) / 2) is a basic math fact
-
-        2. the bit pattern set _within_ a block depends only on the lower 32 bits of the hash,
-        which doesn't change with filter size. So the same bits get set regardless!
-        > structually trivial, mask() takes a u32 and uses only the SALT constants.
-
-
-        When you combine it together, every hash sets the same bits in the same destination block
-        whether you fold or build fresh. Therefore the filters are bit-identical
-    */
+    /// Prove that folding an SBBF by one level produces the exact same bits
+    /// as building a fresh filter at the smaller size from scratch.
+    ///
+    /// # What is folding?
+    ///
+    /// ```text
+    ///   Original (N = 8 blocks):
+    ///   ┌───┬───┬───┬───┬───┬───┬───┬───┐
+    ///   │ 0 │ 1 │ 2 │ 3 │ 4 │ 5 │ 6 │ 7 │
+    ///   └─┬─┴─┬─┴─┬─┴─┬─┴─┬─┴─┬─┴─┬─┴─┬─┘
+    ///     │   │   │   │   │   │   │   │
+    ///     └─OR┘   └─OR┘   └─OR┘   └─OR┘    pair-wise OR
+    ///       │       │       │       │
+    ///   ┌───┴──┬────┴──┬────┴──┬────┴──┐
+    ///   │ 0|1  │ 2|3   │ 4|5   │ 6|7   │   Folded (N/2 = 4 blocks)
+    ///   └──────┴───────┴───────┴───────┘
+    /// ```
+    ///
+    /// # Why folded == fresh (the two lemmas)
+    ///
+    /// An SBBF insertion does two things with a 64-bit hash `h`:
+    ///
+    ///   1. **Pick a block** — uses the upper 32 bits via `hash_to_block_index`
+    ///   2. **Set 8 bits in that block** — uses the lower 32 bits via `Block::mask`
+    ///
+    /// **Lemma 1 (block index halves):** `hash_to_block_index` uses
+    /// `(upper32 * N) >> 32`. When N halves, the index halves too:
+    /// `index_in(N/2) == index_in(N) / 2`. So the hash lands in the same
+    /// destination block whether you fold or build fresh.
+    ///
+    /// **Lemma 2 (mask is size-independent):** `Block::mask(h as u32)` depends
+    /// only on the lower 32 bits and the fixed SALT constants — the filter
+    /// size N is not involved. So the same 8 bits get set regardless.
+    ///
+    /// Combined: every hash sets the *same bits* in the *same destination
+    /// block* whether you fold or build fresh → filters are bit-identical.
     #[test]
     fn test_sbbf_folded_equals_fresh() {
         let values = (0..5000).map(|i| format!("elem_{i}")).collect::<Vec<_>>();
@@ -940,66 +993,103 @@ mod tests {
         for num_blocks in [64, 256, 1024] {
             let half = num_blocks / 2;
 
-            // original filter
+            // Build a filter with N blocks and insert all values.
             let mut original = Sbbf::new_with_num_of_bytes(num_blocks * 32);
             assert_eq!(original.num_blocks(), num_blocks);
             for &h in &hashes {
                 original.insert_hash(h);
             }
 
+            // --- Per-hash verification of the two lemmas ---
             for &h in hashes.iter() {
+                // mask(h as u32) gives the 8-bit pattern that this hash sets
+                // inside whichever block it lands in. It uses only the lower
+                // 32 bits of h, so it's the same regardless of filter size.
                 let mask = Block::mask(h as u32);
 
-                // step 1: element's block in original
+                // Lemma 1 check: the block index in the original N-block
+                // filter, divided by 2, should equal the block index in a
+                // fresh N/2-block filter.
                 let orig_idx = original.hash_to_block_index(h);
                 assert!(orig_idx < num_blocks);
 
-                // step 2 (lemma 1): destination in N/2 filter
                 let fresh_idx = {
                     let tmp = Sbbf(vec![Block::ZERO; half]);
                     tmp.hash_to_block_index(h)
                 };
-
                 let folded_idx = orig_idx / 2;
-                assert_eq!(fresh_idx, folded_idx,);
+                assert_eq!(
+                    fresh_idx, folded_idx,
+                    "Lemma 1 failed: fresh index {fresh_idx} != folded index {folded_idx}"
+                );
 
-                // step 3 (lemma 2): mask is the same
+                // Lemma 2 check: every bit that mask wants to set is actually
+                // present in the original block.
+                //
+                // mask.0[w] has exactly ONE bit set (see Block::mask: `1 << y`).
+                // The block at orig_idx has many bits set from many inserts, so
+                // we can't test equality — we test that the specific mask bit is
+                // *present*:
+                //
+                //   block_word & mask_word != 0
+                //     ⟺  "the one bit in the mask is set in the block"
+                //
+                // (Since mask_word has exactly 1 bit, `& mask != 0` is the same
+                //  as `& mask == mask` — but `!= 0` reads more naturally.)
                 for w in 0..8 {
-                    assert_ne!(original.0[orig_idx].0[w] & mask.0[w], 0,);
+                    assert_ne!(
+                        original.0[orig_idx].0[w] & mask.0[w],
+                        0,
+                        "Lemma 2 failed: mask bit not set in word {w} of block {orig_idx}"
+                    );
                 }
             }
 
-            // verify the actual blocks match
+            // --- Final bit-identical comparison ---
+            // Fold the original N-block filter down to N/2 blocks.
             let mut folded = original.clone();
             folded.fold_n(1);
             assert_eq!(folded.num_blocks(), half);
 
+            // Build a fresh N/2-block filter with the same values.
             let mut fresh = Sbbf::new_with_num_of_bytes(half * 32);
             for &h in &hashes {
                 fresh.insert_hash(h);
             }
 
+            // By lemmas 1 + 2, every block should be bit-identical.
             for j in 0..half {
                 assert_eq!(
                     folded.0[j].0, fresh.0[j].0,
-                    "Step 4 failed: block {j} differs (N={num_blocks}→{half})"
+                    "Block {j} differs after fold (N={num_blocks} → {half})"
                 );
             }
         }
     }
 
-    /// show multi-step folding.
+    /// Inductive multi-step folding: folding k times from N blocks produces
+    /// a filter bit-identical to a fresh N/2^k-block filter.
     ///
-    /// You can apply the above inductively, folding k times from N blocks produces a filter bit-identical to a fresh N/2^k filter
+    /// `test_sbbf_folded_equals_fresh` proves the base case (one fold).
+    /// This test applies folds *repeatedly*, checking after each step:
+    ///
+    /// ```text
+    ///   512 ─fold→ 256 ─fold→ 128 ─…→ 1  (9 folds total)
+    /// ```
+    ///
+    /// At each intermediate size we build a fresh filter and assert
+    /// bit-equality, confirming the lemma composes across folds.
     #[test]
     fn test_multi_step_fold() {
         let values = (0..3000).map(|i| format!("x_{i}")).collect::<Vec<_>>();
 
+        // Start with a 512-block filter.
         let mut filter = Sbbf::new_with_num_of_bytes(512 * 32);
         for v in &values {
             filter.insert(v.as_str());
         }
 
+        // Fold one level at a time, comparing against a fresh filter each step.
         for expected_blocks in [256, 128, 64, 32, 16, 8, 4, 2, 1] {
             filter.fold_n(1);
             assert_eq!(filter.num_blocks(), expected_blocks);
@@ -1009,7 +1099,7 @@ mod tests {
                 fresh.insert(v.as_str());
             }
             for (fb, rb) in filter.0.iter().zip(fresh.0.iter()) {
-                assert_eq!(fb.0, rb.0,);
+                assert_eq!(fb.0, rb.0);
             }
         }
     }
