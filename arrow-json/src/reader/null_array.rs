@@ -22,8 +22,6 @@ use arrow_schema::ArrowError;
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
-use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType};
 
 #[derive(Default)]
 pub struct NullArrayDecoder {

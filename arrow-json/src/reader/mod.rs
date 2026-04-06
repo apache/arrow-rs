@@ -856,7 +856,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::{
         Array, BooleanArray, Float64Array, GenericListViewArray, Int32Array, ListArray, MapArray,
-        NullArray, OffsetSizeTrait, StringArray, StringViewArray, StructArrayDecoder, make_array,
+        NullArray, OffsetSizeTrait, StringArray, StringViewArray, StructArray, make_array,
     };
     use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
