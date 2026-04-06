@@ -181,6 +181,23 @@ pub enum BloomFilterPosition {
 /// Reference counted writer properties.
 pub type WriterPropertiesPtr = Arc<WriterProperties>;
 
+/// Resolved state of [`WriterPropertiesBuilder::set_offset_index_disabled`].
+///
+/// When a user disables offset indexes but page-level statistics are enabled,
+/// the setting is overridden (offset indexes remain enabled). This enum
+/// preserves the user's original intent so that a round-trip through
+/// `WriterPropertiesBuilder` does not lose it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OffsetIndexSetting {
+    /// Offset indexes are enabled (the default).
+    Enabled,
+    /// User disabled offset indexes and no page-level statistics override it.
+    Disabled,
+    /// User disabled offset indexes, but page-level statistics require them,
+    /// so they remain enabled.
+    DisabledOverridden,
+}
+
 /// Configuration settings for writing parquet files.
 ///
 /// Use [`Self::builder`] to create a [`WriterPropertiesBuilder`] to change settings.
@@ -224,7 +241,7 @@ pub struct WriterProperties {
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
-    offset_index_disabled: bool,
+    offset_index_setting: OffsetIndexSetting,
     pub(crate) key_value_metadata: Option<Vec<KeyValue>>,
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
@@ -374,18 +391,7 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_offset_index_disabled`]
     pub fn offset_index_disabled(&self) -> bool {
-        // If page statistics are to be collected, then do not disable the offset indexes.
-        let default_page_stats_enabled =
-            self.default_column_properties.statistics_enabled() == Some(EnabledStatistics::Page);
-        let column_page_stats_enabled = self
-            .column_properties
-            .iter()
-            .any(|path_props| path_props.1.statistics_enabled() == Some(EnabledStatistics::Page));
-        if default_page_stats_enabled || column_page_stats_enabled {
-            return false;
-        }
-
-        self.offset_index_disabled
+        matches!(self.offset_index_setting, OffsetIndexSetting::Disabled)
     }
 
     /// Returns `key_value_metadata` KeyValue pairs.
@@ -593,6 +599,22 @@ impl Default for WriterPropertiesBuilder {
 impl WriterPropertiesBuilder {
     /// Finalizes the configuration and returns immutable writer properties struct.
     pub fn build(self) -> WriterProperties {
+        // Pre-compute offset_index_setting
+        let offset_index_setting = if self.offset_index_disabled {
+            let default_page_stats_enabled = self.default_column_properties.statistics_enabled()
+                == Some(EnabledStatistics::Page);
+            let column_page_stats_enabled = self.column_properties.iter().any(|path_props| {
+                path_props.1.statistics_enabled() == Some(EnabledStatistics::Page)
+            });
+            if default_page_stats_enabled || column_page_stats_enabled {
+                OffsetIndexSetting::DisabledOverridden
+            } else {
+                OffsetIndexSetting::Disabled
+            }
+        } else {
+            OffsetIndexSetting::Enabled
+        };
+
         // Resolve bloom filter NDV for columns where it wasn't explicitly set:
         // default to max_row_group_row_count so the filter is never undersized.
         let default_ndv = self
@@ -613,7 +635,7 @@ impl WriterPropertiesBuilder {
             bloom_filter_position: self.bloom_filter_position,
             writer_version: self.writer_version,
             created_by: self.created_by,
-            offset_index_disabled: self.offset_index_disabled,
+            offset_index_setting,
             key_value_metadata: self.key_value_metadata,
             default_column_properties,
             column_properties,
@@ -1148,7 +1170,10 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             bloom_filter_position: props.bloom_filter_position,
             writer_version: props.writer_version,
             created_by: props.created_by,
-            offset_index_disabled: props.offset_index_disabled,
+            offset_index_disabled: !matches!(
+                props.offset_index_setting,
+                OffsetIndexSetting::Enabled
+            ),
             key_value_metadata: props.key_value_metadata,
             default_column_properties: props.default_column_properties,
             column_properties: props.column_properties,
