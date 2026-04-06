@@ -1159,6 +1159,8 @@ pub enum SortOrder {
     UNSIGNED,
     /// Comparison is undefined.
     UNDEFINED,
+    /// Use IEEE 754 total order.
+    TOTAL_ORDER,
 }
 
 impl SortOrder {
@@ -1179,6 +1181,8 @@ pub enum ColumnOrder {
     /// Column uses the order defined by its logical or physical type
     /// (if there is no logical type), parquet-format 2.4.0+.
     TYPE_DEFINED_ORDER(SortOrder),
+    /// Column ordering to use for floating point types.
+    IEEE_754_TOTAL_ORDER,
     // The following are not defined in the Parquet spec and should always be last.
     /// Undefined column order, means legacy behaviour before parquet-format 2.4.0.
     /// Sort order is always SIGNED.
@@ -1199,14 +1203,36 @@ impl ColumnOrder {
         converted_type: ConvertedType,
         physical_type: Type,
     ) -> SortOrder {
-        Self::sort_order_for_type(logical_type.as_ref(), converted_type, physical_type)
+        Self::column_order_for_type(logical_type.as_ref(), converted_type, physical_type)
+            .sort_order()
+    }
+
+    /// Returns the `ColumnOrder` for a physical/logical type.
+    pub fn column_order_for_type(
+        logical_type: Option<&LogicalType>,
+        converted_type: ConvertedType,
+        physical_type: Type,
+    ) -> ColumnOrder {
+        if Some(&LogicalType::Float16) == logical_type
+            || matches!(physical_type, Type::FLOAT | Type::DOUBLE)
+        {
+            ColumnOrder::IEEE_754_TOTAL_ORDER
+        } else {
+            let sort_order =
+                Self::sort_order_for_type(logical_type, converted_type, physical_type, true);
+            ColumnOrder::TYPE_DEFINED_ORDER(sort_order)
+        }
     }
 
     /// Returns sort order for a physical/logical type.
+    ///
+    /// `is_type_defined` indicates whether the column order for this type is
+    /// [`ColumnOrder::TYPE_DEFINED_ORDER`].
     pub fn sort_order_for_type(
         logical_type: Option<&LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,
+        is_type_defined: bool,
     ) -> SortOrder {
         match logical_type {
             Some(logical) => match logical {
@@ -1224,18 +1250,28 @@ impl ColumnOrder {
                 LogicalType::Timestamp { .. } => SortOrder::SIGNED,
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
-                LogicalType::Float16 => SortOrder::SIGNED,
+                LogicalType::Float16 => {
+                    if is_type_defined {
+                        SortOrder::SIGNED
+                    } else {
+                        SortOrder::TOTAL_ORDER
+                    }
+                }
                 LogicalType::Variant { .. }
                 | LogicalType::Geometry { .. }
                 | LogicalType::Geography { .. }
                 | LogicalType::_Unknown { .. } => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
-            None => Self::get_converted_sort_order(converted_type, physical_type),
+            None => Self::get_converted_sort_order(converted_type, physical_type, is_type_defined),
         }
     }
 
-    fn get_converted_sort_order(converted_type: ConvertedType, physical_type: Type) -> SortOrder {
+    fn get_converted_sort_order(
+        converted_type: ConvertedType,
+        physical_type: Type,
+        is_type_defined: bool,
+    ) -> SortOrder {
         match converted_type {
             // Unsigned byte-wise comparison.
             ConvertedType::UTF8
@@ -1270,24 +1306,35 @@ impl ColumnOrder {
             }
 
             // Fall back to physical type.
-            ConvertedType::NONE => Self::get_default_sort_order(physical_type),
+            ConvertedType::NONE => Self::get_default_sort_order(physical_type, is_type_defined),
         }
     }
 
     /// Returns default sort order based on physical type.
-    fn get_default_sort_order(physical_type: Type) -> SortOrder {
+    fn get_default_sort_order(physical_type: Type, is_type_defined: bool) -> SortOrder {
         match physical_type {
             // Order: false, true
             Type::BOOLEAN => SortOrder::UNSIGNED,
             Type::INT32 | Type::INT64 => SortOrder::SIGNED,
             Type::INT96 => SortOrder::UNDEFINED,
             // Notes to remember when comparing float/double values:
-            // If the min is a NaN, it should be ignored.
-            // If the max is a NaN, it should be ignored.
-            // If the min is +0, the row group may contain -0 values as well.
-            // If the max is -0, the row group may contain +0 values as well.
-            // When looking for NaN values, min and max should be ignored.
-            Type::FLOAT | Type::DOUBLE => SortOrder::SIGNED,
+            // If legacy TYPE_DEFINED_ORDER is specified:
+            //   If the min is a NaN, it should be ignored.
+            //   If the max is a NaN, it should be ignored.
+            //   If the min is +0, the row group may contain -0 values as well.
+            //   If the max is -0, the row group may contain +0 values as well.
+            //   When looking for NaN values, min and max should be ignored.
+            // If IEEE_754_TOTAL_ORDER:
+            //   Examine nan_count to see if NaNs are present.
+            //   If min/max are NaN, that means only NaNs are present.
+            //   If min/max are not NaN, they are ordered according to total order.
+            Type::FLOAT | Type::DOUBLE => {
+                if is_type_defined {
+                    SortOrder::SIGNED
+                } else {
+                    SortOrder::TOTAL_ORDER
+                }
+            }
             // Unsigned byte-wise comparison
             Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => SortOrder::UNSIGNED,
         }
@@ -1297,6 +1344,7 @@ impl ColumnOrder {
     pub fn sort_order(&self) -> SortOrder {
         match *self {
             ColumnOrder::TYPE_DEFINED_ORDER(order) => order,
+            ColumnOrder::IEEE_754_TOTAL_ORDER => SortOrder::TOTAL_ORDER,
             ColumnOrder::UNDEFINED => SortOrder::SIGNED,
             ColumnOrder::UNKNOWN => SortOrder::UNDEFINED,
         }
@@ -1314,6 +1362,10 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
                 // NOTE: the sort order needs to be set correctly after parsing.
                 prot.skip_empty_struct()?;
                 Self::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
+            }
+            2 => {
+                prot.skip_empty_struct()?;
+                Self::IEEE_754_TOTAL_ORDER
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -1337,6 +1389,10 @@ impl WriteThrift for ColumnOrder {
         match *self {
             Self::TYPE_DEFINED_ORDER(_) => {
                 writer.write_field_begin(FieldType::Struct, 1, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::IEEE_754_TOTAL_ORDER => {
+                writer.write_field_begin(FieldType::Struct, 2, 0)?;
                 writer.write_struct_end()?;
             }
             _ => return Err(general_err!("Attempt to write undefined ColumnOrder")),
@@ -2181,6 +2237,7 @@ mod tests {
         assert_eq!(SortOrder::SIGNED.to_string(), "SIGNED");
         assert_eq!(SortOrder::UNSIGNED.to_string(), "UNSIGNED");
         assert_eq!(SortOrder::UNDEFINED.to_string(), "UNDEFINED");
+        assert_eq!(SortOrder::TOTAL_ORDER.to_string(), "TOTAL_ORDER");
     }
 
     #[test]
@@ -2196,6 +2253,10 @@ mod tests {
         assert_eq!(
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED).to_string(),
             "TYPE_DEFINED_ORDER(UNDEFINED)"
+        );
+        assert_eq!(
+            ColumnOrder::IEEE_754_TOTAL_ORDER.to_string(),
+            "IEEE_754_TOTAL_ORDER"
         );
         assert_eq!(ColumnOrder::UNDEFINED.to_string(), "UNDEFINED");
     }
@@ -2213,7 +2274,12 @@ mod tests {
         fn check_sort_order(types: Vec<LogicalType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(Some(tpe), ConvertedType::NONE, Type::BYTE_ARRAY),
+                    ColumnOrder::column_order_for_type(
+                        Some(&tpe),
+                        ConvertedType::NONE,
+                        Type::BYTE_ARRAY
+                    )
+                    .sort_order(),
                     expected_order
                 );
             }
@@ -2292,9 +2358,11 @@ mod tests {
                 is_adjusted_to_u_t_c: true,
                 unit: TimeUnit::NANOS,
             },
-            LogicalType::Float16,
         ];
         check_sort_order(signed, SortOrder::SIGNED);
+
+        let float = vec![LogicalType::Float16];
+        check_sort_order(float, SortOrder::TOTAL_ORDER);
 
         // Undefined comparison
         let undefined = vec![
@@ -2316,7 +2384,7 @@ mod tests {
         fn check_sort_order(types: Vec<ConvertedType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(None, tpe, Type::BYTE_ARRAY),
+                    ColumnOrder::column_order_for_type(None, tpe, Type::BYTE_ARRAY).sort_order(),
                     expected_order
                 );
             }
@@ -2368,35 +2436,43 @@ mod tests {
     fn test_column_order_get_default_sort_order() {
         // Comparison based on physical type
         assert_eq!(
-            ColumnOrder::get_default_sort_order(Type::BOOLEAN),
+            ColumnOrder::get_default_sort_order(Type::BOOLEAN, true),
             SortOrder::UNSIGNED
         );
         assert_eq!(
-            ColumnOrder::get_default_sort_order(Type::INT32),
+            ColumnOrder::get_default_sort_order(Type::INT32, true),
             SortOrder::SIGNED
         );
         assert_eq!(
-            ColumnOrder::get_default_sort_order(Type::INT64),
+            ColumnOrder::get_default_sort_order(Type::INT64, true),
             SortOrder::SIGNED
         );
         assert_eq!(
-            ColumnOrder::get_default_sort_order(Type::INT96),
+            ColumnOrder::get_default_sort_order(Type::INT96, true),
             SortOrder::UNDEFINED
         );
         assert_eq!(
-            ColumnOrder::get_default_sort_order(Type::FLOAT),
+            ColumnOrder::get_default_sort_order(Type::FLOAT, false),
+            SortOrder::TOTAL_ORDER
+        );
+        assert_eq!(
+            ColumnOrder::get_default_sort_order(Type::DOUBLE, false),
+            SortOrder::TOTAL_ORDER
+        );
+        assert_eq!(
+            ColumnOrder::get_default_sort_order(Type::FLOAT, true),
             SortOrder::SIGNED
         );
         assert_eq!(
-            ColumnOrder::get_default_sort_order(Type::DOUBLE),
+            ColumnOrder::get_default_sort_order(Type::DOUBLE, true),
             SortOrder::SIGNED
         );
         assert_eq!(
-            ColumnOrder::get_default_sort_order(Type::BYTE_ARRAY),
+            ColumnOrder::get_default_sort_order(Type::BYTE_ARRAY, true),
             SortOrder::UNSIGNED
         );
         assert_eq!(
-            ColumnOrder::get_default_sort_order(Type::FIXED_LEN_BYTE_ARRAY),
+            ColumnOrder::get_default_sort_order(Type::FIXED_LEN_BYTE_ARRAY, true),
             SortOrder::UNSIGNED
         );
     }
@@ -2414,6 +2490,10 @@ mod tests {
         assert_eq!(
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED).sort_order(),
             SortOrder::UNDEFINED
+        );
+        assert_eq!(
+            ColumnOrder::IEEE_754_TOTAL_ORDER.sort_order(),
+            SortOrder::TOTAL_ORDER
         );
         assert_eq!(ColumnOrder::UNDEFINED.sort_order(), SortOrder::SIGNED);
     }
