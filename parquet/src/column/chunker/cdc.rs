@@ -2308,7 +2308,7 @@ mod arrow_tests {
             None,
             true,
         );
-        let read = concat_batches(&read_batches(&buf));
+        let read = concat_batches(read_batches(&buf));
         let read_list = read.column(0).as_list::<i32>();
         assert_eq!(read_list.len(), 5);
         assert!(read_list.is_valid(0));
