@@ -45,16 +45,22 @@ fn same_type_family(a: &DataType, b: &DataType) -> bool {
     )
 }
 
-// variant selection heuristic — 3 passes with decreasing specificity:
-//
-// first pass: field type == target type
-// second pass: field and target are in the same equivalence class
-//              (e.g., Utf8 and Utf8View are both strings)
-// third pass: field can be cast to target
-//      note: this is the most permissive and may lose information
-//      also, the matching logic is greedy so it will pick the first 'castable' variant
-//
-// each pass picks the first matching variant by type_id order.
+/// Selects the best-matching child array from a [`UnionArray`] for a given target type
+///
+/// The goal is to find the source field whose type is closest to the target,
+/// so that the subsequent cast is as lossless as possible. The heuristic uses
+/// three passes with decreasing specificity:
+///
+/// 1. **Exact match**: field type equals the target type.
+/// 2. **Same type family**: field and target belong to the same logical family
+///    (e.g. `Utf8` and `Utf8View` are both strings). This avoids a greedy
+///    cross-family cast in pass 3 (e.g. picking `Int32` over `Utf8` when the
+///    target is `Utf8View`, since `can_cast_types(Int32, Utf8View)` is true)
+/// 3. **Castable**:`can_cast_types` reports the field can be cast to the target
+///    Nested target types are skipped here because union extraction introduces
+///    nulls, which can conflict with non-nullable inner fields
+///
+/// Each pass greedily picks the first matching field by type_id order
 pub(crate) fn resolve_variant<'a>(
     fields: &'a UnionFields,
     target_type: &DataType,
@@ -81,7 +87,7 @@ pub(crate) fn resolve_variant<'a>(
         .map(|(_, f)| f)
 }
 
-/// Extracts the best-matching variant from a union array for a given target type,
+/// Extracts the best-matching child array from a [`UnionArray`] for a given target type,
 /// and casts it to that type.
 ///
 /// Rows where a different variant is active become NULL.
