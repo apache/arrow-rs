@@ -303,6 +303,7 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
                 data_type,
                 cast_options,
                 capacity,
+                true,
             )?,
             nulls: NullBufferBuilder::new(capacity),
             null_value,

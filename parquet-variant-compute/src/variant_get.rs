@@ -365,8 +365,8 @@ mod test {
     use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
     use chrono::DateTime;
     use parquet_variant::{
-        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8,
-        VariantDecimal16, VariantDecimalType, VariantPath,
+        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
+        VariantDecimalType, VariantPath,
     };
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
@@ -4131,69 +4131,45 @@ mod test {
         ]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
 
-        let value_array: ArrayRef = {
-            let mut builder = VariantBuilder::new();
-            builder.append_value("two");
-            let (_, value_bytes) = builder.finish();
-            Arc::new(BinaryViewArray::from(vec![
-                None,
-                Some(value_bytes.as_slice()),
-                None,
-            ]))
-        };
-        let typed_value_array: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
-        let struct_fields = Fields::from(vec![
-            Field::new("value", DataType::BinaryView, true),
-            Field::new("typed_value", DataType::Int64, true),
-        ]);
-        let struct_array: ArrayRef = Arc::new(
-            StructArray::try_new(
-                struct_fields.clone(),
-                vec![value_array.clone(), typed_value_array.clone()],
-                None,
-            )
-            .unwrap(),
-        );
-
-        let request_field = Arc::new(Field::new("item", DataType::Int64, true));
-        let result_field = Arc::new(Field::new("item", DataType::Struct(struct_fields), true));
+        let element_array: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
+        let field = Arc::new(Field::new("item", Int64, true));
 
         let expectations = vec![
             (
-                DataType::List(request_field.clone()),
+                DataType::List(field.clone()),
                 Arc::new(ListArray::new(
-                    result_field.clone(),
+                    field.clone(),
                     OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 3])),
-                    struct_array.clone(),
+                    element_array.clone(),
                     Some(NullBuffer::from(vec![true, false])),
                 )) as ArrayRef,
             ),
             (
-                DataType::LargeList(request_field.clone()),
+                DataType::LargeList(field.clone()),
                 Arc::new(LargeListArray::new(
-                    result_field.clone(),
+                    field.clone(),
                     OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 3])),
-                    struct_array.clone(),
+                    element_array.clone(),
                     Some(NullBuffer::from(vec![true, false])),
                 )) as ArrayRef,
             ),
             (
-                DataType::ListView(request_field.clone()),
+                DataType::ListView(field.clone()),
                 Arc::new(ListViewArray::new(
-                    result_field.clone(),
+                    field.clone(),
                     ScalarBuffer::from(vec![0, 3]),
                     ScalarBuffer::from(vec![3, 0]),
-                    struct_array.clone(),
+                    element_array.clone(),
                     Some(NullBuffer::from(vec![true, false])),
                 )) as ArrayRef,
             ),
             (
-                DataType::LargeListView(request_field),
+                DataType::LargeListView(field.clone()),
                 Arc::new(LargeListViewArray::new(
-                    result_field,
+                    field,
                     ScalarBuffer::from(vec![0, 3]),
                     ScalarBuffer::from(vec![3, 0]),
-                    struct_array,
+                    element_array,
                     Some(NullBuffer::from(vec![true, false])),
                 )) as ArrayRef,
             ),
@@ -4233,6 +4209,52 @@ mod test {
             let index_expected: ArrayRef = Arc::new(Int64Array::from(expected));
             assert_eq!(&index_result, &index_expected);
         }
+    }
+
+    #[test]
+    fn test_variant_get_nested_list() {
+        use arrow::datatypes::Int64Type;
+
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec![
+            r#"[[1, 2], [3]]"#,
+            r#"[[4], "not a list", [5, 6]]"#,
+        ]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+
+        let inner_field = Arc::new(Field::new("item", Int64, true));
+        let outer_field = Arc::new(Field::new(
+            "item",
+            DataType::List(inner_field.clone()),
+            true,
+        ));
+        let request_type = DataType::List(outer_field.clone());
+
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+            "result",
+            request_type,
+            true,
+        ))));
+        let result = variant_get(&variant_array, options).unwrap();
+        let outer = result.as_list::<i32>();
+
+        // Row 0: [[1, 2], [3]]
+        let row0 = outer.value(0);
+        let row0 = row0.as_list::<i32>();
+        assert_eq!(row0.len(), 2);
+        let elem0 = row0.value(0);
+        assert_eq!(elem0.as_primitive::<Int64Type>().values(), &[1, 2]);
+        let elem1 = row0.value(1);
+        assert_eq!(elem1.as_primitive::<Int64Type>().values(), &[3]);
+
+        // Row 1: [[4], null, [5, 6]] — "not a list" becomes null inner list
+        let row1 = outer.value(1);
+        let row1 = row1.as_list::<i32>();
+        assert_eq!(row1.len(), 3);
+        let elem0 = row1.value(0);
+        assert_eq!(elem0.as_primitive::<Int64Type>().values(), &[4]);
+        assert!(row1.is_null(1));
+        let elem2 = row1.value(2);
+        assert_eq!(elem2.as_primitive::<Int64Type>().values(), &[5, 6]);
     }
 
     #[test]
@@ -4287,40 +4309,17 @@ mod test {
             .with_cast_options(cast_options);
 
         let result = variant_get(&variant_array, options).unwrap();
-        let element_struct = result
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap()
+        let list_array = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = list_array
             .values()
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap();
-
-        let value = element_struct
-            .column_by_name("value")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<BinaryViewArray>()
-            .unwrap();
-        let typed_value = element_struct
-            .column_by_name("typed_value")
-            .unwrap()
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
 
-        assert_eq!(typed_value.len(), 3);
-        assert_eq!(typed_value.value(0), 1);
-        assert!(typed_value.is_null(1));
-        assert_eq!(typed_value.value(2), 3);
-
-        assert!(value.is_null(0));
-        assert!(value.is_valid(1));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value.value(1)),
-            Variant::Null
-        );
-        assert!(value.is_null(2));
+        assert_eq!(values.len(), 3);
+        assert_eq!(values.value(0), 1);
+        assert!(values.is_null(1));
+        assert_eq!(values.value(2), 3);
     }
 
     #[test]
