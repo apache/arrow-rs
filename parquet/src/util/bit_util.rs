@@ -219,6 +219,13 @@ impl BitWriter {
         self.buffer()
     }
 
+    /// Like `flush_buffer`, but returns mutable access to the buffer.
+    #[inline]
+    pub fn flush_buffer_mut(&mut self) -> &mut [u8] {
+        self.flush();
+        &mut self.buffer
+    }
+
     /// Clears the internal state so the buffer can be reused.
     #[inline]
     pub fn clear(&mut self) {

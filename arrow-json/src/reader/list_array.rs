@@ -15,37 +15,46 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::marker::PhantomData;
+use std::sync::Arc;
+
+use arrow_array::builder::BooleanBufferBuilder;
+use arrow_array::{ArrayRef, GenericListArray, OffsetSizeTrait, make_array};
+use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::{ArrowError, DataType, FieldRef};
+
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
-use arrow_array::OffsetSizeTrait;
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
-use arrow_buffer::buffer::NullBuffer;
-use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType};
-use std::marker::PhantomData;
 
-pub struct ListArrayDecoder<O> {
-    data_type: DataType,
+pub type ListArrayDecoder<O> = ListLikeArrayDecoder<O, false>;
+pub type ListViewArrayDecoder<O> = ListLikeArrayDecoder<O, true>;
+
+pub struct ListLikeArrayDecoder<O, const IS_VIEW: bool> {
+    field: FieldRef,
     decoder: Box<dyn ArrayDecoder>,
     phantom: PhantomData<O>,
     is_nullable: bool,
 }
 
-impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
+impl<O: OffsetSizeTrait, const IS_VIEW: bool> ListLikeArrayDecoder<O, IS_VIEW> {
     pub fn new(
         ctx: &DecoderContext,
         data_type: &DataType,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
-        let field = match data_type {
-            DataType::List(f) if !O::IS_LARGE => f,
-            DataType::LargeList(f) if O::IS_LARGE => f,
+        let field = match (IS_VIEW, data_type) {
+            (false, DataType::List(f)) if !O::IS_LARGE => f,
+            (false, DataType::LargeList(f)) if O::IS_LARGE => f,
+            (true, DataType::ListView(f)) if !O::IS_LARGE => f,
+            (true, DataType::LargeListView(f)) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
         let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
 
         Ok(Self {
-            data_type: data_type.clone(),
+            field: field.clone(),
             decoder,
             phantom: Default::default(),
             is_nullable,
@@ -53,11 +62,11 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
     }
 }
 
-impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDecoder<O, IS_VIEW> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut child_pos = Vec::with_capacity(pos.len());
-        let mut offsets = BufferBuilder::<O>::new(pos.len() + 1);
-        offsets.append(O::from_usize(0).unwrap());
+        let mut offsets = Vec::with_capacity(pos.len() + 1);
+        offsets.push(O::from_usize(0).unwrap());
 
         let mut nulls = self
             .is_nullable
@@ -86,22 +95,42 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
             }
 
             let offset = O::from_usize(child_pos.len()).ok_or_else(|| {
-                ArrowError::JsonError(format!("offset overflow decoding {}", self.data_type))
+                ArrowError::JsonError(format!("offset overflow decoding {}ListArray", O::PREFIX))
             })?;
-            offsets.append(offset)
+            offsets.push(offset);
         }
 
-        let child_data = self.decoder.decode(tape, &child_pos)?;
+        let values = self.decoder.decode(tape, &child_pos)?;
         let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
 
-        let data = ArrayDataBuilder::new(self.data_type.clone())
-            .len(pos.len())
-            .nulls(nulls)
-            .add_buffer(offsets.finish())
-            .child_data(vec![child_data]);
+        if IS_VIEW {
+            let mut sizes = Vec::with_capacity(offsets.len() - 1);
+            for i in 1..offsets.len() {
+                sizes.push(offsets[i] - offsets[i - 1]);
+            }
+            offsets.pop();
+            let data_type = if O::IS_LARGE {
+                DataType::LargeListView(self.field.clone())
+            } else {
+                DataType::ListView(self.field.clone())
+            };
+            // SAFETY: offsets and sizes are constructed correctly from the tape
+            let array_data = unsafe {
+                ArrayDataBuilder::new(data_type)
+                    .len(pos.len())
+                    .nulls(nulls)
+                    .child_data(vec![values.to_data()])
+                    .add_buffer(Buffer::from_vec(offsets))
+                    .add_buffer(Buffer::from_vec(sizes))
+                    .build_unchecked()
+            };
+            Ok(make_array(array_data))
+        } else {
+            // SAFETY: offsets are built monotonically starting from 0
+            let offsets = unsafe { OffsetBuffer::<O>::new_unchecked(ScalarBuffer::from(offsets)) };
 
-        // Safety
-        // Validated lengths above
-        Ok(unsafe { data.build_unchecked() })
+            let array = GenericListArray::<O>::try_new(self.field.clone(), offsets, values, nulls)?;
+            Ok(Arc::new(array))
+        }
     }
 }

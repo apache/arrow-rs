@@ -20,7 +20,7 @@
 use arrow_array::cast::*;
 use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, NullBuffer};
+use arrow_buffer::NullBuffer;
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_schema::*;
 use std::borrow::BorrowMut;
@@ -541,11 +541,9 @@ pub fn min_string_view(array: &StringViewArray) -> Option<&str> {
 ///
 /// This doesn't detect overflow. Once overflowing, the result will wrap around.
 /// For an overflow-checking variant, use [`sum_array_checked`] instead.
-pub fn sum_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
+pub fn sum_array<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Option<T::Native> {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
             let null_count = array.null_count();
@@ -583,13 +581,9 @@ where
 /// use [`sum_array`] instead.
 /// Additionally returns an `Err` on run-end-encoded arrays with a provided
 /// values type parameter that is incorrect.
-pub fn sum_array_checked<T, A: ArrayAccessor<Item = T::Native>>(
+pub fn sum_array_checked<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
     array: A,
-) -> Result<Option<T::Native>, ArrowError>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
+) -> Result<Option<T::Native>, ArrowError> {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
             let null_count = array.null_count();
@@ -717,21 +711,17 @@ mod ree {
 
 /// Returns the min of values in the array of `ArrowNumericType` type, or dictionary
 /// array with value of `ArrowNumericType` type.
-pub fn min_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeType,
-{
+pub fn min_array<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Option<T::Native> {
     min_max_array_helper::<T, A, _, _>(array, |a, b| a.is_gt(*b), min)
 }
 
 /// Returns the max of values in the array of `ArrowNumericType` type, or dictionary
 /// array with value of `ArrowNumericType` type.
-pub fn max_array<T, A: ArrayAccessor<Item = T::Native>>(array: A) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
+pub fn max_array<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
+    array: A,
+) -> Option<T::Native> {
     min_max_array_helper::<T, A, _, _>(array, |a, b| a.is_lt(*b), max)
 }
 
@@ -874,11 +864,9 @@ pub fn bool_or(array: &BooleanArray) -> Option<bool> {
 ///
 /// This detects overflow and returns an `Err` for that. For an non-overflow-checking variant,
 /// use [`sum`] instead.
-pub fn sum_checked<T>(array: &PrimitiveArray<T>) -> Result<Option<T::Native>, ArrowError>
-where
-    T: ArrowNumericType,
-    T::Native: ArrowNativeTypeOp,
-{
+pub fn sum_checked<T: ArrowNumericType>(
+    array: &PrimitiveArray<T>,
+) -> Result<Option<T::Native>, ArrowError> {
     let null_count = array.null_count();
 
     if null_count == array.len() {
@@ -922,10 +910,7 @@ where
 ///
 /// This doesn't detect overflow in release mode by default. Once overflowing, the result will
 /// wrap around. For an overflow-checking variant, use [`sum_checked`] instead.
-pub fn sum<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T::Native: ArrowNativeTypeOp,
-{
+pub fn sum<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> {
     aggregate::<T::Native, T, SumAccumulator<T::Native>>(array)
 }
 
@@ -940,10 +925,7 @@ where
 /// let result = min(&array);
 /// assert_eq!(result, Some(2));
 /// ```
-pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T::Native: PartialOrd,
-{
+pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> {
     aggregate::<T::Native, T, MinAccumulator<T::Native>>(array)
 }
 
@@ -958,10 +940,7 @@ where
 /// let result = max(&array);
 /// assert_eq!(result, Some(8));
 /// ```
-pub fn max<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T::Native: PartialOrd,
-{
+pub fn max<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native> {
     aggregate::<T::Native, T, MaxAccumulator<T::Native>>(array)
 }
 
