@@ -25,8 +25,8 @@ use arrow_select::union_extract::union_extract;
 
 use super::CastOptions;
 
-// this is used during variant selection to prefer a "close" type over a distant cast
-// for example: when targeting Utf8View, a Utf8 variant is preferred over Int32 despite both being castable
+// this is used during child array selection to prefer a "close" type over a distant cast
+// for example: when targeting Utf8View, a Utf8 child is preferred over Int32 despite both being castable
 fn same_type_family(a: &DataType, b: &DataType) -> bool {
     use DataType::*;
     matches!(
@@ -61,7 +61,7 @@ fn same_type_family(a: &DataType, b: &DataType) -> bool {
 ///    nulls, which can conflict with non-nullable inner fields
 ///
 /// Each pass greedily picks the first matching field by type_id order
-pub(crate) fn resolve_variant<'a>(
+pub(crate) fn resolve_child_array<'a>(
     fields: &'a UnionFields,
     target_type: &DataType,
 ) -> Option<&'a FieldRef> {
@@ -74,7 +74,7 @@ pub(crate) fn resolve_variant<'a>(
                 .find(|(_, f)| same_type_family(f.data_type(), target_type))
         })
         .or_else(|| {
-            // skip nested types in pass 3 — union extraction introduces nulls,
+            // skip nested types in pass 3 because union extraction introduces nulls,
             // and casting nullable arrays to nested types like List/Struct/Map can fail
             // when inner fields are non-nullable.
             if target_type.is_nested() {
@@ -90,8 +90,8 @@ pub(crate) fn resolve_variant<'a>(
 /// Extracts the best-matching child array from a [`UnionArray`] for a given target type,
 /// and casts it to that type.
 ///
-/// Rows where a different variant is active become NULL.
-/// If no variant matches, returns a null array.
+/// Rows where a different child array is active become NULL.
+/// If no child array matches, returns an error.
 ///
 /// # Example
 ///
@@ -120,7 +120,7 @@ pub(crate) fn resolve_variant<'a>(
 /// )
 /// .unwrap();
 ///
-/// // extract the Utf8 variant and cast to Utf8View
+/// // extract the Utf8 child array and cast to Utf8View
 /// let result = union_extract_by_type(&union, &DataType::Utf8View, &CastOptions::default()).unwrap();
 /// assert_eq!(result.data_type(), &DataType::Utf8View);
 /// assert!(result.is_null(0));   // Int32 row -> NULL
@@ -137,7 +137,7 @@ pub fn union_extract_by_type(
         _ => unreachable!("union_extract_by_type called on non-union array"),
     };
 
-    let Some(field) = resolve_variant(fields, target_type) else {
+    let Some(field) = resolve_child_array(fields, target_type) else {
         return Err(ArrowError::CastError(format!(
             "cannot cast Union with fields {} to {}",
             fields
@@ -182,7 +182,7 @@ mod tests {
     }
 
     // pass 1: exact type match.
-    // Union(Int32, Utf8) targeting Utf8 — the Utf8 variant matches exactly.
+    // Union(Int32, Utf8) targeting Utf8. The Utf8 child matches exactly.
     // Int32 rows become NULL. tested for both sparse and dense.
     #[test]
     fn test_exact_type_match() {
@@ -237,8 +237,8 @@ mod tests {
     }
 
     // pass 2: same type family match.
-    // Union(Int32, Utf8) targeting Utf8View — no exact match, but Utf8 and Utf8View
-    // are in the same family. picks the Utf8 variant and casts to Utf8View.
+    // Union(Int32, Utf8) targeting Utf8View. No exact match, but Utf8 and Utf8View
+    // are in the same family. picks the Utf8 child array and casts to Utf8View.
     // this is the bug that motivated this work: without pass 2, pass 3 would
     // greedily pick Int32 (since can_cast_types(Int32, Utf8View) is true).
     #[test]
@@ -301,7 +301,7 @@ mod tests {
 
     // pass 3: one-directional cast across type families.
     // Union(Int32, Utf8) targeting Boolean — no exact match, no family match.
-    // pass 3 picks Int32 (first variant where can_cast_types is true) and
+    // pass 3 picks Int32 (first child array where can_cast_types is true) and
     // casts to Boolean (0 → false, nonzero → true). Utf8 rows become NULL.
     #[test]
     fn test_one_directional_cast() {
@@ -355,7 +355,7 @@ mod tests {
         assert!(!arr.value(2));
     }
 
-    // no matching variant — all three passes fail.
+    // no matching child array, all three passes fail.
     // Union(Int32, Utf8) targeting Struct({x: Int32}). neither Int32 nor Utf8
     // can be cast to a Struct, so both can_cast_types and cast return errors.
     #[test]
@@ -382,7 +382,7 @@ mod tests {
     }
 
     // priority: exact match (pass 1) wins over family match (pass 2).
-    // Union(Utf8, Utf8View) targeting Utf8View — both variants are in the string
+    // Union(Utf8, Utf8View) targeting Utf8View. Both child arrays are in the string
     // family, but Utf8View is an exact match. pass 1 should pick it, not Utf8.
     #[test]
     fn test_exact_match_preferred_over_family() {
@@ -421,17 +421,17 @@ mod tests {
         assert_eq!(result.data_type(), &target);
         let arr = result.as_any().downcast_ref::<StringViewArray>().unwrap();
 
-        // pass 1 picks variant "b" (Utf8View), so variant "a" rows become NULL
+        // pass 1 picks child "b" (Utf8View), so child "a" rows become NULL
         assert!(arr.is_null(0));
         assert_eq!(arr.value(1), "from_b");
         assert!(arr.is_null(2));
     }
 
-    // null values within the selected variant stay null.
-    // this is distinct from "wrong variant → NULL": here the correct variant
+    // null values within the selected child array stay null.
+    // this is distinct from "wrong child array -> NULL": here the correct child array
     // is active but its value is null.
     #[test]
-    fn test_null_in_selected_variant() {
+    fn test_null_in_selected_child_array() {
         let target = DataType::Utf8;
 
         assert!(can_cast_types(
@@ -440,7 +440,7 @@ mod tests {
         ));
 
         // ["hello", NULL(str), "world"]
-        // all rows are the Utf8 variant, but row 1 has a null value
+        // all rows are the Utf8 child array, but row 1 has a null value
         let union = UnionArray::try_new(
             int_str_fields(),
             vec![1_i8, 1, 1].into(),

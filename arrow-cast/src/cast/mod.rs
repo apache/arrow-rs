@@ -110,7 +110,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             can_cast_types(from_value_type, to_value_type)
         }
         (Dictionary(_, value_type), _) => can_cast_types(value_type, to_type),
-        (Union(fields, _), _) => union::resolve_variant(fields, to_type).is_some(),
+        (Union(fields, _), _) => union::resolve_child_array(fields, to_type).is_some(),
         (_, Union(_, _)) => false,
         (RunEndEncoded(_, value_type), _) => can_cast_types(value_type.data_type(), to_type),
         (_, RunEndEncoded(_, value_type)) => can_cast_types(from_type, value_type.data_type()),
