@@ -27,10 +27,10 @@ use crate::variant_array::ShreddedVariantFieldArray;
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewArray,
-    BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, GenericListArray,
-    GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder,
-    OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
-    StructArray,
+    BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, FixedSizeListArray,
+    GenericListArray, GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, NullArray,
+    NullBufferBuilder, OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder,
+    StringViewBuilder, StructArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{CastOptions, DecimalCast};
@@ -507,6 +507,7 @@ pub(crate) enum ArrayVariantToArrowRowBuilder<'a> {
     LargeList(VariantToListArrowRowBuilder<'a, i64, false>),
     ListView(VariantToListArrowRowBuilder<'a, i32, true>),
     LargeListView(VariantToListArrowRowBuilder<'a, i64, true>),
+    FixedSizeList(VariantToFixedSizeListArrowRowBuilder<'a>),
 }
 
 pub(crate) struct StructVariantToArrowRowBuilder<'a> {
@@ -611,10 +612,14 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
             DataType::LargeList(field) => make_list_builder!(LargeList, i64, false, field),
             DataType::ListView(field) => make_list_builder!(ListView, i32, true, field),
             DataType::LargeListView(field) => make_list_builder!(LargeListView, i64, true, field),
-            DataType::FixedSizeList(..) => {
-                return Err(ArrowError::NotYetImplemented(
-                    "Converting unshredded variant arrays to arrow fixed-size lists".to_string(),
-                ));
+            DataType::FixedSizeList(field, size) => {
+                FixedSizeList(VariantToFixedSizeListArrowRowBuilder::try_new(
+                    field.clone(),
+                    field.data_type(),
+                    *size,
+                    cast_options,
+                    capacity,
+                )?)
             }
             other => {
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -631,6 +636,7 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
             Self::LargeList(builder) => builder.append_null(),
             Self::ListView(builder) => builder.append_null(),
             Self::LargeListView(builder) => builder.append_null(),
+            Self::FixedSizeList(builder) => builder.append_null(),
         }
     }
 
@@ -640,6 +646,7 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
             Self::LargeList(builder) => builder.append_value(value),
             Self::ListView(builder) => builder.append_value(value),
             Self::LargeListView(builder) => builder.append_value(value),
+            Self::FixedSizeList(builder) => builder.append_value(value),
         }
     }
 
@@ -649,6 +656,7 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
             Self::LargeList(builder) => builder.finish(),
             Self::ListView(builder) => builder.finish(),
             Self::LargeListView(builder) => builder.finish(),
+            Self::FixedSizeList(builder) => builder.finish(),
         }
     }
 }
@@ -1000,6 +1008,92 @@ where
             );
             Ok(Arc::new(list_array))
         }
+    }
+}
+
+pub(crate) struct VariantToFixedSizeListArrowRowBuilder<'a> {
+    field: FieldRef,
+    list_size: i32,
+    element_builder: Box<VariantToShreddedVariantRowBuilder<'a>>,
+    nulls: NullBufferBuilder,
+    cast_options: &'a CastOptions<'a>,
+}
+
+impl<'a> VariantToFixedSizeListArrowRowBuilder<'a> {
+    fn try_new(
+        field: FieldRef,
+        element_data_type: &'a DataType,
+        list_size: i32,
+        cast_options: &'a CastOptions,
+        capacity: usize,
+    ) -> Result<Self> {
+        let element_builder = make_variant_to_shredded_variant_arrow_row_builder(
+            element_data_type,
+            cast_options,
+            capacity,
+            NullValue::ArrayElement,
+        )?;
+        Ok(Self {
+            field,
+            list_size,
+            element_builder: Box::new(element_builder),
+            nulls: NullBufferBuilder::new(capacity),
+            cast_options,
+        })
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        for _ in 0..self.list_size {
+            self.element_builder.append_null()?;
+        }
+        self.nulls.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        match value {
+            Variant::List(list) => {
+                let len = list.len();
+                if len != self.list_size as usize {
+                    return Err(ArrowError::CastError(format!(
+                        "Expected fixed size list of size {}, got size {}",
+                        self.list_size, len
+                    )));
+                }
+                for element in list.iter() {
+                    self.element_builder.append_value(element)?;
+                }
+                self.nulls.append_non_null();
+                Ok(true)
+            }
+            _ if self.cast_options.safe => {
+                self.append_null()?;
+                Ok(false)
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Failed to extract fixed size list from variant {:?}",
+                value
+            ))),
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        let (value, typed_value, nulls) = self.element_builder.finish()?;
+        let element_array =
+            ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
+        let field = Arc::new(
+            self.field
+                .as_ref()
+                .clone()
+                .with_data_type(element_array.data_type().clone()),
+        );
+        let fixed_size_list_array = FixedSizeListArray::try_new(
+            field,
+            self.list_size,
+            ArrayRef::from(element_array),
+            self.nulls.finish(),
+        )?;
+        Ok(Arc::new(fixed_size_list_array))
     }
 }
 

@@ -351,9 +351,9 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
-        ListViewArray, NullBuilder, StringArray, StringViewArray, StructArray,
+        FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
+        ListArray, ListViewArray, NullBuilder, StringArray, StringViewArray, StructArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -4336,7 +4336,8 @@ mod test {
             DataType::List(item_field.clone()),
             DataType::LargeList(item_field.clone()),
             DataType::ListView(item_field.clone()),
-            DataType::LargeListView(item_field),
+            DataType::LargeListView(item_field.clone()),
+            DataType::FixedSizeList(item_field, 2),
         ];
 
         for data_type in data_types {
@@ -4353,10 +4354,65 @@ mod test {
     }
 
     #[test]
-    fn test_variant_get_fixed_size_list_not_implemented() {
-        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2]", "\"not a list\""]));
+    fn test_variant_get_fixed_size_list_with_safe_option() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec![
+            "[1, 2]",
+            "[3, 4]",
+            "\"not a list\"",
+        ]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
         let item_field = Arc::new(Field::new("item", Int64, true));
+
+        // Request shredding on `FixedSizeList` with `safe` set to true, such that `variant_get`
+        // does not raise error on type mismatch.
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::FixedSizeList(item_field.clone(), 2),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe: true,
+                ..Default::default()
+            });
+
+        // Verify that the shredded value is a `FixedSizeList`.
+        let result = variant_get(&variant_array, options).unwrap();
+        let fixed_size_list = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("Expected FixedSizeListArray");
+        assert_eq!(fixed_size_list.len(), 3);
+        assert_eq!(fixed_size_list.value_length(), 2);
+
+        // Verify that the first entry in the `FixedSizeList` contains the expected value.
+        assert!(fixed_size_list.is_valid(0));
+        let val0 = fixed_size_list.value(0);
+        let val0_struct = val0.as_any().downcast_ref::<StructArray>().unwrap();
+        let val0_typed = val0_struct.column_by_name("typed_value").unwrap();
+        let val0_ints = val0_typed.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(val0_ints.values(), &[1i64, 2i64]);
+
+        // Verify that the second entry in the `FixedSizeList` contains the expected value.
+        assert!(fixed_size_list.is_valid(1));
+        let val1 = fixed_size_list.value(1);
+        let val1_struct = val1.as_any().downcast_ref::<StructArray>().unwrap();
+        let val1_typed = val1_struct.column_by_name("typed_value").unwrap();
+        let val1_ints = val1_typed.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(val1_ints.values(), &[3i64, 4i64]);
+
+        // Verify that the third entry is null due to type mismatch.
+        assert!(fixed_size_list.is_null(2));
+    }
+
+    #[test]
+    fn test_variant_get_fixed_size_list_wrong_size() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2, 3]"]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+        let item_field = Arc::new(Field::new("item", Int64, true));
+
+        // Set the safe flag to both true and false and verify that size mismatch raises an error
+        // for `FixedSizeList`, regardless.
         for safe in [true, false] {
             let options = GetOptions::new()
                 .with_as_type(Some(FieldRef::from(Field::new(
@@ -4368,11 +4424,11 @@ mod test {
                     safe,
                     ..Default::default()
                 });
-
             let err = variant_get(&variant_array, options).unwrap_err();
             assert!(
                 err.to_string()
-                    .contains("Converting unshredded variant arrays to arrow fixed-size lists")
+                    .contains("Expected fixed size list of size 2, got size 3"),
+                "safe={safe}, got: {err}",
             );
         }
     }
