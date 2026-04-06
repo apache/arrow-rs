@@ -70,9 +70,9 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.buffered_bytes()
     }
 
-    /// Release any staged ranges currently buffered for future decode work
-    pub fn release_all_ranges(&mut self) {
-        self.row_group_reader_builder.release_all_ranges();
+    /// Clear any staged ranges currently buffered for future decode work
+    pub fn clear_all_ranges(&mut self) {
+        self.row_group_reader_builder.clear_all_ranges();
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next

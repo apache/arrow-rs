@@ -366,13 +366,13 @@ impl ParquetPushDecoder {
         self.state.buffered_bytes()
     }
 
-    /// Release any staged byte ranges currently buffered for future decode work.
+    /// Clear any staged byte ranges currently buffered for future decode work.
     ///
     /// This clears byte ranges still owned by the decoder's internal
     /// [`PushBuffers`]. It does not affect any data that has already been handed
     /// off to an active [`ParquetRecordBatchReader`].
-    pub fn release_all_ranges(&mut self) {
-        self.state.release_all_ranges();
+    pub fn clear_all_ranges(&mut self) {
+        self.state.clear_all_ranges();
     }
 }
 
@@ -583,16 +583,16 @@ impl ParquetDecoderState {
         }
     }
 
-    /// Release any staged ranges currently buffered in the decoder.
-    fn release_all_ranges(&mut self) {
+    /// Clear any staged ranges currently buffered in the decoder.
+    fn clear_all_ranges(&mut self) {
         match self {
             ParquetDecoderState::ReadingRowGroup {
                 remaining_row_groups,
-            } => remaining_row_groups.release_all_ranges(),
+            } => remaining_row_groups.clear_all_ranges(),
             ParquetDecoderState::DecodingRowGroup {
                 record_batch_reader: _,
                 remaining_row_groups,
-            } => remaining_row_groups.release_all_ranges(),
+            } => remaining_row_groups.clear_all_ranges(),
             ParquetDecoderState::Finished => {}
         }
     }
@@ -691,7 +691,7 @@ mod test {
     /// Releasing staged ranges should free speculative buffers without affecting
     /// the active row group reader.
     #[test]
-    fn test_decoder_release_all_ranges() {
+    fn test_decoder_clear_all_ranges() {
         let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
             .unwrap()
             .with_batch_size(100)
@@ -710,7 +710,7 @@ mod test {
         assert_eq!(decoder.buffered_bytes(), test_file_len());
 
         // All of the buffer is released
-        decoder.release_all_ranges();
+        decoder.clear_all_ranges();
         assert_eq!(decoder.buffered_bytes(), 0);
 
         // The active reader still owns the current row group's bytes, so it can
