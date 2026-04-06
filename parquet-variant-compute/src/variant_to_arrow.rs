@@ -1071,7 +1071,7 @@ impl<'a> VariantToFixedSizeListArrowRowBuilder<'a> {
                 Ok(false)
             }
             _ => Err(ArrowError::CastError(format!(
-                "Failed to extract fixed size list from variant {:?}",
+                "Failed to extract list from variant {:?}",
                 value
             ))),
         }
