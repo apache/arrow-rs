@@ -3283,12 +3283,10 @@ mod tests {
             // Each message is: [continuation (4 bytes)] [meta_len (4 bytes)]
             //                   [metadata (meta_len bytes)] [body (bodyLength bytes)]
             let mut header = [0u8; 4];
-            if std::io::Read::read_exact(&mut cursor, &mut header).is_err() {
+            if cursor.read_exact(&mut header).is_err() {
                 break;
             }
-            if header == CONTINUATION_MARKER
-                && std::io::Read::read_exact(&mut cursor, &mut header).is_err()
-            {
+            if header == CONTINUATION_MARKER && cursor.read_exact(&mut header).is_err() {
                 break;
             }
             let meta_len = u32::from_le_bytes(header) as usize;
@@ -3299,12 +3297,12 @@ mod tests {
                 break;
             }
             let mut meta_buf = vec![0u8; meta_len];
-            std::io::Read::read_exact(&mut cursor, &mut meta_buf).unwrap();
+            cursor.read_exact(&mut meta_buf).unwrap();
 
             let message = root_as_message(&meta_buf).unwrap();
             let body_len = message.bodyLength() as usize;
             let mut body_buf = vec![0u8; body_len];
-            std::io::Read::read_exact(&mut cursor, &mut body_buf).unwrap();
+            cursor.read_exact(&mut body_buf).unwrap();
 
             if message.header_type() == crate::MessageHeader::DictionaryBatch {
                 // Skip the dictionary batch — this is what C++ does for
