@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use num_traits::NumCast;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use arrow_array::builder::PrimitiveBuilder;
-use arrow_array::{Array, ArrowPrimitiveType};
+use arrow_array::{ArrayRef, ArrowPrimitiveType};
 use arrow_cast::parse::Parser;
-use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use half::f16;
+use num_traits::NumCast;
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
@@ -95,7 +95,7 @@ where
     P: ArrowPrimitiveType + Parser,
     P::Native: ParseJsonNumber + NumCast,
 {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut builder =
             PrimitiveBuilder::<P>::with_capacity(pos.len()).with_data_type(self.data_type.clone());
         let d = &self.data_type;
@@ -154,6 +154,6 @@ where
             }
         }
 
-        Ok(builder.finish().into_data())
+        Ok(Arc::new(builder.finish()))
     }
 }

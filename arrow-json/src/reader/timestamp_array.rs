@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use chrono::TimeZone;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
-use arrow_array::Array;
+use arrow_array::ArrayRef;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::ArrowTimestampType;
 use arrow_cast::parse::string_to_datetime;
-use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, TimeUnit};
+use chrono::TimeZone;
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
@@ -53,7 +53,7 @@ where
     P: ArrowTimestampType,
     Tz: TimeZone + Send,
 {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut builder =
             PrimitiveBuilder::<P>::with_capacity(pos.len()).with_data_type(self.data_type.clone());
         for p in pos {
@@ -110,6 +110,6 @@ where
             }
         }
 
-        Ok(builder.finish().into_data())
+        Ok(Arc::new(builder.finish()))
     }
 }

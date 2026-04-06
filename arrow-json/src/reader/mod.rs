@@ -133,27 +133,25 @@
 //! ```
 //!
 
-use crate::StructMode;
-use crate::reader::binary_array::{
-    BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
-};
 use std::borrow::Cow;
 use std::io::BufRead;
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray;
+use arrow_array::timezone::Tz;
+use arrow_array::types::*;
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader, downcast_integer};
+use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 use chrono::Utc;
 use serde_core::Serialize;
 
-use arrow_array::timezone::Tz;
-use arrow_array::types::*;
-use arrow_array::{RecordBatch, RecordBatchReader, StructArray, downcast_integer, make_array};
-use arrow_data::ArrayData;
-use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
-pub use schema::*;
-
+use crate::StructMode;
+use crate::reader::binary_array::{
+    BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
+};
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
-use crate::reader::list_array::ListArrayDecoder;
+use crate::reader::list_array::{ListArrayDecoder, ListViewArrayDecoder};
 use crate::reader::map_array::MapArrayDecoder;
 use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
@@ -163,6 +161,9 @@ use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
+
+pub use schema::*;
+pub use value_iter::ValueIter;
 
 mod binary_array;
 mod boolean_array;
@@ -179,6 +180,7 @@ mod string_view_array;
 mod struct_array;
 mod tape;
 mod timestamp_array;
+mod value_iter;
 
 /// A builder for [`Reader`] and [`Decoder`]
 pub struct ReaderBuilder {
@@ -690,9 +692,9 @@ impl Decoder {
         self.tape_decoder.clear();
 
         let batch = match self.is_field {
-            true => RecordBatch::try_new(self.schema.clone(), vec![make_array(decoded)])?,
+            true => RecordBatch::try_new(self.schema.clone(), vec![decoded])?,
             false => {
-                RecordBatch::from(StructArray::from(decoded)).with_schema(self.schema.clone())?
+                RecordBatch::from(decoded.as_struct().clone()).with_schema(self.schema.clone())?
             }
         };
 
@@ -702,7 +704,7 @@ impl Decoder {
 
 trait ArrayDecoder: Send {
     /// Decode elements from `tape` starting at the indexes contained in `pos`
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError>;
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError>;
 }
 
 /// Context for decoder creation, containing configuration.
@@ -831,6 +833,8 @@ fn make_decoder(
         DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(ctx))),
         DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(ctx, data_type, is_nullable)?)),
         DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(ctx, data_type, is_nullable)?)),
+        DataType::ListView(_) => Ok(Box::new(ListViewArrayDecoder::<i32>::new(ctx, data_type, is_nullable)?)),
+        DataType::LargeListView(_) => Ok(Box::new(ListViewArrayDecoder::<i64>::new(ctx, data_type, is_nullable)?)),
         DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(ctx, data_type, is_nullable)?)),
         DataType::Binary => Ok(Box::new(BinaryArrayDecoder::<i32>::default())),
         DataType::LargeBinary => Ok(Box::new(BinaryArrayDecoder::<i64>::default())),
@@ -851,8 +855,8 @@ fn make_decoder(
 mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::{
-        Array, BooleanArray, Float64Array, Int32Array, ListArray, MapArray, NullArray, StringArray,
-        StringViewArray,
+        Array, BooleanArray, Float64Array, GenericListViewArray, Int32Array, ListArray, MapArray,
+        NullArray, OffsetSizeTrait, StringArray, StringViewArray, StructArrayDecoder, make_array,
     };
     use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -2231,6 +2235,77 @@ mod tests {
         assert_eq!(read_d.as_ref(), &d);
 
         assert_eq!(read, expected);
+    }
+
+    fn assert_read_list_view<O: OffsetSizeTrait>() {
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let data_type = GenericListViewArray::<O>::DATA_TYPE_CONSTRUCTOR(field.clone());
+        let schema = Arc::new(Schema::new(vec![Field::new("lv", data_type, true)]));
+
+        let buf = r#"
+        {"lv": [1, 2, 3]}
+        {"lv": [4, null]}
+        {"lv": null}
+        {"lv": [6]}
+        {"lv": []}
+        "#;
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        let col = batch.column(0);
+        let list_view = col
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(list_view.len(), 5);
+
+        // Check offsets and sizes
+        let expected_offsets: Vec<O> = vec![0, 3, 5, 5, 6]
+            .into_iter()
+            .map(|v| O::usize_as(v))
+            .collect();
+        let expected_sizes: Vec<O> = vec![3, 2, 0, 1, 0]
+            .into_iter()
+            .map(|v| O::usize_as(v))
+            .collect();
+        assert_eq!(list_view.value_offsets(), &expected_offsets);
+        assert_eq!(list_view.value_sizes(), &expected_sizes);
+
+        // Row 0: [1, 2, 3]
+        assert!(list_view.is_valid(0));
+        let vals = list_view.value(0);
+        let ints = vals.as_primitive::<Int32Type>();
+        assert_eq!(ints.values(), &[1, 2, 3]);
+
+        // Row 1: [4, null]
+        assert!(list_view.is_valid(1));
+        let vals = list_view.value(1);
+        let ints = vals.as_primitive::<Int32Type>();
+        assert_eq!(ints.len(), 2);
+        assert_eq!(ints.value(0), 4);
+        assert!(ints.is_null(1));
+
+        // Row 2: null
+        assert!(list_view.is_null(2));
+
+        // Row 3: [6]
+        assert!(list_view.is_valid(3));
+        let vals = list_view.value(3);
+        let ints = vals.as_primitive::<Int32Type>();
+        assert_eq!(ints.values(), &[6]);
+
+        // Row 4: []
+        assert!(list_view.is_valid(4));
+        let vals = list_view.value(4);
+        assert_eq!(vals.len(), 0);
+    }
+
+    #[test]
+    fn test_read_list_view() {
+        assert_read_list_view::<i32>();
+        assert_read_list_view::<i64>();
     }
 
     #[test]

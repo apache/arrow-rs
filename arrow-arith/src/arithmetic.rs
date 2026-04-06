@@ -170,11 +170,7 @@ pub fn multiply_fixed_point(
 }
 
 /// Divide a decimal native value by given divisor and round the result.
-fn divide_and_round<I>(input: I::Native, div: I::Native) -> I::Native
-where
-    I: DecimalType,
-    I::Native: ArrowNativeTypeOp,
-{
+fn divide_and_round<I: DecimalType>(input: I::Native, div: I::Native) -> I::Native {
     let d = input.div_wrapping(div);
     let r = input.mod_wrapping(div);
 

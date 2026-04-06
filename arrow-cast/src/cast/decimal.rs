@@ -812,7 +812,7 @@ where
     T: ArrowPrimitiveType,
     <T as ArrowPrimitiveType>::Native: NumCast,
     D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + ToPrimitive,
+    <D as ArrowPrimitiveType>::Native: ToPrimitive,
 {
     let array = array.as_primitive::<D>();
 

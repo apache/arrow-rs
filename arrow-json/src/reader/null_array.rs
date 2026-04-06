@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
+use arrow_array::{ArrayRef, NullArray};
+use arrow_schema::ArrowError;
+
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -33,7 +38,7 @@ impl NullArrayDecoder {
 }
 
 impl ArrayDecoder for NullArrayDecoder {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         if !self.ignore_type_conflicts {
             for p in pos {
                 if !matches!(tape.get(*p), TapeElement::Null) {
@@ -41,6 +46,6 @@ impl ArrayDecoder for NullArrayDecoder {
                 }
             }
         }
-        ArrayDataBuilder::new(DataType::Null).len(pos.len()).build()
+        Ok(Arc::new(NullArray::new(pos.len())))
     }
 }
