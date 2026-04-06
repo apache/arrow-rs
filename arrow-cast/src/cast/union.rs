@@ -45,20 +45,6 @@ fn same_type_family(a: &DataType, b: &DataType) -> bool {
     )
 }
 
-fn is_complex_container(dt: &DataType) -> bool {
-    use DataType::*;
-    matches!(
-        dt,
-        List(_)
-            | LargeList(_)
-            | ListView(_)
-            | LargeListView(_)
-            | FixedSizeList(_, _)
-            | Struct(_)
-            | Map(_, _)
-    )
-}
-
 // variant selection heuristic — 3 passes with decreasing specificity:
 //
 // first pass: field type == target type
@@ -82,10 +68,10 @@ pub(crate) fn resolve_variant<'a>(
                 .find(|(_, f)| same_type_family(f.data_type(), target_type))
         })
         .or_else(|| {
-            // skip complex container types in pass 3 — union extraction introduces nulls,
-            // and casting nullable arrays to containers like List/Struct/Map can fail when
-            // inner fields are non-nullable.
-            if is_complex_container(target_type) {
+            // skip nested types in pass 3 — union extraction introduces nulls,
+            // and casting nullable arrays to nested types like List/Struct/Map can fail
+            // when inner fields are non-nullable.
+            if target_type.is_nested() {
                 return None;
             }
             fields
