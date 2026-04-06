@@ -43,6 +43,7 @@ mod list;
 mod map;
 mod run_array;
 mod string;
+mod union;
 
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
@@ -50,6 +51,7 @@ use crate::cast::list::*;
 use crate::cast::map::*;
 use crate::cast::run_array::*;
 use crate::cast::string::*;
+pub use crate::cast::union::*;
 
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_data::ByteView;
@@ -71,6 +73,7 @@ use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
 pub use decimal::{DecimalCast, rescale_decimal};
+pub use string::cast_single_string_to_boolean_default;
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -108,6 +111,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             can_cast_types(from_value_type, to_value_type)
         }
         (Dictionary(_, value_type), _) => can_cast_types(value_type, to_type),
+        (Union(fields, _), _) => union::resolve_child_array(fields, to_type).is_some(),
+        (_, Union(_, _)) => false,
         (RunEndEncoded(_, value_type), _) => can_cast_types(value_type.data_type(), to_type),
         (_, RunEndEncoded(_, value_type)) => can_cast_types(from_type, value_type.data_type()),
         (_, Dictionary(_, value_type)) => can_cast_types(from_type, value_type),
@@ -230,7 +235,6 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
-
         (_, Boolean) => from_type.is_integer() || from_type.is_floating() || from_type.is_string(),
         (Boolean, _) => to_type.is_integer() || to_type.is_floating() || to_type.is_string(),
 
@@ -781,6 +785,14 @@ pub fn cast_with_options(
                 ))),
             }
         }
+        (Union(_, _), _) => union_extract_by_type(
+            array.as_any().downcast_ref::<UnionArray>().unwrap(),
+            to_type,
+            cast_options,
+        ),
+        (_, Union(_, _)) => Err(ArrowError::CastError(format!(
+            "Casting from {from_type} to {to_type} not supported"
+        ))),
         (Dictionary(index_type, _), _) => match **index_type {
             Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
             Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
@@ -2287,7 +2299,7 @@ fn cast_from_decimal<D, F>(
 ) -> Result<ArrayRef, ArrowError>
 where
     D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + ToPrimitive,
+    <D as ArrowPrimitiveType>::Native: ToPrimitive,
     F: Fn(D::Native) -> f64,
 {
     use DataType::*;
@@ -2464,7 +2476,7 @@ where
     R::Native: NumCast,
 {
     from.try_unary(|value| {
-        num_traits::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
+        num_cast::<T::Native, R::Native>(value).ok_or_else(|| {
             ArrowError::CastError(format!(
                 "Can't cast value {:?} to type {}",
                 value,
@@ -2472,6 +2484,17 @@ where
             ))
         })
     })
+}
+
+/// Natural cast between numeric types
+/// Return None if the input `value` can't be casted to type `O`.
+#[inline]
+pub fn num_cast<I, O>(value: I) -> Option<O>
+where
+    I: NumCast,
+    O: NumCast,
+{
+    num_traits::cast::cast::<I, O>(value)
 }
 
 // Natural cast between numeric types
@@ -2483,7 +2506,7 @@ where
     T::Native: NumCast,
     R::Native: NumCast,
 {
-    from.unary_opt::<_, R>(num_traits::cast::cast::<T::Native, R::Native>)
+    from.unary_opt::<_, R>(num_cast::<T::Native, R::Native>)
 }
 
 fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
@@ -2540,14 +2563,21 @@ where
     for i in 0..from.len() {
         if from.is_null(i) {
             b.append_null();
-        } else if from.value(i) != T::default_value() {
-            b.append_value(true);
         } else {
-            b.append_value(false);
+            b.append_value(cast_num_to_bool::<T::Native>(from.value(i)));
         }
     }
 
     Ok(b.finish())
+}
+
+/// Cast numeric types to boolean
+#[inline]
+pub fn cast_num_to_bool<I>(value: I) -> bool
+where
+    I: Default + PartialEq,
+{
+    value != I::default()
 }
 
 /// Cast Boolean types to numeric
@@ -2575,11 +2605,8 @@ where
     let iter = (0..from.len()).map(|i| {
         if from.is_null(i) {
             None
-        } else if from.value(i) {
-            // a workaround to cast a primitive to T::Native, infallible
-            num_traits::cast::cast(1)
         } else {
-            Some(T::default_value())
+            single_bool_to_numeric::<T::Native>(from.value(i))
         }
     });
     // Benefit:
@@ -2587,6 +2614,20 @@ where
     // Soundness:
     //     The iterator is trustedLen because it comes from a Range
     unsafe { PrimitiveArray::<T>::from_trusted_len_iter(iter) }
+}
+
+/// Cast single bool value to numeric value.
+#[inline]
+pub fn single_bool_to_numeric<O>(value: bool) -> Option<O>
+where
+    O: num_traits::NumCast + Default,
+{
+    if value {
+        // a workaround to cast a primitive to type O, infallible
+        num_traits::cast::cast(1)
+    } else {
+        Some(O::default())
+    }
 }
 
 /// Helper function to cast from one `BinaryArray` or 'LargeBinaryArray' to 'FixedSizeBinaryArray'.
