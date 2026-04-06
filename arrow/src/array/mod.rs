@@ -25,7 +25,7 @@ pub use arrow_array::cast::*;
 pub use arrow_array::iterator::*;
 pub use arrow_array::*;
 pub use arrow_data::{
-    ArrayData, ArrayDataBuilder, ArrayDataRef, BufferSpec, ByteView, DataTypeLayout, layout,
+    ArrayData, ArrayDataBuilder, ArrayDataRef, BufferSpec, ByteView, DataTypeLayout, layout, MAX_INLINE_VIEW_LEN
 };
 
 pub use arrow_data::transform::{Capacities, MutableArrayData};
