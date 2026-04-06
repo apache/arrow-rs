@@ -194,12 +194,7 @@ impl RecordBatchDecoder<'_> {
                     }
                 };
 
-                self.create_dictionary_array(
-                    index_node,
-                    data_type,
-                    &index_buffers,
-                    value_array,
-                )
+                self.create_dictionary_array(index_node, data_type, &index_buffers, value_array)
             }
             Union(fields, mode) => {
                 let union_node = self.next_node(field)?;
@@ -3274,8 +3269,7 @@ mod tests {
             dict_array.data_type().clone(),
             true,
         )]));
-        let batch =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(dict_array)]).unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict_array)]).unwrap();
 
         // Write a normal IPC stream (which includes the dictionary batch).
         let full_stream = write_stream(&batch);
@@ -3292,10 +3286,10 @@ mod tests {
             if std::io::Read::read_exact(&mut cursor, &mut header).is_err() {
                 break;
             }
-            if header == CONTINUATION_MARKER {
-                if std::io::Read::read_exact(&mut cursor, &mut header).is_err() {
-                    break;
-                }
+            if header == CONTINUATION_MARKER
+                && std::io::Read::read_exact(&mut cursor, &mut header).is_err()
+            {
+                break;
             }
             let meta_len = u32::from_le_bytes(header) as usize;
             if meta_len == 0 {
