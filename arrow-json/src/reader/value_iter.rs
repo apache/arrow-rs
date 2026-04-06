@@ -73,7 +73,7 @@ impl<R: BufRead> Iterator for ValueIter<R> {
         }
 
         loop {
-            self.line_buf.truncate(0);
+            self.line_buf.clear();
             match self.reader.read_line(&mut self.line_buf) {
                 Ok(0) => {
                     // read_line returns 0 when stream reached EOF
