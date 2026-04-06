@@ -818,7 +818,10 @@ impl ArrayLevels {
 
         // Select the non-null indices for this chunk.
         let nni = &self.non_null_indices[chunk.value_offset..chunk.value_offset + chunk.num_values];
-        // Compute the array range spanned by the non-null indices
+        // Compute the array range spanned by the non-null indices.
+        // When nni is empty (all-null chunk), start=0, end=0 → zero-length
+        // array slice; write_batch_internal will process only the def/rep
+        // levels and write no values.
         let start = nni.first().copied().unwrap_or(0);
         let end = nni.last().map_or(0, |&i| i + 1);
         // Shift indices to be relative to the sliced array.
@@ -2269,5 +2272,31 @@ mod tests {
         });
         assert_eq!(chunk2.non_null_indices, vec![0, 1]);
         assert_eq!(chunk2.array.len(), 2);
+    }
+
+    #[test]
+    fn test_slice_for_chunk_all_null() {
+        // All-null chunk: num_values=0 → empty nni slice → zero-length array.
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, None, Some(4)]));
+        let logical_nulls = array.logical_nulls();
+        let levels = ArrayLevels {
+            def_levels: Some(vec![1, 0, 0, 1]),
+            rep_levels: None,
+            non_null_indices: vec![0, 3],
+            max_def_level: 1,
+            max_rep_level: 0,
+            array,
+            logical_nulls,
+        };
+        // Chunk covering only the two null rows (levels 1..3), zero non-null values.
+        let sliced = levels.slice_for_chunk(&CdcChunk {
+            level_offset: 1,
+            num_levels: 2,
+            value_offset: 1,
+            num_values: 0,
+        });
+        assert_eq!(sliced.def_levels, Some(vec![0, 0]));
+        assert_eq!(sliced.non_null_indices, Vec::<usize>::new());
+        assert_eq!(sliced.array.len(), 0);
     }
 }

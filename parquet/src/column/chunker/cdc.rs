@@ -328,6 +328,9 @@ impl ContentDefinedChunker {
                 let def_level = def_levels[offset];
                 self.roll_level(def_level);
                 if def_level == self.max_def_level {
+                    // For non-nested data, the leaf array has one slot per
+                    // level (nulls are array elements), so `offset` (the
+                    // level index) is the correct array index for hashing.
                     roll_value(self, offset);
                 }
                 // Check boundary before incrementing value_offset so that
@@ -690,17 +693,23 @@ mod tests {
 
         let num_levels = 20;
         // def_level=1 means non-null, def_level=0 means null
+        // Pattern: null at indices 0, 3, 6, 9, 12, 15, 18 → 7 nulls, 13 non-null
         let def_levels: Vec<i16> = (0..num_levels)
             .map(|i| if i % 3 == 0 { 0 } else { 1 })
             .collect();
+        let expected_non_null: usize = def_levels.iter().filter(|&&d| d == 1).count();
 
         let chunks = chunker.calculate(Some(&def_levels), None, num_levels, |c, i| {
             c.roll_fixed::<4>(&(i as i32).to_le_bytes());
         });
 
         assert!(!chunks.is_empty());
-        let total: usize = chunks.iter().map(|c| c.num_levels).sum();
-        assert_eq!(total, num_levels);
+        let total_levels: usize = chunks.iter().map(|c| c.num_levels).sum();
+        let total_values: usize = chunks.iter().map(|c| c.num_values).sum();
+        assert_eq!(total_levels, num_levels);
+        assert_eq!(total_values, expected_non_null);
+        // With nulls present, total_values < total_levels
+        assert!(total_values < total_levels);
     }
 }
 
