@@ -2298,7 +2298,7 @@ fn cast_from_decimal<D, F>(
 ) -> Result<ArrayRef, ArrowError>
 where
     D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + ToPrimitive,
+    <D as ArrowPrimitiveType>::Native: ToPrimitive,
     F: Fn(D::Native) -> f64,
 {
     use DataType::*;
