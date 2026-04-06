@@ -1288,7 +1288,7 @@ mod tests {
             .downcast_ref::<arrow::array::Int32Array>()
             .unwrap();
         assert_eq!(typed_value_int32.value(0), 42);
-        assert!(typed_value_int32.is_null(1)); // float doesn't convert to int32
+        assert_eq!(typed_value_int32.value(1), 3);
         assert!(typed_value_int32.is_null(2)); // string doesn't convert to int32
 
         // Test Float64 target

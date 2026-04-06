@@ -73,6 +73,7 @@ use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
 pub use decimal::{DecimalCast, rescale_decimal};
+pub use string::cast_single_string_to_boolean_default;
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2475,7 +2476,7 @@ where
     R::Native: NumCast,
 {
     from.try_unary(|value| {
-        num_traits::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
+        num_cast::<T::Native, R::Native>(value).ok_or_else(|| {
             ArrowError::CastError(format!(
                 "Can't cast value {:?} to type {}",
                 value,
@@ -2483,6 +2484,17 @@ where
             ))
         })
     })
+}
+
+/// Natural cast between numeric types
+/// Return None if the input `value` can't be casted to type `O`.
+#[inline]
+pub fn num_cast<I, O>(value: I) -> Option<O>
+where
+    I: NumCast,
+    O: NumCast,
+{
+    num_traits::cast::cast::<I, O>(value)
 }
 
 // Natural cast between numeric types
@@ -2494,7 +2506,7 @@ where
     T::Native: NumCast,
     R::Native: NumCast,
 {
-    from.unary_opt::<_, R>(num_traits::cast::cast::<T::Native, R::Native>)
+    from.unary_opt::<_, R>(num_cast::<T::Native, R::Native>)
 }
 
 fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
@@ -2551,14 +2563,21 @@ where
     for i in 0..from.len() {
         if from.is_null(i) {
             b.append_null();
-        } else if from.value(i) != T::default_value() {
-            b.append_value(true);
         } else {
-            b.append_value(false);
+            b.append_value(cast_num_to_bool::<T::Native>(from.value(i)));
         }
     }
 
     Ok(b.finish())
+}
+
+/// Cast numeric types to boolean
+#[inline]
+pub fn cast_num_to_bool<I>(value: I) -> bool
+where
+    I: Default + PartialEq,
+{
+    value != I::default()
 }
 
 /// Cast Boolean types to numeric
@@ -2586,11 +2605,8 @@ where
     let iter = (0..from.len()).map(|i| {
         if from.is_null(i) {
             None
-        } else if from.value(i) {
-            // a workaround to cast a primitive to T::Native, infallible
-            num_traits::cast::cast(1)
         } else {
-            Some(T::default_value())
+            single_bool_to_numeric::<T::Native>(from.value(i))
         }
     });
     // Benefit:
@@ -2598,6 +2614,20 @@ where
     // Soundness:
     //     The iterator is trustedLen because it comes from a Range
     unsafe { PrimitiveArray::<T>::from_trusted_len_iter(iter) }
+}
+
+/// Cast single bool value to numeric value.
+#[inline]
+pub fn single_bool_to_numeric<O>(value: bool) -> Option<O>
+where
+    O: num_traits::NumCast + Default,
+{
+    if value {
+        // a workaround to cast a primitive to type O, infallible
+        num_traits::cast::cast(1)
+    } else {
+        Some(O::default())
+    }
 }
 
 /// Helper function to cast from one `BinaryArray` or 'LargeBinaryArray' to 'FixedSizeBinaryArray'.
