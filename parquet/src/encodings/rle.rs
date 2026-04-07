@@ -84,7 +84,7 @@ impl RleEncoder {
 
     /// Initialize the encoder from existing `buffer`
     pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>) -> Self {
-        assert!(bit_width <= 64);
+        debug_assert!(bit_width <= 64);
         let bit_writer = BitWriter::new_from_buf(buffer);
         RleEncoder {
             bit_width,
@@ -469,7 +469,7 @@ impl RleDecoder {
     where
         T: Default + Clone,
     {
-        assert!(buffer.len() >= max_values);
+        debug_assert!(buffer.len() >= max_values);
 
         let mut values_read = 0;
         while values_read < max_values {
@@ -507,27 +507,29 @@ impl RleDecoder {
                         self.bit_packed_left = 0;
                         break;
                     }
-                    let out: &mut [T] = &mut buffer[values_read..values_read + num_values];
-                    let idx = &index_buf[..num_values];
-                    let mut out_chunks = out.chunks_exact_mut(8);
-                    let idx_chunks = idx.chunks_exact(8);
-                    for (out_chunk, idx_chunk) in out_chunks.by_ref().zip(idx_chunks) {
-                        let dict_len = dict.len();
-                        assert!(
-                            idx_chunk.iter().all(|&i| (i as usize) < dict_len),
-                            "dictionary index out of bounds"
-                        );
-                        for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
-                            // SAFETY: all indices checked above to be in bounds
-                            b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
-                        }
-                    }
-                    for (b, i) in out_chunks
-                        .into_remainder()
-                        .iter_mut()
-                        .zip(idx.chunks_exact(8).remainder().iter())
                     {
-                        b.clone_from(&dict[*i as usize]);
+                        let out = &mut buffer[values_read..values_read + num_values];
+                        let idx = &index_buf[..num_values];
+                        let mut out_chunks = out.chunks_exact_mut(8);
+                        let idx_chunks = idx.chunks_exact(8);
+                        for (out_chunk, idx_chunk) in out_chunks.by_ref().zip(idx_chunks) {
+                            let dict_len = dict.len();
+                            assert!(
+                                idx_chunk.iter().all(|&i| (i as usize) < dict_len),
+                                "dictionary index out of bounds"
+                            );
+                            for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
+                                // SAFETY: all indices checked above to be in bounds
+                                b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
+                            }
+                        }
+                        for (b, i) in out_chunks
+                            .into_remainder()
+                            .iter_mut()
+                            .zip(idx.chunks_exact(8).remainder().iter())
+                        {
+                            b.clone_from(&dict[*i as usize]);
+                        }
                     }
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
