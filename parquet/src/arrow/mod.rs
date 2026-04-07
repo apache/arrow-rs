@@ -184,6 +184,8 @@ pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
 mod decoder;
+#[cfg(feature = "page_store")]
+pub mod page_store;
 
 #[cfg(feature = "async")]
 pub mod async_reader;

@@ -1,0 +1,6 @@
+data/
+meta/
+pages/
+verify/
+.venv/
+.cache/

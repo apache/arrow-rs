@@ -43,6 +43,7 @@ arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
+arrow-cast = { workspace = true, optional = true, features = ["prettyprint"] }
 arrow-ipc = { workspace = true, optional = true }
 parquet-geospatial = { workspace = true, optional = true }
 parquet-variant = { workspace = true, optional = true }
@@ -65,6 +66,7 @@ num-integer = { version = "0.1.46", default-features = false, features = ["std"]
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 base64 = { version = "0.22", default-features = false, features = ["std", ], optional = true }
 clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
+glob = { version = "0.3", default-features = false, optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 seq-macro = { version = "0.3", default-features = false }
@@ -77,6 +79,7 @@ half = { version = "2.1", default-features = false, features = ["num-traits"] }
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
 simdutf8 = { workspace = true , optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
+blake3 = { version = "1", default-features = false, optional = true }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
@@ -108,7 +111,7 @@ arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-data", "arrow-schema", 
 # Enable support for arrow canonical extension types
 arrow_canonical_extension_types = ["arrow-schema?/canonical_extension_types"]
 # Enable CLI tools
-cli = ["json", "base64", "clap", "arrow-csv", "serde"]
+cli = ["json", "base64", "clap", "arrow-csv", "serde", "dep:glob"]
 # Enable JSON APIs
 json = ["serde_json", "base64"]
 # Enable internal testing APIs
@@ -134,6 +137,8 @@ flate2-zlib-rs = ["flate2/zlib-rs"]
 variant_experimental = ["arrow", "parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
+# Enable page store (content-addressed page storage)
+page_store = ["arrow", "dep:blake3", "dep:arrow-cast", "serde", "serde_json"]
 
 
 [[example]]
@@ -150,6 +155,11 @@ path = "./examples/read_parquet.rs"
 name = "write_parquet"
 required-features = ["cli"]
 path = "./examples/write_parquet.rs"
+
+[[example]]
+name = "page_store"
+required-features = ["page_store"]
+path = "./examples/page_store.rs"
 
 [[example]]
 name = "read_with_rowgroup"
@@ -179,6 +189,10 @@ path = "./tests/encryption/mod.rs"
 name = "variant_integration"
 required-features = ["arrow", "variant_experimental", "serde"]
 path = "./tests/variant_integration.rs"
+
+[[bin]]
+name = "parquet-page-store"
+required-features = ["page_store", "cli"]
 
 [[bin]]
 name = "parquet-read"

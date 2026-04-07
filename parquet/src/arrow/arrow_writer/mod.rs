@@ -605,9 +605,9 @@ impl ArrowWriterOptions {
 
 /// A single column chunk produced by [`ArrowColumnWriter`]
 #[derive(Default)]
-struct ArrowColumnChunkData {
-    length: usize,
-    data: Vec<Bytes>,
+pub(crate) struct ArrowColumnChunkData {
+    pub(crate) length: usize,
+    pub(crate) data: Vec<Bytes>,
 }
 
 impl Length for ArrowColumnChunkData {
@@ -632,7 +632,7 @@ impl ChunkReader for ArrowColumnChunkData {
 }
 
 /// A [`Read`] for [`ArrowColumnChunkData`]
-struct ArrowColumnChunkReader(Peekable<IntoIter<Bytes>>);
+pub(crate) struct ArrowColumnChunkReader(Peekable<IntoIter<Bytes>>);
 
 impl Read for ArrowColumnChunkReader {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
@@ -658,7 +658,7 @@ impl Read for ArrowColumnChunkReader {
 ///
 /// This allows it to be owned by [`ArrowPageWriter`] whilst allowing access via
 /// [`ArrowRowGroupWriter`] on flush, without requiring self-referential borrows
-type SharedColumnChunk = Arc<Mutex<ArrowColumnChunkData>>;
+pub(crate) type SharedColumnChunk = Arc<Mutex<ArrowColumnChunkData>>;
 
 #[derive(Default)]
 struct ArrowPageWriter {
@@ -752,8 +752,8 @@ pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafCo
 
 /// The data for a single column chunk, see [`ArrowColumnWriter`]
 pub struct ArrowColumnChunk {
-    data: ArrowColumnChunkData,
-    close: ColumnCloseResult,
+    pub(crate) data: ArrowColumnChunkData,
+    pub(crate) close: ColumnCloseResult,
 }
 
 impl std::fmt::Debug for ArrowColumnChunk {
@@ -872,8 +872,8 @@ impl ArrowColumnChunk {
 /// assert_eq!(metadata.file_metadata().num_rows(), 3);
 /// ```
 pub struct ArrowColumnWriter {
-    writer: ArrowColumnWriterImpl,
-    chunk: SharedColumnChunk,
+    pub(crate) writer: ArrowColumnWriterImpl,
+    pub(crate) chunk: SharedColumnChunk,
 }
 
 impl std::fmt::Debug for ArrowColumnWriter {
@@ -882,7 +882,7 @@ impl std::fmt::Debug for ArrowColumnWriter {
     }
 }
 
-enum ArrowColumnWriterImpl {
+pub(crate) enum ArrowColumnWriterImpl {
     ByteArray(GenericColumnWriter<'static, ByteArrayEncoder>),
     Column(ColumnWriter<'static>),
 }
@@ -989,14 +989,14 @@ impl ArrowColumnWriter {
 ///
 /// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
 #[derive(Debug)]
-struct ArrowRowGroupWriter {
-    writers: Vec<ArrowColumnWriter>,
+pub(crate) struct ArrowRowGroupWriter {
+    pub(crate) writers: Vec<ArrowColumnWriter>,
     schema: SchemaRef,
-    buffered_rows: usize,
+    pub(crate) buffered_rows: usize,
 }
 
 impl ArrowRowGroupWriter {
-    fn new(writers: Vec<ArrowColumnWriter>, arrow: &SchemaRef) -> Self {
+    pub(crate) fn new(writers: Vec<ArrowColumnWriter>, arrow: &SchemaRef) -> Self {
         Self {
             writers,
             schema: arrow.clone(),
@@ -1004,7 +1004,7 @@ impl ArrowRowGroupWriter {
         }
     }
 
-    fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+    pub(crate) fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         self.buffered_rows += batch.num_rows();
         let mut writers = self.writers.iter_mut();
         for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
@@ -1015,7 +1015,7 @@ impl ArrowRowGroupWriter {
         Ok(())
     }
 
-    fn write_with_chunkers(
+    pub(crate) fn write_with_chunkers(
         &mut self,
         batch: &RecordBatch,
         chunkers: &mut [ContentDefinedChunker],
@@ -1042,7 +1042,7 @@ impl ArrowRowGroupWriter {
             .sum()
     }
 
-    fn close(self) -> Result<Vec<ArrowColumnChunk>> {
+    pub(crate) fn close(self) -> Result<Vec<ArrowColumnChunk>> {
         self.writers
             .into_iter()
             .map(|writer| writer.close())
