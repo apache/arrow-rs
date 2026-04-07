@@ -84,14 +84,20 @@ pub(crate) enum AvroLiteral {
 /// Contains the necessary information to resolve a writer's record against a reader's record schema.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResolvedRecord {
-    /// Maps a writer's field index to the corresponding reader's field index.
-    /// `None` if the writer's field is not present in the reader's schema.
-    pub(crate) writer_to_reader: Arc<[Option<usize>]>,
+    /// Maps a writer's field index to the field's resolution against the reader's schema.
+    pub(crate) writer_fields: Arc<[ResolvedField]>,
     /// A list of indices in the reader's schema for fields that have a default value.
     pub(crate) default_fields: Arc<[usize]>,
+}
+
+/// Resolution information for record fields in the writer schema.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ResolvedField {
+    /// Resolves to a field indexed in the reader schema.
+    ToReader(usize),
     /// For fields present in the writer's schema but not the reader's, this stores their data type.
     /// This is needed to correctly skip over these fields during deserialization.
-    pub(crate) skip_fields: Arc<[Option<AvroDataType>]>,
+    Skip(AvroDataType),
 }
 
 /// Defines the type of promotion to be applied during schema resolution.
@@ -141,7 +147,7 @@ impl Display for Promotion {
 pub(crate) struct ResolvedUnion {
     /// For each writer branch index, the reader branch index and how to read it.
     /// `None` means the writer branch doesn't resolve against the reader.
-    pub(crate) writer_to_reader: Arc<[Option<(usize, Promotion)>]>,
+    pub(crate) writer_to_reader: Arc<[Option<(usize, ResolutionInfo)>]>,
     /// Whether the writer schema at this site is a union
     pub(crate) writer_is_union: bool,
     /// Whether the reader schema at this site is a union
@@ -615,7 +621,7 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
     fn try_from(schema: &Schema<'a>) -> Result<Self, Self::Error> {
         match schema {
             Schema::Complex(ComplexType::Record(r)) => {
-                let mut resolver = Maker::new(false, false);
+                let mut resolver = Maker::new(false, false, Tz::default());
                 let data_type = resolver.make_data_type(schema, None, None)?;
                 Ok(AvroField {
                     data_type,
@@ -636,6 +642,7 @@ pub(crate) struct AvroFieldBuilder<'a> {
     reader_schema: Option<&'a Schema<'a>>,
     use_utf8view: bool,
     strict_mode: bool,
+    tz: Tz,
 }
 
 impl<'a> AvroFieldBuilder<'a> {
@@ -646,6 +653,7 @@ impl<'a> AvroFieldBuilder<'a> {
             reader_schema: None,
             use_utf8view: false,
             strict_mode: false,
+            tz: Tz::default(),
         }
     }
 
@@ -671,11 +679,17 @@ impl<'a> AvroFieldBuilder<'a> {
         self
     }
 
+    /// Sets the timezone representation for timestamps.
+    pub(crate) fn with_tz(mut self, tz: Tz) -> Self {
+        self.tz = tz;
+        self
+    }
+
     /// Build an [`AvroField`] from the builder
     pub(crate) fn build(self) -> Result<AvroField, ArrowError> {
         match self.writer_schema {
             Schema::Complex(ComplexType::Record(r)) => {
-                let mut resolver = Maker::new(self.use_utf8view, self.strict_mode);
+                let mut resolver = Maker::new(self.use_utf8view, self.strict_mode, self.tz);
                 let data_type =
                     resolver.make_data_type(self.writer_schema, self.reader_schema, None)?;
                 Ok(AvroField {
@@ -688,6 +702,36 @@ impl<'a> AvroFieldBuilder<'a> {
                 self.writer_schema
             ))),
         }
+    }
+}
+
+/// Timezone representation for timestamps.
+///
+/// Avro only distinguishes between UTC and local time (no timezone), but Arrow supports
+/// any of the two identifiers of the UTC timezone: "+00:00" and "UTC".
+/// The data types using these time zone IDs behave identically, but are not logically equal.
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
+pub enum Tz {
+    /// Represent Avro `timestamp-*` logical types with "+00:00" timezone ID
+    #[default]
+    OffsetZero,
+    /// Represent Avro `timestamp-*` logical types with "UTC" timezone ID
+    Utc,
+}
+
+impl Tz {
+    /// Returns the string identifier for this timezone representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::OffsetZero => "+00:00",
+            Self::Utc => "UTC",
+        }
+    }
+}
+
+impl Display for Tz {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -726,18 +770,18 @@ pub(crate) enum Codec {
     /// Represents Avro timestamp-millis or local-timestamp-millis logical type
     ///
     /// Maps to Arrow's Timestamp(TimeUnit::Millisecond) data type
-    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
-    TimestampMillis(bool),
+    /// The parameter indicates whether the timestamp has a UTC timezone (Some) or is local time (None)
+    TimestampMillis(Option<Tz>),
     /// Represents Avro timestamp-micros or local-timestamp-micros logical type
     ///
     /// Maps to Arrow's Timestamp(TimeUnit::Microsecond) data type
-    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
-    TimestampMicros(bool),
+    /// The parameter indicates whether the timestamp has a UTC timezone (Some) or is local time (None)
+    TimestampMicros(Option<Tz>),
     /// Represents Avro timestamp-nanos or local-timestamp-nanos logical type
     ///
     /// Maps to Arrow's Timestamp(TimeUnit::Nanosecond) data type
-    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
-    TimestampNanos(bool),
+    /// The parameter indicates whether the timestamp has a UTC timezone (Some) or is local time (None)
+    TimestampNanos(Option<Tz>),
     /// Represents Avro fixed type, maps to Arrow's FixedSizeBinary data type
     /// The i32 parameter indicates the fixed binary size
     Fixed(i32),
@@ -838,15 +882,18 @@ impl Codec {
             Self::Date32 => DataType::Date32,
             Self::TimeMillis => DataType::Time32(TimeUnit::Millisecond),
             Self::TimeMicros => DataType::Time64(TimeUnit::Microsecond),
-            Self::TimestampMillis(is_utc) => {
-                DataType::Timestamp(TimeUnit::Millisecond, is_utc.then(|| "+00:00".into()))
-            }
-            Self::TimestampMicros(is_utc) => {
-                DataType::Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
-            }
-            Self::TimestampNanos(is_utc) => {
-                DataType::Timestamp(TimeUnit::Nanosecond, is_utc.then(|| "+00:00".into()))
-            }
+            Self::TimestampMillis(tz) => DataType::Timestamp(
+                TimeUnit::Millisecond,
+                tz.as_ref().map(|tz| tz.as_str().into()),
+            ),
+            Self::TimestampMicros(tz) => DataType::Timestamp(
+                TimeUnit::Microsecond,
+                tz.as_ref().map(|tz| tz.as_str().into()),
+            ),
+            Self::TimestampNanos(tz) => DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                tz.as_ref().map(|tz| tz.as_str().into()),
+            ),
             Self::Interval => DataType::Interval(IntervalUnit::MonthDayNano),
             Self::Fixed(size) => DataType::FixedSizeBinary(*size),
             Self::Decimal(precision, scale, _size) => {
@@ -1106,12 +1153,15 @@ impl From<&Codec> for UnionFieldKind {
             Codec::Date32 => Self::Date,
             Codec::TimeMillis => Self::TimeMillis,
             Codec::TimeMicros => Self::TimeMicros,
-            Codec::TimestampMillis(true) => Self::TimestampMillisUtc,
-            Codec::TimestampMillis(false) => Self::TimestampMillisLocal,
-            Codec::TimestampMicros(true) => Self::TimestampMicrosUtc,
-            Codec::TimestampMicros(false) => Self::TimestampMicrosLocal,
-            Codec::TimestampNanos(true) => Self::TimestampNanosUtc,
-            Codec::TimestampNanos(false) => Self::TimestampNanosLocal,
+            Codec::TimestampMillis(Some(Tz::OffsetZero)) => Self::TimestampMillisUtc,
+            Codec::TimestampMillis(Some(Tz::Utc)) => Self::TimestampMillisUtc,
+            Codec::TimestampMillis(None) => Self::TimestampMillisLocal,
+            Codec::TimestampMicros(Some(Tz::OffsetZero)) => Self::TimestampMicrosUtc,
+            Codec::TimestampMicros(Some(Tz::Utc)) => Self::TimestampMicrosUtc,
+            Codec::TimestampMicros(None) => Self::TimestampMicrosLocal,
+            Codec::TimestampNanos(Some(Tz::OffsetZero)) => Self::TimestampNanosUtc,
+            Codec::TimestampNanos(Some(Tz::Utc)) => Self::TimestampNanosUtc,
+            Codec::TimestampNanos(None) => Self::TimestampNanosLocal,
             Codec::Interval => Self::Duration,
             Codec::Fixed(_) => Self::Fixed,
             Codec::Decimal(..) => Self::Decimal,
@@ -1332,14 +1382,16 @@ struct Maker<'a> {
     resolver: Resolver<'a>,
     use_utf8view: bool,
     strict_mode: bool,
+    tz: Tz,
 }
 
 impl<'a> Maker<'a> {
-    fn new(use_utf8view: bool, strict_mode: bool) -> Self {
+    fn new(use_utf8view: bool, strict_mode: bool, tz: Tz) -> Self {
         Self {
             resolver: Default::default(),
             use_utf8view,
             strict_mode,
+            tz,
         }
     }
 
@@ -1603,20 +1655,22 @@ impl<'a> Maker<'a> {
                     (Some("time-millis"), c @ Codec::Int32) => *c = Codec::TimeMillis,
                     (Some("time-micros"), c @ Codec::Int64) => *c = Codec::TimeMicros,
                     (Some("timestamp-millis"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMillis(true)
+                        *c = Codec::TimestampMillis(Some(self.tz))
                     }
                     (Some("timestamp-micros"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMicros(true)
+                        *c = Codec::TimestampMicros(Some(self.tz))
                     }
                     (Some("local-timestamp-millis"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMillis(false)
+                        *c = Codec::TimestampMillis(None)
                     }
                     (Some("local-timestamp-micros"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampMicros(false)
+                        *c = Codec::TimestampMicros(None)
                     }
-                    (Some("timestamp-nanos"), c @ Codec::Int64) => *c = Codec::TimestampNanos(true),
+                    (Some("timestamp-nanos"), c @ Codec::Int64) => {
+                        *c = Codec::TimestampNanos(Some(self.tz))
+                    }
                     (Some("local-timestamp-nanos"), c @ Codec::Int64) => {
-                        *c = Codec::TimestampNanos(false)
+                        *c = Codec::TimestampNanos(None)
                     }
                     (Some("uuid"), c @ Codec::Utf8) => {
                         // Map Avro string+logicalType=uuid into the UUID Codec,
@@ -1715,7 +1769,7 @@ impl<'a> Maker<'a> {
                         .and_then(|v| v.as_str())
                     {
                         if unit == "nanosecond" {
-                            field.codec = Codec::TimestampNanos(false);
+                            field.codec = Codec::TimestampNanos(Some(self.tz));
                         }
                     }
                 }
@@ -1748,9 +1802,21 @@ impl<'a> Maker<'a> {
                     nullable_union_variants(writer_variants),
                     nullable_union_variants(reader_variants),
                 ) {
-                    (Some((w_nb, w_nonnull)), Some((_r_nb, r_nonnull))) => {
-                        let mut dt = self.make_data_type(w_nonnull, Some(r_nonnull), namespace)?;
+                    (Some((w_nb, w_nonnull)), Some((r_nb, r_nonnull))) => {
+                        let mut dt = self.resolve_type(w_nonnull, r_nonnull, namespace)?;
+                        let mut writer_to_reader = vec![None, None];
+                        writer_to_reader[w_nb.non_null_index()] = Some((
+                            r_nb.non_null_index(),
+                            dt.resolution
+                                .take()
+                                .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct)),
+                        ));
                         dt.nullability = Some(w_nb);
+                        dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
+                            writer_to_reader: Arc::from(writer_to_reader),
+                            writer_is_union: true,
+                            reader_is_union: true,
+                        }));
                         #[cfg(feature = "avro_custom_types")]
                         Self::propagate_nullability_into_ree(&mut dt, w_nb);
                         Ok(dt)
@@ -1759,12 +1825,17 @@ impl<'a> Maker<'a> {
                 }
             }
             (Schema::Union(writer_variants), reader_non_union) => {
-                let writer_to_reader: Vec<Option<(usize, Promotion)>> = writer_variants
+                let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
                     .iter()
                     .map(|writer| {
                         self.resolve_type(writer, reader_non_union, namespace)
                             .ok()
-                            .map(|tmp| (0usize, Self::coercion_from(&tmp)))
+                            .map(|tmp| {
+                                let resolution = tmp
+                                    .resolution
+                                    .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
+                                (0usize, resolution)
+                            })
                     })
                     .collect();
                 let mut dt = self.parse_type(reader_non_union, namespace)?;
@@ -1780,54 +1851,44 @@ impl<'a> Maker<'a> {
                     nullable_union_variants(reader_variants)
                 {
                     let mut dt = self.resolve_type(writer_non_union, non_null_branch, namespace)?;
-                    let non_null_idx = match nullability {
-                        Nullability::NullFirst => 1,
-                        Nullability::NullSecond => 0,
-                    };
                     #[cfg(feature = "avro_custom_types")]
                     Self::propagate_nullability_into_ree(&mut dt, nullability);
                     dt.nullability = Some(nullability);
-                    let promotion = Self::coercion_from(&dt);
-                    dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
-                        writer_to_reader: Arc::from(vec![Some((non_null_idx, promotion))]),
-                        writer_is_union: false,
-                        reader_is_union: true,
-                    }));
+                    // Ensure resolution is set to a non-Union variant to suppress
+                    // reading the union tag which is the default behavior.
+                    if dt.resolution.is_none() {
+                        dt.resolution = Some(ResolutionInfo::Promotion(Promotion::Direct));
+                    }
                     Ok(dt)
                 } else {
-                    let mut best_match: Option<(usize, AvroDataType, Promotion)> = None;
-                    for (i, variant) in reader_variants.iter().enumerate() {
-                        if let Ok(resolved_dt) =
-                            self.resolve_type(writer_non_union, variant, namespace)
-                        {
-                            let promotion = Self::coercion_from(&resolved_dt);
-                            if promotion == Promotion::Direct {
-                                best_match = Some((i, resolved_dt, promotion));
-                                break;
-                            } else if best_match.is_none() {
-                                best_match = Some((i, resolved_dt, promotion));
-                            }
-                        }
-                    }
-                    let Some((match_idx, match_dt, promotion)) = best_match else {
+                    let Some((match_idx, mut match_dt)) =
+                        self.find_best_union_match(writer_non_union, reader_variants, namespace)
+                    else {
                         return Err(ArrowError::SchemaError(
                             "Writer schema does not match any reader union branch".to_string(),
                         ));
                     };
-                    let mut children = Vec::with_capacity(reader_variants.len());
+                    // Steal the resolution info from the matching reader branch
+                    // for the Union resolution, but preserve possible resolution
+                    // information on its inner types.
+                    // For other branches, resolution is irrelevant,
+                    // so just parse them.
+                    let resolution = match_dt
+                        .resolution
+                        .take()
+                        .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
                     let mut match_dt = Some(match_dt);
-                    for (i, variant) in reader_variants.iter().enumerate() {
-                        if i == match_idx {
-                            if let Some(mut dt) = match_dt.take() {
-                                if matches!(dt.resolution, Some(ResolutionInfo::Promotion(_))) {
-                                    dt.resolution = None;
-                                }
-                                children.push(dt);
+                    let children = reader_variants
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, variant)| {
+                            if idx == match_idx {
+                                Ok(match_dt.take().unwrap())
+                            } else {
+                                self.parse_type(variant, namespace)
                             }
-                        } else {
-                            children.push(self.parse_type(variant, namespace)?);
-                        }
-                    }
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let union_fields = build_union_fields(&children)?;
                     let mut dt = AvroDataType::new(
                         Codec::Union(children.into(), union_fields, UnionMode::Dense),
@@ -1835,7 +1896,7 @@ impl<'a> Maker<'a> {
                         None,
                     );
                     dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
-                        writer_to_reader: Arc::from(vec![Some((match_idx, promotion))]),
+                        writer_to_reader: Arc::from(vec![Some((match_idx, resolution))]),
                         writer_is_union: false,
                         reader_is_union: true,
                     }));
@@ -1870,34 +1931,30 @@ impl<'a> Maker<'a> {
         }
     }
 
-    #[inline]
-    fn coercion_from(dt: &AvroDataType) -> Promotion {
-        match dt.resolution.as_ref() {
-            Some(ResolutionInfo::Promotion(promotion)) => *promotion,
-            _ => Promotion::Direct,
-        }
-    }
-
-    fn find_best_promotion(
+    fn find_best_union_match(
         &mut self,
         writer: &Schema<'a>,
         reader_variants: &[Schema<'a>],
         namespace: Option<&'a str>,
-    ) -> Option<(usize, Promotion)> {
-        let mut first_promotion: Option<(usize, Promotion)> = None;
+    ) -> Option<(usize, AvroDataType)> {
+        let mut first_resolution = None;
         for (reader_index, reader) in reader_variants.iter().enumerate() {
-            if let Ok(tmp) = self.resolve_type(writer, reader, namespace) {
-                let promotion = Self::coercion_from(&tmp);
-                if promotion == Promotion::Direct {
-                    // An exact match is best, return immediately.
-                    return Some((reader_index, promotion));
-                } else if first_promotion.is_none() {
-                    // Store the first valid promotion but keep searching for a direct match.
-                    first_promotion = Some((reader_index, promotion));
-                }
+            if let Ok(dt) = self.resolve_type(writer, reader, namespace) {
+                match &dt.resolution {
+                    None | Some(ResolutionInfo::Promotion(Promotion::Direct)) => {
+                        // An exact match is best, return immediately.
+                        return Some((reader_index, dt));
+                    }
+                    Some(_) => {
+                        if first_resolution.is_none() {
+                            // Store the first valid promotion but keep searching for a direct match.
+                            first_resolution = Some((reader_index, dt));
+                        }
+                    }
+                };
             }
         }
-        first_promotion
+        first_resolution
     }
 
     fn resolve_unions<'s>(
@@ -1906,15 +1963,34 @@ impl<'a> Maker<'a> {
         reader_variants: &'s [Schema<'a>],
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
+        let mut resolved_reader_encodings = HashMap::new();
+        let writer_to_reader: Vec<Option<(usize, ResolutionInfo)>> = writer_variants
+            .iter()
+            .map(|writer| {
+                self.find_best_union_match(writer, reader_variants, namespace)
+                    .map(|(match_idx, mut match_dt)| {
+                        let resolution = match_dt
+                            .resolution
+                            .take()
+                            .unwrap_or(ResolutionInfo::Promotion(Promotion::Direct));
+                        // TODO: check for overlapping reader variants?
+                        // They should not be possible in a valid schema.
+                        resolved_reader_encodings.insert(match_idx, match_dt);
+                        (match_idx, resolution)
+                    })
+            })
+            .collect();
         let reader_encodings: Vec<AvroDataType> = reader_variants
             .iter()
-            .map(|reader_schema| self.parse_type(reader_schema, namespace))
+            .enumerate()
+            .map(|(reader_idx, reader_schema)| {
+                if let Some(resolved) = resolved_reader_encodings.remove(&reader_idx) {
+                    Ok(resolved)
+                } else {
+                    self.parse_type(reader_schema, namespace)
+                }
+            })
             .collect::<Result<_, _>>()?;
-        let mut writer_to_reader: Vec<Option<(usize, Promotion)>> =
-            Vec::with_capacity(writer_variants.len());
-        for writer in writer_variants {
-            writer_to_reader.push(self.find_best_promotion(writer, reader_variants, namespace));
-        }
         let union_fields = build_union_fields(&reader_encodings)?;
         let mut dt = AvroDataType::new(
             Codec::Union(reader_encodings.into(), union_fields, UnionMode::Dense),
@@ -2179,7 +2255,14 @@ impl<'a> Maker<'a> {
         )?;
         let writer_ns = writer_record.namespace.or(namespace);
         let reader_ns = reader_record.namespace.or(namespace);
-        let reader_md = reader_record.attributes.field_metadata();
+        let mut reader_md = reader_record.attributes.field_metadata();
+        reader_md.insert(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            reader_record.name.to_string(),
+        );
+        if let Some(ns) = reader_ns {
+            reader_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), ns.to_string());
+        }
         // Build writer lookup and ambiguous alias set.
         let (writer_lookup, ambiguous_writer_aliases) = Self::build_writer_lookup(writer_record);
         let mut writer_to_reader: Vec<Option<usize>> = vec![None; writer_record.fields.len()];
@@ -2252,24 +2335,27 @@ impl<'a> Maker<'a> {
                 data_type: dt,
             });
         }
-        // Build skip_fields in writer order; pre-size and push.
-        let mut skip_fields: Vec<Option<AvroDataType>> =
-            Vec::with_capacity(writer_record.fields.len());
-        for (writer_index, writer_field) in writer_record.fields.iter().enumerate() {
-            if writer_to_reader[writer_index].is_some() {
-                skip_fields.push(None);
-            } else {
-                skip_fields.push(Some(self.parse_type(&writer_field.r#type, writer_ns)?));
-            }
-        }
+        // Build writer field map.
+        let writer_fields = writer_record
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(writer_index, writer_field)| {
+                if let Some(reader_index) = writer_to_reader[writer_index] {
+                    Ok(ResolvedField::ToReader(reader_index))
+                } else {
+                    let dt = self.parse_type(&writer_field.r#type, writer_ns)?;
+                    Ok(ResolvedField::Skip(dt))
+                }
+            })
+            .collect::<Result<_, ArrowError>>()?;
         let resolved = AvroDataType::new_with_resolution(
             Codec::Struct(Arc::from(reader_fields)),
             reader_md,
             None,
             Some(ResolutionInfo::Record(ResolvedRecord {
-                writer_to_reader: Arc::from(writer_to_reader),
+                writer_fields,
                 default_fields: Arc::from(default_fields),
-                skip_fields: Arc::from(skip_fields),
             })),
         );
         // Register a resolved record by reader name+namespace for potential named type refs.
@@ -2307,7 +2393,7 @@ mod tests {
     fn resolve_promotion(writer: PrimitiveType, reader: PrimitiveType) -> AvroDataType {
         let writer_schema = Schema::TypeName(TypeName::Primitive(writer));
         let reader_schema = Schema::TypeName(TypeName::Primitive(reader));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("promotion should resolve")
@@ -2324,7 +2410,7 @@ mod tests {
     fn test_date_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "date");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::Date32));
@@ -2334,7 +2420,7 @@ mod tests {
     fn test_time_millis_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "time-millis");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::TimeMillis));
@@ -2344,7 +2430,7 @@ mod tests {
     fn test_time_micros_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "time-micros");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::TimeMicros));
@@ -2352,42 +2438,77 @@ mod tests {
 
     #[test]
     fn test_timestamp_millis_logical_type() {
-        let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-millis");
+        for tz in [Tz::OffsetZero, Tz::Utc] {
+            let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-millis");
 
-        let mut maker = Maker::new(false, false);
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+            let mut maker = Maker::new(false, false, tz);
+            let result = maker.make_data_type(&schema, None, None).unwrap();
 
-        assert!(matches!(result.codec, Codec::TimestampMillis(true)));
+            let Codec::TimestampMillis(Some(actual_tz)) = result.codec else {
+                panic!("Expected TimestampMillis codec");
+            };
+            assert_eq!(actual_tz, tz);
+        }
     }
 
     #[test]
     fn test_timestamp_micros_logical_type() {
-        let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-micros");
+        for tz in [Tz::OffsetZero, Tz::Utc] {
+            let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-micros");
 
-        let mut maker = Maker::new(false, false);
-        let result = maker.make_data_type(&schema, None, None).unwrap();
+            let mut maker = Maker::new(false, false, tz);
+            let result = maker.make_data_type(&schema, None, None).unwrap();
 
-        assert!(matches!(result.codec, Codec::TimestampMicros(true)));
+            let Codec::TimestampMicros(Some(actual_tz)) = result.codec else {
+                panic!("Expected TimestampMicros codec");
+            };
+            assert_eq!(actual_tz, tz);
+        }
+    }
+
+    #[test]
+    fn test_timestamp_nanos_logical_type() {
+        for tz in [Tz::OffsetZero, Tz::Utc] {
+            let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-nanos");
+
+            let mut maker = Maker::new(false, false, tz);
+            let result = maker.make_data_type(&schema, None, None).unwrap();
+
+            let Codec::TimestampNanos(Some(actual_tz)) = result.codec else {
+                panic!("Expected TimestampNanos codec");
+            };
+            assert_eq!(actual_tz, tz);
+        }
     }
 
     #[test]
     fn test_local_timestamp_millis_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-millis");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
-        assert!(matches!(result.codec, Codec::TimestampMillis(false)));
+        assert!(matches!(result.codec, Codec::TimestampMillis(None)));
     }
 
     #[test]
     fn test_local_timestamp_micros_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-micros");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
-        assert!(matches!(result.codec, Codec::TimestampMicros(false)));
+        assert!(matches!(result.codec, Codec::TimestampMicros(None)));
+    }
+
+    #[test]
+    fn test_local_timestamp_nanos_logical_type() {
+        let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-nanos");
+
+        let mut maker = Maker::new(false, false, Tz::default());
+        let result = maker.make_data_type(&schema, None, None).unwrap();
+
+        assert!(matches!(result.codec, Codec::TimestampNanos(None)));
     }
 
     #[test]
@@ -2436,7 +2557,7 @@ mod tests {
     fn test_unknown_logical_type_added_to_metadata() {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "custom-type");
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert_eq!(
@@ -2449,7 +2570,7 @@ mod tests {
     fn test_string_with_utf8view_enabled() {
         let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
-        let mut maker = Maker::new(true, false);
+        let mut maker = Maker::new(true, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::Utf8View));
@@ -2459,7 +2580,7 @@ mod tests {
     fn test_string_without_utf8view_enabled() {
         let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         assert!(matches!(result.codec, Codec::Utf8));
@@ -2488,7 +2609,7 @@ mod tests {
 
         let schema = Schema::Complex(ComplexType::Record(record));
 
-        let mut maker = Maker::new(true, false);
+        let mut maker = Maker::new(true, false, Tz::default());
         let result = maker.make_data_type(&schema, None, None).unwrap();
 
         if let Codec::Struct(fields) = &result.codec {
@@ -2506,7 +2627,7 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
         ]);
 
-        let mut maker = Maker::new(false, true);
+        let mut maker = Maker::new(false, true, Tz::default());
         let result = maker.make_data_type(&schema, None, None);
 
         assert!(result.is_err());
@@ -2594,7 +2715,7 @@ mod tests {
     fn test_resolve_illegal_promotion_double_to_float_errors() {
         let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Double));
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Float));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&writer_schema, Some(&reader_schema), None);
         assert!(result.is_err());
         match result {
@@ -2615,12 +2736,20 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Double)),
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(result.codec, Codec::Float64));
         assert_eq!(
             result.resolution,
-            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::IntToDouble)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true,
+            }))
         );
         assert_eq!(result.nullability, Some(Nullability::NullFirst));
     }
@@ -2632,7 +2761,7 @@ mod tests {
             mk_primitive(PrimitiveType::Long),
         ]);
         let reader = mk_primitive(PrimitiveType::Bytes);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(dt.codec(), Codec::Binary));
         let resolved = match dt.resolution {
@@ -2642,7 +2771,10 @@ mod tests {
         assert!(resolved.writer_is_union && !resolved.reader_is_union);
         assert_eq!(
             resolved.writer_to_reader.as_ref(),
-            &[Some((0, Promotion::StringToBytes)), None]
+            &[
+                Some((0, ResolutionInfo::Promotion(Promotion::StringToBytes))),
+                None
+            ]
         );
     }
 
@@ -2653,7 +2785,7 @@ mod tests {
             mk_primitive(PrimitiveType::Long),
             mk_primitive(PrimitiveType::Double),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         let resolved = match dt.resolution {
             Some(ResolutionInfo::Union(u)) => u,
@@ -2662,7 +2794,7 @@ mod tests {
         assert!(!resolved.writer_is_union && resolved.reader_is_union);
         assert_eq!(
             resolved.writer_to_reader.as_ref(),
-            &[Some((0, Promotion::Direct))]
+            &[Some((0, ResolutionInfo::Promotion(Promotion::Direct)))]
         );
     }
 
@@ -2674,7 +2806,7 @@ mod tests {
             mk_primitive(PrimitiveType::Long),
             mk_primitive(PrimitiveType::String),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         let resolved = match dt.resolution {
             Some(ResolutionInfo::Union(u)) => u,
@@ -2682,7 +2814,194 @@ mod tests {
         };
         assert_eq!(
             resolved.writer_to_reader.as_ref(),
-            &[Some((1, Promotion::IntToLong))]
+            &[Some((1, ResolutionInfo::Promotion(Promotion::IntToLong)))]
+        );
+    }
+
+    #[test]
+    fn test_resolve_writer_non_union_to_reader_union_preserves_inner_record_defaults() {
+        // Writer: record Inner{a: int}
+        // Reader: union [Inner{a: int, b: int default 42}, string]
+        // The matching child (Inner) should preserve DefaultValue(Int(42)) on field b.
+        let writer = Schema::Complex(ComplexType::Record(Record {
+            name: "Inner",
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![AvroFieldSchema {
+                name: "a",
+                doc: None,
+                r#type: mk_primitive(PrimitiveType::Int),
+                default: None,
+                aliases: vec![],
+            }],
+            attributes: Attributes::default(),
+        }));
+        let reader = mk_union(vec![
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![
+                    AvroFieldSchema {
+                        name: "a",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: None,
+                        aliases: vec![],
+                    },
+                    AvroFieldSchema {
+                        name: "b",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: Some(Value::Number(serde_json::Number::from(42))),
+                        aliases: vec![],
+                    },
+                ],
+                attributes: Attributes::default(),
+            })),
+            mk_primitive(PrimitiveType::String),
+        ]);
+        let mut maker = Maker::new(false, false, Default::default());
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None)
+            .expect("resolution should succeed");
+        // Verify the union resolution structure
+        let resolved = match dt.resolution.as_ref() {
+            Some(ResolutionInfo::Union(u)) => u,
+            other => panic!("expected union resolution info, got {other:?}"),
+        };
+        assert!(!resolved.writer_is_union && resolved.reader_is_union);
+        assert_eq!(
+            resolved.writer_to_reader.len(),
+            1,
+            "expected the non-union record to resolve to a union variant"
+        );
+        let resolution = match resolved.writer_to_reader.first().unwrap() {
+            Some((0, resolution)) => resolution,
+            other => panic!("unexpected writer-to-reader table value {other:?}"),
+        };
+        match resolution {
+            ResolutionInfo::Record(ResolvedRecord {
+                writer_fields,
+                default_fields,
+            }) => {
+                assert_eq!(writer_fields.len(), 1);
+                assert_eq!(writer_fields[0], ResolvedField::ToReader(0));
+                assert_eq!(default_fields.len(), 1);
+                assert_eq!(default_fields[0], 1);
+            }
+            other => panic!("unexpected resolution {other:?}"),
+        }
+        // The matching child (Inner at index 0) should have field b with DefaultValue
+        let children = match dt.codec() {
+            Codec::Union(children, _, _) => children,
+            other => panic!("expected union codec, got {other:?}"),
+        };
+        let inner_fields = match children[0].codec() {
+            Codec::Struct(f) => f,
+            other => panic!("expected struct codec for Inner, got {other:?}"),
+        };
+        assert_eq!(inner_fields.len(), 2);
+        assert_eq!(inner_fields[1].name(), "b");
+        assert_eq!(
+            inner_fields[1].data_type().resolution,
+            Some(ResolutionInfo::DefaultValue(AvroLiteral::Int(42))),
+            "field b should have DefaultValue(Int(42)) from schema resolution"
+        );
+    }
+
+    #[test]
+    fn test_resolve_writer_union_to_reader_union_preserves_inner_record_defaults() {
+        // Writer: record [string, Inner{a: int}]
+        // Reader: union [Inner{a: int, b: int default 42}, string]
+        // The matching child (Inner) should preserve DefaultValue(Int(42)) on field b.
+        let writer = mk_union(vec![
+            mk_primitive(PrimitiveType::String),
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![AvroFieldSchema {
+                    name: "a",
+                    doc: None,
+                    r#type: mk_primitive(PrimitiveType::Int),
+                    default: None,
+                    aliases: vec![],
+                }],
+                attributes: Attributes::default(),
+            })),
+        ]);
+        let reader = mk_union(vec![
+            Schema::Complex(ComplexType::Record(Record {
+                name: "Inner",
+                namespace: None,
+                doc: None,
+                aliases: vec![],
+                fields: vec![
+                    AvroFieldSchema {
+                        name: "a",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: None,
+                        aliases: vec![],
+                    },
+                    AvroFieldSchema {
+                        name: "b",
+                        doc: None,
+                        r#type: mk_primitive(PrimitiveType::Int),
+                        default: Some(Value::Number(serde_json::Number::from(42))),
+                        aliases: vec![],
+                    },
+                ],
+                attributes: Attributes::default(),
+            })),
+            mk_primitive(PrimitiveType::String),
+        ]);
+        let mut maker = Maker::new(false, false, Default::default());
+        let dt = maker
+            .make_data_type(&writer, Some(&reader), None)
+            .expect("resolution should succeed");
+        // Verify the union resolution structure
+        let resolved = match dt.resolution.as_ref() {
+            Some(ResolutionInfo::Union(u)) => u,
+            other => panic!("expected union resolution info, got {other:?}"),
+        };
+        assert!(resolved.writer_is_union && resolved.reader_is_union);
+        assert_eq!(resolved.writer_to_reader.len(), 2);
+        let resolution = match resolved.writer_to_reader[1].as_ref() {
+            Some((0, resolution)) => resolution,
+            other => panic!("unexpected writer-to-reader table value {other:?}"),
+        };
+        match resolution {
+            ResolutionInfo::Record(ResolvedRecord {
+                writer_fields,
+                default_fields,
+            }) => {
+                assert_eq!(writer_fields.len(), 1);
+                assert_eq!(writer_fields[0], ResolvedField::ToReader(0));
+                assert_eq!(default_fields.len(), 1);
+                assert_eq!(default_fields[0], 1);
+            }
+            other => panic!("unexpected resolution {other:?}"),
+        }
+        // The matching child (Inner at index 0) should have field b with DefaultValue
+        let children = match dt.codec() {
+            Codec::Union(children, _, _) => children,
+            other => panic!("expected union codec, got {other:?}"),
+        };
+        let inner_fields = match children[0].codec() {
+            Codec::Struct(f) => f,
+            other => panic!("expected struct codec for Inner, got {other:?}"),
+        };
+        assert_eq!(inner_fields.len(), 2);
+        assert_eq!(inner_fields[1].name(), "b");
+        assert_eq!(
+            inner_fields[1].data_type().resolution,
+            Some(ResolutionInfo::DefaultValue(AvroLiteral::Int(42))),
+            "field b should have DefaultValue(Int(42)) from schema resolution"
         );
     }
 
@@ -2696,11 +3015,22 @@ mod tests {
             mk_primitive(PrimitiveType::String),
             mk_primitive(PrimitiveType::Null),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(dt.codec(), Codec::Utf8));
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
-        assert!(dt.resolution.is_none());
+        assert_eq!(
+            dt.resolution,
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::Direct)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true
+            }))
+        );
     }
 
     #[test]
@@ -2713,13 +3043,21 @@ mod tests {
             mk_primitive(PrimitiveType::Double),
             mk_primitive(PrimitiveType::Null),
         ]);
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker.make_data_type(&writer, Some(&reader), None).unwrap();
         assert!(matches!(dt.codec(), Codec::Float64));
         assert_eq!(dt.nullability, Some(Nullability::NullFirst));
         assert_eq!(
             dt.resolution,
-            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+            Some(ResolutionInfo::Union(ResolvedUnion {
+                writer_to_reader: [
+                    None,
+                    Some((0, ResolutionInfo::Promotion(Promotion::IntToDouble)))
+                ]
+                .into(),
+                writer_is_union: true,
+                reader_is_union: true
+            }))
         );
     }
 
@@ -2727,7 +3065,7 @@ mod tests {
     fn test_resolve_type_promotion() {
         let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Long));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
@@ -2764,7 +3102,7 @@ mod tests {
 
         let schema: Schema = serde_json::from_str(schema_str).unwrap();
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let avro_data_type = maker.make_data_type(&schema, None, None).unwrap();
 
         if let Codec::Struct(fields) = avro_data_type.codec() {
@@ -2844,7 +3182,7 @@ mod tests {
 
         let schema: Schema = serde_json::from_str(schema_str).unwrap();
 
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let avro_data_type = maker.make_data_type(&schema, None, None).unwrap();
 
         if let Codec::Struct(fields) = avro_data_type.codec() {
@@ -2900,7 +3238,7 @@ mod tests {
     fn test_resolve_from_writer_and_reader_defaults_root_name_for_non_record_reader() {
         let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let data_type = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("resolution should succeed");
@@ -3031,13 +3369,12 @@ mod tests {
             .parse_and_store_default(&serde_json::json!(1_000_000))
             .unwrap();
         assert_eq!(ltm, AvroLiteral::Long(1_000_000));
-        let mut dt_ts_milli = AvroDataType::new(Codec::TimestampMillis(true), HashMap::new(), None);
+        let mut dt_ts_milli = AvroDataType::new(Codec::TimestampMillis(None), HashMap::new(), None);
         let l1 = dt_ts_milli
             .parse_and_store_default(&serde_json::json!(123))
             .unwrap();
         assert_eq!(l1, AvroLiteral::Long(123));
-        let mut dt_ts_micro =
-            AvroDataType::new(Codec::TimestampMicros(false), HashMap::new(), None);
+        let mut dt_ts_micro = AvroDataType::new(Codec::TimestampMicros(None), HashMap::new(), None);
         let l2 = dt_ts_micro
             .parse_and_store_default(&serde_json::json!(456))
             .unwrap();
@@ -3276,7 +3613,7 @@ mod tests {
                 additional: r_add,
             },
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
@@ -3305,7 +3642,7 @@ mod tests {
             ])),
             attributes: Attributes::default(),
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
@@ -3313,14 +3650,7 @@ mod tests {
             assert_eq!(inner.nullability(), Some(Nullability::NullFirst));
             assert!(matches!(inner.codec(), Codec::Int32));
             match inner.resolution.as_ref() {
-                Some(ResolutionInfo::Union(info)) => {
-                    assert!(!info.writer_is_union, "writer should be non-union");
-                    assert!(info.reader_is_union, "reader should be union");
-                    assert_eq!(
-                        info.writer_to_reader.as_ref(),
-                        &[Some((1, Promotion::Direct))]
-                    );
-                }
+                Some(ResolutionInfo::Promotion(Promotion::Direct)) => {}
                 other => panic!("expected Union resolution, got {other:?}"),
             }
         } else {
@@ -3344,7 +3674,7 @@ mod tests {
             size: 16,
             attributes: Attributes::default(),
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .unwrap();
@@ -3364,7 +3694,7 @@ mod tests {
                 additional: Default::default(),
             },
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Default::default());
         let dt = maker.make_data_type(&schema, None, None).unwrap();
         assert!(matches!(dt.codec(), Codec::IntervalMonthDayNano));
         assert_eq!(
@@ -3445,7 +3775,7 @@ mod tests {
             ],
             attributes: Attributes::default(),
         }));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let dt = maker
             .make_data_type(&writer, Some(&reader), None)
             .expect("record resolution");
@@ -3466,11 +3796,18 @@ mod tests {
             Some(ResolutionInfo::Record(ref r)) => r.clone(),
             other => panic!("expected record resolution, got {other:?}"),
         };
-        assert_eq!(rec.writer_to_reader.as_ref(), &[Some(1), None, Some(0)]);
+        assert!(matches!(
+            &rec.writer_fields[..],
+            &[
+                ResolvedField::ToReader(1),
+                ResolvedField::Skip(_),
+                ResolvedField::ToReader(0),
+            ]
+        ));
         assert_eq!(rec.default_fields.as_ref(), &[2usize, 3usize]);
-        assert!(rec.skip_fields[0].is_none());
-        assert!(rec.skip_fields[2].is_none());
-        let skip1 = rec.skip_fields[1].as_ref().expect("skip field present");
+        let ResolvedField::Skip(skip1) = &rec.writer_fields[1] else {
+            panic!("should skip field 1")
+        };
         assert!(matches!(skip1.codec(), Codec::Utf8));
         let name_md = &fields[2].data_type().metadata;
         assert_eq!(
@@ -3519,7 +3856,7 @@ mod tests {
         };
         let writer_schema = Schema::Complex(ComplexType::Record(writer_record));
         let reader_schema = Schema::Complex(ComplexType::Record(reader_record));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         let result = maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("record alias resolution should succeed");
@@ -3551,7 +3888,7 @@ mod tests {
         };
         let writer_schema = Schema::Complex(ComplexType::Enum(writer_enum));
         let reader_schema = Schema::Complex(ComplexType::Enum(reader_enum));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("enum alias resolution should succeed");
@@ -3575,7 +3912,7 @@ mod tests {
         };
         let writer_schema = Schema::Complex(ComplexType::Fixed(writer_fixed));
         let reader_schema = Schema::Complex(ComplexType::Fixed(reader_fixed));
-        let mut maker = Maker::new(false, false);
+        let mut maker = Maker::new(false, false, Tz::default());
         maker
             .make_data_type(&writer_schema, Some(&reader_schema), None)
             .expect("fixed alias resolution should succeed");
