@@ -476,8 +476,8 @@ impl BitReader {
     ///
     /// Returns `None` if there's not enough data available. `Some` otherwise.
     pub fn get_value<T: FromBitpacked>(&mut self, num_bits: usize) -> Option<T> {
-        assert!(num_bits <= 64);
-        assert!(num_bits <= size_of::<T>() * 8);
+        debug_assert!(num_bits <= 64);
+        debug_assert!(num_bits <= size_of::<T>() * 8);
 
         if self.byte_offset * 8 + self.bit_offset + num_bits > self.buffer.len() * 8 {
             return None;
@@ -663,7 +663,7 @@ impl BitReader {
     ///
     /// Return the number of values skipped (up to num_values)
     pub fn skip(&mut self, num_values: usize, num_bits: usize) -> usize {
-        assert!(num_bits <= 64);
+        debug_assert!(num_bits <= 64);
 
         let needed_bits = num_bits * num_values;
         let remaining_bits = (self.buffer.len() - self.byte_offset) * 8 - self.bit_offset;
