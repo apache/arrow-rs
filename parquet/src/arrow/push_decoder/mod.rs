@@ -369,7 +369,7 @@ impl ParquetPushDecoder {
     /// Clear any staged byte ranges currently buffered for future decode work.
     ///
     /// This clears byte ranges still owned by the decoder's internal
-    /// [`PushBuffers`]. It does not affect any data that has already been handed
+    /// `PushBuffers`. It does not affect any data that has already been handed
     /// off to an active [`ParquetRecordBatchReader`].
     pub fn clear_all_ranges(&mut self) {
         self.state.clear_all_ranges();
