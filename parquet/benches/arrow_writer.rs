@@ -34,7 +34,7 @@ use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_arr
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
 use arrow_array::RecordBatchOptions;
 use parquet::errors::Result;
-use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
+use parquet::file::properties::{WriterProperties, WriterVersion};
 
 fn create_primitive_bench_batch(
     size: usize,
@@ -391,6 +391,15 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
     let batch = create_list_primitive_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("list_primitive_non_null", batch));
 
+    let batch = create_primitive_bench_batch(BATCH_SIZE, 0.99, 0.75).unwrap();
+    batches.push(("primitive_sparse_99pct_null", batch));
+
+    let batch = create_list_primitive_bench_batch(BATCH_SIZE, 0.99, 0.75).unwrap();
+    batches.push(("list_primitive_sparse_99pct_null", batch));
+
+    let batch = create_primitive_bench_batch(BATCH_SIZE, 1.0, 0.75).unwrap();
+    batches.push(("primitive_all_null", batch));
+
     batches
 }
 
@@ -420,10 +429,12 @@ fn create_writer_props() -> Vec<(&'static str, WriterProperties)> {
         .build();
     props.push(("zstd_parquet_2", prop));
 
-    let prop = WriterProperties::builder()
-        .set_content_defined_chunking(Some(CdcOptions::default()))
-        .build();
-    props.push(("cdc", prop));
+    // Disabled until https://github.com/apache/arrow-rs/issues/9637 is fixed
+    //
+    // let prop = WriterProperties::builder()
+    //    .set_content_defined_chunking(Some(CdcOptions::default()))
+    //    .build();
+    // props.push(("cdc", prop));
 
     props
 }

@@ -17,14 +17,15 @@
 
 use std::marker::PhantomData;
 
-use crate::reader::tape::Tape;
-use crate::reader::{ArrayDecoder, DecoderContext};
 use arrow_array::types::RunEndIndexType;
-use arrow_array::{Array, PrimitiveArray, new_empty_array};
+use arrow_array::{Array, ArrayRef, PrimitiveArray, make_array, new_empty_array};
 use arrow_buffer::{ArrowNativeType, ScalarBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
+
+use crate::reader::tape::Tape;
+use crate::reader::{ArrayDecoder, DecoderContext};
 
 pub struct RunEndEncodedArrayDecoder<R> {
     data_type: DataType,
@@ -56,13 +57,13 @@ impl<R: RunEndIndexType> RunEndEncodedArrayDecoder<R> {
 }
 
 impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let len = pos.len();
         if len == 0 {
-            return Ok(new_empty_array(&self.data_type).to_data());
+            return Ok(new_empty_array(&self.data_type));
         }
 
-        let flat_data = self.decoder.decode(tape, pos)?;
+        let flat_data = self.decoder.decode(tape, pos)?.to_data();
 
         let mut run_ends: Vec<R::Native> = Vec::new();
         let mut mutable = MutableArrayData::new(vec![&flat_data], false, len);
@@ -102,7 +103,7 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
         // Safety:
         // run_ends are strictly increasing with the last value equal to len,
         // and values has the same length as run_ends
-        Ok(unsafe { data.build_unchecked() })
+        Ok(make_array(unsafe { data.build_unchecked() }))
     }
 }
 

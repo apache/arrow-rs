@@ -55,6 +55,9 @@ jobs:
           rustup toolchain install nightly --component miri
           rustup override set nightly
           cargo miri setup
+      - name: Set up nextest
+        run: |
+          cargo install cargo-nextest --version 0.9.132 --locked
       - name: Run Miri Checks
         env:
           RUST_BACKTRACE: full
