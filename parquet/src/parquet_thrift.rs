@@ -708,12 +708,29 @@ where
 /// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
     writer: W,
+    write_path_in_schema: bool,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Create a new `ThriftCompactOutputProtocol` wrapping the byte sink `writer`.
     pub(crate) fn new(writer: W) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            write_path_in_schema: true,
+        }
+    }
+
+    // TODO(ets): at some point there should probably be a properties object
+    // to control aspects of thrift output. But since this is the only option to date
+    // I'm choosing a simpler API.
+    /// Control the writing of the `path_in_schema` element of the `ColumnMetaData`
+    pub(crate) fn set_write_path_in_schema(&mut self, val: bool) {
+        self.write_path_in_schema = val;
+    }
+
+    /// Indicate whether or not to emit `path_in_schema`.
+    pub(crate) fn write_path_in_schema(&self) -> bool {
+        self.write_path_in_schema
     }
 
     /// Write a single byte to the output stream.

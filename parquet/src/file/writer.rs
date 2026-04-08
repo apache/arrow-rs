@@ -345,12 +345,14 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         let column_indexes = std::mem::take(&mut self.column_indexes);
         let offset_indexes = std::mem::take(&mut self.offset_indexes);
 
+        let write_path_in_schema = self.props.write_path_in_schema();
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
             &self.descr,
             row_groups,
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
+            write_path_in_schema,
         );
 
         #[cfg(feature = "encryption")]
