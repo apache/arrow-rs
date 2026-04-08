@@ -505,16 +505,27 @@ impl Field {
     }
 
     /// Returns `true` if this [`Field`] has the given [`ExtensionType`] name
-    /// and can be successfully parsed and constructed as that extension type.
+    /// and can be successfully validated as that extension type.
     ///
     /// This first checks the extension type name and only calls
-    /// [`Field::try_extension_type`] when the name matches.
+    /// [`ExtensionType::validate`] when the name matches.
     ///
     /// This is useful when you only need a boolean validity check and do not
     /// need to retrieve the extension type instance.
     #[inline]
     pub fn has_valid_extension_type<E: ExtensionType>(&self) -> bool {
-        self.extension_type_name() == Some(E::NAME) && self.try_extension_type::<E>().is_ok()
+        if self.extension_type_name() != Some(E::NAME) {
+            return false;
+        }
+
+        let ext_metadata = self
+            .metadata()
+            .get(EXTENSION_TYPE_METADATA_KEY)
+            .map(|s| s.as_str());
+
+        E::deserialize_metadata(ext_metadata)
+            .and_then(|metadata| E::validate(self.data_type(), metadata))
+            .is_ok()
     }
 
     /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
