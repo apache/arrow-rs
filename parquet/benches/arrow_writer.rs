@@ -266,6 +266,25 @@ fn create_list_primitive_bench_batch_non_null(
     )?)
 }
 
+fn create_struct_bench_batch(size: usize, null_density: f32) -> Result<RecordBatch> {
+    let fields = vec![Field::new(
+        "_1",
+        DataType::Struct(Fields::from(vec![
+            Field::new("_1", DataType::Int32, false),
+            Field::new("_2", DataType::Int64, false),
+            Field::new("_3", DataType::Float32, false),
+        ])),
+        true,
+    )];
+    let schema = Schema::new(fields);
+    Ok(create_random_batch(
+        Arc::new(schema),
+        size,
+        null_density,
+        0.75,
+    )?)
+}
+
 fn _create_nested_bench_batch(
     size: usize,
     null_density: f32,
@@ -399,6 +418,15 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
 
     let batch = create_primitive_bench_batch(BATCH_SIZE, 1.0, 0.75).unwrap();
     batches.push(("primitive_all_null", batch));
+
+    let batch = create_struct_bench_batch(BATCH_SIZE, 0.0).unwrap();
+    batches.push(("struct_non_null", batch));
+
+    let batch = create_struct_bench_batch(BATCH_SIZE, 0.99).unwrap();
+    batches.push(("struct_sparse_99pct_null", batch));
+
+    let batch = create_struct_bench_batch(BATCH_SIZE, 1.0).unwrap();
+    batches.push(("struct_all_null", batch));
 
     batches
 }
