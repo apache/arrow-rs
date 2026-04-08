@@ -2539,11 +2539,6 @@ mod test {
 
     #[test]
     fn test_null_buffer_union_for_shredded_paths() {
-        use arrow::compute::CastOptions;
-        use arrow::datatypes::{DataType, Field};
-        use parquet_variant::VariantPath;
-        use std::sync::Arc;
-
         // Test that null buffers are properly unioned when traversing shredded paths
         // This test verifies scovich's null buffer union requirement
 
@@ -2564,8 +2559,7 @@ mod test {
             cast_options: CastOptions::default(),
         };
 
-        let variant_array_ref: Arc<dyn Array> = variant_array.clone();
-        let result = variant_get(&variant_array_ref, options).unwrap();
+        let result = variant_get(&variant_array, options).unwrap();
 
         // Verify the result length matches input
         assert_eq!(result.len(), variant_array.len());
@@ -2586,13 +2580,6 @@ mod test {
 
     #[test]
     fn test_struct_null_mask_union_from_children() {
-        use arrow::compute::CastOptions;
-        use arrow::datatypes::{DataType, Field, Fields};
-        use parquet_variant::VariantPath;
-        use std::sync::Arc;
-
-        use arrow::array::StringArray;
-
         // Test that struct null masks properly union nulls from children field extractions
         // This verifies scovich's concern about incomplete null masks in struct construction
 
@@ -2666,13 +2653,6 @@ mod test {
 
     #[test]
     fn test_field_nullability_preservation() {
-        use arrow::compute::CastOptions;
-        use arrow::datatypes::{DataType, Field};
-        use parquet_variant::VariantPath;
-        use std::sync::Arc;
-
-        use arrow::array::StringArray;
-
         // Test that field nullability from GetOptions.as_type is preserved in the result
 
         let json_strings = vec![
