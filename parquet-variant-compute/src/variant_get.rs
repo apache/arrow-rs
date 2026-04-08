@@ -50,7 +50,7 @@ pub(crate) enum ShreddedPathStep<'a> {
 pub(crate) fn follow_shredded_path_element<'a>(
     shredding_state: &BorrowedShreddingState<'a>,
     path_element: &VariantPathElement<'_>,
-    cast_options: &CastOptions,
+    _cast_options: &CastOptions,
 ) -> Result<ShreddedPathStep<'a>> {
     // If the requested path element is not present in `typed_value`, and `value` is missing, then
     // we know it does not exist; it, and all paths under it, are all-NULL.
@@ -68,15 +68,7 @@ pub(crate) fn follow_shredded_path_element<'a>(
             // Try to step into the requested field name of a struct.
             // First, try to downcast to StructArray
             let Some(struct_array) = typed_value.as_any().downcast_ref::<StructArray>() else {
-                // Downcast failure - if strict cast options are enabled, this should be an error
-                if !cast_options.safe {
-                    return Err(ArrowError::CastError(format!(
-                        "Cannot access field '{}' on non-struct type: {}",
-                        name,
-                        typed_value.data_type()
-                    )));
-                }
-                // With safe cast options, return NULL (missing_path_step)
+                // Object field path step follows JSONPath semantics and returns missing path step (NotShredded/Missing) on non-struct path
                 return Ok(missing_path_step());
             };
 
@@ -2456,53 +2448,26 @@ mod test {
     }
 
     #[test]
-    fn test_strict_cast_options_downcast_failure() {
-        use arrow::compute::CastOptions;
-        use arrow::datatypes::{DataType, Field};
-        use arrow::error::ArrowError;
-        use parquet_variant::VariantPath;
-        use std::sync::Arc;
-
+    fn test_field_path_non_struct_returns_missing_path_step() {
         // Use the existing simple test data that has Int32 as typed_value
         let variant_array = perfectly_shredded_int32_variant_array();
 
-        // Try to access a field with safe cast options (should return NULLs)
-        let safe_options = GetOptions {
-            path: VariantPath::try_from("nonexistent_field").unwrap(),
-            as_type: Some(Arc::new(Field::new("result", DataType::Int32, true))),
-            cast_options: CastOptions::default(), // safe = true
-        };
+        for safe in [true, false] {
+            let options = GetOptions {
+                path: VariantPath::try_from("nonexistent_field").unwrap(),
+                as_type: Some(Arc::new(Field::new("result", DataType::Int32, true))),
+                cast_options: CastOptions {
+                    safe,
+                    ..Default::default()
+                },
+            };
 
-        let variant_array_ref: Arc<dyn Array> = variant_array.clone();
-        let result = variant_get(&variant_array_ref, safe_options);
-        // Should succeed and return NULLs (safe behavior)
-        assert!(result.is_ok());
-        let result_array = result.unwrap();
-        assert_eq!(result_array.len(), 3);
-        assert!(result_array.is_null(0));
-        assert!(result_array.is_null(1));
-        assert!(result_array.is_null(2));
-
-        // Try to access a field with strict cast options (should error)
-        let strict_options = GetOptions {
-            path: VariantPath::try_from("nonexistent_field").unwrap(),
-            as_type: Some(Arc::new(Field::new("result", DataType::Int32, true))),
-            cast_options: CastOptions {
-                safe: false,
-                ..Default::default()
-            },
-        };
-
-        let result = variant_get(&variant_array_ref, strict_options);
-        // Should fail with a cast error
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert!(matches!(error, ArrowError::CastError(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("Cannot access field 'nonexistent_field' on non-struct type")
-        );
+            let result_array = variant_get(&variant_array, options).unwrap();
+            assert_eq!(result_array.len(), 3);
+            assert!(result_array.is_null(0));
+            assert!(result_array.is_null(1));
+            assert!(result_array.is_null(2));
+        }
     }
 
     #[test]
