@@ -131,9 +131,9 @@ impl ExtensionType for VariantType {
 /// let schema = get_schema();
 /// assert_eq!(schema.fields().len(), 2);
 /// // first field is not a Variant
-/// assert!(schema.field(0).try_extension_type::<VariantType>().is_err());
+/// assert!(!schema.field(0).has_valid_extension_type::<VariantType>());
 /// // second field is a Variant
-/// assert!(schema.field(1).try_extension_type::<VariantType>().is_ok());
+/// assert!(schema.field(1).has_valid_extension_type::<VariantType>());
 /// ```
 ///
 /// # Example: Constructing the correct [`Field`] for a [`VariantArray`]
