@@ -80,6 +80,10 @@ impl ExtensionType for VariantType {
         Self.supports_data_type(data_type)?;
         Ok(Self)
     }
+
+    fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<()> {
+        Self.supports_data_type(data_type)
+    }
 }
 
 /// An array of Parquet [`Variant`] values
