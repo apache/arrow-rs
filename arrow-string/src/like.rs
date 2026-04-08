@@ -24,8 +24,6 @@ use arrow_array::*;
 use arrow_schema::*;
 use arrow_select::take::take;
 
-use std::sync::Arc;
-
 use crate::binary_like::binary_apply;
 pub use arrow_array::StringArrayType;
 
@@ -398,118 +396,7 @@ fn binary_predicate<'a>(
         .collect()
 }
 
-// Deprecated kernels
-
-fn make_scalar(data_type: &DataType, scalar: &str) -> Result<ArrayRef, ArrowError> {
-    match data_type {
-        DataType::Utf8 => Ok(Arc::new(StringArray::from_iter_values([scalar]))),
-        DataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from_iter_values([scalar]))),
-        DataType::Dictionary(_, v) => make_scalar(v.as_ref(), scalar),
-        d => Err(ArrowError::InvalidArgumentError(format!(
-            "Unsupported string scalar data type {d:?}",
-        ))),
-    }
-}
-
-macro_rules! legacy_kernels {
-    ($fn_datum:ident, $fn_array:ident, $fn_scalar:ident, $fn_array_dyn:ident, $fn_scalar_dyn:ident, $deprecation:expr) => {
-        #[doc(hidden)]
-        #[deprecated(note = $deprecation)]
-        pub fn $fn_array<O: OffsetSizeTrait>(
-            left: &GenericStringArray<O>,
-            right: &GenericStringArray<O>,
-        ) -> Result<BooleanArray, ArrowError> {
-            $fn_datum(left, right)
-        }
-
-        #[doc(hidden)]
-        #[deprecated(note = $deprecation)]
-        pub fn $fn_scalar<O: OffsetSizeTrait>(
-            left: &GenericStringArray<O>,
-            right: &str,
-        ) -> Result<BooleanArray, ArrowError> {
-            let scalar = GenericStringArray::<O>::from_iter_values([right]);
-            $fn_datum(left, &Scalar::new(&scalar))
-        }
-
-        #[doc(hidden)]
-        #[deprecated(note = $deprecation)]
-        pub fn $fn_array_dyn(
-            left: &dyn Array,
-            right: &dyn Array,
-        ) -> Result<BooleanArray, ArrowError> {
-            $fn_datum(&left, &right)
-        }
-
-        #[doc(hidden)]
-        #[deprecated(note = $deprecation)]
-        pub fn $fn_scalar_dyn(left: &dyn Array, right: &str) -> Result<BooleanArray, ArrowError> {
-            let scalar = make_scalar(left.data_type(), right)?;
-            $fn_datum(&left, &Scalar::new(&scalar))
-        }
-    };
-}
-
-legacy_kernels!(
-    like,
-    like_utf8,
-    like_utf8_scalar,
-    like_dyn,
-    like_utf8_scalar_dyn,
-    "Use arrow_string::like::like"
-);
-legacy_kernels!(
-    ilike,
-    ilike_utf8,
-    ilike_utf8_scalar,
-    ilike_dyn,
-    ilike_utf8_scalar_dyn,
-    "Use arrow_string::like::ilike"
-);
-legacy_kernels!(
-    nlike,
-    nlike_utf8,
-    nlike_utf8_scalar,
-    nlike_dyn,
-    nlike_utf8_scalar_dyn,
-    "Use arrow_string::like::nlike"
-);
-legacy_kernels!(
-    nilike,
-    nilike_utf8,
-    nilike_utf8_scalar,
-    nilike_dyn,
-    nilike_utf8_scalar_dyn,
-    "Use arrow_string::like::nilike"
-);
-legacy_kernels!(
-    contains,
-    contains_utf8,
-    contains_utf8_scalar,
-    contains_dyn,
-    contains_utf8_scalar_dyn,
-    "Use arrow_string::like::contains"
-);
-legacy_kernels!(
-    starts_with,
-    starts_with_utf8,
-    starts_with_utf8_scalar,
-    starts_with_dyn,
-    starts_with_utf8_scalar_dyn,
-    "Use arrow_string::like::starts_with"
-);
-
-legacy_kernels!(
-    ends_with,
-    ends_with_utf8,
-    ends_with_utf8_scalar,
-    ends_with_dyn,
-    ends_with_utf8_scalar_dyn,
-    "Use arrow_string::like::ends_with"
-);
-
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use arrow_array::builder::BinaryDictionaryBuilder;
@@ -653,6 +540,10 @@ mod tests {
                 assert_eq!(res, expected);
 
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
+                let right = StringArray::from_iter_values([$right]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
                 let right: DictionaryArray<Int8Type> = [$right].into_iter().collect();
                 let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
@@ -1394,585 +1285,102 @@ mod tests {
         vec![true, false, true, true, true]
     );
 
-    #[test]
-    fn test_dict_like_kernels() {
-        let data = vec![
+    // Nullable, repeated values exercise dictionary remapping with a plain UTF8 scalar RHS.
+    test_utf8_scalar!(
+        test_utf8_scalar_nullable_like,
+        vec![
             Some("Earth"),
             Some("Fire"),
             Some("Water"),
             Some("Air"),
             None,
             Some("Air"),
-            Some("bbbbb\nAir"),
-        ];
+            Some("bbbbb\nAir")
+        ],
+        "Air",
+        like,
+        vec![
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            None,
+            Some(true),
+            Some(false)
+        ]
+    );
 
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-    }
-
-    #[test]
-    fn test_dict_nlike_kernels() {
-        let data = vec![
+    test_utf8_scalar!(
+        test_utf8_scalar_nullable_nlike,
+        vec![
             Some("Earth"),
             Some("Fire"),
             Some("Water"),
             Some("Air"),
             None,
             Some("Air"),
-            Some("bbbbb\nAir"),
-        ];
+            Some("bbbbb\nAir")
+        ],
+        "%a%r%",
+        nlike,
+        vec![
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(true),
+            None,
+            Some(true),
+            Some(true)
+        ]
+    );
 
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-    }
-
-    #[test]
-    fn test_dict_ilike_kernels() {
-        let data = vec![
+    test_utf8_scalar!(
+        test_utf8_scalar_nullable_ilike,
+        vec![
             Some("Earth"),
             Some("Fire"),
             Some("Water"),
             Some("Air"),
             None,
             Some("Air"),
-            Some("bbbbb\nAir"),
-        ];
+            Some("bbbbb\nAir")
+        ],
+        "%I%",
+        ilike,
+        vec![
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(true),
+            None,
+            Some(true),
+            Some(true)
+        ]
+    );
 
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-    }
-
-    #[test]
-    fn test_dict_nilike_kernels() {
-        let data = vec![
+    test_utf8_scalar!(
+        test_utf8_scalar_nullable_nilike,
+        vec![
             Some("Earth"),
             Some("Fire"),
             Some("Water"),
             Some("Air"),
             None,
             Some("Air"),
-            Some("bbbbb\nAir"),
-        ];
-
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-    }
+            Some("bbbbb\nAir")
+        ],
+        "%R",
+        nilike,
+        vec![
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            None,
+            Some(false),
+            Some(false)
+        ]
+    );
 
     #[test]
     fn string_null_like_pattern() {
