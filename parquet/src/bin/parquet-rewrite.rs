@@ -279,6 +279,10 @@ struct Args {
     #[clap(long)]
     write_page_header_statistics: Option<bool>,
 
+    /// Write path_in_schema to the column metadata.
+    #[clap(long)]
+    write_path_in_schema: Option<bool>,
+
     /// Sets whether bloom filter is enabled for all columns.
     #[clap(long)]
     bloom_filter_enabled: Option<bool>,
@@ -405,6 +409,9 @@ fn main() {
     }
     if let Some(value) = args.coerce_types {
         writer_properties_builder = writer_properties_builder.set_coerce_types(value);
+    }
+    if let Some(value) = args.write_path_in_schema {
+        writer_properties_builder = writer_properties_builder.set_write_path_in_schema(value);
     }
     if let Some(value) = args.write_batch_size {
         writer_properties_builder = writer_properties_builder.set_write_batch_size(value);

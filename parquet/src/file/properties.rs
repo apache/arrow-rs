@@ -67,6 +67,8 @@ pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
 pub const DEFAULT_COERCE_TYPES: bool = false;
+/// Default value for [`WriterProperties::write_path_in_schema`]
+pub const DEFAULT_WRITE_PATH_IN_SCHEMA: bool = true;
 /// Default minimum chunk size for content-defined chunking: 256 KiB.
 pub const DEFAULT_CDC_MIN_CHUNK_SIZE: usize = 256 * 1024;
 /// Default maximum chunk size for content-defined chunking: 1024 KiB.
@@ -233,6 +235,7 @@ pub struct WriterProperties {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
+    write_path_in_schema: bool,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -429,6 +432,14 @@ impl WriterProperties {
         self.coerce_types
     }
 
+    /// Returns `true` if the `path_in_schema` field of the `ColumnMetaData` Thrift struct
+    /// should be written.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_write_path_in_schema`]
+    pub fn write_path_in_schema(&self) -> bool {
+        self.write_path_in_schema
+    }
+
     /// EXPERIMENTAL: Returns content-defined chunking options, or `None` if CDC is disabled.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_content_defined_chunking`]
@@ -560,6 +571,7 @@ pub struct WriterPropertiesBuilder {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
+    write_path_in_schema: bool,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -584,6 +596,7 @@ impl Default for WriterPropertiesBuilder {
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
             content_defined_chunking: None,
+            write_path_in_schema: DEFAULT_WRITE_PATH_IN_SCHEMA,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -622,6 +635,7 @@ impl WriterPropertiesBuilder {
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
             content_defined_chunking: self.content_defined_chunking,
+            write_path_in_schema: self.write_path_in_schema,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -834,6 +848,22 @@ impl WriterPropertiesBuilder {
     /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
+        self
+    }
+
+    /// Should the writer should emit the `path_in_schema` element of the
+    /// `ColumnMetaData` Thrift struct.
+    ///
+    /// The `path_in_schema` field in the Thrift metadata is redundant and wastes a great
+    /// deal of space. Parquet file footers can be made much smaller by omitting this field.
+    /// Because the field was originally a mandatory field, this property defaults to `true`
+    /// to maintain compatibility with older readers that expect this field to be present.
+    /// If one knows that all readers one plans to use are tolerant of the absense of this field,
+    /// this may be safely set to `false`.
+    ///
+    /// At some point in the future this will default to `false`.
+    pub fn set_write_path_in_schema(mut self, write_path_in_schema: bool) -> Self {
+        self.write_path_in_schema = write_path_in_schema;
         self
     }
 
@@ -1157,6 +1187,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
             content_defined_chunking: props.content_defined_chunking,
+            write_path_in_schema: props.write_path_in_schema,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }
