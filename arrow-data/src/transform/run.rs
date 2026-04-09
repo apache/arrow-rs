@@ -17,7 +17,7 @@
 
 use super::{_MutableArrayData, ArrayData, Extend};
 use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use num_traits::CheckedAdd;
 
 /// Generic helper to get the last run end value from a run ends array
@@ -38,14 +38,14 @@ fn get_last_run_end<T: ArrowNativeType>(run_ends_data: &super::MutableArrayData)
 ///
 /// For RunEndEncoded, this adds nulls by extending the run_ends array
 /// and values array appropriately.
-pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
+pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), ArrowError> {
     if len == 0 {
-        return;
+        return Ok(());
     }
 
     // For REE, we always need to add a value entry when adding a new run
     // The values array should have one entry per run, not per logical element
-    mutable.child_data[1].extend_nulls(1);
+    mutable.child_data[1].try_extend_nulls(1)?;
 
     // Determine the run end type from the data type
     let run_end_type = if let DataType::RunEndEncoded(run_ends_field, _) = &mutable.data_type {
@@ -60,7 +60,13 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
             let last_run_end = get_last_run_end::<$run_end_type>(&mutable.child_data[0]);
             let new_value = last_run_end
                 .checked_add(<$run_end_type as ArrowNativeType>::usize_as(len))
-                .expect("run end overflow");
+                .ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
+                        "run end overflow when extending RunEndEncoded array: \
+                         use a larger run-end type (e.g. Int64 instead of Int32)"
+                            .to_string(),
+                    )
+                })?;
             mutable.child_data[0]
                 .data
                 .buffer1
@@ -77,6 +83,7 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
     };
 
     mutable.child_data[0].data.len += 1;
+    Ok(())
 }
 
 /// Build run ends bytes and values range directly for batch processing
@@ -86,7 +93,7 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
     start: usize,
     len: usize,
     dest_last_run_end: T,
-) -> (Vec<u8>, Option<(usize, usize)>) {
+) -> Result<(Vec<u8>, Option<(usize, usize)>), ArrowError> {
     let mut run_ends_bytes = Vec::new();
     let mut values_range: Option<(usize, usize)> = None;
     let end = start + len;
@@ -109,7 +116,11 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
                 };
                 current_run_end = current_run_end
                     .checked_add(&T::usize_as(end_offset - start_offset))
-                    .expect("run end overflow");
+                    .ok_or_else(|| ArrowError::InvalidArgumentError(
+                        "run end overflow when extending RunEndEncoded array: \
+                         use a larger run-end type (e.g. Int64 instead of Int32)"
+                            .to_string(),
+                    ))?;
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Start the range
@@ -117,7 +128,11 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
             } else if prev_end >= start && run_end <= end {
                 current_run_end = current_run_end
                     .checked_add(&T::usize_as(run_end - prev_end))
-                    .expect("run end overflow");
+                    .ok_or_else(|| ArrowError::InvalidArgumentError(
+                        "run end overflow when extending RunEndEncoded array: \
+                         use a larger run-end type (e.g. Int64 instead of Int32)"
+                            .to_string(),
+                    ))?;
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Extend the range
@@ -128,7 +143,11 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
             } else if prev_end < end && run_end >= end {
                 current_run_end = current_run_end
                     .checked_add(&T::usize_as(end - prev_end))
-                    .expect("run end overflow");
+                    .ok_or_else(|| ArrowError::InvalidArgumentError(
+                        "run end overflow when extending RunEndEncoded array: \
+                         use a larger run-end type (e.g. Int64 instead of Int32)"
+                            .to_string(),
+                    ))?;
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Extend the range and break
@@ -149,7 +168,7 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
             break;
         }
     }
-    (run_ends_bytes, values_range)
+    Ok((run_ends_bytes, values_range))
 }
 
 /// Process extends using batch operations
@@ -158,9 +177,9 @@ fn process_extends_batch<T: ArrowNativeType>(
     source_array_idx: usize,
     run_ends_bytes: Vec<u8>,
     values_range: Option<(usize, usize)>,
-) {
+) -> Result<(), ArrowError> {
     if run_ends_bytes.is_empty() {
-        return;
+        return Ok(());
     }
 
     // Batch extend the run_ends array with all bytes at once
@@ -173,7 +192,7 @@ fn process_extends_batch<T: ArrowNativeType>(
     // Batch extend the values array using the range
     let (start_idx, end_idx) =
         values_range.expect("values_range should be Some if run_ends_bytes is not empty");
-    mutable.child_data[1].extend(source_array_idx, start_idx, end_idx);
+    mutable.child_data[1].try_extend(source_array_idx, start_idx, end_idx)
 }
 
 /// Returns a function that extends the run encoded array.
@@ -183,7 +202,7 @@ pub fn build_extend(array: &ArrayData) -> Extend<'_> {
     Box::new(
         move |mutable: &mut _MutableArrayData, array_idx: usize, start: usize, len: usize| {
             if len == 0 {
-                return;
+                return Ok(());
             }
 
             // We need to analyze the source array's run structure
@@ -209,13 +228,13 @@ pub fn build_extend(array: &ArrayData) -> Extend<'_> {
                         start + array.offset(),
                         len,
                         dest_last_run_end,
-                    );
+                    )?;
                     process_extends_batch::<$run_end_type>(
                         mutable,
                         array_idx,
                         run_ends_bytes,
                         values_range,
-                    );
+                    )?;
                 }};
             }
 
@@ -225,6 +244,7 @@ pub fn build_extend(array: &ArrayData) -> Extend<'_> {
                 DataType::Int64 => build_and_process_impl!(i64),
                 _ => panic!("Invalid run end type for RunEndEncoded array: {dest_run_end_type}",),
             }
+            Ok(())
         },
     )
 }
@@ -375,9 +395,9 @@ mod tests {
 
         let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
 
-        mutable.extend_nulls(3);
-        mutable.extend(0, 0, 5);
-        mutable.extend_nulls(3);
+        mutable.try_extend_nulls(3).unwrap();
+        mutable.try_extend(0, 0, 5).unwrap();
+        mutable.try_extend_nulls(3).unwrap();
 
         // Verify the run ends were extended correctly
         let result = mutable.freeze();
@@ -425,10 +445,10 @@ mod tests {
         let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
 
         // First, we need to copy the existing data
-        mutable.extend(0, 0, 5);
+        mutable.try_extend(0, 0, 5).unwrap();
 
         // Then add nulls
-        mutable.extend_nulls(3);
+        mutable.try_extend_nulls(3).unwrap();
 
         // Verify the run ends were extended correctly
         let result = mutable.freeze();
@@ -454,10 +474,10 @@ mod tests {
         let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
 
         // First, we need to copy the existing data
-        mutable.extend(0, 0, 5);
+        mutable.try_extend(0, 0, 5).unwrap();
 
         // Then add nulls
-        mutable.extend_nulls(3);
+        mutable.try_extend_nulls(3).unwrap();
 
         // Verify the run ends were extended correctly
         let result = mutable.freeze();
@@ -483,7 +503,7 @@ mod tests {
         let mut mutable = MutableArrayData::new(vec![&ree_array], false, 10);
 
         // Extend the entire array
-        mutable.extend(0, 0, 5);
+        mutable.try_extend(0, 0, 5).unwrap();
 
         let result = mutable.freeze();
 
@@ -501,7 +521,7 @@ mod tests {
         let ree_array = create_run_array_data(vec![], values);
 
         let mut mutable = MutableArrayData::new(vec![&ree_array], false, 10);
-        mutable.extend(0, 0, 0);
+        mutable.try_extend(0, 0, 0).unwrap();
 
         let result = mutable.freeze();
         assert_eq!(result.len(), 0);
@@ -511,7 +531,8 @@ mod tests {
     #[test]
     fn test_build_extend_arrays_int16() {
         let buffer = Buffer::from_vec(vec![3i16, 5i16, 8i16]);
-        let (run_ends_bytes, values_range) = build_extend_arrays::<i16>(&buffer, 3, 2, 4, 0i16);
+        let (run_ends_bytes, values_range) =
+            build_extend_arrays::<i16>(&buffer, 3, 2, 4, 0i16).unwrap();
 
         // Logical array: [A, A, A, B, B, C, C, C]
         // Requesting indices 2-6 should give us:
@@ -533,7 +554,8 @@ mod tests {
     #[test]
     fn test_build_extend_arrays_int64() {
         let buffer = Buffer::from_vec(vec![3i64, 5i64, 8i64]);
-        let (run_ends_bytes, values_range) = build_extend_arrays::<i64>(&buffer, 3, 2, 4, 0i64);
+        let (run_ends_bytes, values_range) =
+            build_extend_arrays::<i64>(&buffer, 3, 2, 4, 0i64).unwrap();
 
         // Same logic as above but with i64
         assert_eq!(run_ends_bytes.len(), 3 * std::mem::size_of::<i64>());
@@ -559,7 +581,7 @@ mod tests {
         let mut mutable = MutableArrayData::new(vec![&ree_array], false, 10);
 
         // Extend the entire array
-        mutable.extend(0, 0, 5);
+        mutable.try_extend(0, 0, 5).unwrap();
 
         let result = mutable.freeze();
 
@@ -576,7 +598,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "run end overflow")]
     fn test_extend_nulls_overflow_i16() {
         let values = create_int32_array_data(vec![42]);
         // Start with run end close to max to set up overflow condition
@@ -584,14 +605,17 @@ mod tests {
         let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
 
         // Extend the original data first to initialize state
-        mutable.extend(0, 0, 5_usize);
+        mutable.try_extend(0, 0, 5_usize).unwrap();
 
-        // This should cause overflow: i16::MAX + 5 > i16::MAX
-        mutable.extend_nulls(i16::MAX as usize);
+        // This should return an error: i16::MAX + 5 > i16::MAX
+        let err = mutable.try_extend_nulls(i16::MAX as usize).unwrap_err();
+        assert!(
+            err.to_string().contains("run end overflow"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "run end overflow")]
     fn test_extend_nulls_overflow_i32() {
         let values = create_int32_array_data(vec![42]);
         // Start with run end close to max to set up overflow condition
@@ -599,14 +623,17 @@ mod tests {
         let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
 
         // Extend the original data first to initialize state
-        mutable.extend(0, 0, 10_usize);
+        mutable.try_extend(0, 0, 10_usize).unwrap();
 
-        // This should cause overflow: (i32::MAX - 10) + 20 > i32::MAX
-        mutable.extend_nulls(i32::MAX as usize);
+        // This should return an error: (i32::MAX - 10) + 20 > i32::MAX
+        let err = mutable.try_extend_nulls(i32::MAX as usize).unwrap_err();
+        assert!(
+            err.to_string().contains("run end overflow"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "run end overflow")]
     fn test_build_extend_overflow_i16() {
         // Create a source array with small run that will cause overflow when added
         let values = create_int32_array_data(vec![10]);
@@ -619,14 +646,17 @@ mod tests {
         let mut mutable = MutableArrayData::new(vec![&source_array, &dest_array], false, 10);
 
         // First extend the destination array to set up state
-        mutable.extend(1, 0, (i16::MAX - 5) as usize);
+        mutable.try_extend(1, 0, (i16::MAX - 5) as usize).unwrap();
 
-        // This should cause overflow: (i16::MAX - 5) + 20 > i16::MAX
-        mutable.extend(0, 0, 20);
+        // This should return an error: (i16::MAX - 5) + 20 > i16::MAX
+        let err = mutable.try_extend(0, 0, 20).unwrap_err();
+        assert!(
+            err.to_string().contains("run end overflow"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    #[should_panic(expected = "run end overflow")]
     fn test_build_extend_overflow_i32() {
         // Create a source array with small run that will cause overflow when added
         let values = create_int32_array_data(vec![10]);
@@ -639,9 +669,13 @@ mod tests {
         let mut mutable = MutableArrayData::new(vec![&source_array, &dest_array], false, 10);
 
         // First extend the destination array to set up state
-        mutable.extend(1, 0, (i32::MAX - 50) as usize);
+        mutable.try_extend(1, 0, (i32::MAX - 50) as usize).unwrap();
 
-        // This should cause overflow: (i32::MAX - 50) + 100 > i32::MAX
-        mutable.extend(0, 0, 100);
+        // This should return an error: (i32::MAX - 50) + 100 > i32::MAX
+        let err = mutable.try_extend(0, 0, 100).unwrap_err();
+        assert!(
+            err.to_string().contains("run end overflow"),
+            "unexpected error: {err}"
+        );
     }
 }
