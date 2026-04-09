@@ -34,7 +34,7 @@ use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_arr
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
 use arrow_array::RecordBatchOptions;
 use parquet::errors::Result;
-use parquet::file::properties::{WriterProperties, WriterVersion};
+use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 
 fn create_primitive_bench_batch(
     size: usize,
