@@ -43,8 +43,9 @@ pub(crate) enum ShreddedPathStep<'a> {
 }
 
 /// Given a shredded variant field -- a `(value?, typed_value?)` pair -- try to take one path step
-/// deeper. For a `VariantPathElement::Field`, the step fails if there is no `typed_value` at this
-/// level, or if `typed_value` is not a struct, or if the requested field name does not exist.
+/// deeper. For a `VariantPathElement::Field`, if there is no `typed_value` at this level, if
+/// `typed_value` is not a struct, or if the requested field name does not exist, traversal returns
+/// a missing-path step (`Missing` or `NotShredded` depending on whether `value` exists).
 ///
 /// TODO: Support `VariantPathElement::Index`? It wouldn't be easy, and maybe not even possible.
 pub(crate) fn follow_shredded_path_element<'a>(
