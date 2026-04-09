@@ -4439,8 +4439,7 @@ mod test {
     /// Fields with VariantType extension metadata should be extracted as VariantArrays.
     #[test]
     fn test_struct_extraction_with_variant_fields() {
-        // Create test data: [{"id": 1, "name": "Alice", "data": {"score": 95}},
-        //                   {"id": 2, "name": "Bob", "data": null}]
+        // Create test data
         let json_strings = vec![
             r#"{"id": 1, "name": "Alice", "data": {"score": 95}}"#,
             r#"{"id": 2, "name": "Bob", "data": null}"#,
@@ -4595,6 +4594,70 @@ mod test {
         assert!(
             missing_variant.is_ok(),
             "missing variant field should be a valid VariantArray"
+        );
+    }
+
+    /// VariantType field extraction should distinguish:
+    /// - explicit JSON null  => present Variant::Null
+    /// - missing path        => SQL NULL
+    #[test]
+    fn test_struct_variant_field_distinguishes_missing_and_variant_null() {
+        let json_strings = vec![
+            r#"{"id": 1, "data": null}"#,
+            r#"{"id": 2}"#,
+            r#"{"id": 3, "data": {"score": 95}}"#,
+        ];
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
+        let variant_array = json_to_variant(&string_array).unwrap();
+
+        let struct_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("data", DataType::Struct(Fields::empty()), true)
+                .with_extension_type(VariantType),
+        ]);
+        let struct_type = DataType::Struct(struct_fields);
+
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", struct_type, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let variant_array_ref = ArrayRef::from(variant_array);
+        let result = variant_get(&variant_array_ref, options).unwrap();
+
+        let struct_result = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_result.len(), 3);
+
+        let data_field = struct_result.column(1);
+        let data_variant_array = VariantArray::try_new(data_field).unwrap();
+        assert_eq!(data_variant_array.len(), 3);
+
+        // Row 0: explicit JSON null => present Variant::Null (NOT SQL NULL)
+        assert!(
+            !data_variant_array.is_null(0),
+            "explicit JSON null should be a present value, not SQL NULL"
+        );
+        assert!(
+            matches!(data_variant_array.value(0), Variant::Null),
+            "explicit JSON null should surface as Variant::Null"
+        );
+
+        // Row 1: missing path => SQL NULL
+        assert!(
+            data_variant_array.is_null(1),
+            "missing field should be SQL NULL"
+        );
+
+        // Row 2: present object
+        assert!(!data_variant_array.is_null(2));
+        let row2 = data_variant_array.value(2);
+        let obj = row2.as_object().expect("row 2 data should be an object");
+        assert_eq!(
+            obj.get("score")
+                .expect("row 2 should have 'score'")
+                .as_int16(),
+            Some(95)
         );
     }
 }
