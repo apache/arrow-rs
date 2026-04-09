@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::compute::{SortColumn, lexsort_to_indices};
+use arrow::row::radix::radix_sort_to_indices;
 use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
     create_dict_from_values, create_primitive_array, create_string_array_with_len,
@@ -143,6 +144,21 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
                 let mut sort: Vec<_> = rows.iter().enumerate().collect();
                 sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
                 UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
+            })
+        })
+    });
+
+    c.bench_function(&format!("lexsort_radix({columns:?}): {len}"), |b| {
+        b.iter(|| {
+            hint::black_box({
+                let fields = arrays
+                    .iter()
+                    .map(|a| SortField::new(a.data_type().clone()))
+                    .collect();
+                let converter = RowConverter::new(fields).unwrap();
+                let rows = converter.convert_columns(&arrays).unwrap();
+                let indices = radix_sort_to_indices(&rows);
+                UInt32Array::from_iter_values(indices)
             })
         })
     });

@@ -180,6 +180,7 @@ use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 
 mod fixed;
 mod list;
+pub mod radix;
 mod run;
 mod variable;
 
