@@ -24,40 +24,42 @@
 //!
 //! # When to use this
 //!
-//! Radix sort on row-encoded keys is the fastest sort strategy when:
-//! - **Primitive columns** (integers, floats): ~2.4x faster than [`lexsort_to_indices`]
-//!   at N=32768 despite the encoding overhead.
-//! - **String columns**: 1.3–1.9x faster than the best alternative at all sizes.
-//!   The advantage grows with more string columns and larger N.
-//! - **Mixed dict + string columns**: ~1.3x faster than row-format comparison sort.
-//! - **List columns with other columns**: Competitive or faster when lists aren't
-//!   the primary sort key.
+//! Radix sort on row-encoded keys is the fastest sort strategy for most
+//! multi-column sorts, including:
+//! - **Primitive columns** (integers, floats)
+//! - **String columns**, especially multiple string columns
+//! - **Mixed column types** (primitives, strings, dicts, lists)
+//!
+//! The advantage over [`lexsort_to_indices`] grows with N and with the
+//! number of columns.
 //!
 //! # When NOT to use this
 //!
-//! - **Low-cardinality dictionary-only columns**: MSD radix sort performs poorly
-//!   when many rows share long identical key prefixes, because it must recurse
-//!   byte-by-byte through the shared prefix before reaching a distinguishing byte.
-//!   For example, 2 low-cardinality dict columns is ~7x *slower* than
-//!   [`lexsort_to_indices`]. Mixing in a string or primitive column eliminates
-//!   this problem.
-//! - **List-heavy sorts where a leading primitive column discriminates most rows**:
-//!   [`lexsort_to_indices`] avoids encoding the expensive list column entirely for
-//!   most rows, so it wins when the leading column is highly selective.
+//! Prefer [`lexsort_to_indices`] when:
+//! - **All sort columns are low-cardinality dictionaries** with no
+//!   high-cardinality column to break ties. The row encoding for
+//!   dictionary values produces long shared prefixes, and radix sort
+//!   gains little from its first few byte passes before falling back
+//!   to comparison sort.
+//! - **A leading primitive column discriminates most rows and a trailing
+//!   column is expensive to encode** (e.g., lists). [`lexsort_to_indices`]
+//!   avoids encoding the trailing column for rows already resolved by
+//!   the leading column.
 //!
-//! As a rule of thumb: if your sort key is dominated by low-cardinality columns
-//! with no high-cardinality column to break ties early, prefer [`lexsort_to_indices`].
-//! Otherwise, radix sort is likely faster.
-//!
-//! [`lexsort_to_indices`]: arrow_ord::sort::lexsort_to_indices
+//! [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 
 use crate::Rows;
 
-/// Bucket size at which we fall back to comparison sort.
+/// When a bucket has this few elements, the fixed per-level cost of radix
+/// sort (256-bucket histogram + scatter) exceeds the O(n log n) cost of
+/// comparison sort with small n and warm cache lines.
 const FALLBACK_THRESHOLD: usize = 64;
 
-/// Maximum byte depth before falling back to comparison sort.
-const MAX_DEPTH: usize = 128;
+/// Beyond this depth, comparison sort on the full row handles the
+/// remaining discrimination. 8 bytes covers the discriminating prefix
+/// of most key layouts; deeper recursion hits diminishing returns as
+/// buckets become sparse and the per-level overhead dominates.
+const MAX_DEPTH: usize = 8;
 
 /// Sort row indices using MSD radix sort on row-encoded keys.
 ///
@@ -86,7 +88,7 @@ const MAX_DEPTH: usize = 128;
 ///
 /// [`RowConverter::convert_columns`]: crate::RowConverter::convert_columns
 /// [`take`]: https://docs.rs/arrow/latest/arrow/compute/fn.take.html
-/// [`lexsort_to_indices`]: arrow_ord::sort::lexsort_to_indices
+/// [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 pub fn radix_sort_to_indices(rows: &Rows) -> Vec<u32> {
     let n = rows.num_rows();
     let mut indices: Vec<u32> = (0..n as u32).collect();
@@ -104,30 +106,30 @@ fn msd_radix_sort(indices: &mut [u32], rows: &Rows, byte_pos: usize) {
         return;
     }
 
-    // Histogram of byte values at byte_pos
     let mut counts = [0u32; 256];
-    for &idx in indices.iter() {
+    // Reborrow as &[u32] so pattern gives u32 not &mut u32
+    for &idx in &*indices {
         let row = unsafe { rows.row_unchecked(idx as usize) };
         let byte = row.data().get(byte_pos).copied().unwrap_or(0);
         counts[byte as usize] += 1;
     }
 
-    // All same byte — skip to next position
+    // No discrimination at this byte position — all rows have the same value
     if counts.iter().filter(|&&c| c > 0).count() == 1 {
         msd_radix_sort(indices, rows, byte_pos + 1);
         return;
     }
 
-    // Prefix sum for bucket offsets
     let mut offsets = [0u32; 257];
     for i in 0..256 {
         offsets[i + 1] = offsets[i] + counts[i];
     }
 
-    // Out-of-place scatter into buckets
+    // Out-of-place scatter avoids the complexity of in-place partitioning
+    // across 256 buckets
     let mut temp = vec![0u32; indices.len()];
     let mut write_pos = offsets;
-    for &idx in indices.iter() {
+    for &idx in &*indices {
         let row = unsafe { rows.row_unchecked(idx as usize) };
         let byte = row.data().get(byte_pos).copied().unwrap_or(0) as usize;
         temp[write_pos[byte] as usize] = idx;
@@ -135,7 +137,6 @@ fn msd_radix_sort(indices: &mut [u32], rows: &Rows, byte_pos: usize) {
     }
     indices.copy_from_slice(&temp);
 
-    // Recurse into non-trivial buckets
     for bucket in 0..256 {
         let start = offsets[bucket] as usize;
         let end = offsets[bucket + 1] as usize;
@@ -149,9 +150,7 @@ fn msd_radix_sort(indices: &mut [u32], rows: &Rows, byte_pos: usize) {
 mod tests {
     use super::*;
     use crate::{RowConverter, SortField};
-    use arrow_array::{
-        ArrayRef, BooleanArray, Float64Array, Int32Array, StringArray,
-    };
+    use arrow_array::{ArrayRef, BooleanArray, Float64Array, Int32Array, StringArray};
     use arrow_schema::{DataType, SortOptions};
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
@@ -159,9 +158,14 @@ mod tests {
 
     fn assert_sorted(rows: &Rows, indices: &[u32]) {
         for i in 1..indices.len() {
-            let a = unsafe { rows.row_unchecked(indices[i - 1] as usize) };
-            let b = unsafe { rows.row_unchecked(indices[i] as usize) };
-            assert!(a <= b, "row {} should be <= row {}", indices[i - 1], indices[i]);
+            let a = rows.row(indices[i - 1] as usize);
+            let b = rows.row(indices[i] as usize);
+            assert!(
+                a <= b,
+                "row {} should be <= row {}",
+                indices[i - 1],
+                indices[i]
+            );
         }
     }
 
@@ -178,7 +182,8 @@ mod tests {
 
     #[test]
     fn test_radix_sort_strings() {
-        let array: ArrayRef = Arc::new(StringArray::from(vec!["banana", "apple", "cherry", "date"]));
+        let array: ArrayRef =
+            Arc::new(StringArray::from(vec!["banana", "apple", "cherry", "date"]));
         let converter = RowConverter::new(vec![SortField::new(DataType::Utf8)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
@@ -254,8 +259,7 @@ mod tests {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 3, 2, 5, 4]));
         let options = SortOptions::default().desc();
         let converter =
-            RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)])
-                .unwrap();
+            RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
         let indices = radix_sort_to_indices(&rows);
@@ -273,8 +277,7 @@ mod tests {
         ]));
         let options = SortOptions::default().with_nulls_first(true);
         let converter =
-            RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)])
-                .unwrap();
+            RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
         let indices = radix_sort_to_indices(&rows);
@@ -292,8 +295,7 @@ mod tests {
         ]));
         let options = SortOptions::default().desc().with_nulls_first(true);
         let converter =
-            RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)])
-                .unwrap();
+            RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)]).unwrap();
         let rows = converter.convert_columns(&[array]).unwrap();
 
         let indices = radix_sort_to_indices(&rows);
@@ -318,11 +320,9 @@ mod tests {
                     descending,
                     nulls_first,
                 };
-                let converter = RowConverter::new(vec![SortField::new_with_options(
-                    DataType::Int32,
-                    options,
-                )])
-                .unwrap();
+                let converter =
+                    RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)])
+                        .unwrap();
                 let rows = converter.convert_columns(&[array.clone()]).unwrap();
 
                 let indices = radix_sort_to_indices(&rows);
@@ -381,8 +381,7 @@ mod tests {
                 })
                 .collect();
             let array: ArrayRef = Arc::new(Int32Array::from(values));
-            let converter =
-                RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
+            let converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
             let rows = converter.convert_columns(&[array]).unwrap();
 
             let indices = radix_sort_to_indices(&rows);
@@ -466,10 +465,20 @@ mod tests {
                                 } else {
                                     // Fixed set of strings to get some collisions
                                     Some(
-                                        ["alpha", "beta", "gamma", "delta", "epsilon",
-                                         "zeta", "eta", "theta", "iota", "kappa",
-                                         "a longer string for testing", ""]
-                                            [rng.random_range(0..12)],
+                                        [
+                                            "alpha",
+                                            "beta",
+                                            "gamma",
+                                            "delta",
+                                            "epsilon",
+                                            "zeta",
+                                            "eta",
+                                            "theta",
+                                            "iota",
+                                            "kappa",
+                                            "a longer string for testing",
+                                            "",
+                                        ][rng.random_range(0..12)],
                                     )
                                 }
                             })
@@ -571,19 +580,15 @@ mod tests {
             };
 
             let array: ArrayRef = Arc::new(Int32Array::from(vals));
-            let converter = RowConverter::new(vec![SortField::new_with_options(
-                DataType::Int32,
-                options,
-            )])
-            .unwrap();
+            let converter =
+                RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)])
+                    .unwrap();
             let rows = converter.convert_columns(&[array]).unwrap();
 
             let radix = radix_sort_to_indices(&rows);
 
             let mut comparison: Vec<u32> = (0..len as u32).collect();
-            comparison.sort_unstable_by(|&a, &b| {
-                rows.row(a as usize).cmp(&rows.row(b as usize))
-            });
+            comparison.sort_unstable_by(|&a, &b| rows.row(a as usize).cmp(&rows.row(b as usize)));
 
             // Both sorts operate on the same rows, so equal-keyed elements
             // should appear in the same relative order only if both are stable

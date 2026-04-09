@@ -202,12 +202,6 @@ fn add_benchmark(c: &mut Criterion) {
             Column::Optional100Value50CharStringDict,
             Column::Optional50CharString,
         ],
-        &[
-            Column::Optional100Value50CharStringDict,
-            Column::Optional100Value50CharStringDict,
-            Column::Optional100Value50CharStringDict,
-            Column::Optional50CharString,
-        ],
         &[Column::OptionalI32, Column::RequiredI32List],
         &[Column::OptionalI32, Column::OptionalI32List],
         &[Column::OptionalI32List, Column::OptionalI32],
