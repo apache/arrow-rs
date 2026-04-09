@@ -35,6 +35,8 @@ pub const DEFAULT_WRITER_VERSION: WriterVersion = WriterVersion::PARQUET_1_0;
 pub const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
 /// Default value for [`WriterProperties::dictionary_enabled`]
 pub const DEFAULT_DICTIONARY_ENABLED: bool = true;
+/// Default value for [`WriterProperties::dictionary_fallback`]
+pub const DEFAULT_DICTIONARY_FALLBACK: DictionaryFallback = DictionaryFallback::OnPageSizeLimit;
 /// Default value for [`WriterProperties::dictionary_page_size_limit`]
 pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
 /// Default value for [`WriterProperties::data_page_row_count_limit`]
@@ -491,6 +493,17 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_DICTIONARY_ENABLED)
     }
 
+    /// Returns the dictionary fallback behavior for a column.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_dictionary_fallback`]
+    pub fn dictionary_fallback(&self, col: &ColumnPath) -> DictionaryFallback {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.dictionary_fallback())
+            .or_else(|| self.default_column_properties.dictionary_fallback())
+            .unwrap_or(DEFAULT_DICTIONARY_FALLBACK)
+    }
+
     /// Returns which statistics are written for a column.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_statistics_enabled`]
@@ -915,6 +928,16 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets default behavior to control dictionary fallback for all columns
+    /// (defaults to [`OnPageSizeLimit`] via [`DEFAULT_DICTIONARY_FALLBACK`]).
+    ///
+    /// [`OnPageSizeLimit`]: DictionaryFallback::OnPageSizeLimit
+    pub fn set_dictionary_fallback(mut self, behavior: DictionaryFallback) -> Self {
+        self.default_column_properties
+            .set_dictionary_fallback(behavior);
+        self
+    }
+
     /// Sets best effort maximum dictionary page size, in bytes (defaults to `1024 * 1024`
     /// via [`DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT`]).
     ///
@@ -1073,6 +1096,18 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets dictionary fallback behavior for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_dictionary_fallback`].
+    pub fn set_column_dictionary_fallback(
+        mut self,
+        col: ColumnPath,
+        behavior: DictionaryFallback,
+    ) -> Self {
+        self.get_mut_props(col).set_dictionary_fallback(behavior);
+        self
+    }
+
     /// Sets dictionary page size limit for a specific column.
     ///
     /// Takes precedence over [`Self::set_dictionary_page_size_limit`].
@@ -1160,6 +1195,24 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }
+    }
+}
+
+/// Controls the behavior of the writer in deciding whether to fall back to non-dictionary encoding.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DictionaryFallback {
+    /// Fall back to non-dictionary encoding only if the dictionary page size limit is exceeded.
+    OnPageSizeLimit,
+    /// Fall back to non-dictionary encoding if the dictionary page size limit is exceeded
+    /// or if the dictionary encoding upon encoding a write batch is larger than the plain
+    /// encoding for the same data.
+    OnUnfavorableCompression,
+}
+
+impl Default for DictionaryFallback {
+    fn default() -> Self {
+        DEFAULT_DICTIONARY_FALLBACK
     }
 }
 
@@ -1278,6 +1331,7 @@ struct ColumnProperties {
     data_page_size_limit: Option<usize>,
     dictionary_page_size_limit: Option<usize>,
     dictionary_enabled: Option<bool>,
+    dictionary_fallback: Option<DictionaryFallback>,
     statistics_enabled: Option<EnabledStatistics>,
     write_page_header_statistics: Option<bool>,
     /// bloom filter related properties
@@ -1321,6 +1375,11 @@ impl ColumnProperties {
     /// Sets dictionary page size limit for this column.
     fn set_dictionary_page_size_limit(&mut self, value: usize) {
         self.dictionary_page_size_limit = Some(value);
+    }
+
+    /// Sets the dictionary fallback behavior for this column.
+    fn set_dictionary_fallback(&mut self, value: DictionaryFallback) {
+        self.dictionary_fallback = Some(value);
     }
 
     /// Sets the statistics level for this column.
@@ -1390,6 +1449,11 @@ impl ColumnProperties {
     /// Returns optional dictionary page size limit for this column.
     fn dictionary_page_size_limit(&self) -> Option<usize> {
         self.dictionary_page_size_limit
+    }
+
+    /// Returns optional dictionary fallback behavior for this column.
+    fn dictionary_fallback(&self) -> Option<DictionaryFallback> {
+        self.dictionary_fallback
     }
 
     /// Returns optional data page size limit for this column.

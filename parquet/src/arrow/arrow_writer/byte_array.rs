@@ -21,10 +21,12 @@ use crate::column::writer::encoder::{
     ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
 };
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
-use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
+use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder, PlainDataSizeCounter};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use crate::file::properties::{
+    DictionaryFallback, EnabledStatistics, WriterProperties, WriterVersion,
+};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
@@ -421,6 +423,7 @@ impl DictEncoder {
 pub struct ByteArrayEncoder {
     fallback: FallbackEncoder,
     dict_encoder: Option<DictEncoder>,
+    plain_data_size_counter: Option<PlainDataSizeCounter>,
     statistics_enabled: EnabledStatistics,
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
@@ -446,6 +449,17 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             .dictionary_enabled(descr.path())
             .then(DictEncoder::default);
 
+        let plain_data_size_counter = match props.dictionary_fallback(descr.path()) {
+            DictionaryFallback::OnPageSizeLimit => None,
+            DictionaryFallback::OnUnfavorableCompression => {
+                if dictionary.is_some() {
+                    Some(PlainDataSizeCounter::new(descr))
+                } else {
+                    None
+                }
+            }
+        };
+
         let fallback = FallbackEncoder::new(descr, props)?;
 
         let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(props, descr)?;
@@ -460,6 +474,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             bloom_filter,
             bloom_filter_target_fpp,
             dict_encoder: dictionary,
+            plain_data_size_counter,
             min_value: None,
             max_value: None,
             geo_stats_accumulator,
@@ -508,6 +523,11 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
         Some(self.dict_encoder.as_ref()?.estimated_dict_page_size())
+    }
+
+    fn uncompressed_data_size(&self) -> Option<usize> {
+        let counter = self.plain_data_size_counter.as_ref()?;
+        Some(counter.uncompressed_data_size())
     }
 
     /// Returns an estimate of the data page size in bytes
@@ -582,7 +602,15 @@ where
     }
 
     match &mut encoder.dict_encoder {
-        Some(dict_encoder) => dict_encoder.encode(values, indices),
+        Some(dict_encoder) => {
+            dict_encoder.encode(values, indices);
+            if let Some(counter) = encoder.plain_data_size_counter.as_mut() {
+                for idx in indices {
+                    let value = values.value(*idx);
+                    counter.update_byte_array(value.as_ref());
+                }
+            }
+        }
         None => encoder.fallback.encode(values, indices),
     }
 }

@@ -29,10 +29,13 @@ use crate::util::bit_util::{BitWriter, num_required_bits};
 
 use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
-pub use dict_encoder::DictEncoder;
 
 mod byte_stream_split_encoder;
 mod dict_encoder;
+mod plain_counter;
+
+pub use dict_encoder::DictEncoder;
+pub use plain_counter::PlainDataSizeCounter;
 
 // ----------------------------------------------------------------------
 // Encoders

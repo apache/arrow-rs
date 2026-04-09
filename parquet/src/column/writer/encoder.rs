@@ -25,9 +25,9 @@ use crate::column::writer::{
 };
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
-use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
+use crate::encodings::encoding::{DictEncoder, Encoder, PlainDataSizeCounter, get_encoder};
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties};
+use crate::file::properties::{DictionaryFallback, EnabledStatistics, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
@@ -109,6 +109,12 @@ pub trait ColumnValueEncoder {
     /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_page_size(&self) -> usize;
 
+    /// Returns the estimated size of plainly encoded data, in bytes,
+    /// that would be written without a dictionary.
+    /// If there is no dictionary, or the data size statistic is not available,
+    /// returns `None`.
+    fn uncompressed_data_size(&self) -> Option<usize>;
+
     /// Flush the dictionary page for this column chunk if any. Any subsequent calls to
     /// [`Self::write`] will not be dictionary encoded
     ///
@@ -132,6 +138,7 @@ pub trait ColumnValueEncoder {
 pub struct ColumnValueEncoderImpl<T: DataType> {
     encoder: Box<dyn Encoder<T>>,
     dict_encoder: Option<DictEncoder<T>>,
+    plain_data_size_counter: Option<PlainDataSizeCounter>,
     descr: ColumnDescPtr,
     num_values: usize,
     statistics_enabled: EnabledStatistics,
@@ -176,7 +183,13 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
         }
 
         match &mut self.dict_encoder {
-            Some(encoder) => encoder.put(slice),
+            Some(encoder) => {
+                encoder.put(slice)?;
+                if let Some(counter) = self.plain_data_size_counter.as_mut() {
+                    counter.update(slice);
+                }
+                Ok(())
+            }
             _ => self.encoder.put(slice),
         }
     }
@@ -197,6 +210,16 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         let dict_supported = props.dictionary_enabled(descr.path())
             && has_dictionary_support(T::get_physical_type(), props);
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
+        let plain_data_size_counter = match props.dictionary_fallback(descr.path()) {
+            DictionaryFallback::OnPageSizeLimit => None,
+            DictionaryFallback::OnUnfavorableCompression => {
+                if dict_encoder.is_some() {
+                    Some(PlainDataSizeCounter::new(descr))
+                } else {
+                    None
+                }
+            }
+        };
 
         // Set either main encoder or fallback encoder.
         let encoder = get_encoder(
@@ -215,6 +238,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         Ok(Self {
             encoder,
             dict_encoder,
+            plain_data_size_counter,
             descr: descr.clone(),
             num_values: 0,
             statistics_enabled,
@@ -275,6 +299,11 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
         Some(self.dict_encoder.as_ref()?.dict_encoded_size())
+    }
+
+    fn uncompressed_data_size(&self) -> Option<usize> {
+        let counter = self.plain_data_size_counter.as_ref()?;
+        Some(counter.uncompressed_data_size())
     }
 
     fn estimated_data_page_size(&self) -> usize {

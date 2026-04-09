@@ -746,18 +746,33 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Returns true if we need to fall back to non-dictionary encoding.
     ///
-    /// We can only fall back if dictionary encoder is set and we have exceeded dictionary
-    /// size.
-    #[inline]
+    /// The behavior is governed by the `dictionary_fallback` column property.
     fn should_dict_fallback(&self) -> bool {
-        match self.encoder.estimated_dict_page_size() {
-            Some(size) => {
-                size >= self
-                    .props
-                    .column_dictionary_page_size_limit(self.descr.path())
-            }
-            None => false,
+        let dict_size = match self.encoder.estimated_dict_page_size() {
+            Some(size) => size,
+            None => return false,
+        };
+
+        // First check: dictionary size exceeds limit
+        if dict_size
+            >= self
+                .props
+                .column_dictionary_page_size_limit(self.descr.path())
+        {
+            return true;
         }
+
+        // Second check, if enabled: the compression heuristic.
+        // For similar logic in parquet-java,
+        // see DictionaryValuesWriter.isCompressionSatisfying
+        if let Some(raw_size) = self.encoder.uncompressed_data_size() {
+            let encoded_size = self.encoder.estimated_data_page_size();
+            if encoded_size + dict_size >= raw_size {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Returns true if there is enough data for a data page, false otherwise.
