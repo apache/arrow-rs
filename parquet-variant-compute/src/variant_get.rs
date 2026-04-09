@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 use arrow::{
-    array::{self, Array, ArrayRef, StructArray},
+    array::{self, Array, ArrayRef, StructArray, make_array},
+    buffer::NullBuffer,
     compute::CastOptions,
     datatypes::Field,
     error::Result,
@@ -123,7 +124,7 @@ fn shredded_get_path(
     let make_target_variant =
         |value: Option<ArrayRef>,
          typed_value: Option<ArrayRef>,
-         accumulated_nulls: Option<arrow::buffer::NullBuffer>| {
+         accumulated_nulls: Option<NullBuffer>| {
             let metadata = input.metadata_field().clone();
             VariantArray::from_parts(metadata, value, typed_value, accumulated_nulls)
         };
@@ -168,10 +169,8 @@ fn shredded_get_path(
             ShreddedPathStep::Success(state) => {
                 // Union nulls from the typed_value we just accessed
                 if let Some(typed_value) = shredding_state.typed_value_field() {
-                    accumulated_nulls = arrow::buffer::NullBuffer::union(
-                        accumulated_nulls.as_ref(),
-                        typed_value.nulls(),
-                    );
+                    accumulated_nulls =
+                        NullBuffer::union(accumulated_nulls.as_ref(), typed_value.nulls());
                 }
                 shredding_state = state;
                 path_index += 1;
@@ -258,6 +257,7 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
         return None;
     }
     let typed_value = variant_array.typed_value_field()?;
+
     if typed_value.data_type() == as_field.data_type()
         && variant_array
             .value_field()
@@ -268,9 +268,25 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
         // 2. If every row in the `value` column is null
 
         // This is a perfect shredding, where the value is entirely shredded out,
-        // so we can just return the typed value.
-        return Some(typed_value.clone());
+        // so we can just return the typed value after merging the accumulated nulls.
+        let parent_nulls = variant_array.nulls();
+
+        let target_array = if parent_nulls.is_none() {
+            typed_value.clone()
+        } else {
+            let merged_nulls = NullBuffer::union(parent_nulls, typed_value.nulls());
+            let data = typed_value
+                .to_data()
+                .into_builder()
+                .nulls(merged_nulls)
+                .build()
+                .ok()?;
+            make_array(data)
+        };
+
+        return Some(target_array);
     }
+
     None
 }
 
@@ -1701,6 +1717,41 @@ mod test {
             Some(b"Parquet-variant" as &[u8]),
         ])
     );
+
+    #[test]
+    fn test_variant_get_perfectly_shredded_binary_preserves_top_level_nulls() {
+        let metadata =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
+        let typed_value: ArrayRef = Arc::new(BinaryArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"masked-null" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ]));
+        let variant_array: ArrayRef = VariantArray::from_parts(
+            Arc::new(metadata) as _,
+            None,
+            Some(typed_value),
+            Some(NullBuffer::from(vec![true, false, true])),
+        )
+        .into();
+
+        let result = variant_get(
+            &variant_array,
+            GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::Binary,
+                true,
+            )))),
+        )
+        .unwrap();
+
+        let result = result.as_binary::<i32>();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.null_count(), 1);
+        assert_eq!(result.value(0), b"Apache");
+        assert!(result.is_null(1));
+        assert_eq!(result.value(2), b"Parquet-variant");
+    }
 
     /// Return a VariantArray that represents an "all null" variant
     /// for the following example (3 null values):
