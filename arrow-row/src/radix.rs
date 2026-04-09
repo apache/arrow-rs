@@ -338,7 +338,9 @@ mod tests {
                 let converter =
                     RowConverter::new(vec![SortField::new_with_options(DataType::Int32, options)])
                         .unwrap();
-                let rows = converter.convert_columns(&[array.clone()]).unwrap();
+                let rows = converter
+                    .convert_columns(std::slice::from_ref(&array))
+                    .unwrap();
 
                 let indices = radix_sort_to_indices(&rows);
                 assert_sorted(&rows, &indices);
