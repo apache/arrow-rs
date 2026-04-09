@@ -29,10 +29,17 @@ use crate::decoder::{
 };
 use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
+use arrow::array::ArrowNativeTypeOp;
 use arrow::compute::{
-    cast_num_to_bool, cast_single_string_to_boolean_default, num_cast, single_bool_to_numeric,
+    cast_num_to_bool, cast_single_decimal_to_integer, cast_single_string_to_boolean_default,
+    num_cast, parse_string_to_decimal_native, single_bool_to_numeric,
+    single_decimal_to_float_lossy, single_float_to_decimal,
 };
-use arrow_schema::ArrowError;
+use arrow::datatypes::{Decimal32Type, Decimal64Type, Decimal128Type, DecimalType};
+use arrow_schema::DataType::{
+    Float16, Float32, Float64, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
+};
+use arrow_schema::{ArrowError, DataType};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use num_traits::NumCast;
 use std::ops::Deref;
@@ -166,10 +173,11 @@ impl Deref for ShortString<'_> {
 ///   Arrow UTF8-to-boolean cast rules.
 /// - Numeric accessors such as [`Self::as_int8`], [`Self::as_int64`], [`Self::as_u8`],
 ///   [`Self::as_u64`], [`Self::as_f16`], [`Self::as_f32`], and [`Self::as_f64`] accept
-///   boolean and numeric variants (integers, floating-point, and decimals with scale `0`).
+///   boolean and numeric variants (integers, floating-point, and decimals).
 ///   They return `None` when conversion is not possible.
 /// - Decimal accessors such as [`Self::as_decimal4`], [`Self::as_decimal8`], and
-///   [`Self::as_decimal16`] accept compatible decimal variants and integer variants.
+///   [`Self::as_decimal16`] accept compatible decimal variants, integer variants,
+///   float variants and string variants.
 ///   They return `None` when conversion is not possible.
 ///
 /// # Examples:
@@ -293,6 +301,39 @@ pub enum Variant<'m, 'v> {
 
 // We don't want this to grow because it could hurt performance of a frequently-created type.
 const _: () = crate::utils::expect_size_of::<Variant>(80);
+
+enum NumericKind {
+    Integer,
+    Float,
+}
+
+trait DecimalCastTarget: NumCast + Default {
+    const KIND: NumericKind;
+    fn arrow_type() -> DataType;
+}
+
+macro_rules! impl_decimal_cast_target {
+    ($raw_type: ident, $target_kind:expr, $arrow_type: expr) => {
+        impl DecimalCastTarget for $raw_type {
+            const KIND: NumericKind = $target_kind;
+            fn arrow_type() -> DataType {
+                $arrow_type
+            }
+        }
+    };
+}
+
+impl_decimal_cast_target!(i8, NumericKind::Integer, Int8);
+impl_decimal_cast_target!(i16, NumericKind::Integer, Int16);
+impl_decimal_cast_target!(i32, NumericKind::Integer, Int32);
+impl_decimal_cast_target!(i64, NumericKind::Integer, Int64);
+impl_decimal_cast_target!(u8, NumericKind::Integer, UInt8);
+impl_decimal_cast_target!(u16, NumericKind::Integer, UInt16);
+impl_decimal_cast_target!(u32, NumericKind::Integer, UInt32);
+impl_decimal_cast_target!(u64, NumericKind::Integer, UInt64);
+impl_decimal_cast_target!(f16, NumericKind::Float, Float16);
+impl_decimal_cast_target!(f32, NumericKind::Float, Float32);
+impl_decimal_cast_target!(f64, NumericKind::Float, Float64);
 
 impl<'m, 'v> Variant<'m, 'v> {
     /// Attempts to interpret a metadata and value buffer pair as a new `Variant`.
@@ -797,14 +838,36 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts a boolean or numeric variant(integers, floating-point, and decimals with scale 0)
+    fn cast_decimal_to_num<D, T, F>(raw: D::Native, scale: u8, as_float: F) -> Option<T>
+    where
+        D: DecimalType,
+        D::Native: NumCast + ArrowNativeTypeOp,
+        T: DecimalCastTarget,
+        F: Fn(D::Native) -> f64,
+    {
+        let base: D::Native = NumCast::from(10)?;
+
+        base.pow_checked(scale as _)
+            .ok()
+            .and_then(|div| match T::KIND {
+                NumericKind::Integer => {
+                    cast_single_decimal_to_integer::<D, T>(raw, div, scale as _, T::arrow_type())
+                        .ok()
+                }
+                NumericKind::Float => T::from(single_decimal_to_float_lossy::<D, _>(
+                    &as_float, raw, scale as _,
+                )),
+            })
+    }
+
+    /// Converts a boolean or numeric variant(integers, floating-point, and decimals)
     /// to the specified numeric type `T`.
     ///
     /// Uses Arrow's casting logic to perform the conversion. Returns `Some(T)` if
     /// the conversion succeeds, `None` if the variant can't be casted to type `T`.
     fn as_num<T>(&self) -> Option<T>
     where
-        T: NumCast + Default,
+        T: DecimalCastTarget,
     {
         match *self {
             Variant::BooleanFalse => single_bool_to_numeric(false),
@@ -815,9 +878,21 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int64(i) => num_cast(i),
             Variant::Float(f) => num_cast(f),
             Variant::Double(d) => num_cast(d),
-            Variant::Decimal4(d) if d.scale() == 0 => num_cast(d.integer()),
-            Variant::Decimal8(d) if d.scale() == 0 => num_cast(d.integer()),
-            Variant::Decimal16(d) if d.scale() == 0 => num_cast(d.integer()),
+            Variant::Decimal4(d) => Self::cast_decimal_to_num::<Decimal32Type, T, _>(
+                d.integer(),
+                d.scale(),
+                |x: i32| x as f64,
+            ),
+            Variant::Decimal8(d) => Self::cast_decimal_to_num::<Decimal64Type, T, _>(
+                d.integer(),
+                d.scale(),
+                |x: i64| x as f64,
+            ),
+            Variant::Decimal16(d) => Self::cast_decimal_to_num::<Decimal128Type, T, _>(
+                d.integer(),
+                d.scale(),
+                |x: i128| x as f64,
+            ),
             _ => None,
         }
     }
@@ -1138,6 +1213,18 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
                 self.as_num::<i32>().and_then(|x| x.try_into().ok())
             }
+            Variant::Float(f) => single_float_to_decimal::<Decimal32Type>(f as _, 1f64)
+                .and_then(|x: i32| x.try_into().ok()),
+            Variant::Double(f) => single_float_to_decimal::<Decimal32Type>(f, 1f64)
+                .and_then(|x: i32| x.try_into().ok()),
+            Variant::String(v) => parse_string_to_decimal_native::<Decimal32Type>(v, 0usize)
+                .ok()
+                .and_then(|x: i32| x.try_into().ok()),
+            Variant::ShortString(v) => {
+                parse_string_to_decimal_native::<Decimal32Type>(v.as_str(), 0usize)
+                    .ok()
+                    .and_then(|x: i32| x.try_into().ok())
+            }
             Variant::Decimal4(decimal4) => Some(decimal4),
             Variant::Decimal8(decimal8) => decimal8.try_into().ok(),
             Variant::Decimal16(decimal16) => decimal16.try_into().ok(),
@@ -1177,6 +1264,18 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
                 self.as_num::<i64>().and_then(|x| x.try_into().ok())
             }
+            Variant::Float(f) => single_float_to_decimal::<Decimal64Type>(f as _, 1f64)
+                .and_then(|x: i64| x.try_into().ok()),
+            Variant::Double(f) => single_float_to_decimal::<Decimal64Type>(f, 1f64)
+                .and_then(|x: i64| x.try_into().ok()),
+            Variant::String(v) => parse_string_to_decimal_native::<Decimal64Type>(v, 0usize)
+                .ok()
+                .and_then(|x: i64| x.try_into().ok()),
+            Variant::ShortString(v) => {
+                parse_string_to_decimal_native::<Decimal64Type>(v.as_str(), 0usize)
+                    .ok()
+                    .and_then(|x: i64| x.try_into().ok())
+            }
             Variant::Decimal4(decimal4) => Some(decimal4.into()),
             Variant::Decimal8(decimal8) => Some(decimal8),
             Variant::Decimal16(decimal16) => decimal16.try_into().ok(),
@@ -1205,8 +1304,21 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal16(&self) -> Option<VariantDecimal16> {
         match *self {
-            Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
-                self.as_num::<i128>().and_then(|x| x.try_into().ok())
+            Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => self
+                .as_num::<i64>()
+                .map(|x| (x as i128).try_into().ok())
+                .unwrap(),
+            Variant::Float(f) => single_float_to_decimal::<Decimal128Type>(f as _, 1f64)
+                .and_then(|x: i128| x.try_into().ok()),
+            Variant::Double(f) => single_float_to_decimal::<Decimal128Type>(f, 1f64)
+                .and_then(|x: i128| x.try_into().ok()),
+            Variant::String(v) => parse_string_to_decimal_native::<Decimal128Type>(v, 0usize)
+                .ok()
+                .and_then(|x: i128| x.try_into().ok()),
+            Variant::ShortString(v) => {
+                parse_string_to_decimal_native::<Decimal128Type>(v.as_str(), 0usize)
+                    .ok()
+                    .and_then(|x: i128| x.try_into().ok())
             }
             Variant::Decimal4(decimal4) => Some(decimal4.into()),
             Variant::Decimal8(decimal8) => Some(decimal8.into()),
