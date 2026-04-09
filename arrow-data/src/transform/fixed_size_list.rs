@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::ArrayData;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 
 use super::{_MutableArrayData, Extend};
 
@@ -28,22 +28,25 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
 
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
-            mutable
-                .child_data
-                .iter_mut()
-                .for_each(|child| child.extend(index, start * size, (start + len) * size))
+            for child in mutable.child_data.iter_mut() {
+                child.try_extend(index, start * size, (start + len) * size)?;
+            }
+            Ok(())
         },
     )
 }
 
-pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
+pub(super) fn extend_nulls(
+    mutable: &mut _MutableArrayData,
+    len: usize,
+) -> Result<(), ArrowError> {
     let size = match mutable.data_type {
         DataType::FixedSizeList(_, i) => i as usize,
         _ => unreachable!(),
     };
 
-    mutable
-        .child_data
-        .iter_mut()
-        .for_each(|child| child.extend_nulls(len * size))
+    for child in mutable.child_data.iter_mut() {
+        child.try_extend_nulls(len * size)?;
+    }
+    Ok(())
 }

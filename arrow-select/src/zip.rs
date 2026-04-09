@@ -161,38 +161,38 @@ fn zip_impl(
     let mut filled = 0;
 
     let mask_buffer = maybe_prep_null_mask_filter(mask);
-    SlicesIterator::from(&mask_buffer).for_each(|(start, end)| {
+    for (start, end) in SlicesIterator::from(&mask_buffer) {
         // the gap needs to be filled with falsy values
         if start > filled {
             if falsy_is_scalar {
                 for _ in filled..start {
                     // Copy the first item from the 'falsy' array into the output buffer.
-                    mutable.extend(1, 0, 1);
+                    mutable.try_extend(1, 0, 1)?;
                 }
             } else {
-                mutable.extend(1, filled, start);
+                mutable.try_extend(1, filled, start)?;
             }
         }
         // fill with truthy values
         if truthy_is_scalar {
             for _ in start..end {
                 // Copy the first item from the 'truthy' array into the output buffer.
-                mutable.extend(0, 0, 1);
+                mutable.try_extend(0, 0, 1)?;
             }
         } else {
-            mutable.extend(0, start, end);
+            mutable.try_extend(0, start, end)?;
         }
         filled = end;
-    });
+    }
     // the remaining part is falsy
     if filled < mask.len() {
         if falsy_is_scalar {
             for _ in filled..mask.len() {
                 // Copy the first item from the 'falsy' array into the output buffer.
-                mutable.extend(1, 0, 1);
+                mutable.try_extend(1, 0, 1)?;
             }
         } else {
-            mutable.extend(1, filled, mask.len());
+            mutable.try_extend(1, filled, mask.len())?;
         }
     }
 

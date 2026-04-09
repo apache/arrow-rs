@@ -483,13 +483,15 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
 
                 match &predicate.strategy {
                     IterationStrategy::Slices(slices) => {
-                        slices
-                            .iter()
-                            .for_each(|(start, end)| mutable.extend(0, *start, *end));
+                        for (start, end) in slices {
+                            mutable.try_extend(0, *start, *end)?;
+                        }
                     }
                     _ => {
                         let iter = SlicesIterator::new(&predicate.filter);
-                        iter.for_each(|(start, end)| mutable.extend(0, start, end));
+                        for (start, end) in iter {
+                            mutable.try_extend(0, start, end)?;
+                        }
                     }
                 }
 

@@ -179,7 +179,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
                     } else {
                         // Flush the current slice of child values if any
                         if let Some(start) = filter_start.take() {
-                            child_data_builder.extend(0, start, cur_offset + skipped);
+                            child_data_builder
+                                .try_extend(0, start, cur_offset + skipped)
+                                .map_err(|e| general_err!("{}", e))?;
                         }
 
                         if let Some(validity) = validity.as_mut() {
@@ -202,7 +204,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         } else {
             // One or more filtered values - must build new array
             if let Some(start) = filter_start.take() {
-                child_data_builder.extend(0, start, cur_offset + skipped)
+                child_data_builder
+                    .try_extend(0, start, cur_offset + skipped)
+                    .map_err(|e| general_err!("{}", e))?;
             }
 
             child_data_builder.freeze()

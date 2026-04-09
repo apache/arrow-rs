@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow_buffer::{ArrowNativeType, MutableBuffer, bit_util};
+use arrow_schema::ArrowError;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
 
@@ -28,21 +29,39 @@ pub(super) fn resize_for_bits(buffer: &mut MutableBuffer, len: usize) {
     }
 }
 
-pub(super) fn extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
+/// Extends `buffer` with the re-based offsets from `offsets`, returning an error on overflow.
+///
+/// Use this instead of [`extend_offsets`] to get a proper error when data exceeds the
+/// capacity of the offset type (e.g. when appending more than 2 GiB into a `StringArray`).
+pub(super) fn try_extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
     buffer: &mut MutableBuffer,
     mut last_offset: T,
     offsets: &[T],
-) {
+) -> Result<(), ArrowError> {
     buffer.reserve(std::mem::size_of_val(offsets));
-    offsets.windows(2).for_each(|offsets| {
-        // compute the new offset
-        let length = offsets[1] - offsets[0];
-        // if you hit this appending to a StringArray / BinaryArray it is because you
-        // are trying to add more data than can fit into that type. Try breaking your data into
-        // smaller batches or using LargeStringArray / LargeBinaryArray
-        last_offset = last_offset.checked_add(&length).expect("offset overflow");
-        buffer.push(last_offset);
-    });
+    // Snapshot the length so we can roll back partial writes on overflow.
+    let original_len = buffer.len();
+    for window in offsets.windows(2) {
+        let length = window[1] - window[0];
+        match last_offset.checked_add(&length) {
+            Some(new_offset) => {
+                last_offset = new_offset;
+                buffer.push(last_offset);
+            }
+            None => {
+                // Restore the buffer to its state before this call so the
+                // caller is not left with a partially-written offset sequence.
+                buffer.resize(original_len, 0);
+                return Err(ArrowError::InvalidArgumentError(
+                    "offset overflow: data exceeds the capacity of the offset type. \
+                     Try splitting into smaller batches or using a larger type \
+                     (e.g. LargeStringArray / LargeBinaryArray instead of StringArray / BinaryArray)"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[inline]
@@ -60,13 +79,41 @@ pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &Mutable
 
 #[cfg(test)]
 mod tests {
-    use crate::transform::utils::extend_offsets;
+    use crate::transform::utils::try_extend_offsets;
     use arrow_buffer::MutableBuffer;
 
     #[test]
-    #[should_panic(expected = "offset overflow")]
-    fn test_overflow() {
+    fn test_overflow_returns_error() {
         let mut buffer = MutableBuffer::new(10);
-        extend_offsets(&mut buffer, i32::MAX - 4, &[0, 5]);
+        let err = try_extend_offsets(&mut buffer, i32::MAX - 4, &[0i32, 5]).unwrap_err();
+        assert!(
+            err.to_string().contains("offset overflow"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_overflow_restores_buffer() {
+        // Pre-populate the buffer with a known-good offset so we can verify
+        // it is unchanged after a failed extend.
+        let mut buffer = MutableBuffer::new(16);
+        buffer.push(0i32);
+        buffer.push(10i32);
+        let len_before = buffer.len();
+
+        // Offsets [0, 3, i32::MAX]: the second window (3 → i32::MAX) will overflow
+        // because last_offset (i32::MAX - 4 + 3 = i32::MAX - 1) + (i32::MAX - 3) overflows.
+        // Use a simpler case: start near MAX so the very first window overflows.
+        let err = try_extend_offsets(&mut buffer, i32::MAX - 2, &[0i32, 5]).unwrap_err();
+        assert!(
+            err.to_string().contains("offset overflow"),
+            "unexpected error: {err}"
+        );
+        // Buffer must be exactly as it was before the failed call.
+        assert_eq!(
+            buffer.len(),
+            len_before,
+            "buffer length changed after overflow rollback"
+        );
     }
 }

@@ -1729,7 +1729,7 @@ mod tests_from_ffi {
         let data = array.to_data();
 
         let mut mutable = MutableArrayData::new(vec![&data], false, len);
-        mutable.extend(0, 0, len);
+        mutable.try_extend(0, 0, len).unwrap();
         make_array(mutable.freeze())
     }
 
