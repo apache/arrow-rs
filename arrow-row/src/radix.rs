@@ -122,7 +122,8 @@ fn msd_radix_sort(indices: &mut [u32], temp: &mut [u32], rows: &Rows, byte_pos: 
         counts[byte as usize] += 1;
     }
 
-    // No discrimination at this byte position — all rows have the same value
+    // Skip scatter when all rows share the same byte — one bucket
+    // with everything in it is just wasted work
     if counts.iter().filter(|&&c| c > 0).count() == 1 {
         msd_radix_sort(indices, temp, rows, byte_pos + 1);
         return;
