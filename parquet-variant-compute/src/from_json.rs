@@ -26,12 +26,21 @@ use parquet_variant_json::JsonToVariant;
 /// Macro to convert string array to variant array
 macro_rules! string_array_to_variant {
     ($input:expr, $array:expr, $builder:expr) => {{
-        for i in 0..$input.len() {
-            if $input.is_null(i) {
-                $builder.append_null();
-            } else {
+        let len = $input.len();
+        let mut i = 0;
+        while i < len {
+            if !$input.is_null(i) {
                 $builder.append_json($array.value(i))?;
+                i += 1;
+                continue;
             }
+
+            let start = i;
+            i += 1;
+            while i < len && $input.is_null(i) {
+                i += 1;
+            }
+            $builder.append_nulls(i - start);
         }
     }};
 }
