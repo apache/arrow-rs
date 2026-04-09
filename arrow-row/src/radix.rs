@@ -92,13 +92,17 @@ const MAX_DEPTH: usize = 8;
 pub fn radix_sort_to_indices(rows: &Rows) -> Vec<u32> {
     let n = rows.num_rows();
     let mut indices: Vec<u32> = (0..n as u32).collect();
-    msd_radix_sort(&mut indices, rows, 0);
+    let mut temp = vec![0u32; n];
+    msd_radix_sort(&mut indices, &mut temp, rows, 0);
     indices
 }
 
-fn msd_radix_sort(indices: &mut [u32], rows: &Rows, byte_pos: usize) {
-    if indices.len() <= FALLBACK_THRESHOLD || byte_pos >= MAX_DEPTH {
+fn msd_radix_sort(indices: &mut [u32], temp: &mut [u32], rows: &Rows, byte_pos: usize) {
+    let n = indices.len();
+
+    if n <= FALLBACK_THRESHOLD || byte_pos >= MAX_DEPTH {
         indices.sort_unstable_by(|&a, &b| {
+            // SAFETY: indices contains a permutation of 0..rows.num_rows()
             let ra = unsafe { rows.row_unchecked(a as usize) };
             let rb = unsafe { rows.row_unchecked(b as usize) };
             ra.cmp(&rb)
@@ -106,9 +110,13 @@ fn msd_radix_sort(indices: &mut [u32], rows: &Rows, byte_pos: usize) {
         return;
     }
 
+    // Both the histogram and scatter loops read each row's byte via
+    // row_unchecked. Pre-extracting bytes into a contiguous buffer was
+    // tried but benchmarked slower — the extra write pass costs more
+    // than the second read through row offsets already hot in cache.
     let mut counts = [0u32; 256];
-    // Reborrow as &[u32] so pattern gives u32 not &mut u32
     for &idx in &*indices {
+        // SAFETY: indices contains a permutation of 0..rows.num_rows()
         let row = unsafe { rows.row_unchecked(idx as usize) };
         let byte = row.data().get(byte_pos).copied().unwrap_or(0);
         counts[byte as usize] += 1;
@@ -116,7 +124,7 @@ fn msd_radix_sort(indices: &mut [u32], rows: &Rows, byte_pos: usize) {
 
     // No discrimination at this byte position — all rows have the same value
     if counts.iter().filter(|&&c| c > 0).count() == 1 {
-        msd_radix_sort(indices, rows, byte_pos + 1);
+        msd_radix_sort(indices, temp, rows, byte_pos + 1);
         return;
     }
 
@@ -127,21 +135,27 @@ fn msd_radix_sort(indices: &mut [u32], rows: &Rows, byte_pos: usize) {
 
     // Out-of-place scatter avoids the complexity of in-place partitioning
     // across 256 buckets
-    let mut temp = vec![0u32; indices.len()];
+    let temp = &mut temp[..n];
     let mut write_pos = offsets;
     for &idx in &*indices {
+        // SAFETY: indices contains a permutation of 0..rows.num_rows()
         let row = unsafe { rows.row_unchecked(idx as usize) };
         let byte = row.data().get(byte_pos).copied().unwrap_or(0) as usize;
         temp[write_pos[byte] as usize] = idx;
         write_pos[byte] += 1;
     }
-    indices.copy_from_slice(&temp);
+    indices.copy_from_slice(temp);
 
     for bucket in 0..256 {
         let start = offsets[bucket] as usize;
         let end = offsets[bucket + 1] as usize;
         if end - start > 1 {
-            msd_radix_sort(&mut indices[start..end], rows, byte_pos + 1);
+            msd_radix_sort(
+                &mut indices[start..end],
+                &mut temp[start..end],
+                rows,
+                byte_pos + 1,
+            );
         }
     }
 }
