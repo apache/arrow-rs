@@ -457,12 +457,10 @@ fn create_writer_props() -> Vec<(&'static str, WriterProperties)> {
         .build();
     props.push(("zstd_parquet_2", prop));
 
-    // Disabled until https://github.com/apache/arrow-rs/issues/9637 is fixed
-    //
-    // let prop = WriterProperties::builder()
-    //    .set_content_defined_chunking(Some(CdcOptions::default()))
-    //    .build();
-    // props.push(("cdc", prop));
+    let prop = WriterProperties::builder()
+        .set_content_defined_chunking(Some(CdcOptions::default()))
+        .build();
+    props.push(("cdc", prop));
 
     props
 }
