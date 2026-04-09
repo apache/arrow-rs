@@ -150,12 +150,19 @@ impl VariantArrayBuilder {
 
     /// Appends a null row to the builder.
     pub fn append_null(&mut self) {
-        self.append_nulls(1);
+        self.nulls.append_null();
+        // The subfields are expected to be non-nullable according to the parquet variant spec.
+        self.metadata_offsets.push(self.metadata_builder.offset());
+        self.value_offsets.push(self.value_builder.offset());
     }
 
     /// Appends `count` null rows to the builder.
     pub fn append_nulls(&mut self, count: usize) {
         if count == 0 {
+            return;
+        }
+        if count == 1 {
+            self.append_null();
             return;
         }
 
