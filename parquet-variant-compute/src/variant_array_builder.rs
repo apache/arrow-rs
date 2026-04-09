@@ -150,10 +150,23 @@ impl VariantArrayBuilder {
 
     /// Appends a null row to the builder.
     pub fn append_null(&mut self) {
-        self.nulls.append_null();
+        self.append_nulls(1);
+    }
+
+    /// Appends `count` null rows to the builder.
+    pub fn append_nulls(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
+
+        self.nulls.append_n_nulls(count);
         // The subfields are expected to be non-nullable according to the parquet variant spec.
-        self.metadata_offsets.push(self.metadata_builder.offset());
-        self.value_offsets.push(self.value_builder.offset());
+        let metadata_offset = self.metadata_builder.offset();
+        let value_offset = self.value_builder.offset();
+        self.metadata_offsets
+            .resize(self.metadata_offsets.len() + count, metadata_offset);
+        self.value_offsets
+            .resize(self.value_offsets.len() + count, value_offset);
     }
 
     /// Append the [`Variant`] to the builder as the next row
@@ -524,6 +537,24 @@ mod test {
         let variant = variant_array.value(3);
         let list = variant.as_list().expect("variant to be a list");
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_variant_array_builder_append_nulls() {
+        let mut builder = VariantArrayBuilder::new(6);
+        builder.append_variant(Variant::from(1i32));
+        builder.append_nulls(0); // should be a no-op
+        builder.append_nulls(3);
+        builder.append_variant(Variant::from(2i32));
+
+        let variant_array = builder.build();
+
+        assert_eq!(variant_array.len(), 5);
+        assert_eq!(variant_array.value(0), Variant::from(1i32));
+        assert!(variant_array.is_null(1));
+        assert!(variant_array.is_null(2));
+        assert!(variant_array.is_null(3));
+        assert_eq!(variant_array.value(4), Variant::from(2i32));
     }
 
     #[test]
