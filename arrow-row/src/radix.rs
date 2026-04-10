@@ -50,15 +50,19 @@
 
 use crate::Rows;
 
-/// When a bucket has this few elements, the fixed per-level cost of radix
-/// sort (256-bucket histogram + scatter) exceeds the O(n log n) cost of
-/// comparison sort with small n and warm cache lines.
-const FALLBACK_THRESHOLD: usize = 64;
+/// Buckets smaller than this fall back to comparison sort. A lower
+/// threshold favors the comparison path, which avoids the ping-pong
+/// buffer overhead and per-level indirection cost of radix passes on
+/// small buckets where O(n log n) comparison sort is already cheap.
+const FALLBACK_THRESHOLD: usize = 32;
 
-/// Beyond this depth, comparison sort on the full row handles the
-/// remaining discrimination. 8 bytes covers the discriminating prefix
-/// of most key layouts; deeper recursion hits diminishing returns as
-/// buckets become sparse and the per-level overhead dominates.
+/// Maximum number of radix passes before falling back to comparison
+/// sort. Each pass chases pointers through the Rows offset/buffer
+/// indirection, so deeper passes hit diminishing returns as buckets
+/// shrink and the per-level overhead dominates. 8 bytes covers the
+/// discriminating prefix of most key layouts including skewed or
+/// narrow-range distributions; remaining ties are resolved by
+/// comparison sort on the suffix.
 const MAX_DEPTH: usize = 8;
 
 /// Sort row indices using MSD radix sort on row-encoded keys.
@@ -90,16 +94,46 @@ const MAX_DEPTH: usize = 8;
 /// [`take`]: https://docs.rs/arrow/latest/arrow/compute/fn.take.html
 /// [`lexsort_to_indices`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort_to_indices.html
 pub fn radix_sort_to_indices(rows: &Rows) -> Vec<u32> {
+    radix_sort_to_indices_with(rows, MAX_DEPTH, FALLBACK_THRESHOLD)
+}
+
+/// Like [`radix_sort_to_indices`] but with tunable parameters for
+/// benchmarking. `max_depth` controls how many radix passes to run
+/// before falling back to comparison sort. `fallback_threshold` is
+/// the bucket size below which we switch to comparison sort.
+pub fn radix_sort_to_indices_with(
+    rows: &Rows,
+    max_depth: usize,
+    fallback_threshold: usize,
+) -> Vec<u32> {
     let n = rows.num_rows();
     let mut indices: Vec<u32> = (0..n as u32).collect();
     let mut temp = vec![0u32; n];
     let mut bytes = vec![0u8; n];
-    msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true);
+    let config = RadixSortConfig {
+        max_depth,
+        fallback_threshold,
+    };
+    msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true, &config);
     indices
 }
 
-/// Returns the byte at `byte_pos` for the row at `idx`, or 0 if the row
-/// is shorter.
+/// Tunable parameters for MSD radix sort.
+struct RadixSortConfig {
+    /// Maximum number of radix passes before falling back to comparison sort.
+    max_depth: usize,
+    /// Buckets smaller than this fall back to comparison sort.
+    fallback_threshold: usize,
+}
+
+impl Default for RadixSortConfig {
+    fn default() -> Self {
+        Self {
+            max_depth: MAX_DEPTH,
+            fallback_threshold: FALLBACK_THRESHOLD,
+        }
+    }
+}
 ///
 /// # Safety
 /// `idx` must be a valid row index in `rows`.
@@ -126,10 +160,11 @@ fn msd_radix_sort(
     rows: &Rows,
     byte_pos: usize,
     result_in_src: bool,
+    config: &RadixSortConfig,
 ) {
     let n = src.len();
 
-    if n <= FALLBACK_THRESHOLD || byte_pos >= MAX_DEPTH {
+    if n <= config.fallback_threshold || byte_pos >= config.max_depth {
         // Compare only from byte_pos onward — earlier bytes are identical
         // within this bucket, having already been discriminated by radix
         // passes above us. Safe slice via get() is needed because rows of
@@ -178,7 +213,7 @@ fn msd_radix_sort(
 
     // No scatter happened — data is still in src, roles unchanged.
     if num_buckets == 1 {
-        msd_radix_sort(src, dst, bytes, rows, byte_pos + 1, result_in_src);
+        msd_radix_sort(src, dst, bytes, rows, byte_pos + 1, result_in_src, config);
         return;
     }
 
@@ -205,6 +240,7 @@ fn msd_radix_sort(
                 rows,
                 byte_pos + 1,
                 !result_in_src,
+                config,
             );
         } else if len == 1 && result_in_src {
             // Single-element bucket doesn't recurse. After scatter
