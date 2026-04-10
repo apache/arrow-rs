@@ -93,20 +93,66 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Vec<u32> {
     let n = rows.num_rows();
     let mut indices: Vec<u32> = (0..n as u32).collect();
     let mut temp = vec![0u32; n];
-    msd_radix_sort(&mut indices, &mut temp, rows, 0);
+    let mut bytes = vec![0u8; n];
+    msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true);
     indices
 }
 
-fn msd_radix_sort(indices: &mut [u32], temp: &mut [u32], rows: &Rows, byte_pos: usize) {
-    let n = indices.len();
+/// Returns the byte at `byte_pos` for the row at `idx`, or 0 if the row
+/// is shorter.
+///
+/// # Safety
+/// `idx` must be a valid row index in `rows`.
+#[inline(always)]
+unsafe fn row_byte(rows: &Rows, idx: u32, byte_pos: usize) -> u8 {
+    // SAFETY: caller guarantees idx is a valid row index
+    unsafe { rows.row_unchecked(idx as usize) }.byte_from(byte_pos)
+}
+
+/// MSD radix sort using ping-pong buffers.
+///
+/// Each level scatters from `src` into `dst`, then recurses with the
+/// roles swapped (dst becomes the next level's src). This avoids an
+/// O(n) `copy_from_slice` at every recursion level.
+///
+/// `result_in_src` tracks where the caller expects the sorted output:
+/// true means `src`, false means `dst`. It flips at each scatter so
+/// the final result lands in the right buffer. The top-level call
+/// passes `true` so the answer ends up in `indices`.
+fn msd_radix_sort(
+    src: &mut [u32],
+    dst: &mut [u32],
+    rows: &Rows,
+    byte_pos: usize,
+    result_in_src: bool,
+) {
+    let n = src.len();
 
     if n <= FALLBACK_THRESHOLD || byte_pos >= MAX_DEPTH {
-        indices.sort_unstable_by(|&a, &b| {
-            // SAFETY: indices contains a permutation of 0..rows.num_rows()
-            let ra = unsafe { rows.row_unchecked(a as usize) };
-            let rb = unsafe { rows.row_unchecked(b as usize) };
-            ra.cmp(&rb)
-        });
+        // Compare only from byte_pos onward — earlier bytes are identical
+        // within this bucket, having already been discriminated by radix
+        // passes above us. Safe slice via get() is needed because rows of
+        // different lengths can share a bucket when a shorter row's
+        // past-end default (0) matches a longer row's real byte value.
+        //
+        // When !result_in_src the caller expects the output in dst, so
+        // we copy first and sort in place there.
+        if result_in_src {
+            src.sort_unstable_by(|&a, &b| {
+                // SAFETY: indices contains a permutation of 0..rows.num_rows()
+                let ra = unsafe { rows.row_unchecked(a as usize) };
+                let rb = unsafe { rows.row_unchecked(b as usize) };
+                ra.data_from(byte_pos).cmp(rb.data_from(byte_pos))
+            });
+        } else {
+            dst.copy_from_slice(src);
+            dst.sort_unstable_by(|&a, &b| {
+                // SAFETY: indices contains a permutation of 0..rows.num_rows()
+                let ra = unsafe { rows.row_unchecked(a as usize) };
+                let rb = unsafe { rows.row_unchecked(b as usize) };
+                ra.data_from(byte_pos).cmp(rb.data_from(byte_pos))
+            });
+        }
         return;
     }
 
@@ -115,48 +161,54 @@ fn msd_radix_sort(indices: &mut [u32], temp: &mut [u32], rows: &Rows, byte_pos: 
     // tried but benchmarked slower — the extra write pass costs more
     // than the second read through row offsets already hot in cache.
     let mut counts = [0u32; 256];
-    for &idx in &*indices {
+    for &idx in &*src {
         // SAFETY: indices contains a permutation of 0..rows.num_rows()
-        let row = unsafe { rows.row_unchecked(idx as usize) };
-        let byte = row.data().get(byte_pos).copied().unwrap_or(0);
+        let byte = unsafe { row_byte(rows, idx, byte_pos) };
         counts[byte as usize] += 1;
     }
 
-    // Skip scatter when all rows share the same byte — one bucket
-    // with everything in it is just wasted work
-    if counts.iter().filter(|&&c| c > 0).count() == 1 {
-        msd_radix_sort(indices, temp, rows, byte_pos + 1);
-        return;
-    }
-
     let mut offsets = [0u32; 257];
+    let mut num_buckets = 0u32;
     for i in 0..256 {
+        num_buckets += (counts[i] > 0) as u32;
         offsets[i + 1] = offsets[i] + counts[i];
     }
 
-    // Out-of-place scatter avoids the complexity of in-place partitioning
-    // across 256 buckets
-    let temp = &mut temp[..n];
+    // No scatter happened — data is still in src, roles unchanged.
+    if num_buckets == 1 {
+        msd_radix_sort(src, dst, rows, byte_pos + 1, result_in_src);
+        return;
+    }
+
+    // Scatter src → dst
     let mut write_pos = offsets;
-    for &idx in &*indices {
+    for &idx in &*src {
         // SAFETY: indices contains a permutation of 0..rows.num_rows()
-        let row = unsafe { rows.row_unchecked(idx as usize) };
-        let byte = row.data().get(byte_pos).copied().unwrap_or(0) as usize;
-        temp[write_pos[byte] as usize] = idx;
+        let byte = unsafe { row_byte(rows, idx, byte_pos) } as usize;
+        dst[write_pos[byte] as usize] = idx;
         write_pos[byte] += 1;
     }
-    indices.copy_from_slice(temp);
 
+    // Recurse with roles swapped: after scatter the data lives in dst,
+    // so dst becomes the next level's src. Flipping result_in_src
+    // ensures each level's output lands where the caller above expects.
     for bucket in 0..256 {
         let start = offsets[bucket] as usize;
         let end = offsets[bucket + 1] as usize;
-        if end - start > 1 {
+        let len = end - start;
+        if len > 1 {
             msd_radix_sort(
-                &mut indices[start..end],
-                &mut temp[start..end],
+                &mut dst[start..end],
+                &mut src[start..end],
                 rows,
                 byte_pos + 1,
+                !result_in_src,
             );
+        } else if len == 1 && result_in_src {
+            // Single-element bucket doesn't recurse. After scatter
+            // the element is in dst; copy it back if the caller
+            // expects the result in src.
+            src[start] = dst[start];
         }
     }
 }
