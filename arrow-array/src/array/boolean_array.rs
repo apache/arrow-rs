@@ -1322,9 +1322,9 @@ mod tests {
 
         assert_eq!(result.null_count(), 1);
         assert!(result.is_null(1));
-        assert_eq!(result.value(0), false);
-        assert_eq!(result.value(2), true);
-        assert_eq!(result.value(3), false);
+        assert!(!result.value(0));
+        assert!(result.value(2));
+        assert!(!result.value(3));
     }
 
     #[test]
@@ -1353,8 +1353,8 @@ mod tests {
 
         assert_eq!(result.null_count(), 1);
         assert!(result.is_null(1));
-        assert_eq!(result.value(0), false);
-        assert_eq!(result.value(2), true);
+        assert!(!result.value(0));
+        assert!(result.value(2));
     }
 
     #[test]
@@ -1390,8 +1390,8 @@ mod tests {
         assert_eq!(result.null_count(), 2);
         assert!(result.is_null(1));
         assert!(result.is_null(2));
-        assert_eq!(result.value(0), true);
-        assert_eq!(result.value(3), false);
+        assert!(result.value(0));
+        assert!(!result.value(3));
     }
 
     #[test]
@@ -1402,8 +1402,8 @@ mod tests {
 
         assert_eq!(result.null_count(), 1);
         assert!(result.is_null(1));
-        assert_eq!(result.value(0), false);
-        assert_eq!(result.value(2), true);
+        assert!(!result.value(0));
+        assert!(result.value(2));
     }
 
     #[test]
@@ -1444,8 +1444,8 @@ mod tests {
         assert_eq!(result.null_count(), 2);
         assert!(result.is_null(1));
         assert!(result.is_null(2));
-        assert_eq!(result.value(0), true);
-        assert_eq!(result.value(3), false);
+        assert!(result.value(0));
+        assert!(!result.value(3));
     }
 
     #[test]
@@ -1497,9 +1497,9 @@ mod tests {
 
         let result = sliced.bitwise_unary(|x| !x);
         assert_eq!(result.len(), 3);
-        assert_eq!(result.value(0), true);
-        assert_eq!(result.value(1), false);
-        assert_eq!(result.value(2), false);
+        assert!(result.value(0));
+        assert!(!result.value(1));
+        assert!(!result.value(2));
     }
 
     #[test]
@@ -1518,9 +1518,9 @@ mod tests {
 
         let result = sliced.bitwise_unary_mut_or_clone(|x| !x);
         assert_eq!(result.len(), 3);
-        assert_eq!(result.value(0), true);
-        assert_eq!(result.value(1), false);
-        assert_eq!(result.value(2), false);
+        assert!(result.value(0));
+        assert!(!result.value(1));
+        assert!(!result.value(2));
     }
 
     #[test]
@@ -1535,9 +1535,9 @@ mod tests {
 
         let result = left.bitwise_bin_op(&right, |a, b| a & b);
         assert_eq!(result.len(), 3);
-        assert_eq!(result.value(0), true);
-        assert_eq!(result.value(1), false);
-        assert_eq!(result.value(2), true);
+        assert!(result.value(0));
+        assert!(!result.value(1));
+        assert!(result.value(2));
     }
 
     #[test]
