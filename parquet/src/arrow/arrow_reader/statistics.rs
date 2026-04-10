@@ -1353,7 +1353,10 @@ where
 /// Note: The Parquet schema and Arrow schema do not have to be identical (for
 /// example, the columns may be in different orders and one or the other schemas
 /// may have additional columns). The function [`parquet_column`] is used to
-/// match the column in the Parquet schema to the column in the Arrow schema.
+/// match the column in the Parquet schema to the column in the Arrow schema
+/// when using [`Self::try_new`]. For nested leaf fields (for example fields
+/// within a struct), use [`Self::from_column_index`] with a pre-resolved
+/// Parquet leaf column index.
 #[derive(Debug)]
 pub struct StatisticsConverter<'a> {
     /// the index of the matched column in the Parquet schema
@@ -1454,6 +1457,9 @@ impl<'a> StatisticsConverter<'a> {
     /// arrays will be null. This can happen if the column is in the arrow
     /// schema but not in the parquet schema due to schema evolution.
     ///
+    /// This constructor only supports top-level, non-nested columns. For nested
+    /// leaf fields, use [`Self::from_column_index`].
+    ///
     /// See example on [`Self::row_group_mins`] for usage
     ///
     /// # Errors
@@ -1492,6 +1498,37 @@ impl<'a> StatisticsConverter<'a> {
             arrow_field,
             missing_null_counts_as_zero: true,
             physical_type: parquet_index.map(|idx| parquet_schema.column(idx).physical_type()),
+        })
+    }
+
+    /// Create a new `StatisticsConverter` from a Parquet leaf column index.
+    ///
+    /// Unlike [`Self::try_new`], this constructor bypasses schema resolution
+    /// and accepts a pre-resolved Parquet leaf column index directly. This is
+    /// useful for nested leaf fields where the caller already knows how the
+    /// Arrow field maps to the Parquet schema.
+    ///
+    /// # Errors
+    ///
+    /// * If `parquet_column_index` is out of bounds for `parquet_schema`
+    pub fn from_column_index(
+        parquet_column_index: usize,
+        arrow_field: &'a Field,
+        parquet_schema: &'a SchemaDescriptor,
+    ) -> Result<Self> {
+        if parquet_column_index >= parquet_schema.columns().len() {
+            return Err(arrow_err!(format!(
+                "Parquet column index {} out of bounds, max {}",
+                parquet_column_index,
+                parquet_schema.columns().len()
+            )));
+        }
+
+        Ok(Self {
+            parquet_column_index: Some(parquet_column_index),
+            arrow_field,
+            missing_null_counts_as_zero: true,
+            physical_type: Some(parquet_schema.column(parquet_column_index).physical_type()),
         })
     }
 
