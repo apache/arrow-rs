@@ -1358,13 +1358,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bitwise_unary_mut_or_clone_unshared() {
-        let arr = BooleanArray::from(vec![true, false, true]);
-        let result = arr.bitwise_unary_mut_or_clone(|x| !x);
-        assert_eq!(result, BooleanArray::from(vec![false, true, false]));
-    }
-
-    #[test]
     fn test_bitwise_unary_mut_or_clone_shared() {
         let arr = BooleanArray::from(vec![true, false, true]);
         let _shared = arr.clone();
@@ -1456,14 +1449,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bitwise_bin_op_mut_or_clone_unshared() {
-        let a = BooleanArray::from(vec![true, false, true, true]);
-        let b = BooleanArray::from(vec![true, true, false, true]);
-        let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
-        assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
-    }
-
-    #[test]
     fn test_bitwise_bin_op_mut_or_clone_shared() {
         let a = BooleanArray::from(vec![true, false, true, true]);
         let _shared = a.clone();
@@ -1487,5 +1472,85 @@ mod tests {
         assert_eq!(result.null_count(), 2);
         assert!(result.is_null(1));
         assert!(result.is_null(2));
+    }
+
+    #[test]
+    fn test_bitwise_unary_empty() {
+        let arr = BooleanArray::from(Vec::<bool>::new());
+        let result = arr.bitwise_unary(|x| !x);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_empty() {
+        let a = BooleanArray::from(Vec::<bool>::new());
+        let b = BooleanArray::from(Vec::<bool>::new());
+        let result = a.bitwise_bin_op(&b, |a, b| a & b);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_bitwise_unary_sliced() {
+        // Slicing creates a non-zero offset into the underlying buffer.
+        let arr = BooleanArray::from(vec![true, false, true, true, false]);
+        let sliced = arr.slice(1, 3); // [false, true, true]
+
+        let result = sliced.bitwise_unary(|x| !x);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.value(0), true);
+        assert_eq!(result.value(1), false);
+        assert_eq!(result.value(2), false);
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_sliced() {
+        // Slicing shares the buffer, so _mut must return Err.
+        let arr = BooleanArray::from(vec![true, false, true, true, false]);
+        let sliced = arr.slice(1, 3);
+        assert!(sliced.bitwise_unary_mut(|x| !x).is_err());
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_or_clone_sliced() {
+        // Slicing shares the buffer, so _mut_or_clone falls back to allocating.
+        let arr = BooleanArray::from(vec![true, false, true, true, false]);
+        let sliced = arr.slice(1, 3); // [false, true, true]
+
+        let result = sliced.bitwise_unary_mut_or_clone(|x| !x);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.value(0), true);
+        assert_eq!(result.value(1), false);
+        assert_eq!(result.value(2), false);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_different_offsets() {
+        // Left and right sliced to different offsets exercises misaligned
+        // bit handling in from_bitwise_binary_op.
+        let left_full = BooleanArray::from(vec![false, true, false, true, true]);
+        let right_full = BooleanArray::from(vec![true, true, true, false, true, false]);
+
+        let left = left_full.slice(1, 3); // [true, false, true]
+        let right = right_full.slice(2, 3); // [true, false, true]
+
+        let result = left.bitwise_bin_op(&right, |a, b| a & b);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.value(0), true);
+        assert_eq!(result.value(1), false);
+        assert_eq!(result.value(2), true);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_or_clone_different_offsets() {
+        // Both sliced (shared buffers), so falls back to allocating path.
+        let left_full = BooleanArray::from(vec![false, true, true, false, true]);
+        let right_full = BooleanArray::from(vec![true, true, false, false, true, false]);
+
+        let left = left_full.slice(1, 3); // [true, true, false]
+        let right = right_full.slice(2, 3); // [false, false, true]
+
+        let expected = left.bitwise_bin_op(&right, |a, b| a & b);
+        let result = left.bitwise_bin_op_mut_or_clone(&right, |a, b| a & b);
+        assert_eq!(result, expected);
     }
 }
