@@ -443,7 +443,8 @@ impl BooleanArray {
         }
     }
 
-    /// Try to apply a unary op in place, returning `op` back on failure.
+    /// Try to apply a unary op in place. Returns `op` back on failure so
+    /// callers can fall back to an allocating path without requiring `F: Clone`.
     fn try_bitwise_unary_in_place<F>(self, op: F) -> Result<BooleanArray, (BooleanArray, F)>
     where
         F: FnMut(u64) -> u64,
@@ -568,7 +569,8 @@ impl BooleanArray {
         }
     }
 
-    /// Try to apply a binary op in place, returning `op` back on failure.
+    /// Try to apply a binary op in place. Returns `op` back on failure so
+    /// callers can fall back to an allocating path without requiring `F: Clone`.
     fn try_bitwise_bin_op_in_place<F>(
         self,
         rhs: &BooleanArray,
@@ -592,6 +594,9 @@ impl BooleanArray {
                     len,
                     op,
                 );
+                // Defer null union to the success path so the Err path returns
+                // self's original nulls, avoiding a redundant union in callers
+                // that fall back to bitwise_bin_op.
                 let nulls = NullBuffer::union(nulls.as_ref(), rhs.nulls());
                 let values = BooleanBuffer::new(buf.into(), offset, len);
                 Ok(BooleanArray::new(values, nulls))
@@ -1465,5 +1470,22 @@ mod tests {
         let b = BooleanArray::from(vec![true, true, false, true]);
         let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
         assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_or_clone_shared_with_nulls() {
+        // When the buffer is shared, _mut_or_clone falls back to bitwise_bin_op.
+        // The null union must only be applied once, not double-applied.
+        let a = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+        let _shared = a.clone();
+        let b = BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]);
+
+        let expected = a.bitwise_bin_op(&b, |a, b| a & b);
+        let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
+
+        assert_eq!(result, expected);
+        assert_eq!(result.null_count(), 2);
+        assert!(result.is_null(1));
+        assert!(result.is_null(2));
     }
 }
