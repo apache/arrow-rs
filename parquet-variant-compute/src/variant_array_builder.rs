@@ -156,24 +156,16 @@ impl VariantArrayBuilder {
         self.value_offsets.push(self.value_builder.offset());
     }
 
-    /// Appends `count` null rows to the builder.
-    pub fn append_nulls(&mut self, count: usize) {
-        if count == 0 {
-            return;
-        }
-        if count == 1 {
-            self.append_null();
-            return;
-        }
-
-        self.nulls.append_n_nulls(count);
+    /// Appends `n` null rows to the builder.
+    pub fn append_nulls(&mut self, n: usize) {
+        self.nulls.append_n_nulls(n);
         // The subfields are expected to be non-nullable according to the parquet variant spec.
         let metadata_offset = self.metadata_builder.offset();
         let value_offset = self.value_builder.offset();
         self.metadata_offsets
-            .resize(self.metadata_offsets.len() + count, metadata_offset);
+            .extend(std::iter::repeat_n(metadata_offset, n));
         self.value_offsets
-            .resize(self.value_offsets.len() + count, value_offset);
+            .extend(std::iter::repeat_n(value_offset, n));
     }
 
     /// Append the [`Variant`] to the builder as the next row
