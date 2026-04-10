@@ -625,6 +625,20 @@ impl BooleanBuffer {
     pub fn set_slices(&self) -> BitSliceIterator<'_> {
         BitSliceIterator::new(self.values(), self.bit_offset, self.bit_len)
     }
+
+    /// Bitwise AND of multiple [`BooleanBuffer`]s
+    ///
+    /// # Panics
+    ///
+    /// Panics if `buffers` is empty, or if the buffers have different lengths
+    pub fn bitand_many(buffers: &[&BooleanBuffer]) -> BooleanBuffer {
+        assert!(!buffers.is_empty(), "requires at least one buffer");
+        let mut result = buffers[0].clone();
+        for buf in &buffers[1..] {
+            result &= *buf;
+        }
+        result
+    }
 }
 
 impl Not for &BooleanBuffer {
@@ -1244,5 +1258,30 @@ mod tests {
     fn test_find_nth_set_bit_position_none_set() {
         let buffer = BooleanBuffer::new_unset(100);
         assert_eq!(buffer.clone().find_nth_set_bit_position(0, 1), 100);
+    }
+
+    #[test]
+    fn test_bitand_many_single() {
+        let a = BooleanBuffer::from(&[true, false, true, true] as &[bool]);
+        let result = BooleanBuffer::bitand_many(&[&a]);
+        assert_eq!(result, a);
+    }
+
+    #[test]
+    fn test_bitand_many_two() {
+        let a = BooleanBuffer::from(&[true, false, true, true] as &[bool]);
+        let b = BooleanBuffer::from(&[true, true, false, true] as &[bool]);
+        let result = BooleanBuffer::bitand_many(&[&a, &b]);
+        assert_eq!(result, &a & &b);
+    }
+
+    #[test]
+    fn test_bitand_many_three() {
+        let a = BooleanBuffer::from(&[true, false, true, true] as &[bool]);
+        let b = BooleanBuffer::from(&[true, true, false, true] as &[bool]);
+        let c = BooleanBuffer::from(&[false, true, true, true] as &[bool]);
+        let result = BooleanBuffer::bitand_many(&[&a, &b, &c]);
+        let expected = BooleanBuffer::from(&[false, false, false, true] as &[bool]);
+        assert_eq!(result, expected);
     }
 }
