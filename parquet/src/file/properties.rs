@@ -854,14 +854,19 @@ impl WriterPropertiesBuilder {
     /// Should the writer should emit the `path_in_schema` element of the
     /// `ColumnMetaData` Thrift struct.
     ///
+    /// WARNING: setting this to `true` will break compatibility with Parquet readers that
+    /// still expect this field to be present. For more context, see [GH-563].
+    ///
     /// The `path_in_schema` field in the Thrift metadata is redundant and wastes a great
     /// deal of space. Parquet file footers can be made much smaller by omitting this field.
     /// Because the field was originally a mandatory field, this property defaults to `true`
     /// to maintain compatibility with older readers that expect this field to be present.
-    /// If one knows that all readers one plans to use are tolerant of the absense of this field,
+    /// If one knows that all readers one plans to use are tolerant of the absence of this field,
     /// this may be safely set to `false`.
     ///
-    /// At some point in the future this will default to `false`.
+    /// At some point in the future this may default to `false`.
+    ///
+    /// [GH-563]: https://github.com/apache/parquet-format/issues/563
     pub fn set_write_path_in_schema(mut self, write_path_in_schema: bool) -> Self {
         self.write_path_in_schema = write_path_in_schema;
         self
