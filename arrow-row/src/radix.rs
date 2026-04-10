@@ -93,8 +93,7 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Vec<u32> {
     let n = rows.num_rows();
     let mut indices: Vec<u32> = (0..n as u32).collect();
     let mut temp = vec![0u32; n];
-    let mut bytes = vec![0u8; n];
-    msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true);
+    msd_radix_sort(&mut indices, &mut temp, rows, 0, true);
     indices
 }
 
