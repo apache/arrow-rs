@@ -413,21 +413,8 @@ impl BooleanArray {
     where
         F: FnMut(u64) -> u64,
     {
-        let (values, nulls) = self.into_parts();
-        let offset = values.offset();
-        let len = values.len();
-        let buffer = values.into_inner();
-        match buffer.into_mutable() {
-            Ok(mut buf) => {
-                bit_util::apply_bitwise_unary_op(buf.as_slice_mut(), offset, len, op);
-                let values = BooleanBuffer::new(buf.into(), offset, len);
-                Ok(BooleanArray::new(values, nulls))
-            }
-            Err(buffer) => {
-                let values = BooleanBuffer::new(buffer, offset, len);
-                Err(BooleanArray::new(values, nulls))
-            }
-        }
+        self.try_bitwise_unary_in_place(op)
+            .map_err(|(array, _op)| array)
     }
 
     /// Apply a bitwise operation to this array's values in place if the buffer
@@ -446,7 +433,18 @@ impl BooleanArray {
     /// let result = array.bitwise_unary_mut_or_clone(|x| !x);
     /// assert_eq!(result, BooleanArray::from(vec![false, true, false]));
     /// ```
-    pub fn bitwise_unary_mut_or_clone<F>(self, mut op: F) -> BooleanArray
+    pub fn bitwise_unary_mut_or_clone<F>(self, op: F) -> BooleanArray
+    where
+        F: FnMut(u64) -> u64,
+    {
+        match self.try_bitwise_unary_in_place(op) {
+            Ok(array) => array,
+            Err((array, op)) => array.bitwise_unary(op),
+        }
+    }
+
+    /// Try to apply a unary op in place, returning `op` back on failure.
+    fn try_bitwise_unary_in_place<F>(self, op: F) -> Result<BooleanArray, (BooleanArray, F)>
     where
         F: FnMut(u64) -> u64,
     {
@@ -456,14 +454,13 @@ impl BooleanArray {
         let buffer = values.into_inner();
         match buffer.into_mutable() {
             Ok(mut buf) => {
-                bit_util::apply_bitwise_unary_op(buf.as_slice_mut(), offset, len, &mut op);
+                bit_util::apply_bitwise_unary_op(buf.as_slice_mut(), offset, len, op);
                 let values = BooleanBuffer::new(buf.into(), offset, len);
-                BooleanArray::new(values, nulls)
+                Ok(BooleanArray::new(values, nulls))
             }
             Err(buffer) => {
                 let values = BooleanBuffer::new(buffer, offset, len);
-                let arr = BooleanArray::new(values, nulls);
-                arr.bitwise_unary(op)
+                Err((BooleanArray::new(values, nulls), op))
             }
         }
     }
@@ -536,30 +533,8 @@ impl BooleanArray {
     where
         F: FnMut(u64, u64) -> u64,
     {
-        assert_eq!(self.len(), rhs.len());
-        let nulls = NullBuffer::union(self.nulls(), rhs.nulls());
-        let (values, _) = self.into_parts();
-        let offset = values.offset();
-        let len = values.len();
-        let buffer = values.into_inner();
-        match buffer.into_mutable() {
-            Ok(mut buf) => {
-                bit_util::apply_bitwise_binary_op(
-                    buf.as_slice_mut(),
-                    offset,
-                    rhs.values.inner(),
-                    rhs.values.offset(),
-                    len,
-                    op,
-                );
-                let values = BooleanBuffer::new(buf.into(), offset, len);
-                Ok(BooleanArray::new(values, nulls))
-            }
-            Err(buffer) => {
-                let values = BooleanBuffer::new(buffer, offset, len);
-                Err(BooleanArray::new(values, nulls))
-            }
-        }
+        self.try_bitwise_bin_op_in_place(rhs, op)
+            .map_err(|(array, _op)| array)
     }
 
     /// Apply a bitwise binary operation to this array and `rhs` in place if the
@@ -583,13 +558,27 @@ impl BooleanArray {
     /// let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
     /// assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
     /// ```
-    pub fn bitwise_bin_op_mut_or_clone<F>(self, rhs: &BooleanArray, mut op: F) -> BooleanArray
+    pub fn bitwise_bin_op_mut_or_clone<F>(self, rhs: &BooleanArray, op: F) -> BooleanArray
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        match self.try_bitwise_bin_op_in_place(rhs, op) {
+            Ok(array) => array,
+            Err((array, op)) => array.bitwise_bin_op(rhs, op),
+        }
+    }
+
+    /// Try to apply a binary op in place, returning `op` back on failure.
+    fn try_bitwise_bin_op_in_place<F>(
+        self,
+        rhs: &BooleanArray,
+        op: F,
+    ) -> Result<BooleanArray, (BooleanArray, F)>
     where
         F: FnMut(u64, u64) -> u64,
     {
         assert_eq!(self.len(), rhs.len());
-        let nulls = NullBuffer::union(self.nulls(), rhs.nulls());
-        let (values, _) = self.into_parts();
+        let (values, nulls) = self.into_parts();
         let offset = values.offset();
         let len = values.len();
         let buffer = values.into_inner();
@@ -601,15 +590,15 @@ impl BooleanArray {
                     rhs.values.inner(),
                     rhs.values.offset(),
                     len,
-                    &mut op,
+                    op,
                 );
+                let nulls = NullBuffer::union(nulls.as_ref(), rhs.nulls());
                 let values = BooleanBuffer::new(buf.into(), offset, len);
-                BooleanArray::new(values, nulls)
+                Ok(BooleanArray::new(values, nulls))
             }
             Err(buffer) => {
                 let values = BooleanBuffer::new(buffer, offset, len);
-                let arr = BooleanArray::new(values, nulls);
-                arr.bitwise_bin_op(rhs, op)
+                Err((BooleanArray::new(values, nulls), op))
             }
         }
     }
