@@ -29,7 +29,7 @@ macro_rules! string_array_to_variant {
         let len = $input.len();
         let mut i = 0;
         while i < len {
-            if !$input.is_null(i) {
+            if $input.is_valid(i) {
                 $builder.append_json($array.value(i))?;
                 i += 1;
                 continue;
