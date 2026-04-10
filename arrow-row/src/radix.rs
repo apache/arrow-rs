@@ -93,7 +93,8 @@ pub fn radix_sort_to_indices(rows: &Rows) -> Vec<u32> {
     let n = rows.num_rows();
     let mut indices: Vec<u32> = (0..n as u32).collect();
     let mut temp = vec![0u32; n];
-    msd_radix_sort(&mut indices, &mut temp, rows, 0, true);
+    let mut bytes = vec![0u8; n];
+    msd_radix_sort(&mut indices, &mut temp, &mut bytes, rows, 0, true);
     indices
 }
 
@@ -121,6 +122,7 @@ unsafe fn row_byte(rows: &Rows, idx: u32, byte_pos: usize) -> u8 {
 fn msd_radix_sort(
     src: &mut [u32],
     dst: &mut [u32],
+    bytes: &mut [u8],
     rows: &Rows,
     byte_pos: usize,
     result_in_src: bool,
@@ -155,15 +157,16 @@ fn msd_radix_sort(
         return;
     }
 
-    // Both the histogram and scatter loops read each row's byte via
-    // row_unchecked. Pre-extracting bytes into a contiguous buffer was
-    // tried but benchmarked slower — the extra write pass costs more
-    // than the second read through row offsets already hot in cache.
+    // Extract bytes and build histogram in one pass. The bytes buffer
+    // is reused across levels so the scatter loop can read from a flat
+    // array instead of chasing pointers through Rows a second time.
+    let bytes = &mut bytes[..n];
     let mut counts = [0u32; 256];
-    for &idx in &*src {
-        // SAFETY: indices contains a permutation of 0..rows.num_rows()
-        let byte = unsafe { row_byte(rows, idx, byte_pos) };
-        counts[byte as usize] += 1;
+    for (i, &idx) in src.iter().enumerate() {
+        // SAFETY: src contains valid row indices
+        let b = unsafe { row_byte(rows, idx, byte_pos) };
+        bytes[i] = b;
+        counts[b as usize] += 1;
     }
 
     let mut offsets = [0u32; 257];
@@ -175,17 +178,16 @@ fn msd_radix_sort(
 
     // No scatter happened — data is still in src, roles unchanged.
     if num_buckets == 1 {
-        msd_radix_sort(src, dst, rows, byte_pos + 1, result_in_src);
+        msd_radix_sort(src, dst, bytes, rows, byte_pos + 1, result_in_src);
         return;
     }
 
-    // Scatter src → dst
+    // Scatter src → dst using the pre-extracted bytes
     let mut write_pos = offsets;
-    for &idx in &*src {
-        // SAFETY: indices contains a permutation of 0..rows.num_rows()
-        let byte = unsafe { row_byte(rows, idx, byte_pos) } as usize;
-        dst[write_pos[byte] as usize] = idx;
-        write_pos[byte] += 1;
+    for (i, &idx) in src.iter().enumerate() {
+        let b = bytes[i] as usize;
+        dst[write_pos[b] as usize] = idx;
+        write_pos[b] += 1;
     }
 
     // Recurse with roles swapped: after scatter the data lives in dst,
@@ -199,6 +201,7 @@ fn msd_radix_sort(
             msd_radix_sort(
                 &mut dst[start..end],
                 &mut src[start..end],
+                &mut bytes[start..end],
                 rows,
                 byte_pos + 1,
                 !result_in_src,
