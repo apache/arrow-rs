@@ -89,14 +89,13 @@ impl NullBuffer {
     /// See [`union`](Self::union)
     pub fn union_many(nulls: &[Option<&NullBuffer>]) -> Option<NullBuffer> {
         // Unwrap to BooleanBuffer because BitAndAssign is not implemented for NullBuffer
-        let buffers: Vec<&BooleanBuffer> = nulls
-            .iter()
-            .filter_map(|nb| nb.map(NullBuffer::inner))
-            .collect();
-        if buffers.is_empty() {
-            return None;
+        let mut buffers = nulls.iter().filter_map(|nb| nb.map(NullBuffer::inner));
+        let first = buffers.next()?;
+        let mut result = first.clone();
+        for buf in buffers {
+            result &= buf;
         }
-        Some(Self::new(BooleanBuffer::bitand_many(&buffers)))
+        Some(Self::new(result))
     }
 
     /// Returns true if all nulls in `other` also exist in self
