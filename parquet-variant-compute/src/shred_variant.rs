@@ -68,6 +68,14 @@ use std::sync::Arc;
 /// See [`ShreddedSchemaBuilder`] for a convenient way to build the `as_type`
 /// value passed to this function.
 pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<VariantArray> {
+    shred_variant_with_options(array, as_type, CastOptions::default())
+}
+
+pub fn shred_variant_with_options(
+    array: &VariantArray,
+    as_type: &DataType,
+    cast_options: CastOptions,
+) -> Result<VariantArray> {
     if array.typed_value_field().is_some() {
         return Err(ArrowError::InvalidArgumentError(
             "Input is already shredded".to_string(),
@@ -79,7 +87,6 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
         return Ok(array.clone());
     };
 
-    let cast_options = CastOptions::default();
     let mut builder = make_variant_to_shredded_variant_arrow_row_builder(
         as_type,
         &cast_options,
@@ -321,12 +328,15 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         // If the variant is not an array, typed_value must be null.
         // If the variant is an array, value must be null.
         match variant {
-            Variant::List(list) => {
+            Variant::List(ref list) => {
                 self.nulls.append_non_null();
-                self.value_builder.append_null();
-                self.typed_value_builder
-                    .append_value(&Variant::List(list))?;
-                Ok(true)
+                let shredded = self.typed_value_builder.append_value(&variant)?;
+                if shredded {
+                    self.value_builder.append_null();
+                } else {
+                    self.value_builder.append_value(Variant::List(list.clone()));
+                }
+                Ok(shredded)
             }
             other => {
                 self.nulls.append_non_null();
@@ -1676,13 +1686,37 @@ mod tests {
         ])]);
         let list_schema =
             DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
-        let err = shred_variant(&input, &list_schema).unwrap_err();
-        println!("{}", err);
+
+        let result = shred_variant_with_options(
+            &input,
+            &list_schema,
+            CastOptions {
+                safe: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result.len(), 1);
+
+        // With `safe` cast seto to true, the incorrect size should not raise error.
+        assert!(result.is_valid(0));
+        assert!(result.value_field().unwrap().is_valid(0));
+        assert!(result.typed_value_field().unwrap().is_null(0));
+
+        // With `safe` cast set to false, the incorrect size should raise error.
+        let err = shred_variant_with_options(
+            &input,
+            &list_schema,
+            CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
         assert!(
             err.to_string()
                 .contains("Expected fixed size list of size 2, got size 3"),
-            "got: {}",
-            err
+            "got: {err}",
         );
     }
 

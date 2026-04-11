@@ -4112,10 +4112,26 @@ mod test {
             (
                 DataType::LargeListView(field.clone()),
                 Arc::new(LargeListViewArray::new(
-                    field,
+                    field.clone(),
                     ScalarBuffer::from(vec![0, 3]),
                     ScalarBuffer::from(vec![3, 0]),
                     element_array,
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::FixedSizeList(field.clone(), 3),
+                Arc::new(FixedSizeListArray::new(
+                    field,
+                    3,
+                    Arc::new(Int64Array::from(vec![
+                        Some(1),
+                        None,
+                        Some(3),
+                        None,
+                        None,
+                        None,
+                    ])),
                     Some(NullBuffer::from(vec![true, false])),
                 )) as ArrayRef,
             ),
@@ -4299,17 +4315,12 @@ mod test {
     }
 
     #[test]
-    fn test_variant_get_fixed_size_list_with_safe_option() {
-        let string_array: ArrayRef = Arc::new(StringArray::from(vec![
-            "[1, 2]",
-            "[3, 4]",
-            "\"not a list\"",
-        ]));
+    fn test_variant_get_fixed_size_list_wrong_size() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2, 3]"]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
         let item_field = Arc::new(Field::new("item", Int64, true));
 
-        // Request shredding on `FixedSizeList` with `safe` set to true, such that `variant_get`
-        // does not raise error on type mismatch.
+        // With `safe` set to true, size mismatch should return in null.
         let options = GetOptions::new()
             .with_as_type(Some(FieldRef::from(Field::new(
                 "result",
@@ -4320,61 +4331,30 @@ mod test {
                 safe: true,
                 ..Default::default()
             });
-
-        // Verify that the shredded value is a `FixedSizeList`.
         let result = variant_get(&variant_array, options).unwrap();
         let fixed_size_list = result
             .as_any()
             .downcast_ref::<FixedSizeListArray>()
             .expect("Expected FixedSizeListArray");
-        assert_eq!(fixed_size_list.len(), 3);
-        assert_eq!(fixed_size_list.value_length(), 2);
+        assert_eq!(fixed_size_list.len(), 1);
+        assert!(fixed_size_list.is_null(0));
 
-        // Verify that the first entry in the `FixedSizeList` contains the expected value.
-        assert!(fixed_size_list.is_valid(0));
-        let val0 = fixed_size_list.value(0);
-        let val0_struct = val0.as_any().downcast_ref::<StructArray>().unwrap();
-        let val0_typed = val0_struct.column_by_name("typed_value").unwrap();
-        let val0_ints = val0_typed.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(val0_ints.values(), &[1i64, 2i64]);
-
-        // Verify that the second entry in the `FixedSizeList` contains the expected value.
-        assert!(fixed_size_list.is_valid(1));
-        let val1 = fixed_size_list.value(1);
-        let val1_struct = val1.as_any().downcast_ref::<StructArray>().unwrap();
-        let val1_typed = val1_struct.column_by_name("typed_value").unwrap();
-        let val1_ints = val1_typed.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(val1_ints.values(), &[3i64, 4i64]);
-
-        // Verify that the third entry is null due to type mismatch.
-        assert!(fixed_size_list.is_null(2));
-    }
-
-    #[test]
-    fn test_variant_get_fixed_size_list_wrong_size() {
-        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2, 3]"]));
-        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
-        let item_field = Arc::new(Field::new("item", Int64, true));
-
-        // Set the safe flag to both true and false and verify that size mismatch raises an error
-        // for `FixedSizeList`, regardless.
-        for safe in [true, false] {
-            let options = GetOptions::new()
-                .with_as_type(Some(FieldRef::from(Field::new(
-                    "result",
-                    DataType::FixedSizeList(item_field.clone(), 2),
-                    true,
-                ))))
-                .with_cast_options(CastOptions {
-                    safe,
-                    ..Default::default()
-                });
-            let err = variant_get(&variant_array, options).unwrap_err();
-            assert!(
-                err.to_string()
-                    .contains("Expected fixed size list of size 2, got size 3"),
-                "safe={safe}, got: {err}",
-            );
-        }
+        // With `safe` option set to false, error should be raise on wrong sized fixed list.
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                DataType::FixedSizeList(item_field.clone(), 2),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+        let err = variant_get(&variant_array, options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Expected fixed size list of size 2, got size 3"),
+            "got: {err}",
+        );
     }
 }
