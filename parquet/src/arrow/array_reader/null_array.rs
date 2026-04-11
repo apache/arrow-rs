@@ -53,8 +53,12 @@ where
         pages: Box<dyn PageIterator>,
         column_desc: ColumnDescPtr,
         batch_size: usize,
+        padding_threshold: Option<i16>,
     ) -> Result<Self> {
-        let record_reader = RecordReader::<T>::new(column_desc, batch_size);
+        let mut record_reader = RecordReader::<T>::new(column_desc, batch_size);
+        if let Some(threshold) = padding_threshold {
+            record_reader.set_padding_threshold(threshold);
+        }
 
         Ok(Self {
             data_type: ArrowType::Null,
@@ -87,14 +91,14 @@ where
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         // convert to arrays
-        let array = arrow_array::NullArray::new(self.record_reader.num_values());
+        let array = arrow_array::NullArray::new(self.record_reader.values_written());
 
         // save definition and repetition buffers
         self.def_levels_buffer = self.record_reader.consume_def_levels();
         self.rep_levels_buffer = self.record_reader.consume_rep_levels();
 
         // Must consume bitmap buffer
-        self.record_reader.consume_bitmap_buffer();
+        self.record_reader.consume_compact_bitmap();
 
         self.record_reader.reset();
         Ok(Arc::new(array))
@@ -110,5 +114,9 @@ where
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
     }
 }

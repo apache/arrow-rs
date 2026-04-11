@@ -44,6 +44,7 @@ pub fn make_byte_view_array_reader(
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
     batch_size: usize,
+    padding_threshold: Option<i16>,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -56,7 +57,10 @@ pub fn make_byte_view_array_reader(
 
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
-            let reader = GenericRecordReader::new(column_desc, batch_size);
+            let mut reader = GenericRecordReader::new(column_desc, batch_size);
+            if let Some(threshold) = padding_threshold {
+                reader.set_padding_threshold(threshold);
+            }
             Ok(Box::new(ByteViewArrayReader::new(pages, data_type, reader)))
         }
 
@@ -107,7 +111,7 @@ impl ArrayReader for ByteViewArrayReader {
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let buffer = self.record_reader.consume_record_data();
-        let null_buffer = self.record_reader.consume_bitmap_buffer();
+        let null_buffer = self.record_reader.consume_compact_bitmap();
         self.def_levels_buffer = self.record_reader.consume_def_levels();
         self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
@@ -127,6 +131,10 @@ impl ArrayReader for ByteViewArrayReader {
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
     }
 }
 

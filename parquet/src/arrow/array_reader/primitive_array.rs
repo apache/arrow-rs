@@ -106,11 +106,16 @@ where
     /// Construct primitive array reader.
     ///
     /// `batch_size` is used to pre-allocate internal buffers.
+    /// `padding_threshold` controls how null padding is applied. When
+    /// `None`, the reader pads all null positions (full padding). When
+    /// `Some(threshold)`, entries with `def < threshold` are excluded
+    /// from the value buffer (selective padding for list children).
     pub fn new(
         pages: Box<dyn PageIterator>,
         column_desc: ColumnDescPtr,
         arrow_type: Option<ArrowType>,
         batch_size: usize,
+        padding_threshold: Option<i16>,
     ) -> Result<Self> {
         // Check if Arrow type is specified, else create it from Parquet type
         let data_type = match arrow_type {
@@ -120,7 +125,10 @@ where
                 .clone(),
         };
 
-        let record_reader = RecordReader::<T>::new(column_desc, batch_size);
+        let mut record_reader = RecordReader::<T>::new(column_desc, batch_size);
+        if let Some(threshold) = padding_threshold {
+            record_reader.set_padding_threshold(threshold);
+        }
 
         Ok(Self {
             data_type,
@@ -157,15 +165,16 @@ where
 
         // Convert physical data to equivalent arrow type, and then perform
         // coercion as needed
+        let len = self.record_reader.values_written();
+
         let record_data = self
             .record_reader
             .consume_record_data()
             .into_buffer(target_type);
 
-        let len = self.record_reader.num_values();
         let nulls = self
             .record_reader
-            .consume_bitmap_buffer()
+            .consume_compact_bitmap()
             .and_then(|b| NullBuffer::from_unsliced_buffer(b, len));
 
         let array: ArrayRef = match T::get_physical_type() {
@@ -218,6 +227,10 @@ where
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
     }
 }
 
@@ -515,6 +528,7 @@ mod tests {
             schema.column(0),
             None,
             DEFAULT_BATCH_SIZE,
+            None,
         )
         .unwrap();
 
@@ -562,6 +576,7 @@ mod tests {
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
 
@@ -633,6 +648,7 @@ mod tests {
                     column_desc.clone(),
                     None,
                     DEFAULT_BATCH_SIZE,
+                    None,
                 )
                 .expect("Unable to get array reader");
 
@@ -773,6 +789,7 @@ mod tests {
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
 
@@ -853,6 +870,7 @@ mod tests {
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
 
@@ -916,6 +934,7 @@ mod tests {
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
 
@@ -982,6 +1001,7 @@ mod tests {
                 column_desc,
                 None,
                 DEFAULT_BATCH_SIZE,
+                None,
             )
             .unwrap();
 

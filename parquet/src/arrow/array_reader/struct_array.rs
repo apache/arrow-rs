@@ -30,6 +30,10 @@ pub struct StructArrayReader {
     struct_def_level: i16,
     struct_rep_level: i16,
     nullable: bool,
+    /// When set, entries with def < threshold are excluded from child
+    /// arrays. Set when this struct is inside a list (to the parent
+    /// list's def_level).
+    padding_threshold: Option<i16>,
 }
 
 impl StructArrayReader {
@@ -40,6 +44,7 @@ impl StructArrayReader {
         def_level: i16,
         rep_level: i16,
         nullable: bool,
+        padding_threshold: Option<i16>,
     ) -> Self {
         Self {
             data_type,
@@ -47,6 +52,7 @@ impl StructArrayReader {
             struct_def_level: def_level,
             struct_rep_level: rep_level,
             nullable,
+            padding_threshold,
         }
     }
 }
@@ -82,47 +88,16 @@ impl ArrayReader for StructArrayReader {
         Ok(read.unwrap_or(0))
     }
 
-    /// Consume struct records.
-    ///
-    /// Definition levels of struct array is calculated as following:
-    /// ```ignore
-    /// def_levels[i] = min(child1_def_levels[i], child2_def_levels[i], ...,
-    /// childn_def_levels[i]);
-    /// ```
-    ///
-    /// Repetition levels of struct array is calculated as following:
-    /// ```ignore
-    /// rep_levels[i] = child1_rep_levels[i];
-    /// ```
-    ///
-    /// The null bitmap of struct array is calculated from def_levels:
-    /// ```ignore
-    /// null_bitmap[i] = (def_levels[i] >= self.def_level);
-    /// ```
-    ///
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         if self.children.is_empty() {
             return Ok(Arc::new(StructArray::from(Vec::new())));
         }
 
-        let children_array = self
+        let children_arrays = self
             .children
             .iter_mut()
             .map(|reader| reader.consume_batch())
             .collect::<Result<Vec<_>>>()?;
-
-        // check that array child data has same size
-        let children_array_len = children_array
-            .first()
-            .map(|arr| arr.len())
-            .ok_or_else(|| general_err!("Struct array reader should have at least one child!"))?;
-
-        let all_children_len_eq = children_array
-            .iter()
-            .all(|arr| arr.len() == children_array_len);
-        if !all_children_len_eq {
-            return Err(general_err!("Not all children array length are the same!"));
-        }
 
         let DataType::Struct(fields) = &self.data_type else {
             return Err(general_err!(
@@ -130,59 +105,57 @@ impl ArrayReader for StructArrayReader {
                 self.data_type
             ));
         };
-        let fields = fields.clone(); // cloning Fields is cheap (Arc internally)
+        let fields = fields.clone();
 
-        let mut nulls = None;
-        if self.nullable {
-            // calculate struct def level data
+        let item_count = children_arrays.first().map(|a| a.len()).unwrap_or(0);
 
-            // children should have consistent view of parent, only need to inspect first child
-            let def_levels = self.children[0]
-                .get_def_levels()
-                .expect("child with nullable parents must have definition level");
-
-            // calculate bitmap for current array
-            let mut bitmap_builder = BooleanBufferBuilder::new(children_array_len);
-
-            match self.children[0].get_rep_levels() {
-                Some(rep_levels) => {
-                    // Sanity check
-                    assert_eq!(rep_levels.len(), def_levels.len());
-
-                    for (rep_level, def_level) in rep_levels.iter().zip(def_levels) {
-                        if rep_level > &self.struct_rep_level {
-                            // Already handled by inner list - SKIP
-                            continue;
-                        }
-                        bitmap_builder.append(*def_level >= self.struct_def_level)
-                    }
-                }
-                None => {
-                    // Safety: slice iterator has a trusted length
-                    unsafe {
-                        bitmap_builder.extend_trusted_len(
-                            def_levels
-                                .iter()
-                                .map(|level| *level >= self.struct_def_level),
-                        )
-                    }
-                }
-            }
-
-            if bitmap_builder.len() != children_array_len {
-                return Err(general_err!("Failed to decode level data for struct array"));
-            }
-            nulls = Some(NullBuffer::from(bitmap_builder));
+        if !children_arrays.windows(2).all(|w| w[0].len() == w[1].len()) {
+            return Err(general_err!("Not all children array length are the same!"));
         }
 
-        // Safety: checked above that all children array data have same
-        // length and correct type
+        // Build struct null bitmap if the struct is nullable.
+        // We iterate def/rep levels and select entries that correspond to
+        // struct rows: skip parent-level padding (d < threshold) and
+        // inner-list continuations (r > struct_rep_level).
+        let nulls = if self.nullable {
+            let def_levels = self.children[0]
+                .get_def_levels()
+                .ok_or_else(|| general_err!("child def levels are None"))?;
+            let rep_levels = self.children[0].get_rep_levels();
+
+            let mut bitmap = BooleanBufferBuilder::new(item_count);
+            for (i, &d) in def_levels.iter().enumerate() {
+                if let Some(threshold) = self.padding_threshold {
+                    if d < threshold {
+                        continue;
+                    }
+                }
+                if let Some(reps) = rep_levels {
+                    if reps[i] > self.struct_rep_level {
+                        continue;
+                    }
+                }
+                bitmap.append(d >= self.struct_def_level);
+            }
+            if bitmap.len() != item_count {
+                return Err(general_err!(
+                    "Failed to decode level data for struct array: \
+                     expected {} validity bits but got {}",
+                    item_count,
+                    bitmap.len()
+                ));
+            }
+            Some(NullBuffer::from(bitmap))
+        } else {
+            None
+        };
+
         unsafe {
             Ok(Arc::new(StructArray::new_unchecked_with_length(
                 fields,
-                children_array,
+                children_arrays,
                 nulls,
-                children_array_len,
+                item_count,
             )))
         }
     }
@@ -218,6 +191,10 @@ impl ArrayReader for StructArrayReader {
         // parent structure, so return first child's
         self.children.first().and_then(|l| l.get_rep_levels())
     }
+
+    fn max_def_level(&self) -> i16 {
+        self.struct_def_level
+    }
 }
 
 #[cfg(test)]
@@ -233,9 +210,11 @@ mod tests {
 
     #[test]
     fn test_struct_array_reader() {
-        let array_reader_1 = make_int32_page_reader(&[4], &[0, 1, 2, 3, 1], &[0, 1, 1, 1, 1], 3, 1);
+        let array_reader_1 =
+            make_int32_page_reader(&[4], &[0, 1, 2, 3, 1], &[0, 1, 1, 1, 1], 3, 1, None);
 
-        let array_reader_2 = make_int32_page_reader(&[3], &[0, 1, 3, 1, 2], &[0, 1, 1, 1, 1], 3, 1);
+        let array_reader_2 =
+            make_int32_page_reader(&[3], &[0, 1, 3, 1, 2], &[0, 1, 1, 1, 1], 3, 1, None);
 
         let struct_type = ArrowType::Struct(Fields::from(vec![
             Field::new("f1", ArrowType::Int32, true),
@@ -248,6 +227,7 @@ mod tests {
             1,
             1,
             true,
+            None,
         );
 
         let struct_array = struct_array_reader.next_batch(5).unwrap();
@@ -294,11 +274,17 @@ mod tests {
         )];
         let expected = StructArray::from((struct_fields, validity));
 
-        let reader =
-            make_int32_page_reader(&[1, 2], &[4, 4, 3, 2, 1, 0], &[0, 1, 1, 0, 0, 0], 4, 1);
+        let reader = make_int32_page_reader(
+            &[1, 2],
+            &[4, 4, 3, 2, 1, 0],
+            &[0, 1, 1, 0, 0, 0],
+            4,
+            1,
+            Some(3),
+        );
 
         let list_reader =
-            ListArrayReader::<i32>::new(reader, expected_l.data_type().clone(), 3, 1, true);
+            ListArrayReader::<i32>::new(reader, expected_l.data_type().clone(), 3, 1, true, None);
 
         let mut struct_reader = StructArrayReader::new(
             expected.data_type().clone(),
@@ -306,6 +292,7 @@ mod tests {
             1,
             0,
             true,
+            None,
         );
 
         let actual = struct_reader.next_batch(1024).unwrap();
