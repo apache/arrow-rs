@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use crate::arrow::array_reader::ArrayReader;
+use crate::arrow::record_reader::definition_levels::build_filtered_validity_bitmap;
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use arrow_array::FixedSizeListArray;
@@ -191,9 +192,13 @@ impl ArrayReader for FixedSizeListArrayReader {
 
         if self.nullable {
             let mut validity = BooleanBufferBuilder::new(list_len);
-            for &d in &boundary_defs {
-                validity.append(d + 1 >= self.def_level);
-            }
+            build_filtered_validity_bitmap(
+                &boundary_defs,
+                None,
+                None,
+                self.def_level - 1,
+                &mut validity,
+            );
             list_builder = list_builder.null_bit_buffer(Some(validity.into()));
         }
 
