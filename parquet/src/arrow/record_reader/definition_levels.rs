@@ -115,6 +115,15 @@ impl DefinitionLevelBuffer {
             BufferInner::Mask { nulls } => nulls,
         }
     }
+
+    /// Returns the raw definition levels accumulated so far, if available.
+    /// Only available when the buffer is in Full mode (nested columns).
+    pub fn levels(&self) -> Option<&[i16]> {
+        match &self.inner {
+            BufferInner::Full { levels, .. } => Some(levels.as_slice()),
+            BufferInner::Mask { .. } => None,
+        }
+    }
 }
 
 enum MaybePacked {

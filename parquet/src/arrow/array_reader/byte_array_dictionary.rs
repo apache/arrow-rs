@@ -39,14 +39,17 @@ use crate::util::bit_util::FromBitpacked;
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
     (
-        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr) => match ($k:expr, $v:expr) {
+        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr) => match ($k:expr, $v:expr) {
             $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty),)+
         }
     ) => {
         match (($k, $v)) {
             $(
                 ($key_arrow, $value_arrow) => {
-                    let reader = GenericRecordReader::new($column_desc, $batch_size);
+                    let mut reader = GenericRecordReader::new($column_desc, $batch_size);
+                    if let Some(threshold) = $padding_threshold {
+                        reader.set_padding_threshold(threshold);
+                    }
                     Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::new(
                         $pages, $data_type, reader,
                     )))
@@ -79,6 +82,7 @@ pub fn make_byte_array_dictionary_reader(
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
     batch_size: usize,
+    padding_threshold: Option<i16>,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -91,7 +95,7 @@ pub fn make_byte_array_dictionary_reader(
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
-                (pages, column_desc, data_type, batch_size) => match (key_type.as_ref(), value_type.as_ref()) {
+                (pages, column_desc, data_type, batch_size, padding_threshold) => match (key_type.as_ref(), value_type.as_ref()) {
                     (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u8, i32),
                     (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
                     (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i8, i32),
@@ -179,7 +183,7 @@ where
         }
 
         let buffer = self.record_reader.consume_record_data();
-        let null_buffer = self.record_reader.consume_bitmap_buffer();
+        let null_buffer = self.record_reader.consume_compact_bitmap();
         let array = buffer.into_array(null_buffer, &self.data_type)?;
         self.record_reader.reset();
 
@@ -196,6 +200,10 @@ where
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
     }
 }
 

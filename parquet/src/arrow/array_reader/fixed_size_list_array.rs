@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::arrow::array_reader::ArrayReader;
@@ -38,10 +37,17 @@ pub struct FixedSizeListArrayReader {
     rep_level: i16,
     /// If the list is nullable
     nullable: bool,
+    /// When set, this reader is a child of another list and should
+    /// exclude entries where def < threshold from its output.
+    parent_threshold: Option<i16>,
 }
 
 impl FixedSizeListArrayReader {
     /// Construct fixed-size list array reader.
+    ///
+    /// The child reader must already be constructed with a padding
+    /// threshold of `def_level`. `parent_threshold` is set when this
+    /// reader is itself a child of another list.
     pub fn new(
         item_reader: Box<dyn ArrayReader>,
         fixed_size: usize,
@@ -49,6 +55,7 @@ impl FixedSizeListArrayReader {
         def_level: i16,
         rep_level: i16,
         nullable: bool,
+        parent_threshold: Option<i16>,
     ) -> Self {
         Self {
             item_reader,
@@ -57,6 +64,7 @@ impl FixedSizeListArrayReader {
             def_level,
             rep_level,
             nullable,
+            parent_threshold,
         }
     }
 }
@@ -75,11 +83,12 @@ impl ArrayReader for FixedSizeListArrayReader {
         Ok(size)
     }
 
+    /// Consume batch. The compact child array contains entries only for
+    /// items within non-null fixed-size lists. Null lists get `fixed_size`
+    /// null entries inserted via MutableArrayData. When all lists are
+    /// non-null the compact child is used directly without any copying.
     fn consume_batch(&mut self) -> Result<ArrayRef> {
-        let next_batch_array = self.item_reader.consume_batch()?;
-        if next_batch_array.is_empty() {
-            return Ok(new_empty_array(&self.data_type));
-        }
+        let child_array = self.item_reader.consume_batch()?;
 
         let def_levels = self
             .get_def_levels()
@@ -88,124 +97,104 @@ impl ArrayReader for FixedSizeListArrayReader {
             .get_rep_levels()
             .ok_or_else(|| general_err!("item_reader rep levels are None"))?;
 
-        if !rep_levels.is_empty() && rep_levels[0] != 0 {
-            // This implies either the source data was invalid, or the leaf column
-            // reader did not correctly delimit semantic records
+        if def_levels.is_empty() {
+            return Ok(new_empty_array(&self.data_type));
+        }
+
+        if rep_levels[0] != 0 {
             return Err(general_err!("first repetition level of batch must be 0"));
         }
 
-        let mut validity = self
-            .nullable
-            .then(|| BooleanBufferBuilder::new(next_batch_array.len()));
-
-        let data = next_batch_array.to_data();
-        let mut child_data_builder =
-            MutableArrayData::new(vec![&data], true, next_batch_array.len());
-
-        // The current index into the child array entries
-        let mut child_idx = 0;
-        // The total number of rows (valid and invalid) in the list array
-        let mut list_len = 0;
-        // Start of the current run of valid values
-        let mut start_idx = None;
-        let mut row_len = 0;
-
-        def_levels.iter().zip(rep_levels).try_for_each(|(d, r)| {
-            match r.cmp(&self.rep_level) {
-                Ordering::Greater => {
-                    // Repetition level greater than current => already handled by inner array
-                    if *d < self.def_level {
-                        return Err(general_err!(
-                            "Encountered repetition level too large for definition level"
-                        ));
-                    }
-                }
-                Ordering::Equal => {
-                    // Item inside of the current list
-                    child_idx += 1;
-                    row_len += 1;
-                }
-                Ordering::Less => {
-                    // Start of new list row
-                    list_len += 1;
-
-                    // Length of the previous row should be equal to:
-                    // - the list's fixed size (valid entries)
-                    // - zero (null entries, start of array)
-                    // Any other length indicates invalid data
-                    if start_idx.is_some() && row_len != self.fixed_size {
-                        return Err(general_err!(
-                            "Encountered misaligned row with length {} (expected length {})",
-                            row_len,
-                            self.fixed_size
-                        ));
-                    }
-                    row_len = 0;
-
-                    if *d >= self.def_level {
-                        row_len += 1;
-
-                        // Valid list entry
-                        if let Some(validity) = validity.as_mut() {
-                            validity.append(true);
-                        }
-                        // Start a run of valid rows if not already inside of one
-                        start_idx.get_or_insert(child_idx);
-                    } else {
-                        // Null list entry
-
-                        if let Some(start) = start_idx.take() {
-                            // Flush pending child items
-                            child_data_builder.extend(0, start, child_idx);
-                        }
-                        // Pad list with nulls
-                        child_data_builder.extend_nulls(self.fixed_size);
-
-                        if let Some(validity) = validity.as_mut() {
-                            // Valid if empty list
-                            validity.append(*d + 1 == self.def_level);
-                        }
-                    }
-                    child_idx += 1;
+        // Single pass: collect the def level at each list boundary and
+        // validate that each non-null row contains exactly fixed_size items.
+        let mut boundary_defs: Vec<i16> = Vec::with_capacity(def_levels.len());
+        let mut current_row_len = None;
+        for (&d, &r) in def_levels.iter().zip(rep_levels) {
+            if let Some(threshold) = self.parent_threshold {
+                if d < threshold {
+                    continue;
                 }
             }
-            Ok(())
-        })?;
+            if r < self.rep_level {
+                if let Some(row_len) = current_row_len.take().filter(|&len| len != self.fixed_size)
+                {
+                    return Err(general_err!(
+                        "Encountered misaligned row with length {} (expected length {})",
+                        row_len,
+                        self.fixed_size
+                    ));
+                }
 
-        let child_data = match start_idx {
-            Some(0) => {
-                // No null entries - can reuse original array
-                next_batch_array.to_data()
+                boundary_defs.push(d);
+                current_row_len = (d >= self.def_level).then_some(1);
+            } else if r == self.rep_level {
+                if let Some(row_len) = current_row_len.as_mut() {
+                    *row_len += 1;
+                }
+            } else if d < self.def_level {
+                return Err(general_err!(
+                    "Encountered repetition level too large for definition level"
+                ));
             }
-            Some(start) => {
-                // Flush pending child items
-                child_data_builder.extend(0, start, child_idx);
-                child_data_builder.freeze()
-            }
-            None => child_data_builder.freeze(),
-        };
+        }
 
-        // Verify total number of elements is aligned with fixed list size
-        if list_len * self.fixed_size != child_data.len() {
+        if let Some(row_len) = current_row_len.filter(|&len| len != self.fixed_size) {
             return Err(general_err!(
-                "fixed-size list length must be a multiple of {} but array contains {} elements",
-                self.fixed_size,
-                child_data.len()
+                "Encountered misaligned row with length {} (expected length {})",
+                row_len,
+                self.fixed_size
             ));
         }
+
+        let list_len = boundary_defs.len();
+        let items_count = boundary_defs
+            .iter()
+            .filter(|&&d| d >= self.def_level)
+            .count();
+
+        if child_array.len() != items_count * self.fixed_size {
+            return Err(general_err!(
+                "Fixed-size list child mismatch: expected {} entries but got {}",
+                items_count * self.fixed_size,
+                child_array.len()
+            ));
+        }
+
+        // Build child data. If all lists are non-null, reuse the compact
+        // child directly. Otherwise insert fixed_size null blocks.
+        let child_data = if items_count == list_len {
+            child_array.to_data()
+        } else {
+            let data = child_array.to_data();
+            let mut builder = MutableArrayData::new(vec![&data], true, list_len * self.fixed_size);
+            let mut src_idx = 0;
+            for &d in &boundary_defs {
+                if d >= self.def_level {
+                    builder.extend(0, src_idx, src_idx + self.fixed_size);
+                    src_idx += self.fixed_size;
+                } else {
+                    builder.extend_nulls(self.fixed_size);
+                }
+            }
+            builder.freeze()
+        };
+
+        debug_assert_eq!(child_data.len(), list_len * self.fixed_size);
 
         let mut list_builder = ArrayData::builder(self.get_data_type().clone())
             .len(list_len)
             .add_child_data(child_data);
 
-        if let Some(builder) = validity {
-            list_builder = list_builder.null_bit_buffer(Some(builder.into()));
+        if self.nullable {
+            let mut validity = BooleanBufferBuilder::new(list_len);
+            for &d in &boundary_defs {
+                validity.append(d + 1 >= self.def_level);
+            }
+            list_builder = list_builder.null_bit_buffer(Some(validity.into()));
         }
 
         let list_data = unsafe { list_builder.build_unchecked() };
-
-        let result_array = FixedSizeListArray::from(list_data);
-        Ok(Arc::new(result_array))
+        Ok(Arc::new(FixedSizeListArray::from(list_data)))
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
@@ -218,6 +207,10 @@ impl ArrayReader for FixedSizeListArrayReader {
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.item_reader.get_rep_levels()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.def_level
     }
 }
 
@@ -260,6 +253,7 @@ mod tests {
             &[0, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1],
             3,
             1,
+            Some(2),
         );
 
         let mut list_array_reader = FixedSizeListArrayReader::new(
@@ -269,6 +263,7 @@ mod tests {
             2,
             1,
             true,
+            None,
         );
         let actual = list_array_reader.next_batch(1024).unwrap();
         let actual = actual
@@ -297,6 +292,7 @@ mod tests {
             &[0, 1, 0, 1, 0, 1, 0, 1],
             2,
             1,
+            Some(1),
         );
 
         let mut list_array_reader = FixedSizeListArrayReader::new(
@@ -306,6 +302,7 @@ mod tests {
             1,
             1,
             false,
+            None,
         );
         let actual = list_array_reader.next_batch(1024).unwrap();
         let actual = actual
@@ -313,6 +310,31 @@ mod tests {
             .downcast_ref::<FixedSizeListArray>()
             .unwrap();
         assert_eq!(&expected, actual)
+    }
+
+    #[test]
+    fn test_misaligned_rows_error() {
+        // Two rows with fixed_size == 2 are encoded with row lengths 1 and 3.
+        // The total child count is still 4, so aggregate count validation alone
+        // would silently repartition the values into two valid-looking rows.
+        let item_array_reader =
+            make_int32_page_reader(&[1, 2, 3, 4], &[2, 2, 2, 2], &[0, 0, 1, 1], 2, 1, Some(1));
+
+        let mut list_array_reader = FixedSizeListArrayReader::new(
+            item_array_reader,
+            2,
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 2),
+            1,
+            1,
+            false,
+            None,
+        );
+
+        let err = list_array_reader.next_batch(1024).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Encountered misaligned row with length 1 (expected length 2)"
+        );
     }
 
     #[test]
@@ -366,10 +388,11 @@ mod tests {
             &[0, 0, 2, 0, 2, 0, 0, 2, 0, 2],
             5,
             2,
+            Some(4),
         );
 
-        let l2 = FixedSizeListArrayReader::new(item_array_reader, 2, l2_type, 4, 2, false);
-        let mut l1 = FixedSizeListArrayReader::new(Box::new(l2), 1, l1_type, 3, 1, true);
+        let l2 = FixedSizeListArrayReader::new(item_array_reader, 2, l2_type, 4, 2, false, Some(3));
+        let mut l1 = FixedSizeListArrayReader::new(Box::new(l2), 1, l1_type, 3, 1, true, None);
 
         let expected_1 = expected.slice(0, 2);
         let expected_2 = expected.slice(2, 4);
@@ -389,7 +412,8 @@ mod tests {
             0,
         );
 
-        let item_array_reader = make_int32_page_reader(&[], &[0, 1, 0, 1], &[0, 0, 0, 0], 2, 1);
+        let item_array_reader =
+            make_int32_page_reader(&[], &[0, 1, 0, 1], &[0, 0, 0, 0], 2, 1, Some(2));
 
         let mut list_array_reader = FixedSizeListArrayReader::new(
             item_array_reader,
@@ -398,6 +422,7 @@ mod tests {
             2,
             1,
             true,
+            None,
         );
         let actual = list_array_reader.next_batch(1024).unwrap();
         let actual = actual
@@ -435,13 +460,21 @@ mod tests {
             &[0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0],
             5,
             2,
+            Some(4),
         );
 
         let inner_array_reader =
-            ListArrayReader::<i32>::new(item_array_reader, inner_type, 4, 2, true);
+            ListArrayReader::<i32>::new(item_array_reader, inner_type, 4, 2, true, Some(2));
 
-        let mut list_array_reader =
-            FixedSizeListArrayReader::new(Box::new(inner_array_reader), 2, list_type, 2, 1, true);
+        let mut list_array_reader = FixedSizeListArrayReader::new(
+            Box::new(inner_array_reader),
+            2,
+            list_type,
+            2,
+            1,
+            true,
+            None,
+        );
         let actual = list_array_reader.next_batch(1024).unwrap();
         let actual = actual
             .as_any()

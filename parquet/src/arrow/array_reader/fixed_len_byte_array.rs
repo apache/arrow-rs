@@ -48,6 +48,7 @@ pub fn make_fixed_len_byte_array_reader(
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
     batch_size: usize,
+    padding_threshold: Option<i16>,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -131,6 +132,7 @@ pub fn make_fixed_len_byte_array_reader(
         data_type,
         byte_length,
         batch_size,
+        padding_threshold,
     )))
 }
 
@@ -150,8 +152,12 @@ impl FixedLenByteArrayReader {
         data_type: ArrowType,
         byte_length: usize,
         batch_size: usize,
+        padding_threshold: Option<i16>,
     ) -> Self {
-        let record_reader = GenericRecordReader::new(column_desc, batch_size);
+        let mut record_reader = GenericRecordReader::new(column_desc, batch_size);
+        if let Some(threshold) = padding_threshold {
+            record_reader.set_padding_threshold(threshold);
+        }
         Self {
             data_type,
             byte_length,
@@ -177,12 +183,23 @@ impl ArrayReader for FixedLenByteArrayReader {
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
+        let len = self.record_reader.values_written();
+
         let record_data = self.record_reader.consume_record_data();
+        debug_assert_eq!(
+            record_data.buffer.len(),
+            len * self.byte_length,
+            "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
+            record_data.buffer.len(),
+            len,
+            self.byte_length,
+        );
+        let null_bit_buffer = self.record_reader.consume_compact_bitmap();
 
         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
-            .len(self.record_reader.num_values())
+            .len(len)
             .add_buffer(Buffer::from_vec(record_data.buffer))
-            .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
+            .null_bit_buffer(null_bit_buffer);
 
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
@@ -257,6 +274,10 @@ impl ArrayReader for FixedLenByteArrayReader {
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
     }
 }
 
