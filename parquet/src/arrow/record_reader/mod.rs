@@ -34,7 +34,7 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 
 pub(crate) mod buffer;
-mod definition_levels;
+pub(crate) mod definition_levels;
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
 pub type RecordReader<T> = GenericRecordReader<Vec<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
@@ -311,13 +311,13 @@ where
                 .compact_bitmap
                 .get_or_insert_with(|| BooleanBufferBuilder::new(0));
 
-            let mut item_count: usize = 0;
-            for &d in batch_levels {
-                if d >= threshold {
-                    bitmap.append(d >= max_def);
-                    item_count += 1;
-                }
-            }
+            let item_count = definition_levels::build_filtered_validity_bitmap(
+                batch_levels,
+                None,
+                Some(threshold),
+                max_def,
+                bitmap,
+            );
 
             // Pad values to item_count positions (only if there are gaps).
             if values_read < item_count {

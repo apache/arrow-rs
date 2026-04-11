@@ -124,19 +124,13 @@ impl ArrayReader for StructArrayReader {
             let rep_levels = self.children[0].get_rep_levels();
 
             let mut bitmap = BooleanBufferBuilder::new(item_count);
-            for (i, &d) in def_levels.iter().enumerate() {
-                if let Some(threshold) = self.padding_threshold {
-                    if d < threshold {
-                        continue;
-                    }
-                }
-                if let Some(reps) = rep_levels {
-                    if reps[i] > self.struct_rep_level {
-                        continue;
-                    }
-                }
-                bitmap.append(d >= self.struct_def_level);
-            }
+            crate::arrow::record_reader::definition_levels::build_filtered_validity_bitmap(
+                def_levels,
+                rep_levels.map(|r| (r, self.struct_rep_level)),
+                self.padding_threshold,
+                self.struct_def_level,
+                &mut bitmap,
+            );
             if bitmap.len() != item_count {
                 return Err(general_err!(
                     "Failed to decode level data for struct array: \
