@@ -176,6 +176,7 @@ impl ParquetPushDecoderBuilder {
             metrics,
             row_selection_policy,
             max_predicate_cache_size,
+            fully_matched_row_groups,
         } = self;
 
         // If no row groups were specified, read all of them
@@ -197,6 +198,7 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
             buffers,
             row_selection_policy,
+            fully_matched_row_groups,
         );
 
         // Initialize the decoder with the configured options
