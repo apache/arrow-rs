@@ -278,7 +278,7 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
             make_array(data)
         };
 
-        return Some(target_array.clone());
+        return Some(target_array);
     }
 
     None
