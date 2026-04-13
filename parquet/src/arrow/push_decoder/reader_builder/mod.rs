@@ -425,42 +425,71 @@ impl RowGroupReaderBuilder {
                     mut plan_builder,
                 } = row_group_info;
 
-                let predicate = filter_info.current();
+                // Get the projection before mutable borrow
+                let predicate_projection = filter_info.current().projection().clone();
 
                 let row_group = data_request.try_into_in_memory_row_group(
                     row_group_idx,
                     row_count,
                     &self.metadata,
-                    predicate.projection(),
+                    &predicate_projection,
                     &mut self.buffers,
                 )?;
 
-                let cache_options = filter_info.cache_builder().producer();
+                // Try dictionary pruning before decoding data pages
+                let dict_result =
+                    crate::arrow::arrow_reader::dictionary_pruning::try_dictionary_prune_in_memory(
+                        filter_info.current_mut(),
+                        &row_group,
+                        &self.metadata,
+                        self.fields.as_deref(),
+                    )?;
 
-                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
-                    .with_cache_options(Some(&cache_options))
-                    .with_parquet_metadata(&self.metadata)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                let dict_action = match dict_result {
+                    Some(crate::arrow::arrow_reader::DictionaryPredicateResult::AllFalse) => {
+                        Some(false) // skip all rows
+                    }
+                    Some(crate::arrow::arrow_reader::DictionaryPredicateResult::AllTrue) => {
+                        Some(true) // all rows pass, skip predicate eval
+                    }
+                    _ => None, // evaluate normally
+                };
 
-                // Reset to original policy before each predicate so the override
-                // can detect page skipping for THIS predicate's columns.
-                // Without this reset, a prior predicate's override (e.g. Mask)
-                // carries forward and the check returns early, missing unfetched
-                // pages for subsequent predicates.
-                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+                if dict_action == Some(false) {
+                    // Dictionary tells us no rows match - deselect all rows
+                    plan_builder = plan_builder.deselect_all();
+                } else if dict_action == Some(true) {
+                    // Dictionary tells us all rows match - skip predicate evaluation
+                    // (selection unchanged, all rows pass this predicate)
+                } else {
+                    let cache_options = filter_info.cache_builder().producer();
 
-                // Prepare to evaluate the filter.
-                // Note: first update the selection strategy to properly handle any pages
-                // pruned during fetch
-                plan_builder = override_selector_strategy_if_needed(
-                    plan_builder,
-                    predicate.projection(),
-                    self.row_group_offset_index(row_group_idx),
-                );
-                // `with_predicate` actually evaluates the filter
+                    let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                        .with_cache_options(Some(&cache_options))
+                        .with_parquet_metadata(&self.metadata)
+                        .build_array_reader(self.fields.as_deref(), &predicate_projection)?;
 
-                plan_builder =
-                    plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
+                    // Reset to original policy before each predicate so the override
+                    // can detect page skipping for THIS predicate's columns.
+                    // Without this reset, a prior predicate's override (e.g. Mask)
+                    // carries forward and the check returns early, missing unfetched
+                    // pages for subsequent predicates.
+                    plan_builder =
+                        plan_builder.with_row_selection_policy(self.row_selection_policy);
+
+                    // Prepare to evaluate the filter.
+                    // Note: first update the selection strategy to properly handle any pages
+                    // pruned during fetch
+                    plan_builder = override_selector_strategy_if_needed(
+                        plan_builder,
+                        &predicate_projection,
+                        self.row_group_offset_index(row_group_idx),
+                    );
+                    // `with_predicate` actually evaluates the filter
+
+                    plan_builder =
+                        plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
+                }
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,

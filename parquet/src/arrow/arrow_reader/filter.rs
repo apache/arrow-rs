@@ -20,6 +20,17 @@ use arrow_array::{BooleanArray, RecordBatch};
 use arrow_schema::ArrowError;
 use std::fmt::{Debug, Formatter};
 
+/// Result of evaluating a predicate against dictionary values
+#[derive(Debug)]
+pub enum DictionaryPredicateResult {
+    /// No dictionary values match the predicate - all rows can be skipped
+    AllFalse,
+    /// All dictionary values match the predicate - no need to evaluate per-row
+    AllTrue,
+    /// Some dictionary values match - must evaluate per-row as normal
+    Partial,
+}
+
 /// A predicate operating on [`RecordBatch`]
 ///
 /// See also:
@@ -44,6 +55,31 @@ pub trait ArrowPredicate: Send + 'static {
     /// * `true`:the row should be returned
     /// * `false` or `null`: the row should not be returned
     fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError>;
+
+    /// Evaluate this predicate against dictionary values for a column chunk.
+    ///
+    /// If the column chunk is dictionary-encoded, this method is called with a
+    /// [`RecordBatch`] containing the dictionary values (one row per distinct value).
+    ///
+    /// Returns a [`DictionaryPredicateResult`] indicating whether all rows can be
+    /// skipped, all rows pass, or per-row evaluation is needed.
+    ///
+    /// The default implementation calls [`Self::evaluate`] on the dictionary values
+    /// and checks if any/all values match.
+    fn evaluate_dictionary(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<DictionaryPredicateResult, ArrowError> {
+        let result = self.evaluate(batch)?;
+        let true_count = result.true_count();
+        if true_count == 0 {
+            Ok(DictionaryPredicateResult::AllFalse)
+        } else if true_count == result.len() {
+            Ok(DictionaryPredicateResult::AllTrue)
+        } else {
+            Ok(DictionaryPredicateResult::Partial)
+        }
+    }
 }
 
 /// An [`ArrowPredicate`] created from an [`FnMut`] and a [`ProjectionMask`]
