@@ -28,7 +28,7 @@ use std::vec::IntoIter;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
-use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter};
+use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch, RecordBatchWriter};
 use arrow_schema::{
     ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef, TimeUnit,
 };
@@ -37,6 +37,7 @@ use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_pr
 
 use crate::arrow::ArrowSchemaConverter;
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
+use crate::basic::{LogicalType, TimeUnit as ParquetTimeUnit};
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::encoder::ColumnValueEncoder;
@@ -120,17 +121,17 @@ mod levels;
 /// ## Type Support
 ///
 /// The writer supports writing all Arrow [`DataType`]s that have a direct mapping to
-/// Parquet types including  [`StructArray`] and [`ListArray`].
+/// Parquet types including [`StructArray`] and [`ListArray`].
 ///
-/// The following are not supported:
-///
-/// * [`IntervalMonthDayNanoArray`]: Parquet does not [support nanosecond intervals].
+/// [`IntervalMonthDayNanoArray`] is written as a 16-byte fixed-length byte array
+/// by default (lossless). When [`coerce_types`] is enabled, it is written as a
+/// 12-byte Parquet INTERVAL (lossy, truncating nanoseconds to milliseconds).
 ///
 /// [`DataType`]: https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html
 /// [`StructArray`]: https://docs.rs/arrow/latest/arrow/array/struct.StructArray.html
 /// [`ListArray`]: https://docs.rs/arrow/latest/arrow/array/type.ListArray.html
 /// [`IntervalMonthDayNanoArray`]: https://docs.rs/arrow/latest/arrow/array/type.IntervalMonthDayNanoArray.html
-/// [support nanosecond intervals]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
+/// [`coerce_types`]: crate::file::properties::WriterProperties::coerce_types
 ///
 /// ## Type Compatibility
 /// The writer can write Arrow [`RecordBatch`]s that are logically equivalent. This means that for
@@ -1400,8 +1401,22 @@ fn write_leaf(
                 }
                 ArrowDataType::Timestamp(unit, _) => match unit {
                     TimeUnit::Second => {
-                        let array = column.as_primitive::<TimestampSecondType>();
-                        write_primitive(typed, array.values(), levels)
+                        // If coerced to milliseconds, multiply values by 1000
+                        if matches!(
+                            typed.get_descriptor().logical_type_ref(),
+                            Some(LogicalType::Timestamp {
+                                unit: ParquetTimeUnit::MILLIS,
+                                ..
+                            })
+                        ) {
+                            let array: Int64Array = column
+                                .as_primitive::<TimestampSecondType>()
+                                .unary(|x| x.saturating_mul(1000));
+                            write_primitive(typed, array.values(), levels)
+                        } else {
+                            let array = column.as_primitive::<TimestampSecondType>();
+                            write_primitive(typed, array.values(), levels)
+                        }
                     }
                     TimeUnit::Millisecond => {
                         let array = column.as_primitive::<TimestampMillisecondType>();
@@ -1482,10 +1497,13 @@ fn write_leaf(
                         let array = column.as_primitive::<IntervalDayTimeType>();
                         get_interval_dt_array_slice(array, indices)
                     }
-                    _ => {
-                        return Err(ParquetError::NYI(format!(
-                            "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
-                        )));
+                    IntervalUnit::MonthDayNano => {
+                        let array = column.as_primitive::<IntervalMonthDayNanoType>();
+                        if typed.get_descriptor().type_length() == 12 {
+                            get_interval_mdn_coerced_array_slice(array, indices)
+                        } else {
+                            get_interval_mdn_raw_array_slice(array, indices)
+                        }
                     }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
@@ -1575,6 +1593,44 @@ fn get_interval_dt_array_slice(
         let value = array.value(*i);
         out[4..8].copy_from_slice(&value.days.to_le_bytes());
         out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
+        values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
+    }
+    values
+}
+
+/// Returns 12-byte values representing months, days and milliseconds (4-bytes each).
+/// MonthDayNano nanoseconds are truncated to milliseconds (lossy).
+fn get_interval_mdn_coerced_array_slice(
+    array: &arrow_array::IntervalMonthDayNanoArray,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    for i in indices {
+        let value = array.value(*i);
+        let mut out = [0u8; 12];
+        out[0..4].copy_from_slice(&value.months.to_le_bytes());
+        out[4..8].copy_from_slice(&value.days.to_le_bytes());
+        // Clamp to i32 range: Parquet INTERVAL stores milliseconds as 4-byte signed int
+        let millis = (value.nanoseconds / 1_000_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        out[8..12].copy_from_slice(&millis.to_le_bytes());
+        values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
+    }
+    values
+}
+
+/// Returns 16-byte values: months(4) + days(4) + nanoseconds(8).
+/// Preserves the full IntervalMonthDayNano representation (lossless).
+fn get_interval_mdn_raw_array_slice(
+    array: &arrow_array::IntervalMonthDayNanoArray,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    for i in indices {
+        let value = array.value(*i);
+        let mut out = [0u8; 16];
+        out[0..4].copy_from_slice(&value.months.to_le_bytes());
+        out[4..8].copy_from_slice(&value.days.to_le_bytes());
+        out[8..16].copy_from_slice(&value.nanoseconds.to_le_bytes());
         values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
     }
     values
@@ -3085,9 +3141,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Attempting to write an Arrow interval type MonthDayNano to parquet that is not yet implemented"
-    )]
     fn interval_month_day_nano_single_column() {
         required_and_optional::<IntervalMonthDayNanoArray, _>(vec![
             IntervalMonthDayNano::new(0, 1, 5),

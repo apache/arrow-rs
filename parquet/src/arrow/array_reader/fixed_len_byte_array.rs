@@ -28,9 +28,10 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
     ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
+    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray,
 };
-use arrow_buffer::{Buffer, IntervalDayTime, i256};
+use arrow_buffer::{Buffer, IntervalDayTime, IntervalMonthDayNano, i256};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
@@ -92,6 +93,14 @@ pub fn make_fixed_len_byte_array_reader(
             if byte_length > 32 {
                 return Err(general_err!(
                     "decimal 256 type too large, must be less than 32 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
+        ArrowType::Interval(IntervalUnit::MonthDayNano) => {
+            if byte_length != 12 && byte_length != 16 {
+                return Err(general_err!(
+                    "MonthDayNano interval must be 12 or 16 bytes, got {}",
                     byte_length
                 ));
             }
@@ -222,7 +231,31 @@ impl ArrayReader for FixedLenByteArrayReader {
                         Arc::new(IntervalDayTimeArray::from_unary(&binary, f)) as ArrayRef
                     }
                     IntervalUnit::MonthDayNano => {
-                        return Err(nyi_err!("MonthDayNano intervals not supported"));
+                        if binary.value_length() == 16 {
+                            // Raw 16-byte: months(4) + days(4) + nanoseconds(8)
+                            let f = |b: &[u8]| {
+                                IntervalMonthDayNano::new(
+                                    i32::from_le_bytes(b[0..4].try_into().unwrap()),
+                                    i32::from_le_bytes(b[4..8].try_into().unwrap()),
+                                    i64::from_le_bytes(b[8..16].try_into().unwrap()),
+                                )
+                            };
+                            Arc::new(IntervalMonthDayNanoArray::from_unary(&binary, f))
+                                as ArrayRef
+                        } else {
+                            // Coerced 12-byte: months(4) + days(4) + millis(4)
+                            let f = |b: &[u8]| {
+                                let millis =
+                                    i32::from_le_bytes(b[8..12].try_into().unwrap());
+                                IntervalMonthDayNano::new(
+                                    i32::from_le_bytes(b[0..4].try_into().unwrap()),
+                                    i32::from_le_bytes(b[4..8].try_into().unwrap()),
+                                    millis as i64 * 1_000_000,
+                                )
+                            };
+                            Arc::new(IntervalMonthDayNanoArray::from_unary(&binary, f))
+                                as ArrayRef
+                        }
                     }
                 }
             }
