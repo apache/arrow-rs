@@ -32,13 +32,7 @@ impl PlainDataSizeCounter {
             Type::INT96 => 12 * values.len(),
             Type::BYTE_ARRAY => {
                 // For variable-length types, the length prefix and the actual data are are encoded.
-                values
-                    .iter()
-                    .map(|value| {
-                        let (base_size, num_elements) = value.dict_encoding_size();
-                        base_size + num_elements
-                    })
-                    .sum()
+                values.iter().map(|value| value.dict_encoding_size()).sum()
             }
             Type::FIXED_LEN_BYTE_ARRAY => self.type_length * values.len(),
         };

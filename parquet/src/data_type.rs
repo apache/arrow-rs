@@ -721,10 +721,8 @@ pub(crate) mod private {
 
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize>;
 
-        /// Return the encoded size for a type
-        fn dict_encoding_size(&self) -> (usize, usize) {
-            (std::mem::size_of::<Self>(), 1)
-        }
+        /// Return the size in bytes for the value encoded in the dictionary.
+        fn dict_encoding_size(&self) -> usize;
 
         /// Return the number of variable length bytes in a given slice of data
         ///
@@ -801,6 +799,10 @@ pub(crate) mod private {
             let values_read = bit_reader.skip(num_values, 1);
             decoder.num_values -= values_read;
             Ok(values_read)
+        }
+
+        fn dict_encoding_size(&self) -> usize {
+            1
         }
 
         #[inline]
@@ -885,6 +887,10 @@ pub(crate) mod private {
                     decoder.num_values -= num_values;
 
                     Ok(num_values)
+                }
+
+                fn dict_encoding_size(&self) -> usize {
+                    std::mem::size_of::<Self>()
                 }
 
                 #[inline]
@@ -984,6 +990,10 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
+        fn dict_encoding_size(&self) -> usize {
+            12
+        }
+
         #[inline]
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -1071,9 +1081,8 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
-        #[inline]
-        fn dict_encoding_size(&self) -> (usize, usize) {
-            (std::mem::size_of::<u32>(), self.len())
+        fn dict_encoding_size(&self) -> usize {
+            4 + self.len()
         }
 
         #[inline]
@@ -1171,9 +1180,11 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
-        #[inline]
-        fn dict_encoding_size(&self) -> (usize, usize) {
-            (std::mem::size_of::<u32>(), self.len())
+        fn dict_encoding_size(&self) -> usize {
+            // The encoding of fixed-length byte arrays only encodes the bytes
+            // without a length prefix. In practice, the length of fixed-length
+            // column values is taken from the column metadata and this call is avoided.
+            self.len()
         }
 
         #[inline]
