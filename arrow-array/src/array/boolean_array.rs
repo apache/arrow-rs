@@ -887,6 +887,41 @@ impl From<BooleanBuffer> for BooleanArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Captures the values-buffer identity for a BooleanArray so tests can assert
+    // whether an operation reused the original allocation or produced a new one.
+    struct PointerInfo {
+        ptr: *const u8,
+        offset: usize,
+        len: usize,
+    }
+
+    impl PointerInfo {
+        // Record the current values buffer pointer plus bit offset/length. The
+        // offset/length checks ensure a logically equivalent slice wasn't rebuilt
+        // with a different view over the same allocation.
+        fn new(array: &BooleanArray) -> Self {
+            Self {
+                ptr: array.values().inner().as_ptr(),
+                offset: array.values().offset(),
+                len: array.values().len(),
+            }
+        }
+
+        // Assert that the array still points at the exact same values buffer and
+        // preserves the same bit view.
+        fn assert_same(&self, array: &BooleanArray) {
+            assert_eq!(array.values().inner().as_ptr(), self.ptr);
+            assert_eq!(array.values().offset(), self.offset);
+            assert_eq!(array.values().len(), self.len);
+        }
+
+        // Assert that the array now points at a different values allocation,
+        // indicating the operation fell back to an allocating path.
+        fn assert_different(&self, array: &BooleanArray) {
+            assert_ne!(array.values().inner().as_ptr(), self.ptr);
+        }
+    }
     use arrow_buffer::Buffer;
     use rand::{Rng, rng};
 
@@ -1330,20 +1365,24 @@ mod tests {
     #[test]
     fn test_bitwise_unary_mut_unshared() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
+        let info = PointerInfo::new(&arr);
         let result = arr.bitwise_unary_mut(|x| !x).unwrap();
         let expected = BooleanArray::from(vec![false, true, false, true]);
         assert_eq!(result, expected);
+        info.assert_same(&result);
     }
 
     #[test]
     fn test_bitwise_unary_mut_shared() {
         let arr = BooleanArray::from(vec![true, false, true, false]);
+        let info = PointerInfo::new(&arr);
         let _shared = arr.clone();
         let result = arr.bitwise_unary_mut(|x| !x);
         assert!(result.is_err());
 
         let returned = result.unwrap_err();
         assert_eq!(returned, BooleanArray::from(vec![true, false, true, false]));
+        info.assert_same(&returned);
     }
 
     #[test]
@@ -1360,9 +1399,21 @@ mod tests {
     #[test]
     fn test_bitwise_unary_mut_or_clone_shared() {
         let arr = BooleanArray::from(vec![true, false, true]);
+        let info = PointerInfo::new(&arr);
         let _shared = arr.clone();
         let result = arr.bitwise_unary_mut_or_clone(|x| !x);
         assert_eq!(result, BooleanArray::from(vec![false, true, false]));
+        info.assert_different(&result);
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_or_clone_unshared() {
+        // Covers the uniquely-owned fast path in bitwise_unary_mut_or_clone.
+        let arr = BooleanArray::from(vec![true, false, true]);
+        let info = PointerInfo::new(&arr);
+        let result = arr.bitwise_unary_mut_or_clone(|x| !x);
+        assert_eq!(result, BooleanArray::from(vec![false, true, false]));
+        info.assert_same(&result);
     }
 
     #[test]
@@ -1419,20 +1470,25 @@ mod tests {
     #[test]
     fn test_bitwise_bin_op_mut_unshared() {
         let a = BooleanArray::from(vec![true, false, true, true]);
+        let info = PointerInfo::new(&a);
         let b = BooleanArray::from(vec![true, true, false, true]);
         let result = a.bitwise_bin_op_mut(&b, |a, b| a & b).unwrap();
         assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+        info.assert_same(&result);
     }
 
     #[test]
     fn test_bitwise_bin_op_mut_shared() {
         let a = BooleanArray::from(vec![true, false, true, true]);
+        let info = PointerInfo::new(&a);
         let _shared = a.clone();
         let result = a.bitwise_bin_op_mut(
             &BooleanArray::from(vec![true, true, false, true]),
             |a, b| a & b,
         );
         assert!(result.is_err());
+        let returned = result.unwrap_err();
+        info.assert_same(&returned);
     }
 
     #[test]
@@ -1451,10 +1507,12 @@ mod tests {
     #[test]
     fn test_bitwise_bin_op_mut_or_clone_shared() {
         let a = BooleanArray::from(vec![true, false, true, true]);
+        let info = PointerInfo::new(&a);
         let _shared = a.clone();
         let b = BooleanArray::from(vec![true, true, false, true]);
         let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
         assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+        info.assert_different(&result);
     }
 
     #[test]
@@ -1462,6 +1520,7 @@ mod tests {
         // When the buffer is shared, _mut_or_clone falls back to bitwise_bin_op.
         // The null union must only be applied once, not double-applied.
         let a = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+        let info = PointerInfo::new(&a);
         let _shared = a.clone();
         let b = BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]);
 
@@ -1472,6 +1531,24 @@ mod tests {
         assert_eq!(result.null_count(), 2);
         assert!(result.is_null(1));
         assert!(result.is_null(2));
+        info.assert_different(&result);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_or_clone_unshared_with_nulls() {
+        // Covers the uniquely-owned fast path in bitwise_bin_op_mut_or_clone,
+        // including null union on the in-place path.
+        let a = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+        let info = PointerInfo::new(&a);
+        let b = BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]);
+        let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
+
+        assert_eq!(result.null_count(), 2);
+        assert!(result.is_null(1));
+        assert!(result.is_null(2));
+        assert!(result.value(0));
+        assert!(!result.value(3));
+        info.assert_same(&result);
     }
 
     #[test]
