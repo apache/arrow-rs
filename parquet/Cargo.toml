@@ -222,6 +222,11 @@ required-features = ["arrow"]
 harness = false
 
 [[bench]]
+name = "push_decoder"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "arrow_reader"
 required-features = ["arrow", "test_common", "experimental"]
 harness = false
