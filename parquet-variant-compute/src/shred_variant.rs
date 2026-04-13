@@ -96,7 +96,7 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
     let (value, typed_value, nulls) = builder.finish()?;
     Ok(VariantArray::from_parts(
         array.metadata_field().clone(),
-        Some(Arc::new(value) as ArrayRef),
+        Some(Arc::new(value)),
         Some(typed_value),
         nulls,
     ))
@@ -444,7 +444,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         for (field_name, typed_value_builder) in self.typed_value_builders {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
             let array = ShreddedVariantFieldArray::from_parts(
-                Some(Arc::new(value) as ArrayRef),
+                Some(Arc::new(value)),
                 Some(typed_value),
                 nulls,
             );
@@ -1142,7 +1142,7 @@ mod tests {
     #[test]
     fn test_all_null_input() {
         // Create VariantArray with no value field (all null case)
-        let metadata = Arc::new(BinaryViewArray::from_iter_values([&[1u8, 0u8]])) as ArrayRef; // minimal valid metadata
+        let metadata = Arc::new(BinaryViewArray::from_iter_values([&[1u8, 0u8]])); // minimal valid metadata
         let all_null_array = VariantArray::from_parts(metadata, None, None, None);
         let result = shred_variant(&all_null_array, &DataType::Int64).unwrap();
 
@@ -1698,11 +1698,11 @@ mod tests {
         let outer_metadata = Arc::new(BinaryViewArray::from_iter_values(std::iter::repeat_n(
             EMPTY_VARIANT_METADATA_BYTES,
             outer_elements.len(),
-        ))) as ArrayRef;
+        )));
         let outer_variant = VariantArray::from_parts(
             outer_metadata,
             Some(outer_fallbacks.clone()),
-            Some(Arc::new(outer_values.clone()) as ArrayRef),
+            Some(Arc::new(outer_values.clone())),
             None,
         );
 
@@ -2245,7 +2245,7 @@ mod tests {
                 Arc::new(BinaryViewArray::from_iter_values(std::iter::repeat_n(
                     EMPTY_VARIANT_METADATA_BYTES,
                     scores_field.len(),
-                ))) as ArrayRef,
+                ))),
                 Some(scores_field.value_field().unwrap().clone()),
                 Some(scores_field.typed_value_field().unwrap().clone()),
                 None,

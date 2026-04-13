@@ -2303,7 +2303,7 @@ mod test {
                 .unwrap(),
         ) as ArrayRef;
         let a_field_shredded = ShreddedVariantFieldArray::from_parts(
-            Some(Arc::new(a_value_array) as ArrayRef),
+            Some(Arc::new(a_value_array)),
             Some(a_inner_typed_value),
             None,
         );
@@ -2405,7 +2405,7 @@ mod test {
                 .unwrap(),
         ) as ArrayRef;
         let b_field_shredded = ShreddedVariantFieldArray::from_parts(
-            Some(Arc::new(b_value_array) as ArrayRef),
+            Some(Arc::new(b_value_array)),
             Some(b_inner_typed_value),
             None,
         );
@@ -2434,7 +2434,7 @@ mod test {
                 .unwrap(),
         ) as ArrayRef;
         let a_field_shredded = ShreddedVariantFieldArray::from_parts(
-            Some(Arc::new(a_value_array) as ArrayRef),
+            Some(Arc::new(a_value_array)),
             Some(a_inner_typed_value),
             None,
         );
