@@ -51,6 +51,18 @@ pub(crate) fn binary_array_value(array: &dyn Array, index: usize) -> Option<&[u8
     }
 }
 
+/// Returns a [`Variant`] from a `metadata` and `value` byte arrays, returns `None`
+/// if one of them is of invalid type.
+pub(crate) fn variant_from_arrays_at<'m, 'v>(
+    metadata: &'m dyn Array,
+    value: &'v dyn Array,
+    index: usize,
+) -> Option<Variant<'m, 'v>> {
+    let metadata = binary_array_value(metadata, index)?;
+    let value = binary_array_value(value, index)?;
+    Some(Variant::new(metadata, value))
+}
+
 /// Validates that an array has a binary-like data type.
 fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
     match array.data_type() {
@@ -387,22 +399,18 @@ impl VariantArray {
                 typed_value_to_variant(typed_value, value, index)
             }
             // Otherwise fall back to value, if available
-            (_, Some(value)) if value.is_valid(index) => {
-                let metadata =
-                    binary_array_value(self.metadata.as_ref(), index).ok_or_else(|| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "metadata field must be a binary-like array, instead got {}",
-                            self.metadata.data_type(),
-                        ))
-                    })?;
-                let value = binary_array_value(value.as_ref(), index).ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(format!(
-                        "value field must be a binary-like array, instead got {}",
-                        value.data_type(),
-                    ))
-                })?;
-                Ok(Variant::new(metadata, value))
-            }
+            (_, Some(value)) if value.is_valid(index) => variant_from_arrays_at(
+                &self.metadata,
+                value,
+                index,
+            )
+            .ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "metadata and value fields must be binary-like arrays, instead got {} and {}",
+                    self.metadata.data_type(),
+                    value.data_type()
+                ))
+            }),
             // It is technically invalid for neither value nor typed_value fields to be available,
             // but the spec specifically requires readers to return Variant::Null in this case.
             _ => Ok(Variant::Null),

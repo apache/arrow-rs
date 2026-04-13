@@ -692,7 +692,7 @@ impl VariantSchemaNode {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use crate::variant_array::binary_array_value;
+    use crate::variant_array::{binary_array_value, variant_from_arrays_at};
     use arrow::array::{
         Array, BinaryViewArray, FixedSizeBinaryArray, Float64Array, GenericListArray,
         GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray, ListArray,
@@ -1256,10 +1256,7 @@ mod tests {
         assert!(!value_field.is_null(1)); // value should contain original
         assert!(typed_value_field.is_null(1)); // typed_value should be null
         assert_eq!(
-            Variant::new(
-                binary_array_value(metadata_field.as_ref(), 1).unwrap(),
-                binary_array_value(value_field.as_ref(), 1).unwrap()
-            ),
+            variant_from_arrays_at(metadata_field, value_field, 1).unwrap(),
             Variant::from("hello")
         );
 
@@ -1275,10 +1272,7 @@ mod tests {
         assert!(!result.is_null(4));
         assert!(!value_field.is_null(4)); // should contain Variant::Null
         assert_eq!(
-            Variant::new(
-                binary_array_value(metadata_field.as_ref(), 4).unwrap(),
-                binary_array_value(value_field.as_ref(), 4).unwrap()
-            ),
+            variant_from_arrays_at(metadata_field, value_field, 4).unwrap(),
             Variant::Null
         );
         assert!(typed_value_field.is_null(4));
@@ -1355,10 +1349,7 @@ mod tests {
         assert!(value.is_valid(1));
         assert!(typed_value.is_null(1));
         assert_eq!(
-            Variant::new(
-                binary_array_value(metadata.as_ref(), 1).unwrap(),
-                binary_array_value(value.as_ref(), 1).unwrap()
-            ),
+            variant_from_arrays_at(metadata, value, 1).unwrap(),
             Variant::from(42i64)
         );
 
@@ -1372,10 +1363,7 @@ mod tests {
         assert!(value.is_valid(3));
         assert!(typed_value.is_null(3));
         assert_eq!(
-            Variant::new(
-                binary_array_value(metadata.as_ref(), 3).unwrap(),
-                binary_array_value(value.as_ref(), 3).unwrap()
-            ),
+            variant_from_arrays_at(metadata, value, 3).unwrap(),
             Variant::Null
         );
 
@@ -1417,10 +1405,7 @@ mod tests {
         assert!(value.is_valid(1));
         assert!(typed_value.is_null(1));
         assert_eq!(
-            Variant::new(
-                binary_array_value(metadata.as_ref(), 1).unwrap(),
-                binary_array_value(value.as_ref(), 1).unwrap()
-            ),
+            variant_from_arrays_at(metadata, value, 1).unwrap(),
             Variant::from("not_binary")
         );
 
@@ -1434,10 +1419,7 @@ mod tests {
         assert!(value.is_valid(3));
         assert!(typed_value.is_null(3));
         assert_eq!(
-            Variant::new(
-                binary_array_value(metadata.as_ref(), 3).unwrap(),
-                binary_array_value(value.as_ref(), 3).unwrap()
-            ),
+            variant_from_arrays_at(metadata, value, 3).unwrap(),
             Variant::Null
         );
 
@@ -1944,10 +1926,7 @@ mod tests {
             metadata: &'m dyn Array,
             value: &'v dyn Array,
         ) -> Variant<'m, 'v> {
-            Variant::new(
-                binary_array_value(metadata, i).unwrap(),
-                binary_array_value(value, i).unwrap(),
-            )
+            variant_from_arrays_at(metadata, value, i).unwrap()
         }
         let expect = |i, expected_result: Option<ShreddedValue<ShreddedStruct>>| {
             match expected_result {
