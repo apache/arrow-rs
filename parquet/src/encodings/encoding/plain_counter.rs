@@ -26,7 +26,7 @@ impl PlainDataSizeCounter {
     /// Updates the counter with the given slice.
     pub fn update<T: ParquetValueType>(&mut self, values: &[T]) {
         let raw_size = match T::PHYSICAL_TYPE {
-            Type::BOOLEAN => 1 * values.len(),
+            Type::BOOLEAN => values.len(),
             Type::INT32 | Type::FLOAT => 4 * values.len(),
             Type::INT64 | Type::DOUBLE => 8 * values.len(),
             Type::INT96 => 12 * values.len(),
