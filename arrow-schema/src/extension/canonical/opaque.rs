@@ -257,6 +257,10 @@ impl ExtensionType for Opaque {
     fn try_new(_data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> {
         Ok(Self::from(metadata))
     }
+
+    fn validate(_data_type: &DataType, _metadata: Self::Metadata) -> Result<(), ArrowError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

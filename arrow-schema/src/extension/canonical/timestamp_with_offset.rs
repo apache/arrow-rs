@@ -139,6 +139,10 @@ impl ExtensionType for TimestampWithOffset {
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
         Self.supports_data_type(data_type).map(|_| Self)
     }
+
+    fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<(), ArrowError> {
+        Self.supports_data_type(data_type)
+    }
 }
 
 #[cfg(test)]
