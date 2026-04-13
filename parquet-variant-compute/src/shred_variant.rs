@@ -68,13 +68,13 @@ use std::sync::Arc;
 /// See [`ShreddedSchemaBuilder`] for a convenient way to build the `as_type`
 /// value passed to this function.
 pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<VariantArray> {
-    shred_variant_with_options(array, as_type, CastOptions::default())
+    shred_variant_with_options(array, as_type, &CastOptions::default())
 }
 
 pub fn shred_variant_with_options(
     array: &VariantArray,
     as_type: &DataType,
-    cast_options: CastOptions,
+    cast_options: &CastOptions,
 ) -> Result<VariantArray> {
     if array.typed_value_field().is_some() {
         return Err(ArrowError::InvalidArgumentError(
@@ -330,6 +330,10 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         match variant {
             Variant::List(ref list) => {
                 self.nulls.append_non_null();
+
+                // With `safe` cast option set to false, appending list of wrong size to
+                // `typed_value_builder` of type `FixedSizeList` will result in an error. In such a
+                // case, the provided list should be appended to the `value_builder.
                 let shredded = self.typed_value_builder.append_value(&variant)?;
                 if shredded {
                     self.value_builder.append_null();
@@ -1690,7 +1694,7 @@ mod tests {
         let result = shred_variant_with_options(
             &input,
             &list_schema,
-            CastOptions {
+            &CastOptions {
                 safe: true,
                 ..Default::default()
             },
@@ -1707,7 +1711,7 @@ mod tests {
         let err = shred_variant_with_options(
             &input,
             &list_schema,
-            CastOptions {
+            &CastOptions {
                 safe: false,
                 ..Default::default()
             },
