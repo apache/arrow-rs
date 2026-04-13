@@ -550,6 +550,8 @@ impl ColumnValueEncoder for ByteArrayEncoder {
                     ));
                 }
 
+                self.plain_data_size_counter = None;
+
                 Ok(Some(encoder.flush_dict_page()))
             }
             _ => Ok(None),

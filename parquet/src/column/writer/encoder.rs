@@ -322,6 +322,8 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
                     ));
                 }
 
+                self.plain_data_size_counter = None;
+
                 let buf = encoder.write_dict()?;
 
                 Ok(Some(DictionaryPage {
