@@ -254,10 +254,18 @@ where
             precision,
             scale,
         ),
-        Variant::Float(f) => single_float_to_decimal::<O>(*f as _, mul),
+        Variant::Float(f) => single_float_to_decimal::<O>(f64::from(*f), mul),
         Variant::Double(f) => single_float_to_decimal::<O>(*f, mul),
-        Variant::String(v) => parse_string_to_decimal_native::<O>(v, scale as _).ok(),
-        Variant::ShortString(v) => parse_string_to_decimal_native::<O>(v, scale as _).ok(),
+        Variant::String(v) if scale > 0 => parse_string_to_decimal_native::<O>(
+            v,
+            <i8 as TryInto<usize>>::try_into(scale).expect("scale is positive, would never fail"),
+        )
+        .ok(),
+        Variant::ShortString(v) if scale > 0 => parse_string_to_decimal_native::<O>(
+            v,
+            <i8 as TryInto<usize>>::try_into(scale).expect("scale is positive, would never fail"),
+        )
+        .ok(),
         Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
             d.integer(),
             VariantDecimal4::MAX_PRECISION,

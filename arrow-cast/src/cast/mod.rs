@@ -89,7 +89,7 @@ where
     D: DecimalType,
     F: Fn(D::Native) -> f64,
 {
-    f(x) / 10_f64.powi(scale)
+    f(x) * 10_f64.powi(-scale)
 }
 
 /// CastOptions provides a way to override the default cast behaviors
@@ -2331,10 +2331,11 @@ where
         Int32 => cast_decimal_to_integer::<D, Int32Type>(array, base, *scale, cast_options),
         Int64 => cast_decimal_to_integer::<D, Int64Type>(array, base, *scale, cast_options),
         Float32 => cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
-            single_decimal_to_float_lossy::<D, F>(&as_float, x, *scale as _) as f32
+            single_decimal_to_float_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
+                as f32
         }),
         Float64 => cast_decimal_to_float::<D, Float64Type, _>(array, |x| {
-            single_decimal_to_float_lossy::<D, F>(&as_float, x, *scale as _)
+            single_decimal_to_float_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
         }),
         Utf8View => value_to_string_view(array, cast_options),
         Utf8 => value_to_string::<i32>(array, cast_options),

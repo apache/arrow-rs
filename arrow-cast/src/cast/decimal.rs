@@ -837,33 +837,35 @@ where
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            value_builder.append_null();
-        } else {
-            match cast_options.safe {
-                true => {
-                    let v = cast_single_decimal_to_integer::<D, T::Native>(
+    // Helper macro for emitting nearly the same loop every time, so we can hoist branches out
+    // The compiler will specialize the resulting code (inlining and jump threading)
+    macro_rules! cast_loop {
+        (|$v: ident| $body:expr) => {{
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    value_builder.append_null();
+                } else {
+                    let $v = cast_single_decimal_to_integer::<D, T::Native>(
                         array.value(i),
                         div,
-                        scale as _,
+                        <i16 as From<i8>>::from(scale),
                         T::DATA_TYPE,
-                    )
-                    .ok();
-                    value_builder.append_option(v);
-                }
-                false => {
-                    let value = cast_single_decimal_to_integer::<D, T::Native>(
-                        array.value(i),
-                        div,
-                        scale as _,
-                        T::DATA_TYPE,
-                    )?;
-
-                    value_builder.append_value(value);
+                    );
+                    $body
                 }
             }
+        }};
+    }
+    if scale < 0 {
+        if cast_options.safe {
+            cast_loop!(|v| value_builder.append_option(v.ok()));
+        } else {
+            cast_loop!(|v| value_builder.append_value(v?));
         }
+    } else if cast_options.safe {
+        cast_loop!(|v| value_builder.append_option(v.ok()));
+    } else {
+        cast_loop!(|v| value_builder.append_value(v?));
     }
 
     Ok(Arc::new(value_builder.finish()))

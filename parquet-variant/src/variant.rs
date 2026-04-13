@@ -847,15 +847,20 @@ impl<'m, 'v> Variant<'m, 'v> {
     {
         let base: D::Native = NumCast::from(10)?;
 
-        base.pow_checked(scale as _)
+        base.pow_checked(<u32 as From<u8>>::from(scale))
             .ok()
             .and_then(|div| match T::KIND {
-                NumericKind::Integer => {
-                    cast_single_decimal_to_integer::<D, T>(raw, div, scale as _, T::arrow_type())
-                        .ok()
-                }
+                NumericKind::Integer => cast_single_decimal_to_integer::<D, T>(
+                    raw,
+                    div,
+                    <i16 as From<u8>>::from(scale),
+                    T::arrow_type(),
+                )
+                .ok(),
                 NumericKind::Float => T::from(single_decimal_to_float_lossy::<D, _>(
-                    &as_float, raw, scale as _,
+                    &as_float,
+                    raw,
+                    <i32 as From<u8>>::from(scale),
                 )),
             })
     }
@@ -878,21 +883,21 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int64(i) => num_cast(i),
             Variant::Float(f) => num_cast(f),
             Variant::Double(d) => num_cast(d),
-            Variant::Decimal4(d) => Self::cast_decimal_to_num::<Decimal32Type, T, _>(
-                d.integer(),
-                d.scale(),
-                |x: i32| x as f64,
-            ),
-            Variant::Decimal8(d) => Self::cast_decimal_to_num::<Decimal64Type, T, _>(
-                d.integer(),
-                d.scale(),
-                |x: i64| x as f64,
-            ),
-            Variant::Decimal16(d) => Self::cast_decimal_to_num::<Decimal128Type, T, _>(
-                d.integer(),
-                d.scale(),
-                |x: i128| x as f64,
-            ),
+            Variant::Decimal4(d) => {
+                Self::cast_decimal_to_num::<Decimal32Type, T, _>(d.integer(), d.scale(), |x| {
+                    x as f64
+                })
+            }
+            Variant::Decimal8(d) => {
+                Self::cast_decimal_to_num::<Decimal64Type, T, _>(d.integer(), d.scale(), |x| {
+                    x as f64
+                })
+            }
+            Variant::Decimal16(d) => {
+                Self::cast_decimal_to_num::<Decimal128Type, T, _>(d.integer(), d.scale(), |x| {
+                    x as f64
+                })
+            }
             _ => None,
         }
     }
@@ -1181,7 +1186,7 @@ impl<'m, 'v> Variant<'m, 'v> {
         self.as_num()
     }
 
-    fn convert_string_to_decimal<VD, D>(input: &str) -> Option<VD>
+    fn convert_string_to_decimal<D, VD>(input: &str) -> Option<VD>
     where
         D: DecimalType,
         VD: VariantDecimalType<Native = D::Native>,
@@ -1190,14 +1195,12 @@ impl<'m, 'v> Variant<'m, 'v> {
         // find the last '.'
         let scale_usize = input
             .rsplit_once('.')
-            .map(|(_, frac)| frac.len())
-            .unwrap_or(0);
+            .map_or_else(|| 0, |(_, frac)| frac.len());
 
         let scale = u8::try_from(scale_usize).ok()?;
 
-        parse_string_to_decimal_native::<D>(input, scale_usize)
-            .ok()
-            .and_then(|raw| VD::try_new(raw, scale).ok())
+        let raw = parse_string_to_decimal_native::<D>(input, scale_usize).ok()?;
+        VD::try_new(raw, scale).ok()
     }
 
     /// Converts this variant to tuple with a 4-byte unscaled value if possible.
@@ -1240,9 +1243,9 @@ impl<'m, 'v> Variant<'m, 'v> {
                 .and_then(|x: i32| x.try_into().ok()),
             Variant::Double(f) => single_float_to_decimal::<Decimal32Type>(f, 1f64)
                 .and_then(|x: i32| x.try_into().ok()),
-            Variant::String(v) => Self::convert_string_to_decimal::<_, Decimal32Type>(v),
+            Variant::String(v) => Self::convert_string_to_decimal::<Decimal32Type, _>(v),
             Variant::ShortString(v) => {
-                Self::convert_string_to_decimal::<_, Decimal32Type>(v.as_str())
+                Self::convert_string_to_decimal::<Decimal32Type, _>(v.as_str())
             }
             Variant::Decimal4(decimal4) => Some(decimal4),
             Variant::Decimal8(decimal8) => decimal8.try_into().ok(),
@@ -1291,9 +1294,9 @@ impl<'m, 'v> Variant<'m, 'v> {
                 .and_then(|x: i64| x.try_into().ok()),
             Variant::Double(f) => single_float_to_decimal::<Decimal64Type>(f, 1f64)
                 .and_then(|x: i64| x.try_into().ok()),
-            Variant::String(v) => Self::convert_string_to_decimal::<_, Decimal64Type>(v),
+            Variant::String(v) => Self::convert_string_to_decimal::<Decimal64Type, _>(v),
             Variant::ShortString(v) => {
-                Self::convert_string_to_decimal::<_, Decimal64Type>(v.as_str())
+                Self::convert_string_to_decimal::<Decimal64Type, _>(v.as_str())
             }
             Variant::Decimal4(decimal4) => Some(decimal4.into()),
             Variant::Decimal8(decimal8) => Some(decimal8),
@@ -1329,15 +1332,15 @@ impl<'m, 'v> Variant<'m, 'v> {
         match *self {
             Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => self
                 .as_num::<i64>()
-                .map(|x| (x as i128).try_into().ok())
+                .map(|x| <i128 as From<i64>>::from(x).try_into().ok())
                 .unwrap(),
             Variant::Float(f) => single_float_to_decimal::<Decimal128Type>(f as _, 1f64)
                 .and_then(|x: i128| x.try_into().ok()),
             Variant::Double(f) => single_float_to_decimal::<Decimal128Type>(f, 1f64)
                 .and_then(|x: i128| x.try_into().ok()),
-            Variant::String(v) => Self::convert_string_to_decimal::<_, Decimal128Type>(v),
+            Variant::String(v) => Self::convert_string_to_decimal::<Decimal128Type, _>(v),
             Variant::ShortString(v) => {
-                Self::convert_string_to_decimal::<_, Decimal128Type>(v.as_str())
+                Self::convert_string_to_decimal::<Decimal128Type, _>(v.as_str())
             }
             Variant::Decimal4(decimal4) => Some(decimal4.into()),
             Variant::Decimal8(decimal8) => Some(decimal8.into()),
