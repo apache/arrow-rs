@@ -53,16 +53,12 @@ pub(crate) fn binary_array_value(array: &dyn Array, index: usize) -> Option<&[u8
 
 /// Validates that an array has a binary-like data type.
 fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
-    if matches!(
-        array.data_type(),
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-    ) {
-        Ok(())
-    } else {
-        Err(ArrowError::InvalidArgumentError(format!(
+    match array.data_type() {
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
+        _ => Err(ArrowError::InvalidArgumentError(format!(
             "VariantArray '{field_name}' field must be Binary, LargeBinary, or BinaryView, got {}",
             array.data_type()
-        )))
+        ))),
     }
 }
 
