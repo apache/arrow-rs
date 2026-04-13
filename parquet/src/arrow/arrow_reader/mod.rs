@@ -1404,6 +1404,8 @@ impl ParquetRecordBatchReader {
                             mask_chunk.chunk_rows
                         ));
                     }
+
+                    // Keep strict behavior — do NOT allow partial reads here
                     if read != mask_chunk.chunk_rows {
                         return Err(general_err!(
                             "insufficient rows read from array reader - expected {}, got {}",
@@ -1413,8 +1415,9 @@ impl ParquetRecordBatchReader {
                     }
 
                     let array = self.array_reader.consume_batch()?;
-                    // The column reader exposes the projection as a struct array; convert this
-                    // into a record batch before applying the boolean filter mask.
+
+                    // The column reader exposes the projection as a struct array;
+                    // convert this into a record batch before applying the boolean filter mask.
                     let struct_array = array.as_struct_opt().ok_or_else(|| {
                         ArrowError::ParquetError(
                             "Struct array reader should return struct array".to_string(),
@@ -1439,6 +1442,7 @@ impl ParquetRecordBatchReader {
                     return Ok(Some(filtered_batch));
                 }
             }
+
             RowSelectionCursor::Selectors(selectors_cursor) => {
                 while read_records < batch_size && !selectors_cursor.is_empty() {
                     let front = selectors_cursor.next_selector();

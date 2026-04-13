@@ -60,10 +60,9 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     /// UTF-8. This should be done by calling [`Self::check_valid_utf8`] after
     /// all data has been written
     pub fn try_push(&mut self, data: &[u8], validate_utf8: bool) -> Result<()> {
+        // Keep UTF8 validation
         if validate_utf8 {
             if let Some(&b) = data.first() {
-                // A valid code-point iff it does not start with 0b10xxxxxx
-                // Bit-magic taken from `std::str::is_char_boundary`
                 if (b as i8) < -0x40 {
                     return Err(ParquetError::General(
                         "encountered non UTF-8 data".to_string(),
@@ -72,15 +71,19 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             }
         }
 
-        self.values.extend_from_slice(data);
+        let current_len = self.values.len();
+        let new_len = current_len + data.len();
 
-        let index_offset = I::from_usize(self.values.len())
+        // Proactively check if offset type can represent this
+        let index_offset = I::from_usize(new_len)
             .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
 
+        // Only mutate state AFTER successful conversion
+        self.values.extend_from_slice(data);
         self.offsets.push(index_offset);
+
         Ok(())
     }
-
     /// Extends this buffer with a list of keys
     ///
     /// For each value `key` in `keys` this will insert
