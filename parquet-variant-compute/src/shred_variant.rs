@@ -1698,12 +1698,12 @@ mod tests {
         .unwrap();
         assert_eq!(result.len(), 1);
 
-        // With `safe` cast seto to true, the incorrect size should not raise error.
+        // With `safe` set to to true, the incorrect size should not raise error.
         assert!(result.is_valid(0));
         assert!(result.value_field().unwrap().is_valid(0));
         assert!(result.typed_value_field().unwrap().is_null(0));
 
-        // With `safe` cast set to false, the incorrect size should raise error.
+        // With `safe` set to false, the incorrect size should raise error.
         let err = shred_variant_with_options(
             &input,
             &list_schema,

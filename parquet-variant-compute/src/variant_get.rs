@@ -4320,7 +4320,7 @@ mod test {
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
         let item_field = Arc::new(Field::new("item", Int64, true));
 
-        // With `safe` set to true, size mismatch should return in null.
+        // With `safe` set to true, size mismatch should return Null.
         let options = GetOptions::new()
             .with_as_type(Some(FieldRef::from(Field::new(
                 "result",
@@ -4339,7 +4339,7 @@ mod test {
         assert_eq!(fixed_size_list.len(), 1);
         assert!(fixed_size_list.is_null(0));
 
-        // With `safe` option set to false, error should be raise on wrong sized fixed list.
+        // With `safe` set to false, error should be raised on wrong sized fixed list.
         let options = GetOptions::new()
             .with_as_type(Some(FieldRef::from(Field::new(
                 "result",
