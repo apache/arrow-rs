@@ -2573,6 +2573,74 @@ mod tests {
     }
 
     #[test]
+    fn arrow_writer_dictionary_fallback_on_unfavorable_compression() {
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+        let mut builder = StringBuilder::with_capacity(100, 329 * 10_000);
+
+        // Generate an array of 10 unique 10 character strings.
+        // This results in a dictionary encoding larger than the plain encoded data,
+        // which should trigger a fallback to PLAIN encoding.
+        for i in 0..10 {
+            let value = i
+                .to_string()
+                .repeat(10)
+                .chars()
+                .take(10)
+                .collect::<String>();
+
+            builder.append_value(value);
+        }
+
+        let array = Arc::new(builder.finish());
+
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let file = tempfile::tempfile().unwrap();
+
+        // Set dictionary fallback to trigger fallback to PLAIN encoding on unfavorable compression
+        let props = WriterProperties::builder()
+            .set_dictionary_fallback(DictionaryFallback::OnUnfavorableCompression)
+            .set_data_page_size_limit(1)
+            .set_write_batch_size(1)
+            .build();
+
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props))
+                .expect("Unable to write file");
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader =
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap();
+
+        let column = reader.metadata().row_group(0).columns();
+
+        assert_eq!(column.len(), 1);
+
+        // We should write one row before falling back to PLAIN encoding so there should still be a
+        // dictionary page.
+        assert!(
+            column[0].dictionary_page_offset().is_some(),
+            "Expected a dictionary page"
+        );
+
+        assert!(reader.metadata().offset_index().is_some());
+        let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
+
+        let page_locations = offset_indexes[0].page_locations.clone();
+
+        // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
+        // so we expect one dictionary encoded page and then a page per row thereafter.
+        assert_eq!(
+            page_locations.len(),
+            10,
+            "Expected 10 pages but got {page_locations:#?}"
+        );
+    }
+
+    #[test]
     fn arrow_writer_float_nans() {
         let f16_field = Field::new("a", DataType::Float16, false);
         let f32_field = Field::new("b", DataType::Float32, false);
