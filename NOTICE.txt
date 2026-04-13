@@ -11,10 +11,3 @@ This product includes software from the chronoutil crate (MIT)
 This product includes software from the compact-thrift project (Apache 2.0)
  * Copyright Jörn Horstmann
  * https://github.com/jhorstmann/compact-thrift
-
-This product includes software inspired by the parity-common uint crate (Apache 2.0 / MIT)
- * Copyright Parity Technologies
- * https://github.com/paritytech/parity-common
-
-This product includes software inspired by the simdjson project (Apache 2.0)
- * https://github.com/simdjson/simdjson
