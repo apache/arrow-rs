@@ -22,7 +22,7 @@ use arrow::util::bench_util::{
     create_dict_from_values, create_primitive_array, create_string_array_with_len,
 };
 use arrow::util::data_gen::create_random_array;
-use arrow_array::types::Int32Type;
+use arrow_array::types::{Float64Type, Int32Type, Int64Type};
 use arrow_array::{Array, ArrayRef, UInt32Array};
 use arrow_schema::{DataType, Field};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -32,6 +32,10 @@ use std::{hint, sync::Arc};
 enum Column {
     RequiredI32,
     OptionalI32,
+    RequiredI64,
+    OptionalI64,
+    RequiredF64,
+    OptionalF64,
     Required16CharString,
     Optional16CharString,
     Optional50CharString,
@@ -47,6 +51,10 @@ impl std::fmt::Debug for Column {
         let s = match self {
             Column::RequiredI32 => "i32",
             Column::OptionalI32 => "i32_opt",
+            Column::RequiredI64 => "i64",
+            Column::OptionalI64 => "i64_opt",
+            Column::RequiredF64 => "f64",
+            Column::OptionalF64 => "f64_opt",
             Column::Required16CharString => "str(16)",
             Column::Optional16CharString => "str_opt(16)",
             Column::Optional50CharString => "str_opt(50)",
@@ -65,6 +73,10 @@ impl Column {
         match self {
             Column::RequiredI32 => Arc::new(create_primitive_array::<Int32Type>(size, 0.)),
             Column::OptionalI32 => Arc::new(create_primitive_array::<Int32Type>(size, 0.2)),
+            Column::RequiredI64 => Arc::new(create_primitive_array::<Int64Type>(size, 0.)),
+            Column::OptionalI64 => Arc::new(create_primitive_array::<Int64Type>(size, 0.2)),
+            Column::RequiredF64 => Arc::new(create_primitive_array::<Float64Type>(size, 0.)),
+            Column::OptionalF64 => Arc::new(create_primitive_array::<Float64Type>(size, 0.2)),
             Column::Required16CharString => {
                 Arc::new(create_string_array_with_len::<i32>(size, 0., 16))
             }
@@ -166,6 +178,17 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
 
 fn add_benchmark(c: &mut Criterion) {
     let cases: &[&[Column]] = &[
+        // Single-column primitives
+        &[Column::RequiredI32],
+        &[Column::OptionalI32],
+        &[Column::RequiredI64],
+        &[Column::OptionalI64],
+        &[Column::RequiredF64],
+        &[Column::OptionalF64],
+        // Single-column strings
+        &[Column::Required16CharString],
+        &[Column::Optional16CharString],
+        // Multi-column
         &[Column::RequiredI32, Column::OptionalI32],
         &[Column::RequiredI32, Column::Optional16CharString],
         &[Column::RequiredI32, Column::Required16CharString],
