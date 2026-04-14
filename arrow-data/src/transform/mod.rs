@@ -724,10 +724,6 @@ impl<'a> MutableArrayData<'a> {
     /// Extends the in progress array with a region of the input arrays, returning an error on
     /// overflow.
     ///
-    /// Prefer this over [`extend`](Self::extend) to handle cases where the data exceeds the
-    /// capacity of the offset type (e.g. more than 2 GiB in a `StringArray`). The error message
-    /// will indicate which array type overflowed and suggest a larger type.
-    ///
     /// # Arguments
     /// * `index` - the index of array that you want to copy values from
     /// * `start` - the start index of the chunk (inclusive)
