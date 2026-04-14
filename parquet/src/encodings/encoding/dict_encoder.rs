@@ -64,7 +64,7 @@ impl<T: DataType> Storage for KeyStorage<T> {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        self.size_in_bytes + self.uniques.capacity() * std::mem::size_of::<T::T>()
+        self.uniques.capacity() * std::mem::size_of::<T::T>()
     }
 }
 
@@ -183,6 +183,6 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
     ///
     /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
     fn estimated_memory_size(&self) -> usize {
-        self.interner.storage().size_in_bytes + self.indices.len() * std::mem::size_of::<usize>()
+        self.interner.estimated_memory_size() + self.indices.len() * std::mem::size_of::<usize>()
     }
 }
