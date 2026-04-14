@@ -36,10 +36,7 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
     )
 }
 
-pub(super) fn extend_nulls(
-    mutable: &mut _MutableArrayData,
-    len: usize,
-) -> Result<(), ArrowError> {
+pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), ArrowError> {
     let size = match mutable.data_type {
         DataType::FixedSizeList(_, i) => i as usize,
         _ => unreachable!(),
