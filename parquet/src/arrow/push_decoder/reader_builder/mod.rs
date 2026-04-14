@@ -213,14 +213,20 @@ impl RowGroupReaderBuilder {
     }
 
     /// Release all staged ranges currently buffered for future decode work.
-    pub fn release_all(&mut self) {
+    pub(crate) fn release_all(&mut self) {
         self.buffers.release_all();
     }
 
-    /// Release all physical buffers that end at or before `offset`.
-    /// A straddling buffer is trimmed via zero-copy [`Bytes::slice`].
-    pub fn release_through(&mut self, offset: u64) {
-        self.buffers.release_through(offset);
+    /// Release all column chunk byte ranges for a given row group.
+    ///
+    /// This is safe to call even if some (or all) column chunks were never
+    /// fetched — [`PushBuffers::release_range`] is a no-op for ranges that
+    /// have no overlapping entry.
+    fn release_row_group(&mut self, row_group_idx: usize) {
+        for col in self.metadata.row_group(row_group_idx).columns() {
+            let (start, len) = col.byte_range();
+            self.buffers.release_range(start..start + len);
+        }
     }
 
     /// take the current state, leaving None in its place.
@@ -275,7 +281,6 @@ impl RowGroupReaderBuilder {
     pub(crate) fn try_build(
         &mut self,
     ) -> Result<DecodeResult<ParquetRecordBatchReader>, ParquetError> {
-        self.buffers.ensure_sorted();
         loop {
             let current_state = self.take_state()?;
             // Try to transition the decoder.
@@ -368,7 +373,9 @@ impl RowGroupReaderBuilder {
 
                 // If nothing is selected, we are done with this row group
                 if !plan_builder.selects_any() {
-                    // ruled out entire row group
+                    // ruled out entire row group — release any column chunks
+                    // that were fetched for predicate evaluation.
+                    self.release_row_group(row_group_idx);
                     self.filter = Some(filter_info.into_filter());
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
@@ -515,7 +522,9 @@ impl RowGroupReaderBuilder {
                 let rows_before = plan_builder.num_rows_selected().unwrap_or(row_count);
 
                 if rows_before == 0 {
-                    // ruled out entire row group
+                    // ruled out entire row group — release any column chunks
+                    // that were fetched for predicate evaluation.
+                    self.release_row_group(row_group_idx);
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
                         DecodeResult::Finished,
@@ -539,7 +548,9 @@ impl RowGroupReaderBuilder {
                 }
 
                 if rows_after == 0 {
-                    // no rows left after applying limit/offset
+                    // no rows left after applying limit/offset — release any
+                    // column chunks that were fetched for predicate evaluation.
+                    self.release_row_group(row_group_idx);
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
                         DecodeResult::Finished,
@@ -617,12 +628,6 @@ impl RowGroupReaderBuilder {
                     &mut self.buffers,
                 )?;
 
-                // All data for this row group has been extracted into the
-                // InMemoryRowGroup.  Release physical buffers up to the end
-                // of this row group so streaming IO can reclaim memory.
-                self.buffers
-                    .release_through(self.metadata.row_group(row_group_idx).end_offset());
-
                 let plan = plan_builder.build();
 
                 // if we have any cached results, connect them up
@@ -637,6 +642,10 @@ impl RowGroupReaderBuilder {
                     array_reader_builder
                         .build_array_reader(self.fields.as_deref(), &self.projection)
                 }?;
+
+                // Release column chunks now that all borrows from
+                // self.metadata / self.buffers are done.
+                self.release_row_group(row_group_idx);
 
                 let reader = ParquetRecordBatchReader::new(array_reader, plan);
                 NextState::result(RowGroupDecoderState::Finished, DecodeResult::Data(reader))

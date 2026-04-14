@@ -18,8 +18,23 @@
 use crate::errors::ParquetError;
 use crate::file::reader::Length;
 use bytes::{Bytes, BytesMut};
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::ops::Range;
+
+/// Value stored in the [`PushBuffers`] B-tree for each IO buffer.
+/// The key is the buffer's start offset.
+#[derive(Debug, Clone)]
+struct BufferValue {
+    /// End offset (exclusive) of the byte range this buffer covers.
+    end: u64,
+    /// The raw data.
+    data: Bytes,
+    /// Number of bytes within this buffer that have not yet been released.
+    /// Initialized to `data.len()` and decremented by [`PushBuffers::release_range`].
+    /// When this reaches zero the entry is dropped.
+    live_bytes: u64,
+}
 
 /// Holds multiple buffers of data
 ///
@@ -34,7 +49,7 @@ use std::ops::Range;
 ///
 /// # No Coalescing
 ///
-/// This buffer does not coalesce (merging adjacent ranges of bytes into a ingle
+/// This buffer does not coalesce (merging adjacent ranges of bytes into a single
 /// range). The IO layer is free to push arbitrarily-sized buffers; they will be
 /// stitched on read if needed. Coalescing is left to the IO layer because it
 /// would require an extra copy here, and because the optimal coalescing
@@ -49,23 +64,27 @@ use std::ops::Range;
 /// the decision of *whether* to prefetch, and *how much*, is left to the
 /// IO layer. Like coalescing, prefetching strategy depends on the storage
 /// medium and access pattern.
+///
+/// # Release model
+///
+/// Callers release byte ranges via [`release_range`](Self::release_range).
+/// Each buffer tracks a `live_bytes` counter that is decremented by the
+/// overlap between the released range and the buffer's range. When the
+/// counter reaches zero the buffer is dropped.
+///
+/// **Caller invariant:** each byte offset should be released at most once.
+/// Violating this causes double-counting, which may drop a buffer
+/// prematurely. This is safe but wasteful: the decoder's `NeedsData` retry loop
+/// will re-request the data.
 #[derive(Debug, Clone)]
 pub(crate) struct PushBuffers {
     /// the virtual "offset" of this buffers (added to any request)
     offset: u64,
     /// The total length of the file being decoded
     file_len: u64,
-    /// The ranges of data that are available for decoding (not adjusted for offset)
-    ranges: Vec<Range<u64>>,
-    /// The buffers of data that can be used to decode the Parquet file
-    buffers: Vec<Bytes>,
-    /// High-water mark set by [`Self::release_through`].  After a release,
-    /// no push, has_range, or read may target offsets below this value.
-    #[cfg(feature = "arrow")]
-    watermark: u64,
-    /// Whether `ranges`/`buffers` are sorted by range start.
-    /// Set to `false` on every `push_range`, restored lazily before reads.
-    sorted: bool,
+    /// IO buffers keyed by their start offset. Each value stores the end
+    /// offset, the data, and a live-byte counter for release tracking.
+    entries: BTreeMap<u64, BufferValue>,
 }
 
 impl Display for PushBuffers {
@@ -76,15 +95,16 @@ impl Display for PushBuffers {
             self.offset, self.file_len
         )?;
         writeln!(f, "Available Ranges (w/ offset):")?;
-        for range in &self.ranges {
+        for (&start, entry) in &self.entries {
             writeln!(
                 f,
-                "  {}..{} ({}..{}): {} bytes",
-                range.start,
-                range.end,
-                range.start + self.offset,
-                range.end + self.offset,
-                range.end - range.start
+                "  {}..{} ({}..{}): {} bytes ({} live)",
+                start,
+                entry.end,
+                start + self.offset,
+                entry.end + self.offset,
+                entry.end - start,
+                entry.live_bytes,
             )?;
         }
 
@@ -93,89 +113,42 @@ impl Display for PushBuffers {
 }
 
 impl PushBuffers {
-    /// Create a new Buffers instance with the given file length
+    /// Create a new Buffers instance with the given file length.
     pub fn new(file_len: u64) -> Self {
         Self {
             offset: 0,
             file_len,
-            ranges: Vec::new(),
-            buffers: Vec::new(),
-            #[cfg(feature = "arrow")]
-            watermark: 0,
-            sorted: true,
+            entries: BTreeMap::new(),
         }
-    }
-
-    /// Restore the sort invariant on `ranges`/`buffers`.
-    ///
-    /// Because IO completions are expected to generally arrive in-order,
-    /// `push_range` appends without sorting. We instead delay sorting until
-    /// conumption to amortize its cost, if necessary.
-    ///
-    /// This method must be called before any read-side operation that relies on
-    /// binary search (`has_range`, `get_bytes`, `release_through`,
-    /// `Read::read`). Callers that hold `&mut PushBuffers` should call this
-    /// once before lending `&PushBuffers` to read-side code.
-    pub fn ensure_sorted(&mut self) {
-        if self.sorted {
-            return;
-        }
-
-        // Insertion sort: zero-allocation and linear on nearly-sorted input
-        // (IO completions typically arrive roughly in order).
-        for i in 1..self.ranges.len() {
-            let mut j = i;
-            while j > 0 && self.ranges[j - 1].start > self.ranges[j].start {
-                self.ranges.swap(j - 1, j);
-                self.buffers.swap(j - 1, j);
-                j -= 1;
-            }
-        }
-        self.sorted = true;
     }
 
     /// Push a new range and its associated buffer.
-    ///
-    /// Ranges may be pushed in any order. The internal sort invariant is
-    /// restored lazily before the next read-side operation.
     pub fn push_range(&mut self, range: Range<u64>, buffer: Bytes) {
         self.push_ranges(vec![range], vec![buffer]);
     }
 
     /// Push all the ranges and buffers.
-    ///
-    /// Ranges may be pushed in any order. The internal sort invariant is
-    /// restored lazily before the next read-side operation.
     pub fn push_ranges(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
         assert_eq!(
             ranges.len(),
             buffers.len(),
             "Number of ranges must match number of buffers"
         );
-        self.ranges.reserve(ranges.len());
-        self.buffers.reserve(buffers.len());
         for (range, buffer) in ranges.into_iter().zip(buffers.into_iter()) {
-            #[cfg(feature = "arrow")]
-            debug_assert!(
-                range.start >= self.watermark,
-                "push_range({:?}) below watermark {}",
-                range,
-                self.watermark,
-            );
             assert_eq!(
                 (range.end - range.start) as usize,
                 buffer.len(),
                 "Range length must match buffer length"
             );
-            if self.sorted {
-                if let Some(last) = self.ranges.last() {
-                    if last.start > range.start {
-                        self.sorted = false;
-                    }
-                }
-            }
-            self.ranges.push(range);
-            self.buffers.push(buffer);
+            let live_bytes = buffer.len() as u64;
+            self.entries.insert(
+                range.start,
+                BufferValue {
+                    end: range.end,
+                    data: buffer,
+                    live_bytes,
+                },
+            );
         }
     }
 
@@ -185,32 +158,21 @@ impl PushBuffers {
     /// buffers (e.g. fixed-size streaming parts that don't align with column
     /// chunk boundaries).
     pub fn has_range(&self, range: &Range<u64>) -> bool {
-        assert!(
-            self.sorted,
-            "has_range called on unsorted PushBuffers — call ensure_sorted() first"
-        );
-        #[cfg(feature = "arrow")]
-        debug_assert!(
-            range.start >= self.watermark,
-            "has_range({:?}) below watermark {}",
-            range,
-            self.watermark,
-        );
-        // Binary search for the last buffer with start <= range.start.
-        let idx = self.ranges.partition_point(|r| r.start <= range.start);
-        if idx == 0 {
-            return false;
-        }
-        let mut covered = self.ranges[idx - 1].end;
+        // Find the last buffer with start <= range.start.
+        let (_, first) = match self.entries.range(..=range.start).next_back() {
+            Some(entry) => entry,
+            None => return false,
+        };
+        let mut covered = first.end;
         // Walk forward through contiguous buffers until we cover range.end.
-        for r in &self.ranges[idx..] {
+        for (&entry_start, entry) in self.entries.range((range.start + 1)..) {
             if covered >= range.end {
                 break;
             }
-            if r.start > covered {
+            if entry_start > covered {
                 return false;
             }
-            covered = covered.max(r.end);
+            covered = covered.max(entry.end);
         }
         covered >= range.end
     }
@@ -220,45 +182,62 @@ impl PushBuffers {
         self.file_len
     }
 
-    /// Return the total of all buffered bytes.
+    /// Return the total of logically live (unreleased) buffered bytes.
     #[cfg(feature = "arrow")]
     pub fn buffered_bytes(&self) -> u64 {
-        self.buffers.iter().map(|b| b.len() as u64).sum()
+        self.entries.values().map(|e| e.live_bytes).sum()
     }
 
     /// Release all buffered ranges and their corresponding data.
+    #[cfg(feature = "arrow")]
     pub fn release_all(&mut self) {
-        self.ranges.clear();
-        self.buffers.clear();
+        self.entries.clear();
     }
 
-    /// Release all physical buffers that end at or before `offset`.
+    /// Release the given byte range.
     ///
-    /// A buffer straddling the offset is trimmed: the portion before `offset`
-    /// is dropped and the suffix is retained via [`Bytes::slice`] (zero-copy).
+    /// For each buffer that overlaps `range`, the overlap is subtracted from
+    /// the buffer's live-byte counter. When the counter reaches zero the
+    /// buffer is dropped.
     ///
-    /// This is useful for streaming scenarios where fixed-size data parts are
-    /// pushed and memory should be freed incrementally as the decoder
-    /// progresses through the file.
+    /// Caller invariant: each byte offset should be released at most once.
+    /// Double-releasing the same offset will over-decrement the counter, which
+    /// may drop a buffer prematurely. This is safe (the decoder's `NeedsData`
+    /// retry loop will re-request the data) but wasteful.
     #[cfg(feature = "arrow")]
-    pub fn release_through(&mut self, offset: u64) {
-        self.ensure_sorted();
-        self.watermark = self.watermark.max(offset);
+    pub fn release_range(&mut self, range: Range<u64>) {
+        if range.start >= range.end {
+            return;
+        }
 
-        // Find the first buffer whose end extends past the offset.
-        let first_kept = self.ranges.partition_point(|r| r.end <= offset);
+        // Find the first entry that could overlap: the last entry with
+        // start <= range.start (its data may extend into the range).
+        let scan_start = self
+            .entries
+            .range(..=range.start)
+            .next_back()
+            .map(|(&k, _)| k)
+            .unwrap_or(range.start);
 
-        // Drop all buffers entirely before the offset.
-        self.ranges.drain(..first_kept);
-        self.buffers.drain(..first_kept);
-
-        // If the first remaining buffer straddles the offset, trim its prefix.
-        if let Some(range) = self.ranges.first_mut() {
-            if range.start < offset {
-                let trim = (offset - range.start) as usize;
-                self.buffers[0] = self.buffers[0].slice(trim..);
-                range.start = offset;
+        // Walk only the overlapping entries, collecting dead keys.
+        let mut dead_keys = Vec::new();
+        for (&start, value) in self.entries.range_mut(scan_start..range.end) {
+            if value.end <= range.start {
+                continue;
             }
+            let overlap_start = start.max(range.start);
+            let overlap_end = value.end.min(range.end);
+            let overlap = overlap_end - overlap_start;
+            value.live_bytes = value
+                .live_bytes
+                .checked_sub(overlap)
+                .expect("release_range: overlap exceeds live_bytes — likely double-release");
+            if value.live_bytes == 0 {
+                dead_keys.push(start);
+            }
+        }
+        for key in dead_keys {
+            self.entries.remove(&key);
         }
     }
 }
@@ -272,42 +251,33 @@ impl Length for PushBuffers {
 /// Implementation of Read for Buffers with stitching across adjacent buffers.
 impl std::io::Read for PushBuffers {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.ensure_sorted();
-        #[cfg(feature = "arrow")]
-        debug_assert!(
-            self.offset >= self.watermark,
-            "Read::read at offset {} below watermark {}",
-            self.offset,
-            self.watermark,
-        );
         let needed = buf.len() as u64;
         let end = self.offset + needed;
 
-        // Binary search for the buffer containing self.offset.
-        let idx = self.ranges.partition_point(|r| r.start <= self.offset);
-        if idx == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "No data available in Buffers",
-            ));
-        }
+        // Find the last buffer with start <= self.offset.
+        let (&first_start, _) =
+            self.entries
+                .range(..=self.offset)
+                .next_back()
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "No data available in Buffers",
+                    )
+                })?;
 
-        let first = idx - 1;
         let mut written = 0usize;
         let mut cursor = self.offset;
-        for (r, data) in self.ranges[first..]
-            .iter()
-            .zip(self.buffers[first..].iter())
-        {
-            if cursor >= end || r.start > cursor {
+        for (&entry_start, entry) in self.entries.range(first_start..) {
+            if cursor >= end || entry_start > cursor {
                 break;
             }
-            let buf_start = (cursor - r.start) as usize;
-            let buf_end = ((end.min(r.end)) - r.start) as usize;
-            let chunk = &data[buf_start..buf_end];
+            let buf_start = (cursor - entry_start) as usize;
+            let buf_end = ((end.min(entry.end)) - entry_start) as usize;
+            let chunk = &entry.data[buf_start..buf_end];
             buf[written..written + chunk.len()].copy_from_slice(chunk);
             written += chunk.len();
-            cursor = r.end.max(cursor);
+            cursor = entry.end.max(cursor);
         }
 
         if written == 0 {
@@ -322,49 +292,38 @@ impl std::io::Read for PushBuffers {
 }
 
 impl PushBuffers {
-    /// Sort (if needed) then look up bytes.
+    /// Look up bytes, returning a zero-copy slice when a single buffer
+    /// covers the request, or stitching across contiguous buffers otherwise.
     pub fn get_bytes(&mut self, start: u64, length: usize) -> Result<Bytes, ParquetError> {
-        self.ensure_sorted();
-        #[cfg(feature = "arrow")]
-        debug_assert!(
-            start >= self.watermark,
-            "get_bytes({start}, {length}) below watermark {}",
-            self.watermark,
-        );
         let end = start + length as u64;
 
-        // Binary search for the last buffer with start <= `start`.
-        let idx = self.ranges.partition_point(|r| r.start <= start);
-        if idx == 0 {
-            return Err(ParquetError::NeedMoreDataRange(start..end));
-        }
-
-        let first = idx - 1;
-        let range = &self.ranges[first];
+        // Find the last buffer with start_offset <= `start`.
+        let (&first_start, first) = self
+            .entries
+            .range(..=start)
+            .next_back()
+            .ok_or(ParquetError::NeedMoreDataRange(start..end))?;
 
         // Fast path: single buffer covers the entire request (zero-copy).
-        if range.end >= end {
-            let off = (start - range.start) as usize;
-            return Ok(self.buffers[first].slice(off..off + length));
+        if first.end >= end {
+            let off = (start - first_start) as usize;
+            return Ok(first.data.slice(off..off + length));
         }
 
         // Slow path: stitch across multiple contiguous buffers.
         let mut buf = BytesMut::with_capacity(length);
         let mut cursor = start;
-        for (r, data) in self.ranges[first..]
-            .iter()
-            .zip(self.buffers[first..].iter())
-        {
+        for (&entry_start, entry) in self.entries.range(first_start..) {
             if cursor >= end {
                 break;
             }
-            if r.start > cursor {
+            if entry_start > cursor {
                 return Err(ParquetError::NeedMoreDataRange(start..end));
             }
-            let buf_start = (cursor - r.start) as usize;
-            let buf_end = ((end.min(r.end)) - r.start) as usize;
-            buf.extend_from_slice(&data[buf_start..buf_end]);
-            cursor = r.end.max(cursor);
+            let buf_start = (cursor - entry_start) as usize;
+            let buf_end = ((end.min(entry.end)) - entry_start) as usize;
+            buf.extend_from_slice(&entry.data[buf_start..buf_end]);
+            cursor = entry.end.max(cursor);
         }
         if cursor < end {
             return Err(ParquetError::NeedMoreDataRange(start..end));
@@ -379,7 +338,6 @@ mod tests {
     use std::io::Read;
 
     /// Helper: create PushBuffers with the given (start, data) pairs.
-    /// Calls `ensure_sorted()` so the result is ready for read-side methods.
     fn make_buffers(parts: &[(u64, &[u8])]) -> PushBuffers {
         let file_len = parts
             .iter()
@@ -391,7 +349,6 @@ mod tests {
             let end = start + data.len() as u64;
             pb.push_range(start..end, Bytes::copy_from_slice(data));
         }
-        pb.ensure_sorted();
         pb
     }
 
@@ -444,7 +401,6 @@ mod tests {
 
     #[test]
     fn has_range_overlapping_buffers() {
-        // Buffers overlap: [0..5) and [3..8)
         let pb = make_buffers(&[(0, &[1, 2, 3, 4, 5]), (3, &[4, 5, 6, 7, 8])]);
         assert!(pb.has_range(&(0..8)));
         assert!(pb.has_range(&(2..7)));
@@ -498,8 +454,6 @@ mod tests {
 
     #[test]
     fn get_bytes_overlapping_buffers() {
-        // Buffers overlap: [0..5) and [3..8). The overlap region (bytes 3..5)
-        // must not be duplicated in the output.
         let mut pb = make_buffers(&[(0, &[1, 2, 3, 4, 5]), (3, &[4, 5, 6, 7, 8])]);
         let b = pb.get_bytes(0, 8).unwrap();
         assert_eq!(&*b, &[1, 2, 3, 4, 5, 6, 7, 8]);
@@ -507,7 +461,6 @@ mod tests {
 
     #[test]
     fn get_bytes_overlapping_buffers_interior() {
-        // Request a sub-range that spans the overlap boundary.
         let mut pb = make_buffers(&[(0, &[1, 2, 3, 4, 5]), (3, &[4, 5, 6, 7, 8])]);
         let b = pb.get_bytes(2, 5).unwrap();
         assert_eq!(&*b, &[3, 4, 5, 6, 7]);
@@ -541,8 +494,6 @@ mod tests {
 
     #[test]
     fn read_overlapping_buffers() {
-        // Buffers overlap: [0..5) and [3..8). Read should produce the
-        // correct sequence without duplicating the overlap region.
         let mut pb = make_buffers(&[(0, &[1, 2, 3, 4, 5]), (3, &[4, 5, 6, 7, 8])]);
         let mut buf = [0u8; 8];
         let n = pb.read(&mut buf).unwrap();
@@ -552,7 +503,6 @@ mod tests {
 
     #[test]
     fn read_overlapping_buffers_sequential() {
-        // Two sequential reads that together span the overlap boundary.
         let mut pb = make_buffers(&[(0, &[1, 2, 3, 4, 5]), (3, &[4, 5, 6, 7, 8])]);
         let mut buf1 = [0u8; 4];
         let n = pb.read(&mut buf1).unwrap();
@@ -565,16 +515,14 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Out-of-order push (lazy sort)
+    // Out-of-order push (BTreeMap keeps order automatically)
     // ---------------------------------------------------------------
 
     #[test]
     fn out_of_order_push_has_range() {
-        // Push buffers in reverse order — simulates IO completing out of order.
         let mut pb = PushBuffers::new(6);
         pb.push_range(3..6, Bytes::from_static(&[4, 5, 6]));
         pb.push_range(0..3, Bytes::from_static(&[1, 2, 3]));
-        pb.ensure_sorted();
         assert!(pb.has_range(&(0..6)));
         assert!(pb.has_range(&(1..5)));
     }
@@ -585,7 +533,6 @@ mod tests {
         pb.push_range(6..9, Bytes::from_static(&[7, 8, 9]));
         pb.push_range(0..3, Bytes::from_static(&[1, 2, 3]));
         pb.push_range(3..6, Bytes::from_static(&[4, 5, 6]));
-        pb.ensure_sorted();
         let b = pb.get_bytes(0, 9).unwrap();
         assert_eq!(&*b, &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
@@ -602,82 +549,109 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // release_through
+    // release_range
     // ---------------------------------------------------------------
 
     #[cfg(feature = "arrow")]
-    mod release_through_tests {
+    mod release_tests {
         use super::*;
 
         #[test]
-        fn release_through_at_boundary() {
+        fn release_range_exact_buffer() {
             let mut pb = make_buffers(&[(0, &[1, 2, 3]), (3, &[4, 5, 6])]);
-            pb.release_through(3);
-            assert_eq!(pb.ranges.len(), 1);
-            assert_eq!(pb.ranges[0], 3..6);
-            assert_eq!(&*pb.buffers[0], &[4, 5, 6]);
+            pb.release_range(0..3);
+            assert_eq!(pb.entries.len(), 1);
+            assert!(pb.entries.contains_key(&3));
+            assert_eq!(pb.buffered_bytes(), 3);
         }
 
         #[test]
-        fn release_through_splits_straddling_buffer() {
-            let mut pb = make_buffers(&[(0, &[1, 2, 3, 4, 5])]);
-            pb.release_through(3);
-            assert_eq!(pb.ranges.len(), 1);
-            assert_eq!(pb.ranges[0], 3..5);
-            assert_eq!(&*pb.buffers[0], &[4, 5]);
+        fn release_range_partial_overlap() {
+            let mut pb = make_buffers(&[(0, &[1, 2, 3, 4, 5]), (5, &[6, 7, 8, 9, 10])]);
+            assert_eq!(pb.buffered_bytes(), 10);
+            // Release middle section that spans both buffers.
+            pb.release_range(3..7);
+            // Both buffers still alive (partial release).
+            assert_eq!(pb.entries.len(), 2);
+            // First buffer: 5 - 2 = 3 live bytes
+            assert_eq!(pb.entries[&0].live_bytes, 3);
+            // Second buffer: 5 - 2 = 3 live bytes
+            assert_eq!(pb.entries[&5].live_bytes, 3);
+            assert_eq!(pb.buffered_bytes(), 6);
+            // Data is still accessible (live_bytes is bookkeeping only).
+            assert!(pb.has_range(&(0..10)));
         }
 
         #[test]
-        fn release_through_before_all_buffers() {
+        fn release_range_drops_middle_buffer() {
+            let mut pb = make_buffers(&[(0, &[1, 2, 3]), (3, &[4, 5, 6]), (6, &[7, 8, 9])]);
+            pb.release_range(3..6);
+            assert_eq!(pb.entries.len(), 2);
+            assert!(pb.entries.contains_key(&0));
+            assert!(pb.entries.contains_key(&6));
+        }
+
+        #[test]
+        fn release_range_no_overlap() {
             let mut pb = make_buffers(&[(10, &[1, 2, 3])]);
-            pb.release_through(5);
-            // Nothing to clear — buffer starts at 10.
-            assert_eq!(pb.ranges.len(), 1);
-            assert_eq!(pb.ranges[0], 10..13);
+            pb.release_range(0..5);
+            assert_eq!(pb.entries.len(), 1);
+            assert_eq!(pb.buffered_bytes(), 3);
         }
 
         #[test]
-        fn release_through_past_all_buffers() {
+        fn release_range_superset() {
+            let mut pb = make_buffers(&[(2, &[1, 2, 3, 4, 5, 6])]);
+            // Release range is larger than the buffer.
+            pb.release_range(0..10);
+            assert!(pb.entries.is_empty());
+            assert_eq!(pb.buffered_bytes(), 0);
+        }
+
+        #[test]
+        fn release_range_out_of_order() {
+            // Simulate non-sequential row group access: release "later" range first.
             let mut pb = make_buffers(&[(0, &[1, 2, 3]), (3, &[4, 5, 6])]);
-            pb.release_through(100);
-            assert!(pb.ranges.is_empty());
-            assert!(pb.buffers.is_empty());
+            pb.release_range(3..6);
+            assert_eq!(pb.entries.len(), 1);
+            assert!(pb.entries.contains_key(&0));
+            pb.release_range(0..3);
+            assert!(pb.entries.is_empty());
         }
 
         #[test]
-        fn release_through_multiple_buffers() {
-            let mut pb = make_buffers(&[(0, &[1, 2]), (2, &[3, 4]), (4, &[5, 6]), (6, &[7, 8])]);
-            pb.release_through(5);
-            assert_eq!(pb.ranges.len(), 2);
-            assert_eq!(pb.ranges[0], 5..6);
-            assert_eq!(&*pb.buffers[0], &[6]);
-            assert_eq!(pb.ranges[1], 6..8);
-        }
-
-        #[test]
-        fn release_through_idempotent() {
-            let mut pb = make_buffers(&[(0, &[1, 2, 3, 4, 5])]);
-            pb.release_through(3);
-            pb.release_through(3);
-            assert_eq!(pb.ranges.len(), 1);
-            assert_eq!(pb.ranges[0], 3..5);
-            assert_eq!(&*pb.buffers[0], &[4, 5]);
-        }
-
-        #[test]
-        fn release_through_zero_is_noop() {
+        fn release_range_empty() {
             let mut pb = make_buffers(&[(0, &[1, 2, 3])]);
-            pb.release_through(0);
-            assert_eq!(pb.ranges.len(), 1);
-            assert_eq!(pb.ranges[0], 0..3);
+            pb.release_range(5..5);
+            assert_eq!(pb.entries.len(), 1);
+            assert_eq!(pb.buffered_bytes(), 3);
         }
 
         #[test]
-        fn buffered_bytes_after_release_through() {
+        fn release_range_incremental_on_single_buffer() {
+            // One big buffer, released in chunks (like multiple row groups).
+            let mut pb = make_buffers(&[(0, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10])]);
+            assert_eq!(pb.buffered_bytes(), 10);
+
+            pb.release_range(0..3);
+            assert_eq!(pb.entries.len(), 1);
+            assert_eq!(pb.buffered_bytes(), 7);
+
+            pb.release_range(3..7);
+            assert_eq!(pb.entries.len(), 1);
+            assert_eq!(pb.buffered_bytes(), 3);
+
+            pb.release_range(7..10);
+            assert!(pb.entries.is_empty());
+            assert_eq!(pb.buffered_bytes(), 0);
+        }
+
+        #[test]
+        fn buffered_bytes_tracks_live() {
             let mut pb = make_buffers(&[(0, &[1, 2, 3]), (3, &[4, 5, 6])]);
             assert_eq!(pb.buffered_bytes(), 6);
-            pb.release_through(3);
-            assert_eq!(pb.buffered_bytes(), 3);
+            pb.release_range(0..6);
+            assert_eq!(pb.buffered_bytes(), 0);
         }
     }
 }

@@ -713,21 +713,6 @@ impl RowGroupMetaData {
         self.file_offset
     }
 
-    /// Returns the byte offset just past the last column chunk in this row group.
-    ///
-    /// This is the maximum of `(start + length)` across all column chunks, which
-    /// represents the first byte that is *not* part of this row group's data.
-    pub fn end_offset(&self) -> u64 {
-        self.columns
-            .iter()
-            .map(|c| {
-                let (start, len) = c.byte_range();
-                start + len
-            })
-            .max()
-            .unwrap_or(0)
-    }
-
     /// Converts this [`RowGroupMetaData`] into a [`RowGroupMetaDataBuilder`]
     pub fn into_builder(self) -> RowGroupMetaDataBuilder {
         RowGroupMetaDataBuilder(self)

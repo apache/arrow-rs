@@ -75,8 +75,8 @@ impl DataRequest {
     ///
     /// Assumes that all needed data is present in the buffers.
     /// Does **not** release any buffers — the caller is responsible for
-    /// calling `PushBuffers::release_through` at the appropriate time
-    /// (typically after all phases for a row group are complete).
+    /// calling [`PushBuffers::release_range`] at the appropriate time
+    /// (typically after all column chunks for a row group are complete).
     pub fn try_into_in_memory_row_group<'a>(
         self,
         row_group_idx: usize,

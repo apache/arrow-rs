@@ -70,17 +70,6 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.buffered_bytes()
     }
 
-    /// Release all staged ranges currently buffered for future decode work.
-    pub fn release_all(&mut self) {
-        self.row_group_reader_builder.release_all();
-    }
-
-    /// Release all physical buffers that end at or before `offset`.
-    /// A straddling buffer is trimmed via zero-copy [`Bytes::slice`].
-    pub fn release_through(&mut self, offset: u64) {
-        self.row_group_reader_builder.release_through(offset);
-    }
-
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
     /// group of rows from the Parquet data, or the list of data ranges still
     /// needed to proceed
@@ -109,7 +98,11 @@ impl RemainingRowGroups {
 
             // No current reader, proceed to the next row group if any
             let row_group_idx = match self.row_groups.pop_front() {
-                None => return Ok(DecodeResult::Finished),
+                None => {
+                    // We are done with the file, release all remaining buffers.
+                    self.row_group_reader_builder.release_all();
+                    return Ok(DecodeResult::Finished);
+                }
                 Some(idx) => idx,
             };
 

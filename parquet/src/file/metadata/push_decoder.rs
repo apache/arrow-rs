@@ -357,21 +357,9 @@ impl ParquetMetaDataPushDecoder {
         Ok(())
     }
 
-    /// Clear any staged byte ranges currently buffered for future decode work.
-    #[deprecated(since = "58.1.0", note = "Use `release_all` instead")]
-    pub fn clear_all_ranges(&mut self) {
-        self.release_all();
-    }
-
-    /// Clear any staged byte ranges currently buffered for future decode work.
-    pub fn release_all(&mut self) {
-        self.buffers.release_all();
-    }
-
     /// Try to decode the metadata from the pushed data, returning the
     /// decoded metadata or an error if not enough data is available.
     pub fn try_decode(&mut self) -> Result<DecodeResult<ParquetMetaData>> {
-        self.buffers.ensure_sorted();
         let file_len = self.buffers.file_len();
         let footer_len = FOOTER_SIZE as u64;
         loop {
@@ -594,7 +582,7 @@ mod tests {
             .unwrap();
         assert_eq!(metadata_decoder.buffers.buffered_bytes(), test_file_len());
 
-        metadata_decoder.release_all();
+        metadata_decoder.buffers.release_all();
         assert_eq!(metadata_decoder.buffers.buffered_bytes(), 0);
 
         let ranges = expect_needs_data(metadata_decoder.try_decode());
