@@ -24,23 +24,32 @@
 //!
 //! # When to use this
 //!
-//! Radix sort on row-encoded keys is the fastest sort strategy for most
-//! multi-column sorts, including:
-//! - **Primitive columns** (integers, floats)
-//! - **String columns**, especially multiple string columns
+//! Radix sort is the fastest strategy when sorting by **two or more columns**,
+//! especially as N grows. It benefits from:
+//! - **Multi-column schemas** where comparison sort must traverse columns
+//!   per comparison, while radix sort pays a fixed cost per byte position
+//! - **String columns**, where the row encoding produces compact,
+//!   high-entropy byte sequences that radix passes discriminate quickly
 //! - **Mixed column types** (primitives, strings, dicts, lists)
-//!
-//! The advantage over [`lexsort_to_indices`] grows with N and with the
-//! number of columns.
 //!
 //! # When NOT to use this
 //!
 //! Prefer [`lexsort_to_indices`] when:
+//! - **Sorting by a single column.** The row encoding overhead (allocation,
+//!   encoding, indirection through `Rows`) outweighs the radix advantage.
+//!   Single-column sorts are faster with direct comparison sort on the
+//!   columnar array, which avoids encoding entirely.
 //! - **All sort columns are low-cardinality dictionaries** with no
 //!   high-cardinality column to break ties. The row encoding for
 //!   dictionary values produces long shared prefixes, and radix sort
 //!   gains little from its first few byte passes before falling back
 //!   to comparison sort.
+//! - **Columns with low-entropy leading bytes**, such as `Decimal128` or
+//!   `Decimal256`. These types are encoded as 16- or 32-byte big-endian
+//!   integers, but real-world values occupy a tiny fraction of the range.
+//!   The leading bytes are nearly identical across rows (e.g., `0x80` for
+//!   small positive values), so radix passes burn through the max depth
+//!   without discriminating rows, then fall back to comparison sort.
 //! - **A leading primitive column discriminates most rows and a trailing
 //!   column is expensive to encode** (e.g., lists). [`lexsort_to_indices`]
 //!   avoids encoding the trailing column for rows already resolved by
