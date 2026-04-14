@@ -230,7 +230,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     ///
     /// # Safety
     ///
-    /// Safe if [`Self::new`] would not panic with the given arguments
+    /// The parts must form a valid [`ListViewArray`] or [`LargeListViewArray`] according
+    /// to the Arrow spec.
     pub unsafe fn new_unchecked(
         field: FieldRef,
         offsets: ScalarBuffer<OffsetSize>,
