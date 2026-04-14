@@ -24,6 +24,8 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
 use crate::VariantArray;
+use crate::VariantArrayBuilder;
+use crate::VariantType;
 use crate::variant_array::BorrowedShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 
@@ -79,12 +81,13 @@ pub(crate) fn follow_shredded_path_element<'a>(
                 return Ok(missing_path_step());
             };
 
+            // In a shredded variant object, every field must be a struct containing
+            // `value` and/or `typed_value` sub-fields. A non-struct field here indicates
+            // malformed shredded data, so we error out regardless of cast safety mode.
             let struct_array = field.as_struct_opt().ok_or_else(|| {
-                // TODO: Should we blow up? Or just end the traversal and let the normal
-                // variant pathing code sort out the mess that it must anyway be
-                // prepared to handle?
                 ArrowError::InvalidArgumentError(format!(
-                    "Expected Struct array while following path, got {}",
+                    "Expected shredded variant struct for field '{}', got {}",
+                    name,
                     field.data_type(),
                 ))
             })?;
@@ -216,26 +219,65 @@ fn shredded_get_path(
     // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
     // separately to take advantage of deeper shredding in child fields.
     if let DataType::Struct(fields) = as_field.data_type() {
-        if target.typed_value_field().is_none() {
+        let has_variant_fields = fields
+            .iter()
+            .any(|f| f.try_extension_type::<VariantType>().is_ok());
+        if target.typed_value_field().is_none() && !has_variant_fields {
             return shred_basic_variant(target, VariantPath::default(), Some(as_field));
         }
 
-        let children = fields
-            .iter()
-            .map(|field| {
-                shredded_get_path(
-                    &target,
-                    &[VariantPathElement::from(field.name().as_str())],
-                    Some(field),
-                    cast_options,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut updated_fields = Vec::with_capacity(fields.len());
+        let mut children = Vec::with_capacity(fields.len());
+        for field in fields.iter() {
+            // If the field has VariantType extension metadata, extract it as a
+            // VariantArray instead of casting to the declared data type. This allows
+            // callers to request structs where some fields remain as variants.
+            // See test_struct_extraction_with_variant_fields for usage example.
+            let is_variant_field = field.try_extension_type::<VariantType>().is_ok();
+            let field_as_type = (!is_variant_field).then(|| field.as_ref());
+            let child = shredded_get_path(
+                &target,
+                &[VariantPathElement::from(field.name().as_str())],
+                field_as_type,
+                cast_options,
+            )?;
+
+            if is_variant_field {
+                // Variant field: the child's actual data type (VariantArray's internal
+                // StructArray) differs from the user's declared type (empty Struct),
+                // so we must update the field's data type and re-attach VariantType.
+                //
+                // When the field is entirely absent, shredded_get_path returns a
+                // NullArray. Construct an all-null VariantArray so the extension
+                // metadata is preserved.
+                let child = if child.data_type() == &DataType::Null {
+                    let mut builder = VariantArrayBuilder::new(child.len());
+                    for _ in 0..child.len() {
+                        builder.append_null();
+                    }
+                    Arc::new(builder.build().into_inner()) as ArrayRef
+                } else {
+                    child
+                };
+                let new_field = field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(child.data_type().clone())
+                    .with_extension_type(VariantType);
+                updated_fields.push(new_field);
+                children.push(child);
+            } else {
+                // Strongly typed field: the child data type already matches the
+                // requested field type, so we can use the field as-is.
+                updated_fields.push(field.as_ref().clone());
+                children.push(child);
+            }
+        }
 
         let struct_nulls = target.nulls().cloned();
 
         return Ok(Arc::new(StructArray::try_new(
-            fields.clone(),
+            updated_fields.into(),
             children,
             struct_nulls,
         )?));
@@ -256,9 +298,9 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
             .value_field()
             .is_none_or(|v| v.null_count() == v.len())
     {
-        // Here we need to gate against the case where the `typed_value` is null but data is in the `value` column.
-        // 1. If the `value` column is null, or
-        // 2. If every row in the `value` column is null
+        // When shredding is partial, some values may remain in the `value` column
+        // (as raw variant binary) while `typed_value` is null. Only return the
+        // typed value if the `value` column is entirely null (complete shredding).
 
         // This is a perfect shredding, where the value is entirely shredded out,
         // so we can just return the typed value.
@@ -269,15 +311,30 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
 
 /// Returns an array with the specified path extracted from the variant values.
 ///
-/// The return array type depends on the `as_type` field of the options parameter
+/// The return array type depends on the `as_type` field of the options parameter:
 /// 1. `as_type: None`: a VariantArray is returned. The values in this new VariantArray will point
 ///    to the specified path.
 /// 2. `as_type: Some(<specific field>)`: an array of the specified type is returned.
 ///
-/// TODO: How would a caller request a struct or list type where the fields/elements can be any
-/// variant? Caller can pass None as the requested type to fetch a specific path, but it would
-/// quickly become annoying (and inefficient) to call `variant_get` for each leaf value in a struct or
-/// list and then try to assemble the results.
+/// When extracting a struct type (`DataType::Struct`), you can mix typed fields with variant fields
+/// by marking fields with the [`VariantType`] extension type. Fields with `VariantType` metadata
+/// will be extracted as VariantArrays, preserving the original variant representation.
+///
+/// Example:
+/// ```rust,ignore
+/// use parquet_variant_compute::VariantType;
+/// use arrow_schema::extension::ExtensionType;
+///
+/// // Extract a struct where "name" is converted to Int32, but "data" remains a Variant
+/// let fields = Fields::from(vec![
+///     Field::new("name", DataType::Int32, true),
+///     // Use VariantType extension metadata to request extraction as VariantArray
+///     Field::new("data", DataType::Struct(Fields::empty()), true)
+///         .with_extension_type(VariantType),
+/// ]);
+/// let options = GetOptions::new()
+///     .with_as_type(Some(Arc::new(Field::new("result", DataType::Struct(fields), true))));
+/// ```
 pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
     let variant_array = VariantArray::try_new(input)?;
 
@@ -339,7 +396,8 @@ mod test {
     use super::{GetOptions, variant_get};
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::{
-        VariantArray, VariantArrayBuilder, cast_to_variant, json_to_variant, shred_variant,
+        VariantArray, VariantArrayBuilder, VariantType, cast_to_variant, json_to_variant,
+        shred_variant,
     };
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
@@ -4320,5 +4378,231 @@ mod test {
                     .contains("Converting unshredded variant arrays to arrow fixed-size lists")
             );
         }
+    }
+
+    /// Test extracting a struct with mixed typed and variant fields.
+    /// Fields with VariantType extension metadata should be extracted as VariantArrays.
+    #[test]
+    fn test_struct_extraction_with_variant_fields() {
+        // Create test data
+        let json_strings = vec![
+            r#"{"id": 1, "name": "Alice", "data": {"score": 95}}"#,
+            r#"{"id": 2, "name": "Bob", "data": null}"#,
+            r#"{"id": 3, "name": null, "data": {"level": 5}}"#,
+        ];
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
+        let variant_array = json_to_variant(&string_array).unwrap();
+
+        // Request struct where:
+        // - "id" is extracted as Int32
+        // - "name" is extracted as String (Utf8)
+        // - "data" is extracted as Variant (using VariantType extension metadata)
+        let struct_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("name", DataType::Utf8, true),
+            // Use VariantType extension metadata to request extraction as VariantArray.
+            // The data type must be Struct to satisfy VariantType::supports_data_type.
+            Field::new("data", DataType::Struct(Fields::empty()), true)
+                .with_extension_type(VariantType),
+        ]);
+        let struct_type = DataType::Struct(struct_fields);
+
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", struct_type, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let variant_array_ref = ArrayRef::from(variant_array);
+        let result = variant_get(&variant_array_ref, options).unwrap();
+
+        // Verify the result is a StructArray with 3 fields
+        let struct_result = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_result.len(), 3);
+        assert_eq!(struct_result.num_columns(), 3);
+
+        // Verify "id" field (Int32)
+        let id_field = struct_result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_field.value(0), 1);
+        assert_eq!(id_field.value(1), 2);
+        assert_eq!(id_field.value(2), 3);
+
+        // Verify "name" field (String/Utf8)
+        let name_field = struct_result
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_field.value(0), "Alice");
+        assert_eq!(name_field.value(1), "Bob");
+        assert!(name_field.is_null(2)); // null name in row 2
+
+        // Verify "data" field schema has VariantType extension metadata
+        let data_schema_field = struct_result
+            .fields()
+            .iter()
+            .find(|f| f.name() == "data")
+            .unwrap();
+        assert!(
+            data_schema_field
+                .try_extension_type::<VariantType>()
+                .is_ok(),
+            "data field should have VariantType extension metadata"
+        );
+
+        // Verify "data" field (VariantArray)
+        let data_field = struct_result.column(2);
+        // The data field should be a StructArray representing VariantArray's internal structure
+        // It has columns: metadata, value (optional), typed_value (optional)
+        let data_as_struct = data_field.as_any().downcast_ref::<StructArray>();
+        assert!(
+            data_as_struct.is_some(),
+            "data field should be a VariantArray (represented as StructArray)"
+        );
+
+        // Verify we can access the variant values
+        let data_variant_array = VariantArray::try_new(data_field).unwrap();
+        assert_eq!(data_variant_array.len(), 3);
+
+        // Row 0: data = {"score": 95}
+        let data0 = data_variant_array.value(0);
+        let obj0 = data0.as_object().expect("row 0 data should be an object");
+        let score = obj0.get("score").expect("row 0 data should have 'score'");
+        assert_eq!(score.as_int16(), Some(95));
+
+        // Row 1: data = null
+        assert!(
+            data_variant_array.is_null(1) || matches!(data_variant_array.value(1), Variant::Null)
+        );
+
+        // Row 2: data = {"level": 5}
+        let data2 = data_variant_array.value(2);
+        let obj2 = data2.as_object().expect("row 2 data should be an object");
+        let level = obj2.get("level").expect("row 2 data should have 'level'");
+        assert_eq!(level.as_int8(), Some(5));
+    }
+
+    /// Test that requesting a variant field absent in all rows does not panic.
+    /// Regression test: with_extension_type(VariantType) used to panic on NullArray.
+    #[test]
+    fn test_struct_extraction_missing_variant_field_no_panic() {
+        // Data has "id" but NOT "missing_field"
+        let json_strings = vec![r#"{"id": 1}"#, r#"{"id": 2}"#];
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
+        let variant_array = json_to_variant(&string_array).unwrap();
+
+        // Request struct with a variant field that doesn't exist in any row
+        let struct_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("missing_field", DataType::Struct(Fields::empty()), true)
+                .with_extension_type(VariantType),
+        ]);
+        let struct_type = DataType::Struct(struct_fields);
+
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", struct_type, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let variant_array_ref = ArrayRef::from(variant_array);
+        // This should not panic
+        let result = variant_get(&variant_array_ref, options).unwrap();
+
+        let struct_result = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_result.len(), 2);
+        assert_eq!(struct_result.num_columns(), 2);
+
+        // The missing variant field should be all nulls
+        let missing_col = struct_result.column(1);
+        assert_eq!(missing_col.null_count(), missing_col.len());
+
+        // The missing variant field should preserve VariantType extension metadata
+        let missing_schema_field = struct_result
+            .fields()
+            .iter()
+            .find(|f| f.name() == "missing_field")
+            .unwrap();
+        assert!(
+            missing_schema_field
+                .try_extension_type::<VariantType>()
+                .is_ok(),
+            "missing variant field should preserve VariantType extension metadata"
+        );
+
+        // The missing variant field should be a valid VariantArray
+        let missing_variant = VariantArray::try_new(missing_col);
+        assert!(
+            missing_variant.is_ok(),
+            "missing variant field should be a valid VariantArray"
+        );
+    }
+
+    /// VariantType field extraction should distinguish:
+    /// - explicit JSON null  => present Variant::Null
+    /// - missing path        => SQL NULL
+    #[test]
+    fn test_struct_variant_field_distinguishes_missing_and_variant_null() {
+        let json_strings = vec![
+            r#"{"id": 1, "data": null}"#,
+            r#"{"id": 2}"#,
+            r#"{"id": 3, "data": {"score": 95}}"#,
+        ];
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
+        let variant_array = json_to_variant(&string_array).unwrap();
+
+        let struct_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("data", DataType::Struct(Fields::empty()), true)
+                .with_extension_type(VariantType),
+        ]);
+        let struct_type = DataType::Struct(struct_fields);
+
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", struct_type, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let variant_array_ref = ArrayRef::from(variant_array);
+        let result = variant_get(&variant_array_ref, options).unwrap();
+
+        let struct_result = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_result.len(), 3);
+
+        let data_field = struct_result.column(1);
+        let data_variant_array = VariantArray::try_new(data_field).unwrap();
+        assert_eq!(data_variant_array.len(), 3);
+
+        // Row 0: explicit JSON null => present Variant::Null (NOT SQL NULL)
+        assert!(
+            !data_variant_array.is_null(0),
+            "explicit JSON null should be a present value, not SQL NULL"
+        );
+        assert!(
+            matches!(data_variant_array.value(0), Variant::Null),
+            "explicit JSON null should surface as Variant::Null"
+        );
+
+        // Row 1: missing path => SQL NULL
+        assert!(
+            data_variant_array.is_null(1),
+            "missing field should be SQL NULL"
+        );
+
+        // Row 2: present object
+        assert!(!data_variant_array.is_null(2));
+        let row2 = data_variant_array.value(2);
+        let obj = row2.as_object().expect("row 2 data should be an object");
+        assert_eq!(
+            obj.get("score")
+                .expect("row 2 should have 'score'")
+                .as_int16(),
+            Some(95)
+        );
     }
 }
