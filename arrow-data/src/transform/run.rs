@@ -86,6 +86,9 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
     Ok(())
 }
 
+/// The run-ends bytes and optional values index range returned by [`build_extend_arrays`].
+type ExtendArrays = (Vec<u8>, Option<(usize, usize)>);
+
 /// Build run ends bytes and values range directly for batch processing
 fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedAdd>(
     buffer: &Buffer,
@@ -93,7 +96,7 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
     start: usize,
     len: usize,
     dest_last_run_end: T,
-) -> Result<(Vec<u8>, Option<(usize, usize)>), ArrowError> {
+) -> Result<ExtendArrays, ArrowError> {
     let mut run_ends_bytes = Vec::new();
     let mut values_range: Option<(usize, usize)> = None;
     let end = start + len;
@@ -116,11 +119,13 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
                 };
                 current_run_end = current_run_end
                     .checked_add(&T::usize_as(end_offset - start_offset))
-                    .ok_or_else(|| ArrowError::InvalidArgumentError(
-                        "run end overflow when extending RunEndEncoded array: \
+                    .ok_or_else(|| {
+                        ArrowError::InvalidArgumentError(
+                            "run end overflow when extending RunEndEncoded array: \
                          use a larger run-end type (e.g. Int64 instead of Int32)"
-                            .to_string(),
-                    ))?;
+                                .to_string(),
+                        )
+                    })?;
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Start the range
@@ -128,11 +133,13 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
             } else if prev_end >= start && run_end <= end {
                 current_run_end = current_run_end
                     .checked_add(&T::usize_as(run_end - prev_end))
-                    .ok_or_else(|| ArrowError::InvalidArgumentError(
-                        "run end overflow when extending RunEndEncoded array: \
+                    .ok_or_else(|| {
+                        ArrowError::InvalidArgumentError(
+                            "run end overflow when extending RunEndEncoded array: \
                          use a larger run-end type (e.g. Int64 instead of Int32)"
-                            .to_string(),
-                    ))?;
+                                .to_string(),
+                        )
+                    })?;
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Extend the range
@@ -143,11 +150,13 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
             } else if prev_end < end && run_end >= end {
                 current_run_end = current_run_end
                     .checked_add(&T::usize_as(end - prev_end))
-                    .ok_or_else(|| ArrowError::InvalidArgumentError(
-                        "run end overflow when extending RunEndEncoded array: \
+                    .ok_or_else(|| {
+                        ArrowError::InvalidArgumentError(
+                            "run end overflow when extending RunEndEncoded array: \
                          use a larger run-end type (e.g. Int64 instead of Int32)"
-                            .to_string(),
-                    ))?;
+                                .to_string(),
+                        )
+                    })?;
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Extend the range and break

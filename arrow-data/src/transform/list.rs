@@ -37,11 +37,7 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
             let last_offset: T = unsafe { get_last_offset(offset_buffer) };
 
             // offsets
-            try_extend_offsets::<T>(
-                offset_buffer,
-                last_offset,
-                &offsets[start..start + len + 1],
-            )?;
+            try_extend_offsets::<T>(offset_buffer, last_offset, &offsets[start..start + len + 1])?;
 
             mutable.child_data[0].try_extend(
                 index,

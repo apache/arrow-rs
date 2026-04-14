@@ -744,12 +744,7 @@ impl<'a> MutableArrayData<'a> {
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays
     /// or `end` > the length of the `index`th array
-    pub fn try_extend(
-        &mut self,
-        index: usize,
-        start: usize,
-        end: usize,
-    ) -> Result<(), ArrowError> {
+    pub fn try_extend(&mut self, index: usize, start: usize, end: usize) -> Result<(), ArrowError> {
         let len = end - start;
         (self.extend_null_bits[index])(&mut self.data, start, len);
         // Snapshot buffer lengths before attempting the extend so we can roll
@@ -767,7 +762,6 @@ impl<'a> MutableArrayData<'a> {
         Ok(())
     }
 
-
     /// Extends the in progress array with a region of the input arrays.
     ///
     /// # Deprecated
@@ -780,6 +774,7 @@ impl<'a> MutableArrayData<'a> {
     /// `end` > the length of the `index`th array,
     /// or the offset type overflows (e.g. more than 2 GiB in a `StringArray`).
     #[deprecated(
+        since = "59.0.0",
         note = "Use `try_extend` which returns an error on overflow instead of panicking"
     )]
     pub fn extend(&mut self, index: usize, start: usize, end: usize) {
@@ -817,6 +812,7 @@ impl<'a> MutableArrayData<'a> {
     /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays,
     /// or if the run-end counter overflows for `RunEndEncoded` arrays.
     #[deprecated(
+        since = "59.0.0",
         note = "Use `try_extend_nulls` which returns an error on overflow instead of panicking"
     )]
     pub fn extend_nulls(&mut self, len: usize) {

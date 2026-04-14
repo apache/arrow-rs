@@ -25,19 +25,16 @@ pub(super) fn build_extend(_: &ArrayData) -> Extend<'_> {
             // Collect field names before the mutable borrow of child_data.
             let field_names = struct_field_names(&mutable.data_type);
             for (col_idx, child) in mutable.child_data.iter_mut().enumerate() {
-                child.try_extend(index, start, start + len).map_err(|e| {
-                    wrap_column_error(e, col_idx, &field_names)
-                })?;
+                child
+                    .try_extend(index, start, start + len)
+                    .map_err(|e| wrap_column_error(e, col_idx, &field_names))?;
             }
             Ok(())
         },
     )
 }
 
-pub(super) fn extend_nulls(
-    mutable: &mut _MutableArrayData,
-    len: usize,
-) -> Result<(), ArrowError> {
+pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), ArrowError> {
     let field_names = struct_field_names(&mutable.data_type);
     for (col_idx, child) in mutable.child_data.iter_mut().enumerate() {
         child
@@ -60,7 +57,5 @@ fn wrap_column_error(e: ArrowError, col_idx: usize, field_names: &[String]) -> A
         .get(col_idx)
         .map(|n| format!(" (\"{n}\")"))
         .unwrap_or_default();
-    ArrowError::InvalidArgumentError(format!(
-        "struct column {col_idx}{name_ctx} failed: {e}"
-    ))
+    ArrowError::InvalidArgumentError(format!("struct column {col_idx}{name_ctx} failed: {e}"))
 }
