@@ -30,9 +30,6 @@ pub(super) fn resize_for_bits(buffer: &mut MutableBuffer, len: usize) {
 }
 
 /// Extends `buffer` with the re-based offsets from `offsets`, returning an error on overflow.
-///
-/// Use this instead of [`extend_offsets`] to get a proper error when data exceeds the
-/// capacity of the offset type (e.g. when appending more than 2 GiB into a `StringArray`).
 pub(super) fn try_extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
     buffer: &mut MutableBuffer,
     mut last_offset: T,
