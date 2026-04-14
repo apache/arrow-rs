@@ -113,7 +113,7 @@ pub trait ColumnValueEncoder {
     /// that would be written without a dictionary.
     /// If there is no dictionary, or the data size statistic is not available,
     /// returns `None`.
-    fn uncompressed_data_size(&self) -> Option<usize>;
+    fn plain_encoded_data_size(&self) -> Option<usize>;
 
     /// Flush the dictionary page for this column chunk if any. Any subsequent calls to
     /// [`Self::write`] will not be dictionary encoded
@@ -301,9 +301,9 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         Some(self.dict_encoder.as_ref()?.dict_encoded_size())
     }
 
-    fn uncompressed_data_size(&self) -> Option<usize> {
+    fn plain_encoded_data_size(&self) -> Option<usize> {
         let counter = self.plain_data_size_counter.as_ref()?;
-        Some(counter.uncompressed_data_size())
+        Some(counter.plain_encoded_data_size())
     }
 
     fn estimated_data_page_size(&self) -> usize {

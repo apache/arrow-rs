@@ -765,7 +765,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Second check, if enabled: the compression heuristic.
         // For similar logic in parquet-java,
         // see DictionaryValuesWriter.isCompressionSatisfying
-        if let Some(raw_size) = self.encoder.uncompressed_data_size() {
+        if let Some(raw_size) = self.encoder.plain_encoded_data_size() {
             let encoded_size = self.encoder.estimated_data_page_size();
             if encoded_size + dict_size >= raw_size {
                 return true;

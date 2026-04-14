@@ -525,9 +525,9 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         Some(self.dict_encoder.as_ref()?.estimated_dict_page_size())
     }
 
-    fn uncompressed_data_size(&self) -> Option<usize> {
+    fn plain_encoded_data_size(&self) -> Option<usize> {
         let counter = self.plain_data_size_counter.as_ref()?;
-        Some(counter.uncompressed_data_size())
+        Some(counter.plain_encoded_data_size())
     }
 
     /// Returns an estimate of the data page size in bytes

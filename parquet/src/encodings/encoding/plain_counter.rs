@@ -69,7 +69,7 @@ impl PlainDataSizeCounter {
     /// Returns the total size in bytes of values passed to `update` as if they were written
     /// in plain encoding, without a dictionary.
     #[inline]
-    pub fn uncompressed_data_size(&self) -> usize {
+    pub fn plain_encoded_data_size(&self) -> usize {
         self.raw_data_byte_size
     }
 }
