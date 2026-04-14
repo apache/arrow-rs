@@ -1161,7 +1161,11 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// # Panics
     ///
     /// Panics if `self` and `rhs` have different lengths.
-    pub fn try_binary<U, F, O, E>(&self, rhs: &PrimitiveArray<U>, op: F) -> Result<PrimitiveArray<O>, E>
+    pub fn try_binary<U, F, O, E>(
+        &self,
+        rhs: &PrimitiveArray<U>,
+        op: F,
+    ) -> Result<PrimitiveArray<O>, E>
     where
         U: ArrowPrimitiveType,
         O: ArrowPrimitiveType,
@@ -1353,16 +1357,24 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             }
         };
 
-        let r = try_for_each_valid_idx(len, 0, null_count, nulls.as_ref().map(|n| n.validity()), |idx| {
-            unsafe { *values.get_unchecked_mut(idx) = op(*values.get_unchecked(idx))? };
-            Ok::<_, E>(())
-        });
+        let r = try_for_each_valid_idx(
+            len,
+            0,
+            null_count,
+            nulls.as_ref().map(|n| n.validity()),
+            |idx| {
+                unsafe { *values.get_unchecked_mut(idx) = op(*values.get_unchecked(idx))? };
+                Ok::<_, E>(())
+            },
+        );
 
         if let Err(err) = r {
             return Ok(Err(err));
         }
 
-        Ok(Ok(PrimitiveArray::new(values.into(), nulls).with_data_type(data_type)))
+        Ok(Ok(
+            PrimitiveArray::new(values.into(), nulls).with_data_type(data_type)
+        ))
     }
 
     fn try_binary_mut_impl<F>(
@@ -1381,7 +1393,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             Ok(values) => values,
             Err(buffer) => {
                 let values = ScalarBuffer::new(buffer, 0, len);
-                return Err((PrimitiveArray::new(values, nulls).with_data_type(data_type), op));
+                return Err((
+                    PrimitiveArray::new(values, nulls).with_data_type(data_type),
+                    op,
+                ));
             }
         };
         values
@@ -1409,22 +1424,34 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             Ok(values) => values,
             Err(buffer) => {
                 let values = ScalarBuffer::new(buffer, 0, len);
-                return Err((PrimitiveArray::new(values, nulls).with_data_type(data_type), op));
+                return Err((
+                    PrimitiveArray::new(values, nulls).with_data_type(data_type),
+                    op,
+                ));
             }
         };
 
-        let r = try_for_each_valid_idx(len, 0, null_count, nulls.as_ref().map(|n| n.validity()), |idx| {
-            unsafe {
-                *values.get_unchecked_mut(idx) = op(*values.get_unchecked(idx), rhs.value_unchecked(idx))?;
-            }
-            Ok::<_, E>(())
-        });
+        let r = try_for_each_valid_idx(
+            len,
+            0,
+            null_count,
+            nulls.as_ref().map(|n| n.validity()),
+            |idx| {
+                unsafe {
+                    *values.get_unchecked_mut(idx) =
+                        op(*values.get_unchecked(idx), rhs.value_unchecked(idx))?;
+                }
+                Ok::<_, E>(())
+            },
+        );
 
         if let Err(err) = r {
             return Ok(Err(err));
         }
 
-        Ok(Ok(PrimitiveArray::new(values.into(), nulls).with_data_type(data_type)))
+        Ok(Ok(
+            PrimitiveArray::new(values.into(), nulls).with_data_type(data_type)
+        ))
     }
 
     /// Applies a unary and nullable function to all valid values in a primitive array
@@ -3342,7 +3369,10 @@ mod tests {
                 Ok(a / b)
             }
         });
-        assert_eq!(result.unwrap(), Int32Array::from(vec![Some(5), None, Some(6)]));
+        assert_eq!(
+            result.unwrap(),
+            Int32Array::from(vec![Some(5), None, Some(6)])
+        );
     }
 
     #[test]
