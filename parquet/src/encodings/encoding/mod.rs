@@ -813,7 +813,6 @@ mod tests {
     #[test]
     fn test_bool() {
         BoolType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
-        BoolType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
         BoolType::test(Encoding::RLE, TEST_SET_SIZE, -1);
     }
 
@@ -881,8 +880,7 @@ mod tests {
             assert_eq!(encoder.dict_encoded_size(), expected_size);
         }
 
-        // Only 2 variations of values 1 byte each
-        run_test::<BoolType>(-1, &[true, false, true, false, true], 2);
+        // Dictionary encoding is not supported for BoolType, so we don't test it here.
         run_test::<Int32Type>(-1, &[1i32, 2i32, 3i32, 4i32, 5i32], 20);
         run_test::<Int64Type>(-1, &[1i64, 2i64, 3i64, 4i64, 5i64], 40);
         run_test::<FloatType>(-1, &[1f32, 2f32, 3f32, 4f32, 5f32], 20);

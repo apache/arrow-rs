@@ -57,6 +57,9 @@ const MICROSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MICROSECONDS;
 const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
 
 impl Int96 {
+    /// Size of an INT96 value in bytes.
+    const SIZE_IN_BYTES: usize = 12;
+
     /// Creates new INT96 type struct with no data set.
     pub fn new() -> Self {
         Self { value: [0; 3] }
@@ -802,7 +805,7 @@ pub(crate) mod private {
         }
 
         fn dict_encoding_size(&self) -> usize {
-            1
+            panic!("Dictionary encoding should not be used for BOOLEAN type")
         }
 
         #[inline]
@@ -991,7 +994,7 @@ pub(crate) mod private {
         }
 
         fn dict_encoding_size(&self) -> usize {
-            12
+            Self::SIZE_IN_BYTES
         }
 
         #[inline]
@@ -1082,7 +1085,7 @@ pub(crate) mod private {
         }
 
         fn dict_encoding_size(&self) -> usize {
-            4 + self.len()
+            std::mem::size_of::<u32>() + self.len()
         }
 
         #[inline]
