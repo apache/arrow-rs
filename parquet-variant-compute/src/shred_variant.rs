@@ -89,7 +89,7 @@ pub fn shred_variant_with_options(
 
     let mut builder = make_variant_to_shredded_variant_arrow_row_builder(
         as_type,
-        &cast_options,
+        cast_options,
         array.len(),
         NullValue::TopLevelVariant,
     )?;
