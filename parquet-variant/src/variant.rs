@@ -309,16 +309,14 @@ enum NumericKind {
 
 trait DecimalCastTarget: NumCast + Default {
     const KIND: NumericKind;
-    fn arrow_type() -> DataType;
+    const ARROW_TYPE: DataType;
 }
 
 macro_rules! impl_decimal_cast_target {
     ($raw_type: ident, $target_kind:expr, $arrow_type: expr) => {
         impl DecimalCastTarget for $raw_type {
             const KIND: NumericKind = $target_kind;
-            fn arrow_type() -> DataType {
-                $arrow_type
-            }
+            const ARROW_TYPE: DataType = $arrow_type;
         }
     };
 }
@@ -847,22 +845,21 @@ impl<'m, 'v> Variant<'m, 'v> {
     {
         let base: D::Native = NumCast::from(10)?;
 
-        base.pow_checked(<u32 as From<u8>>::from(scale))
-            .ok()
-            .and_then(|div| match T::KIND {
-                NumericKind::Integer => cast_single_decimal_to_integer::<D, T>(
-                    raw,
-                    div,
-                    <i16 as From<u8>>::from(scale),
-                    T::arrow_type(),
-                )
-                .ok(),
-                NumericKind::Float => T::from(single_decimal_to_float_lossy::<D, _>(
-                    &as_float,
-                    raw,
-                    <i32 as From<u8>>::from(scale),
-                )),
-            })
+        let div = base.pow_checked(<u32 as From<u8>>::from(scale)).ok()?;
+        match T::KIND {
+            NumericKind::Integer => cast_single_decimal_to_integer::<D, T>(
+                raw,
+                div,
+                <i16 as From<u8>>::from(scale),
+                T::ARROW_TYPE,
+            )
+            .ok(),
+            NumericKind::Float => T::from(single_decimal_to_float_lossy::<D, _>(
+                &as_float,
+                raw,
+                <i32 as From<u8>>::from(scale),
+            )),
+        }
     }
 
     /// Converts a boolean or numeric variant(integers, floating-point, and decimals)
@@ -1193,9 +1190,7 @@ impl<'m, 'v> Variant<'m, 'v> {
         D::Native: NumCast + DecimalCast,
     {
         // find the last '.'
-        let scale_usize = input
-            .rsplit_once('.')
-            .map_or_else(|| 0, |(_, frac)| frac.len());
+        let scale_usize = input.rsplit_once('.').map_or(0, |(_, frac)| frac.len());
 
         let scale = u8::try_from(scale_usize).ok()?;
 
@@ -1330,14 +1325,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal16(&self) -> Option<VariantDecimal16> {
         match *self {
-            Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => self
-                .as_num::<i64>()
-                .map(|x| <i128 as From<i64>>::from(x).try_into().ok())
-                .unwrap(),
-            Variant::Float(f) => single_float_to_decimal::<Decimal128Type>(f as _, 1f64)
-                .and_then(|x: i128| x.try_into().ok()),
-            Variant::Double(f) => single_float_to_decimal::<Decimal128Type>(f, 1f64)
-                .and_then(|x: i128| x.try_into().ok()),
+            Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
+                let x = self.as_num::<i64>()?;
+                <i128 as From<i64>>::from(x).try_into().ok()
+            }
+            Variant::Float(f) => {
+                single_float_to_decimal::<Decimal128Type>(<f64 as From<f32>>::from(f), 1f64)
+                    .and_then(|x| x.try_into().ok())
+            }
+            Variant::Double(f) => {
+                single_float_to_decimal::<Decimal128Type>(f, 1f64).and_then(|x| x.try_into().ok())
+            }
             Variant::String(v) => Self::convert_string_to_decimal::<Decimal128Type, _>(v),
             Variant::ShortString(v) => {
                 Self::convert_string_to_decimal::<Decimal128Type, _>(v.as_str())

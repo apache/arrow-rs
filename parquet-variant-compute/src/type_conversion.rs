@@ -256,16 +256,12 @@ where
         ),
         Variant::Float(f) => single_float_to_decimal::<O>(f64::from(*f), mul),
         Variant::Double(f) => single_float_to_decimal::<O>(*f, mul),
-        Variant::String(v) if scale > 0 => parse_string_to_decimal_native::<O>(
-            v,
-            <i8 as TryInto<usize>>::try_into(scale).expect("scale is positive, would never fail"),
-        )
-        .ok(),
-        Variant::ShortString(v) if scale > 0 => parse_string_to_decimal_native::<O>(
-            v,
-            <i8 as TryInto<usize>>::try_into(scale).expect("scale is positive, would never fail"),
-        )
-        .ok(),
+        // arrow-cast only support cast string to decimal with scale >=0 for now
+        // Please see `cast_string_to_decimal` in arrow-cast/src/cast/decimal.rs for more detail
+        Variant::String(v) if scale >= 0 => parse_string_to_decimal_native::<O>(v, scale as _).ok(),
+        Variant::ShortString(v) if scale >= 0 => {
+            parse_string_to_decimal_native::<O>(v, scale as _).ok()
+        }
         Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
             d.integer(),
             VariantDecimal4::MAX_PRECISION,
