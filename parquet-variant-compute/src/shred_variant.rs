@@ -2221,10 +2221,7 @@ mod tests {
         assert!(value_field.is_null(2));
         assert!(value_field.is_valid(3));
         assert_eq!(
-            Variant::new(
-                binary_array_value(result.metadata_field().as_ref(), 3).unwrap(),
-                binary_array_value(value_field.as_ref(), 3).unwrap()
-            ),
+            variant_from_arrays_at(result.metadata_field(), value_field, 3).unwrap(),
             Variant::from("not an object")
         );
         assert!(value_field.is_null(4));
@@ -2405,10 +2402,7 @@ mod tests {
         assert_eq!(session_id_typed_value.value(1), mock_uuid_3.as_bytes());
 
         // Verify the value field contains the name field
-        let row_1_variant = Variant::new(
-            binary_array_value(metadata.as_ref(), 1).unwrap(),
-            binary_array_value(value.as_ref(), 1).unwrap(),
-        );
+        let row_1_variant = variant_from_arrays_at(metadata, value, 1).unwrap();
         let Variant::Object(obj) = row_1_variant else {
             panic!("Expected object");
         };
@@ -2440,10 +2434,7 @@ mod tests {
 
         assert!(session_id_value.is_valid(3)); // type mismatch, stored in value
         assert!(session_id_typed_value.is_null(3));
-        let session_id_variant = Variant::new(
-            binary_array_value(metadata.as_ref(), 3).unwrap(),
-            binary_array_value(session_id_value.as_ref(), 3).unwrap(),
-        );
+        let session_id_variant = variant_from_arrays_at(metadata, session_id_value, 3).unwrap();
         assert_eq!(session_id_variant, Variant::from("not-a-uuid"));
 
         // Row 4: Type mismatch - id is int64, not UUID
@@ -2454,10 +2445,7 @@ mod tests {
 
         assert!(id_value.is_valid(4)); // type mismatch, stored in value
         assert!(id_typed_value.is_null(4));
-        let id_variant = Variant::new(
-            binary_array_value(metadata.as_ref(), 4).unwrap(),
-            binary_array_value(id_value.as_ref(), 4).unwrap(),
-        );
+        let id_variant = variant_from_arrays_at(metadata, id_value, 4).unwrap();
         assert_eq!(id_variant, Variant::from(12345i64));
 
         assert!(session_id_value.is_null(4));
