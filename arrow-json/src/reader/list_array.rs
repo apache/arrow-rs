@@ -34,6 +34,7 @@ pub struct ListLikeArrayDecoder<O, const IS_VIEW: bool> {
     field: FieldRef,
     decoder: Box<dyn ArrayDecoder>,
     phantom: PhantomData<O>,
+    ignore_type_conflicts: bool,
     is_nullable: bool,
 }
 
@@ -56,6 +57,7 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ListLikeArrayDecoder<O, IS_VIEW> {
             field: field.clone(),
             decoder,
             phantom: Default::default(),
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             is_nullable,
         })
     }
@@ -79,6 +81,10 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
                     end_idx
                 }
                 (TapeElement::Null, Some(nulls)) => {
+                    nulls.append(false);
+                    *p + 1
+                }
+                (_, Some(nulls)) if self.ignore_type_conflicts => {
                     nulls.append(false);
                     *p + 1
                 }
