@@ -223,6 +223,35 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         Self::try_new(field, offsets, sizes, values, nulls).unwrap()
     }
 
+    /// Create a new [`GenericListViewArray`] from the provided parts without validation
+    ///
+    /// See [`Self::try_new`] for the checked version of this function, and the
+    /// documentation of that function for the invariants that must be upheld.
+    ///
+    /// # Safety
+    ///
+    /// The parts must form a valid [`ListViewArray`] or [`LargeListViewArray`] according
+    /// to the Arrow spec.
+    pub unsafe fn new_unchecked(
+        field: FieldRef,
+        offsets: ScalarBuffer<OffsetSize>,
+        sizes: ScalarBuffer<OffsetSize>,
+        values: ArrayRef,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(field, offsets, sizes, values, nulls);
+        }
+
+        Self {
+            data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
+            nulls,
+            values,
+            value_offsets: offsets,
+            value_sizes: sizes,
+        }
+    }
+
     /// Create a new [`GenericListViewArray`] of length `len` where all values are null
     pub fn new_null(field: FieldRef, len: usize) -> Self {
         let values = new_empty_array(field.data_type());
