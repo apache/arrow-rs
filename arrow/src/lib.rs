@@ -335,14 +335,24 @@
 //! * [`parquet`](https://docs.rs/parquet) - support for [Apache Parquet]
 //! * [`arrow-avro`](https://docs.rs/arrow-avro) - support for [Apache Avro]
 //!
-//! # Safety and Security
+//! # Security
 //!
-//! Like many crates, this crate makes use of unsafe where prudent. However, it endeavours to be
-//! sound. Specifically, **it should not be possible to trigger undefined behaviour using safe APIs.**
+//! This project follows the [Apache Arrow Security Model]. Any exploitable
+//! instance of undefined behavior using `safe` APIs and has a clear explanation
+//! or reproducer is considered a security issue.
 //!
-//! If you think you have found an instance where this is possible, please file
-//! a ticket in our [issue tracker] and it will be triaged and fixed. For more information on
-//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
+//! If you think you have found a security vulnerability or a soundness bug,
+//! please follow the instructions in our [security policy] for reporting.
+//!
+//! # Safety
+//!
+//! Like many crates, this crate makes use of `unsafe` where prudent. However, it endeavors to be
+//! sound. Specifically, **it should not be possible to trigger undefined behavior using safe APIs.**
+//!
+//! For more information on the use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety-and-security).
+//!
+//! [Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
+//! [security policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
 //!
 //! # Higher-level Processing
 //!
