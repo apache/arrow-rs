@@ -89,7 +89,7 @@ where
     D: DecimalType,
     F: Fn(D::Native) -> f64,
 {
-    f(x) * 10_f64.powi(-scale)
+    f(x) / 10_f64.powi(scale)
 }
 
 /// CastOptions provides a way to override the default cast behaviors

@@ -837,35 +837,74 @@ where
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
-    // Helper macro for emitting nearly the same loop every time, so we can hoist branches out
-    // The compiler will specialize the resulting code (inlining and jump threading)
-    macro_rules! cast_loop {
-        (|$v: ident| $body:expr) => {{
-            for i in 0..array.len() {
-                if array.is_null(i) {
-                    value_builder.append_null();
-                } else {
-                    let $v = cast_single_decimal_to_integer::<D, T::Native>(
-                        array.value(i),
-                        div,
-                        <i16 as From<i8>>::from(scale),
-                        T::DATA_TYPE,
-                    );
-                    $body
+    if scale < 0 {
+        match cast_options.safe {
+            true => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = cast_single_decimal_to_integer::<D, T::Native>(
+                            array.value(i),
+                            div,
+                            true,
+                            T::DATA_TYPE,
+                        )
+                        .ok();
+                        value_builder.append_option(v);
+                    }
                 }
             }
-        }};
-    }
-    if scale < 0 {
-        if cast_options.safe {
-            cast_loop!(|v| value_builder.append_option(v.ok()));
-        } else {
-            cast_loop!(|v| value_builder.append_value(v?));
+            false => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let value = cast_single_decimal_to_integer::<D, T::Native>(
+                            array.value(i),
+                            div,
+                            true,
+                            T::DATA_TYPE,
+                        )?;
+                        value_builder.append_value(value);
+                    }
+                }
+            }
         }
-    } else if cast_options.safe {
-        cast_loop!(|v| value_builder.append_option(v.ok()));
     } else {
-        cast_loop!(|v| value_builder.append_value(v?));
+        match cast_options.safe {
+            true => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = cast_single_decimal_to_integer::<D, T::Native>(
+                            array.value(i),
+                            div,
+                            false,
+                            T::DATA_TYPE,
+                        )
+                        .ok();
+                        value_builder.append_option(v);
+                    }
+                }
+            }
+            false => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let value = cast_single_decimal_to_integer::<D, T::Native>(
+                            array.value(i),
+                            div,
+                            false,
+                            T::DATA_TYPE,
+                        )?;
+                        value_builder.append_value(value);
+                    }
+                }
+            }
+        }
     }
 
     Ok(Arc::new(value_builder.finish()))
@@ -874,10 +913,11 @@ where
 /// Casting a given decimal to an integer based on given div and scale.
 /// The value is scaled by multiplying or dividing with the div based on the scale sign.
 /// Returns `Err` if the value is overflow or cannot be represented with the requested precision.
+#[inline]
 pub fn cast_single_decimal_to_integer<D, T>(
     value: D::Native,
     div: D::Native,
-    scale: i16,
+    negative: bool,
     type_name: DataType,
 ) -> Result<T, ArrowError>
 where
@@ -885,7 +925,7 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: ToPrimitive,
 {
-    let v = if scale < 0 {
+    let v = if negative {
         value.mul_checked(div)?
     } else {
         value.div_checked(div)?
