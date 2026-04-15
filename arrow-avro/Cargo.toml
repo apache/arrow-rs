@@ -92,6 +92,7 @@ criterion = { workspace = true, default-features = false }
 tempfile = "3.3"
 arrow = { workspace = true, features = ["prettyprint"] }
 futures = "0.3.31"
+async-stream = "0.3.6"
 apache-avro = "0.21.0"
 num-bigint = "0.4"
 object_store = { workspace = true, features = ["fs"] }
