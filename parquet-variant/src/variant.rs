@@ -31,15 +31,13 @@ use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
 use arrow::array::ArrowNativeTypeOp;
 use arrow::compute::{
-    DecimalCast, cast_num_to_bool, cast_single_decimal_to_integer,
+    DecimalCast, cast_num_to_bool, cast_single_decimal_to_integer_opt,
     cast_single_string_to_boolean_default, num_cast, parse_string_to_decimal_native,
     single_bool_to_numeric, single_decimal_to_float_lossy, single_float_to_decimal,
 };
 use arrow::datatypes::{Decimal32Type, Decimal64Type, Decimal128Type, DecimalType};
-use arrow_schema::DataType::{
-    Float16, Float32, Float64, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
-};
-use arrow_schema::{ArrowError, DataType};
+
+use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use num_traits::NumCast;
 use std::ops::Deref;
@@ -309,29 +307,27 @@ enum NumericKind {
 
 trait DecimalCastTarget: NumCast + Default {
     const KIND: NumericKind;
-    const ARROW_TYPE: DataType;
 }
 
 macro_rules! impl_decimal_cast_target {
-    ($raw_type: ident, $target_kind:expr, $arrow_type: expr) => {
+    ($raw_type: ident, $target_kind:expr) => {
         impl DecimalCastTarget for $raw_type {
             const KIND: NumericKind = $target_kind;
-            const ARROW_TYPE: DataType = $arrow_type;
         }
     };
 }
 
-impl_decimal_cast_target!(i8, NumericKind::Integer, Int8);
-impl_decimal_cast_target!(i16, NumericKind::Integer, Int16);
-impl_decimal_cast_target!(i32, NumericKind::Integer, Int32);
-impl_decimal_cast_target!(i64, NumericKind::Integer, Int64);
-impl_decimal_cast_target!(u8, NumericKind::Integer, UInt8);
-impl_decimal_cast_target!(u16, NumericKind::Integer, UInt16);
-impl_decimal_cast_target!(u32, NumericKind::Integer, UInt32);
-impl_decimal_cast_target!(u64, NumericKind::Integer, UInt64);
-impl_decimal_cast_target!(f16, NumericKind::Float, Float16);
-impl_decimal_cast_target!(f32, NumericKind::Float, Float32);
-impl_decimal_cast_target!(f64, NumericKind::Float, Float64);
+impl_decimal_cast_target!(i8, NumericKind::Integer);
+impl_decimal_cast_target!(i16, NumericKind::Integer);
+impl_decimal_cast_target!(i32, NumericKind::Integer);
+impl_decimal_cast_target!(i64, NumericKind::Integer);
+impl_decimal_cast_target!(u8, NumericKind::Integer);
+impl_decimal_cast_target!(u16, NumericKind::Integer);
+impl_decimal_cast_target!(u32, NumericKind::Integer);
+impl_decimal_cast_target!(u64, NumericKind::Integer);
+impl_decimal_cast_target!(f16, NumericKind::Float);
+impl_decimal_cast_target!(f32, NumericKind::Float);
+impl_decimal_cast_target!(f64, NumericKind::Float);
 
 impl<'m, 'v> Variant<'m, 'v> {
     /// Attempts to interpret a metadata and value buffer pair as a new `Variant`.
@@ -847,9 +843,7 @@ impl<'m, 'v> Variant<'m, 'v> {
 
         let div = base.pow_checked(<u32 as From<u8>>::from(scale)).ok()?;
         match T::KIND {
-            NumericKind::Integer => {
-                cast_single_decimal_to_integer::<D, T>(raw, div, false, T::ARROW_TYPE).ok()
-            }
+            NumericKind::Integer => cast_single_decimal_to_integer_opt::<D, T>(raw, div, false),
             NumericKind::Float => T::from(single_decimal_to_float_lossy::<D, _>(
                 &as_float,
                 raw,
