@@ -920,9 +920,12 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: ToPrimitive,
 {
-    cast_single_decimal_to_integer::<D, T>(value, div, negative)
-        .ok()
-        .flatten()
+    let v = if negative {
+        value.mul_checked(div).ok()?
+    } else {
+        value.div_checked(div).ok()?
+    };
+    T::from::<D::Native>(v)
 }
 
 #[inline]
@@ -937,31 +940,14 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: ToPrimitive,
 {
-    cast_single_decimal_to_integer::<D, T>(value, div, negative)?.ok_or_else(|| {
-        ArrowError::CastError(format!(
-            "value of {:?} is out of range {:?}",
-            value, type_name
-        ))
-    })
-}
-
-#[inline]
-fn cast_single_decimal_to_integer<D, T>(
-    value: D::Native,
-    div: D::Native,
-    negative: bool,
-) -> Result<Option<T>, ArrowError>
-where
-    T: NumCast + ToPrimitive,
-    D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ToPrimitive,
-{
     let v = if negative {
         value.mul_checked(div)?
     } else {
         value.div_checked(div)?
     };
-    Ok(T::from::<D::Native>(v))
+    T::from::<D::Native>(v).ok_or_else(|| {
+        ArrowError::CastError(format!("value of {:?} is out of range {:?}", v, type_name))
+    })
 }
 
 /// Cast a decimal array to a floating point array.
