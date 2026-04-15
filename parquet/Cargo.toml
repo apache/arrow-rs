@@ -70,7 +70,7 @@ serde_json = { version = "1.0", default-features = false, features = ["std"], op
 seq-macro = { version = "0.3", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "rt", "io-util"] }
-hashbrown = { version = "0.16", default-features = false }
+hashbrown = { version = "0.17", default-features = false }
 twox-hash = { version = "2.0", default-features = false, features = ["xxhash64"] }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
@@ -218,6 +218,11 @@ required-features = ["cli"]
 
 [[bench]]
 name = "arrow_writer"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
+name = "push_decoder"
 required-features = ["arrow"]
 harness = false
 
