@@ -71,6 +71,14 @@ The `parquet` crate provides the following features which may be enabled in your
 [`simdutf8`]: https://crates.io/crates/simdutf8
 [parquet variant]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 
+## Parquet Feature Status
+
+Please see the [Implementation Status Page] on the [Apache Parquet] website for
+information on the status of this implementation.
+
+[implementation status page]: https://parquet.apache.org/docs/file-format/implementationstatus/
+[apache parquet]: https://parquet.apache.org/
+
 ## Security
 
 See the [Security Policy] for information on the security model and how to report vulnerabilities.
