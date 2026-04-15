@@ -68,6 +68,14 @@ use std::sync::Arc;
 /// See [`ShreddedSchemaBuilder`] for a convenient way to build the `as_type`
 /// value passed to this function.
 pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<VariantArray> {
+    shred_variant_with_options(array, as_type, &CastOptions::default())
+}
+
+pub fn shred_variant_with_options(
+    array: &VariantArray,
+    as_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<VariantArray> {
     if array.typed_value_field().is_some() {
         return Err(ArrowError::InvalidArgumentError(
             "Input is already shredded".to_string(),
@@ -79,10 +87,9 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
         return Ok(array.clone());
     };
 
-    let cast_options = CastOptions::default();
     let mut builder = make_variant_to_shredded_variant_arrow_row_builder(
         as_type,
-        &cast_options,
+        cast_options,
         array.len(),
         NullValue::TopLevelVariant,
     )?;
@@ -321,12 +328,19 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         // If the variant is not an array, typed_value must be null.
         // If the variant is an array, value must be null.
         match variant {
-            Variant::List(list) => {
+            Variant::List(ref list) => {
                 self.nulls.append_non_null();
-                self.value_builder.append_null();
-                self.typed_value_builder
-                    .append_value(&Variant::List(list))?;
-                Ok(true)
+
+                // With `safe` cast option set to false, appending list of wrong size to
+                // `typed_value_builder` of type `FixedSizeList` will result in an error. In such a
+                // case, the provided list should be appended to the `value_builder.
+                let shredded = self.typed_value_builder.append_value(&variant)?;
+                if shredded {
+                    self.value_builder.append_null();
+                } else {
+                    self.value_builder.append_value(Variant::List(list.clone()));
+                }
+                Ok(shredded)
             }
             other => {
                 self.nulls.append_non_null();
@@ -690,9 +704,9 @@ mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
     use arrow::array::{
-        Array, BinaryViewArray, FixedSizeBinaryArray, Float64Array, GenericListArray,
-        GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray, ListArray,
-        ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+        Array, BinaryViewArray, FixedSizeBinaryArray, FixedSizeListArray, Float64Array,
+        GenericListArray, GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray,
+        ListArray, ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
     };
     use arrow::datatypes::{
         ArrowPrimitiveType, DataType, Field, Fields, Int64Type, TimeUnit, UnionFields, UnionMode,
@@ -1608,6 +1622,67 @@ mod tests {
 
     #[test]
     fn test_array_shredding_as_fixed_size_list() {
+        let input = build_variant_array(vec![
+            VariantRow::List(vec![VariantValue::from(1i64), VariantValue::from(2i64)]),
+            VariantRow::Value(VariantValue::from("This should not be shredded")),
+            VariantRow::List(vec![VariantValue::from(3i64), VariantValue::from(4i64)]),
+        ]);
+
+        let list_schema =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
+        let result = shred_variant(&input, &list_schema).unwrap();
+        assert_eq!(result.len(), 3);
+
+        // The first row should be shredded, so the `value` field should be null and the
+        // `typed_value` field should contain the list
+        assert!(result.is_valid(0));
+        assert!(result.value_field().unwrap().is_null(0));
+        assert!(result.typed_value_field().unwrap().is_valid(0));
+
+        // The second row should not be shredded because the provided schema for shredding did not
+        // match. Hence, the `value` field should contain the raw value and the `typed_value` field
+        // should be null.
+        assert!(result.is_valid(1));
+        assert!(result.value_field().unwrap().is_valid(1));
+        assert!(result.typed_value_field().unwrap().is_null(1));
+
+        // The third row should be shredded, so the `value` field should be null and the
+        // `typed_value` field should contain the list
+        assert!(result.is_valid(2));
+        assert!(result.value_field().unwrap().is_null(2));
+        assert!(result.typed_value_field().unwrap().is_valid(2));
+
+        let typed_value = result.typed_value_field().unwrap();
+        let fixed_size_list = typed_value
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("Expected FixedSizeListArray");
+
+        // Verify that typed value is `FixedSizeList`.
+        assert_eq!(fixed_size_list.len(), 3);
+        assert_eq!(fixed_size_list.value_length(), 2);
+
+        // Verify that the first entry in the `FixedSizeList` contains the expected value.
+        let val0 = fixed_size_list.value(0);
+        let val0_struct = val0.as_any().downcast_ref::<StructArray>().unwrap();
+        let val0_typed = val0_struct.column_by_name("typed_value").unwrap();
+        let val0_ints = val0_typed.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(val0_ints.values(), &[1i64, 2i64]);
+
+        // Verify that second entry in the `FixedSizeList` cannot be shredded hence the value is
+        // invalid.
+        assert!(fixed_size_list.is_null(1));
+
+        // Verify that the third entry in the `FixedSizeList` contains the expected value.
+        let val2 = fixed_size_list.value(2);
+        let val2_struct = val2.as_any().downcast_ref::<StructArray>().unwrap();
+        let val2_typed = val2_struct.column_by_name("typed_value").unwrap();
+        let val2_ints = val2_typed.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(val2_ints.values(), &[3i64, 4i64]);
+    }
+
+    #[test]
+    fn test_array_shredding_as_fixed_size_list_wrong_size() {
         let input = build_variant_array(vec![VariantRow::List(vec![
             VariantValue::from(1i64),
             VariantValue::from(2i64),
@@ -1615,10 +1690,37 @@ mod tests {
         ])]);
         let list_schema =
             DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
-        let err = shred_variant(&input, &list_schema).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Not yet implemented: Converting unshredded variant arrays to arrow fixed-size lists"
+
+        let result = shred_variant_with_options(
+            &input,
+            &list_schema,
+            &CastOptions {
+                safe: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result.len(), 1);
+
+        // With `safe` set to to true, the incorrect size should not raise error.
+        assert!(result.is_valid(0));
+        assert!(result.value_field().unwrap().is_valid(0));
+        assert!(result.typed_value_field().unwrap().is_null(0));
+
+        // With `safe` set to false, the incorrect size should raise error.
+        let err = shred_variant_with_options(
+            &input,
+            &list_schema,
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Expected fixed size list of size 2, got size 3"),
+            "got: {err}",
         );
     }
 
