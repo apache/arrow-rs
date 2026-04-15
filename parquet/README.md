@@ -75,7 +75,7 @@ The `parquet` crate provides the following features which may be enabled in your
 
 See the [Security Policy] for information on the security model and how to report vulnerabilities.
 
-[Security Policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
+[security policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
 
 ## License
 
