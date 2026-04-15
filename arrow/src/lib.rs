@@ -338,7 +338,7 @@
 //! # Security
 //!
 //! This project follows the [Apache Arrow Security Model]. Any exploitable
-//! instance of undefined behavior using `safe` APIs and has a clear explanation
+//! instance of undefined behavior using `safe` APIs and having a clear explanation
 //! or reproducer is considered a security issue.
 //!
 //! If you think you have found a security vulnerability or a soundness bug,
