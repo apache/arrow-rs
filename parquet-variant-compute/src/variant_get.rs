@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 use arrow::{
-    array::{self, Array, ArrayRef, BinaryViewArray, StructArray},
+    array::{self, Array, ArrayRef, StructArray},
+    buffer::NullBuffer,
     compute::CastOptions,
     datatypes::Field,
     error::Result,
@@ -114,9 +115,9 @@ fn shredded_get_path(
     // Helper that creates a new VariantArray from the given nested value and typed_value columns,
     // properly accounting for accumulated nulls from path traversal
     let make_target_variant =
-        |value: Option<BinaryViewArray>,
+        |value: Option<ArrayRef>,
          typed_value: Option<ArrayRef>,
-         accumulated_nulls: Option<arrow::buffer::NullBuffer>| {
+         accumulated_nulls: Option<NullBuffer>| {
             let metadata = input.metadata_field().clone();
             VariantArray::from_parts(metadata, value, typed_value, accumulated_nulls)
         };
@@ -161,10 +162,8 @@ fn shredded_get_path(
             ShreddedPathStep::Success(state) => {
                 // Union nulls from the typed_value we just accessed
                 if let Some(typed_value) = shredding_state.typed_value_field() {
-                    accumulated_nulls = arrow::buffer::NullBuffer::union(
-                        accumulated_nulls.as_ref(),
-                        typed_value.nulls(),
-                    );
+                    accumulated_nulls =
+                        NullBuffer::union(accumulated_nulls.as_ref(), typed_value.nulls());
                 }
                 shredding_state = state;
                 path_index += 1;
@@ -251,6 +250,7 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
         return None;
     }
     let typed_value = variant_array.typed_value_field()?;
+
     if typed_value.data_type() == as_field.data_type()
         && variant_array
             .value_field()
@@ -264,6 +264,7 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
         // so we can just return the typed value.
         return Some(typed_value.clone());
     }
+
     None
 }
 
@@ -1048,7 +1049,7 @@ mod test {
                     EMPTY_VARIANT_METADATA_BYTES,
                     typed_value.len(),
                 ));
-                VariantArray::from_parts(metadata, None, Some(typed_value), None).into()
+                VariantArray::from_parts(Arc::new(metadata), None, Some(typed_value), None).into()
             }
         };
     }
@@ -1716,7 +1717,12 @@ mod test {
         let metadata =
             BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
 
-        ArrayRef::from(VariantArray::from_parts(metadata, None, None, Some(nulls)))
+        ArrayRef::from(VariantArray::from_parts(
+            Arc::new(metadata),
+            None,
+            None,
+            Some(nulls),
+        ))
     }
     /// This test manually constructs a shredded variant array representing objects
     /// like {"x": 1, "y": "foo"} and {"x": 42} and tests extracting the "x" field
@@ -1822,8 +1828,8 @@ mod test {
 
         // Create the main VariantArray
         ArrayRef::from(VariantArray::from_parts(
-            metadata_array,
-            Some(value_array),
+            Arc::new(metadata_array),
+            Some(Arc::new(value_array)),
             Some(Arc::new(typed_value_struct)),
             None,
         ))
@@ -2199,8 +2205,8 @@ mod test {
 
         // Build final VariantArray
         ArrayRef::from(VariantArray::from_parts(
-            metadata_array,
-            Some(value_array),
+            Arc::new(metadata_array),
+            Some(Arc::new(value_array)),
             Some(Arc::new(typed_value_struct)),
             None,
         ))
@@ -2290,7 +2296,7 @@ mod test {
                 .unwrap(),
         ) as ArrayRef;
         let a_field_shredded = ShreddedVariantFieldArray::from_parts(
-            Some(a_value_array),
+            Some(Arc::new(a_value_array)),
             Some(a_inner_typed_value),
             None,
         );
@@ -2310,8 +2316,8 @@ mod test {
 
         // Build final VariantArray
         ArrayRef::from(VariantArray::from_parts(
-            metadata_array,
-            Some(value_array),
+            Arc::new(metadata_array),
+            Some(Arc::new(value_array)),
             Some(Arc::new(typed_value_struct)),
             None,
         ))
@@ -2392,7 +2398,7 @@ mod test {
                 .unwrap(),
         ) as ArrayRef;
         let b_field_shredded = ShreddedVariantFieldArray::from_parts(
-            Some(b_value_array),
+            Some(Arc::new(b_value_array)),
             Some(b_inner_typed_value),
             None,
         );
@@ -2421,7 +2427,7 @@ mod test {
                 .unwrap(),
         ) as ArrayRef;
         let a_field_shredded = ShreddedVariantFieldArray::from_parts(
-            Some(a_value_array),
+            Some(Arc::new(a_value_array)),
             Some(a_inner_typed_value),
             None,
         );
@@ -2441,8 +2447,8 @@ mod test {
 
         // Build final VariantArray
         ArrayRef::from(VariantArray::from_parts(
-            metadata_array,
-            Some(value_array),
+            Arc::new(metadata_array),
+            Some(Arc::new(value_array)),
             Some(Arc::new(typed_value_struct)),
             None,
         ))
@@ -3208,7 +3214,7 @@ mod test {
 
         // Build final VariantArray with top-level nulls
         ArrayRef::from(VariantArray::from_parts(
-            metadata_array,
+            Arc::new(metadata_array),
             None,
             Some(Arc::new(typed_value_struct)),
             Some(nulls),
@@ -3267,7 +3273,7 @@ mod test {
             false, // row 3: top-level NULL
         ]);
         ArrayRef::from(VariantArray::from_parts(
-            metadata_array,
+            Arc::new(metadata_array),
             None,
             Some(Arc::new(typed_value)),
             Some(nulls),
@@ -3336,8 +3342,8 @@ mod test {
         // Top-level null is encoded in the main StructArray's null mask
         let variant_nulls = NullBuffer::from(vec![true, true, true, false]); // Row 3 is top-level null
         ArrayRef::from(VariantArray::from_parts(
-            metadata_array,
-            Some(value_array),
+            Arc::new(metadata_array),
+            Some(Arc::new(value_array)),
             Some(Arc::new(typed_value_struct)),
             Some(variant_nulls),
         ))
@@ -4014,9 +4020,13 @@ mod test {
             EMPTY_VARIANT_METADATA_BYTES,
             all_nulls_values.len(),
         ));
-        let variant_array: ArrayRef =
-            VariantArray::from_parts(metadata, None, Some(Arc::new(typed_value_struct)), None)
-                .into();
+        let variant_array: ArrayRef = VariantArray::from_parts(
+            Arc::new(metadata),
+            None,
+            Some(Arc::new(typed_value_struct)),
+            None,
+        )
+        .into();
 
         // Case 1: all-null primitive column should reuse the typed_value Arc directly
         let all_nulls_field_ref = FieldRef::from(Field::new("result", DataType::Int32, true));
