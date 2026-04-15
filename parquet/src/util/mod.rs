@@ -21,6 +21,8 @@ mod bit_pack;
 pub(crate) mod interner;
 
 pub(crate) mod push_buffers;
+#[cfg(feature = "arrow")]
+pub(crate) mod retention;
 #[cfg(any(test, feature = "test_common"))]
 pub(crate) mod test_common;
 pub mod utf8;

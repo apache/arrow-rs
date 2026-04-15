@@ -34,6 +34,7 @@ use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::util::push_buffers::PushBuffers;
+use crate::util::retention::RetentionSet;
 use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
@@ -168,6 +169,12 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// The underlying data store
     buffers: PushBuffers,
+
+    /// Optional retention filter.  When present, incoming `push_data` buffers
+    /// are trimmed to only keep byte ranges the decoder will eventually need.
+    /// The set is extended with ranges the decoder explicitly requests via
+    /// `NeedsData`, so the filter only discards truly speculative prefetch.
+    retention: Option<RetentionSet>,
 }
 
 impl RowGroupReaderBuilder {
@@ -185,6 +192,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        retention: Option<RetentionSet>,
     ) -> Self {
         Self {
             batch_size,
@@ -199,12 +207,23 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
+            retention,
         }
     }
 
-    /// Push new data buffers that can be used to satisfy pending requests
+    /// Push new data buffers that can be used to satisfy pending requests.
+    ///
+    /// When a [`RetentionSet`] is configured, incoming buffers are filtered so
+    /// that only byte ranges the decoder will eventually need are stored.
+    /// Portions outside the retention set are silently discarded.
     pub fn push_data(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
-        self.buffers.push_ranges(ranges, buffers);
+        let (ranges, buffers) = match &self.retention {
+            Some(retention) => retention.filter(ranges, buffers),
+            None => (ranges, buffers),
+        };
+        if !ranges.is_empty() {
+            self.buffers.push_ranges(ranges, buffers);
+        }
     }
 
     /// Returns the total number of buffered bytes available
@@ -292,6 +311,13 @@ impl RowGroupReaderBuilder {
                 } => {
                     // put back the next state
                     self.state = Some(next_state);
+                    // Extend the retention set with explicitly requested
+                    // ranges so the IO layer's response is not filtered out.
+                    if let DecodeResult::NeedsData(ref ranges) = result {
+                        if let Some(retention) = &mut self.retention {
+                            retention.extend(ranges);
+                        }
+                    }
                     return Ok(result);
                 }
                 // completed one internal state, maybe can proceed further

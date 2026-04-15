@@ -28,6 +28,7 @@ use crate::arrow::arrow_reader::{
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use crate::util::push_buffers::PushBuffers;
+use crate::util::retention::RetentionSet;
 use arrow_array::RecordBatch;
 use bytes::Bytes;
 use reader_builder::RowGroupReaderBuilder;
@@ -185,6 +186,7 @@ impl ParquetPushDecoderBuilder {
         // Prepare to build RowGroup readers
         let file_len = 0; // not used in push decoder
         let buffers = PushBuffers::new(file_len);
+        let retention = RetentionSet::from_row_groups(&parquet_metadata, &row_groups);
         let row_group_reader_builder = RowGroupReaderBuilder::new(
             batch_size,
             projection,
@@ -197,6 +199,7 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
             buffers,
             row_selection_policy,
+            Some(retention),
         );
 
         // Initialize the decoder with the configured options
