@@ -210,15 +210,14 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         let dict_supported = props.dictionary_enabled(descr.path())
             && has_dictionary_support(T::get_physical_type(), props);
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
-        let plain_data_size_counter = match props.dictionary_fallback(descr.path()) {
-            DictionaryFallback::OnPageSizeLimit => None,
-            DictionaryFallback::OnUnfavorableAfter(_) => {
-                if dict_encoder.is_some() {
-                    Some(PlainDataSizeCounter::new(descr))
-                } else {
-                    None
-                }
-            }
+        let plain_data_size_counter = if dict_encoder.is_some()
+            && matches!(
+                props.dictionary_fallback(descr.path()),
+                DictionaryFallback::OnUnfavorableAfter(_)
+            ) {
+            Some(PlainDataSizeCounter::new(descr))
+        } else {
+            None
         };
 
         // Set either main encoder or fallback encoder.

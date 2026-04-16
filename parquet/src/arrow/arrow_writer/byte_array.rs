@@ -445,19 +445,18 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     where
         Self: Sized,
     {
-        let dictionary = props
+        let dict_encoder = props
             .dictionary_enabled(descr.path())
             .then(DictEncoder::default);
 
-        let plain_data_size_counter = match props.dictionary_fallback(descr.path()) {
-            DictionaryFallback::OnPageSizeLimit => None,
-            DictionaryFallback::OnUnfavorableAfter(_) => {
-                if dictionary.is_some() {
-                    Some(PlainDataSizeCounter::new(descr))
-                } else {
-                    None
-                }
-            }
+        let plain_data_size_counter = if dict_encoder.is_some()
+            && matches!(
+                props.dictionary_fallback(descr.path()),
+                DictionaryFallback::OnUnfavorableAfter(_)
+            ) {
+            Some(PlainDataSizeCounter::new(descr))
+        } else {
+            None
         };
 
         let fallback = FallbackEncoder::new(descr, props)?;
@@ -473,7 +472,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             statistics_enabled,
             bloom_filter,
             bloom_filter_target_fpp,
-            dict_encoder: dictionary,
+            dict_encoder,
             plain_data_size_counter,
             min_value: None,
             max_value: None,
