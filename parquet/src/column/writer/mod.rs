@@ -245,20 +245,6 @@ impl PageMetrics {
             .as_mut()
             .map(LevelHistogram::reset);
     }
-
-    /// Updates histogram values using provided repetition levels
-    fn update_repetition_level_histogram(&mut self, levels: &[i16]) {
-        if let Some(ref mut rep_hist) = self.repetition_level_histogram {
-            rep_hist.update_from_levels(levels);
-        }
-    }
-
-    /// Updates histogram values using provided definition levels
-    fn update_definition_level_histogram(&mut self, levels: &[i16]) {
-        if let Some(ref mut def_hist) = self.definition_level_histogram {
-            def_hist.update_from_levels(levels);
-        }
-    }
 }
 
 // Metrics per column writer
@@ -676,16 +662,19 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 )
             })?;
 
-            let values_to_write = levels
-                .iter()
-                .map(|level| (*level == self.descr.max_def_level()) as usize)
-                .sum();
+            let mut values_to_write = 0usize;
+            let max_def = self.descr.max_def_level();
+            let encoder = &mut self.def_levels_encoder;
+            match self.page_metrics.definition_level_histogram.as_mut() {
+                Some(histogram) => encoder.put_with_observer(levels, |level, count| {
+                    values_to_write += count * (level == max_def) as usize;
+                    histogram.increment_by(level, count as i64);
+                }),
+                None => encoder.put_with_observer(levels, |level, count| {
+                    values_to_write += count * (level == max_def) as usize;
+                }),
+            };
             self.page_metrics.num_page_nulls += (levels.len() - values_to_write) as u64;
-
-            // Update histogram
-            self.page_metrics.update_definition_level_histogram(levels);
-
-            self.def_levels_encoder.put(levels);
             values_to_write
         } else {
             num_levels
@@ -708,15 +697,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 ));
             }
 
-            // Count the occasions where we start a new row
-            for &level in levels {
-                self.page_metrics.num_buffered_rows += (level == 0) as u32
-            }
-
-            // Update histogram
-            self.page_metrics.update_repetition_level_histogram(levels);
-
-            self.rep_levels_encoder.put(levels);
+            let mut new_rows = 0u32;
+            let encoder = &mut self.rep_levels_encoder;
+            match self.page_metrics.repetition_level_histogram.as_mut() {
+                Some(histogram) => encoder.put_with_observer(levels, |level, count| {
+                    new_rows += (count as u32) * (level == 0) as u32;
+                    histogram.increment_by(level, count as i64);
+                }),
+                None => encoder.put_with_observer(levels, |level, count| {
+                    new_rows += (count as u32) * (level == 0) as u32;
+                }),
+            };
+            self.page_metrics.num_buffered_rows += new_rows;
         } else {
             // Each value is exactly one row.
             // Equals to the number of values, we count nulls as well.
