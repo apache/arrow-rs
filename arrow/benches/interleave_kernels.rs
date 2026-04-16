@@ -28,6 +28,7 @@ extern crate arrow;
 use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
+use arrow_buffer::ScalarBuffer;
 use arrow_select::interleave::interleave;
 use std::hint;
 use std::sync::Arc;
@@ -126,6 +127,29 @@ fn add_benchmark(c: &mut Criterion) {
     let list_view_i64_no_nulls: ListViewArray =
         create_primitive_list_array_with_seed::<i32, Int64Type>(8192, 0.0, 0.0, 20, 42).into();
 
+    // ListView with overlapping offset/size ranges: 100 unique element ranges of
+    // 20 elements each, with 80 rows sharing each range (8000 rows, 2000 backing elements).
+    let list_view_overlapping = {
+        let num_unique = 100;
+        let rows_per_unique = 80;
+        let elems_per_row = 20;
+        let total_rows = num_unique * rows_per_unique;
+        let values = Arc::new(Int64Array::from_iter_values(
+            0..((num_unique * elems_per_row) as i64),
+        ));
+        let offsets: Vec<i32> = (0..total_rows)
+            .map(|i| ((i / rows_per_unique) * elems_per_row) as i32)
+            .collect();
+        let sizes = vec![elems_per_row as i32; total_rows];
+        ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int64, false)),
+            ScalarBuffer::from(offsets),
+            ScalarBuffer::from(sizes),
+            values,
+            None,
+        )
+    };
+
     let cases: &[(&str, &dyn Array)] = &[
         ("i32(0.0)", &i32),
         ("i32(0.5)", &i32_opt),
@@ -150,6 +174,10 @@ fn add_benchmark(c: &mut Criterion) {
         ("list<i64>(0.0,0.0,20)", &list_i64_no_nulls),
         ("list_view<i64>(0.1,0.1,20)", &list_view_i64),
         ("list_view<i64>(0.0,0.0,20)", &list_view_i64_no_nulls),
+        (
+            "list_view_overlapping<i64>(80x,20)",
+            &list_view_overlapping,
+        ),
     ];
 
     for (prefix, base) in cases {
