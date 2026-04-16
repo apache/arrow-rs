@@ -923,7 +923,7 @@ impl ArrowColumnWriter {
         let chunks = chunker.get_arrow_chunks(
             levels.def_level_data().as_ref(),
             levels.rep_level_data().as_ref(),
-            ValueSelectionRef::Sparse(levels.non_null_indices()),
+            levels.value_selection().as_ref(),
             levels.array().as_ref(),
         )?;
         let materialized_dictionary = match &self.writer {

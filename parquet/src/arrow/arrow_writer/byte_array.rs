@@ -466,8 +466,15 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         })
     }
 
-    fn write(&mut self, _values: &Self::Values, _offset: usize, _len: usize) -> Result<()> {
-        unreachable!("should call write_gather instead")
+    fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()> {
+        downcast_op!(
+            values.data_type(),
+            values,
+            encode,
+            offset..offset + len,
+            self
+        );
+        Ok(())
     }
 
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {

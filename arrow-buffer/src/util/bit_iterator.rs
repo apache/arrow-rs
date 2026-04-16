@@ -318,6 +318,14 @@ impl Iterator for BitIndexIterator<'_> {
             self.chunk_offset += 64;
         }
     }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let current = self.current_chunk.count_ones() as usize;
+        let (_, remaining_chunks) = self.iter.size_hint();
+        let upper = remaining_chunks.map(|chunks| current + chunks.saturating_mul(64));
+        (current, upper)
+    }
 }
 
 /// An iterator of u32 whose index in a provided bitmask is true
@@ -374,6 +382,14 @@ impl<'a> Iterator for BitIndexU32Iterator<'a> {
                 None => return None,
             }
         }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let current = self.curr.count_ones() as usize;
+        let (_, remaining_chunks) = self.iter.size_hint();
+        let upper = remaining_chunks.map(|chunks| current + chunks.saturating_mul(64));
+        (current, upper)
     }
 }
 

@@ -380,9 +380,11 @@ impl<'a> LevelDataRef<'a> {
 /// This type exists so that [`GenericColumnWriter::write_batch_internal`] can accept value
 /// selections from two callers without allocating: the public [`GenericColumnWriter::write_batch`]
 /// API constructs `Dense` directly from the caller's values length, while the Arrow writer
-/// borrows sparse value indices from `ArrayLevels`.
+/// borrows from `ArrayLevels` as either empty, dense, or sparse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueSelectionRef<'a> {
+    #[cfg(feature = "arrow")]
+    Empty,
     Dense {
         offset: usize,
         len: usize,
@@ -397,6 +399,8 @@ pub(crate) enum ValueSelectionRef<'a> {
 impl<'a> ValueSelectionRef<'a> {
     pub(crate) fn len(self) -> usize {
         match self {
+            #[cfg(feature = "arrow")]
+            Self::Empty => 0,
             Self::Dense { len, .. } => len,
             #[cfg(feature = "arrow")]
             Self::Sparse(indices) => indices.len(),
@@ -406,8 +410,31 @@ impl<'a> ValueSelectionRef<'a> {
     }
 
     #[cfg(feature = "arrow")]
+    pub(crate) fn slice(self, offset: usize, len: usize) -> Self {
+        match self {
+            Self::Empty => {
+                debug_assert_eq!(offset, 0);
+                debug_assert_eq!(len, 0);
+                Self::Empty
+            }
+            Self::Dense {
+                offset: base,
+                len: selection_len,
+            } => {
+                debug_assert!(offset + len <= selection_len);
+                Self::Dense {
+                    offset: base + offset,
+                    len,
+                }
+            }
+            Self::Sparse(indices) => Self::Sparse(&indices[offset..offset + len]),
+        }
+    }
+
+    #[cfg(feature = "arrow")]
     pub(crate) fn index_at(self, idx: usize) -> Option<usize> {
         match self {
+            Self::Empty => None,
             Self::Dense { offset, len } => (idx < len).then_some(offset + idx),
             Self::Sparse(indices) => indices.get(idx).copied(),
         }
@@ -416,6 +443,7 @@ impl<'a> ValueSelectionRef<'a> {
     #[cfg(feature = "arrow")]
     pub(crate) fn for_each_index(self, mut f: impl FnMut(usize)) {
         match self {
+            Self::Empty => {}
             Self::Dense { offset, len } => {
                 for idx in offset..offset + len {
                     f(idx);
@@ -903,6 +931,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         match value_selection {
+            #[cfg(feature = "arrow")]
+            ValueSelectionRef::Empty => {}
             #[cfg(feature = "arrow")]
             ValueSelectionRef::Sparse(indices) => {
                 debug_assert!(
