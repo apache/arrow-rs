@@ -129,6 +129,19 @@ impl RleEncoder {
         bit_packed_max_size.max(rle_max_size)
     }
 
+    /// Returns `true` if the encoder is currently accumulating an RLE run for `value`.
+    #[inline]
+    pub fn is_accumulating_rle(&self, value: u64) -> bool {
+        self.repeat_count >= BIT_PACK_GROUP_SIZE && self.current_value == value
+    }
+
+    /// Extends the current RLE run by `count` additional repetitions.
+    #[inline]
+    pub fn extend_run(&mut self, count: usize) {
+        debug_assert!(self.repeat_count >= BIT_PACK_GROUP_SIZE);
+        self.repeat_count += count;
+    }
+
     /// Encodes `value`, which must be representable with `bit_width` bits.
     #[inline]
     pub fn put(&mut self, value: u64) {

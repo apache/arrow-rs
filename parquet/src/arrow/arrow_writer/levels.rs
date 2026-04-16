@@ -41,6 +41,7 @@
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
 use crate::column::chunker::CdcChunk;
+use crate::column::writer::LevelDataRef;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
@@ -316,7 +317,7 @@ impl LevelInfoBuilder {
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
                 child.write(start_idx..end_idx);
                 child.visit_leaves(|leaf| {
-                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                    let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
                     let mut rev = rep_levels.iter_mut().rev();
                     let mut remaining = end_idx - start_idx;
 
@@ -336,17 +337,18 @@ impl LevelInfoBuilder {
                 })
             };
 
+        // In a list column, each row falls into one of three categories:
+        // - "null": the list slot is absent (!is_valid), encoded at def_level - 2
+        // - "empty": the list slot is present but has zero elements
+        //   (offsets[i] == offsets[i+1]), encoded at def_level - 1
+        // - non-empty: the list slot has child values, which are recursed into
+        //
+        // Consecutive runs of null or empty rows are batched and written together.
         let write_null_run = |child: &mut LevelInfoBuilder, count: usize| {
             if count > 0 {
                 child.visit_leaves(|leaf| {
-                    leaf.rep_levels
-                        .as_mut()
-                        .unwrap()
-                        .extend(std::iter::repeat_n(ctx.rep_level - 1, count));
-                    leaf.def_levels
-                        .as_mut()
-                        .unwrap()
-                        .extend(std::iter::repeat_n(ctx.def_level - 2, count));
+                    leaf.append_rep_level_run(ctx.rep_level - 1, count);
+                    leaf.append_def_level_run(ctx.def_level - 2, count);
                 });
             }
         };
@@ -354,14 +356,8 @@ impl LevelInfoBuilder {
         let write_empty_run = |child: &mut LevelInfoBuilder, count: usize| {
             if count > 0 {
                 child.visit_leaves(|leaf| {
-                    leaf.rep_levels
-                        .as_mut()
-                        .unwrap()
-                        .extend(std::iter::repeat_n(ctx.rep_level - 1, count));
-                    leaf.def_levels
-                        .as_mut()
-                        .unwrap()
-                        .extend(std::iter::repeat_n(ctx.def_level - 1, count));
+                    leaf.append_rep_level_run(ctx.rep_level - 1, count);
+                    leaf.append_def_level_run(ctx.def_level - 1, count);
                 });
             }
         };
@@ -431,7 +427,7 @@ impl LevelInfoBuilder {
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
                 child.write(start_idx..end_idx);
                 child.visit_leaves(|leaf| {
-                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                    let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
                     let mut rev = rep_levels.iter_mut().rev();
                     let mut remaining = end_idx - start_idx;
 
@@ -453,19 +449,15 @@ impl LevelInfoBuilder {
 
         let write_empty_slice = |child: &mut LevelInfoBuilder| {
             child.visit_leaves(|leaf| {
-                let rep_levels = leaf.rep_levels.as_mut().unwrap();
-                rep_levels.push(ctx.rep_level - 1);
-                let def_levels = leaf.def_levels.as_mut().unwrap();
-                def_levels.push(ctx.def_level - 1);
+                leaf.append_rep_level_run(ctx.rep_level - 1, 1);
+                leaf.append_def_level_run(ctx.def_level - 1, 1);
             })
         };
 
         let write_null_slice = |child: &mut LevelInfoBuilder| {
             child.visit_leaves(|leaf| {
-                let rep_levels = leaf.rep_levels.as_mut().unwrap();
-                rep_levels.push(ctx.rep_level - 1);
-                let def_levels = leaf.def_levels.as_mut().unwrap();
-                def_levels.push(ctx.def_level - 2);
+                leaf.append_rep_level_run(ctx.rep_level - 1, 1);
+                leaf.append_def_level_run(ctx.def_level - 2, 1);
             })
         };
 
@@ -513,13 +505,8 @@ impl LevelInfoBuilder {
             for child in children {
                 child.visit_leaves(|info| {
                     let len = range.end - range.start;
-
-                    let def_levels = info.def_levels.as_mut().unwrap();
-                    def_levels.extend(std::iter::repeat_n(ctx.def_level - 1, len));
-
-                    if let Some(rep_levels) = info.rep_levels.as_mut() {
-                        rep_levels.extend(std::iter::repeat_n(ctx.rep_level, len));
-                    }
+                    info.append_def_level_run(ctx.def_level - 1, len);
+                    info.append_rep_level_run(ctx.rep_level, len);
                 })
             }
         };
@@ -579,7 +566,7 @@ impl LevelInfoBuilder {
             child.write(values_start..values_end);
 
             child.visit_leaves(|leaf| {
-                let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
 
                 let row_indices = (0..fixed_size)
                     .rev()
@@ -605,10 +592,8 @@ impl LevelInfoBuilder {
         let write_empty = |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
             let len = end_idx - start_idx;
             child.visit_leaves(|leaf| {
-                let rep_levels = leaf.rep_levels.as_mut().unwrap();
-                rep_levels.extend(std::iter::repeat_n(ctx.rep_level - 1, len));
-                let def_levels = leaf.def_levels.as_mut().unwrap();
-                def_levels.extend(std::iter::repeat_n(ctx.def_level - 1, len));
+                leaf.append_rep_level_run(ctx.rep_level - 1, len);
+                leaf.append_def_level_run(ctx.def_level - 1, len);
             })
         };
 
@@ -634,10 +619,8 @@ impl LevelInfoBuilder {
                         }
                         // Add null row
                         child.visit_leaves(|leaf| {
-                            let rep_levels = leaf.rep_levels.as_mut().unwrap();
-                            rep_levels.push(ctx.rep_level - 1);
-                            let def_levels = leaf.def_levels.as_mut().unwrap();
-                            def_levels.push(ctx.def_level - 2);
+                            leaf.append_rep_level_run(ctx.rep_level - 1, 1);
+                            leaf.append_def_level_run(ctx.def_level - 2, 1);
                         })
                     }
                 }
@@ -655,37 +638,34 @@ impl LevelInfoBuilder {
     fn write_leaf(info: &mut ArrayLevels, range: Range<usize>) {
         let len = range.end - range.start;
 
-        match &mut info.def_levels {
-            Some(def_levels) => {
-                def_levels.reserve(len);
-                info.non_null_indices.reserve(len);
-
-                match &info.logical_nulls {
-                    Some(nulls) => {
-                        assert!(range.end <= nulls.len());
-                        let nulls = nulls.inner();
-                        def_levels.extend(range.clone().map(|i| {
-                            // Safety: range.end was asserted to be in bounds earlier
-                            let valid = unsafe { nulls.value_unchecked(i) };
-                            info.max_def_level - (!valid as i16)
-                        }));
-                        info.non_null_indices.extend(
-                            BitIndexIterator::new(nulls.inner(), nulls.offset() + range.start, len)
-                                .map(|i| i + range.start),
-                        );
-                    }
-                    None => {
-                        let iter = std::iter::repeat_n(info.max_def_level, len);
-                        def_levels.extend(iter);
-                        info.non_null_indices.extend(range);
-                    }
+        if matches!(info.def_levels, LevelData::Absent) {
+            info.non_null_indices.extend(range.clone());
+        } else {
+            let max_def_level = info.max_def_level;
+            match &info.logical_nulls {
+                Some(nulls) => {
+                    assert!(range.end <= nulls.len());
+                    let nulls = nulls.inner();
+                    info.def_levels.extend_from_iter(range.clone().map(|i| {
+                        // Safety: range.end was asserted to be in bounds earlier
+                        let valid = unsafe { nulls.value_unchecked(i) };
+                        max_def_level - (!valid as i16)
+                    }));
+                    info.non_null_indices.reserve(len);
+                    info.non_null_indices.extend(
+                        BitIndexIterator::new(nulls.inner(), nulls.offset() + range.start, len)
+                            .map(|i| i + range.start),
+                    );
+                }
+                None => {
+                    info.append_def_level_run(max_def_level, len);
+                    info.non_null_indices.extend(range.clone());
                 }
             }
-            None => info.non_null_indices.extend(range),
         }
 
-        if let Some(rep_levels) = &mut info.rep_levels {
-            rep_levels.extend(std::iter::repeat_n(info.max_rep_level, len))
+        if !matches!(info.rep_levels, LevelData::Absent) {
+            info.append_rep_level_run(info.max_rep_level, len);
         }
     }
 
@@ -755,16 +735,128 @@ impl LevelInfoBuilder {
 /// The data necessary to write a primitive Arrow array to parquet, taking into account
 /// any non-primitive parents it may have in the arrow representation
 #[derive(Debug, Clone)]
+pub(crate) enum LevelData {
+    Absent,
+    Materialized(Vec<i16>),
+    Uniform { value: i16, count: usize },
+}
+
+impl PartialEq for LevelData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Absent, Self::Absent) => true,
+            (Self::Materialized(a), Self::Materialized(b)) => a == b,
+            (Self::Uniform { value: v, count: n }, Self::Materialized(b))
+            | (Self::Materialized(b), Self::Uniform { value: v, count: n }) => {
+                b.len() == *n && b.iter().all(|x| x == v)
+            }
+            (
+                Self::Uniform {
+                    value: v1,
+                    count: n1,
+                },
+                Self::Uniform {
+                    value: v2,
+                    count: n2,
+                },
+            ) => v1 == v2 && n1 == n2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for LevelData {}
+
+impl LevelData {
+    fn new(present: bool) -> Self {
+        match present {
+            true => Self::Materialized(Vec::new()),
+            false => Self::Absent,
+        }
+    }
+
+    pub(crate) fn as_ref(&self) -> LevelDataRef<'_> {
+        match self {
+            Self::Absent => LevelDataRef::Absent,
+            Self::Materialized(values) => LevelDataRef::Materialized(values),
+            Self::Uniform { value, count } => LevelDataRef::Uniform {
+                value: *value,
+                count: *count,
+            },
+        }
+    }
+
+    pub(crate) fn slice(&self, offset: usize, len: usize) -> Self {
+        match self {
+            Self::Absent => Self::Absent,
+            Self::Materialized(values) => Self::Materialized(values[offset..offset + len].to_vec()),
+            Self::Uniform { value, .. } => Self::Uniform {
+                value: *value,
+                count: len,
+            },
+        }
+    }
+
+    fn append_run(&mut self, value: i16, count: usize) {
+        if count == 0 {
+            return;
+        }
+
+        match self {
+            Self::Absent => {}
+            Self::Materialized(values) if values.is_empty() => {
+                *self = Self::Uniform { value, count };
+            }
+            Self::Materialized(values) => values.extend(std::iter::repeat_n(value, count)),
+            Self::Uniform {
+                value: uniform_value,
+                count: uniform_count,
+            } if *uniform_value == value => {
+                *uniform_count += count;
+            }
+            Self::Uniform { .. } => {
+                let values = self.materialize_mut().unwrap();
+                values.extend(std::iter::repeat_n(value, count));
+            }
+        }
+    }
+
+    fn extend_from_iter<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = i16>,
+    {
+        if let Some(values) = self.materialize_mut() {
+            values.extend(iter);
+        }
+    }
+
+    fn materialize_mut(&mut self) -> Option<&mut Vec<i16>> {
+        match self {
+            Self::Absent => None,
+            Self::Materialized(values) => Some(values),
+            Self::Uniform { value, count } => {
+                let values = vec![*value; *count];
+                *self = Self::Materialized(values);
+                match self {
+                    Self::Materialized(values) => Some(values),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ArrayLevels {
     /// Array's definition levels
     ///
     /// Present if `max_def_level != 0`
-    def_levels: Option<Vec<i16>>,
+    def_levels: LevelData,
 
     /// Array's optional repetition levels
     ///
     /// Present if `max_rep_level != 0`
-    rep_levels: Option<Vec<i16>>,
+    rep_levels: LevelData,
 
     /// The corresponding array identifying non-null slices of data
     /// from the primitive array
@@ -807,8 +899,8 @@ impl ArrayLevels {
         let logical_nulls = array.logical_nulls();
 
         Self {
-            def_levels: (max_def_level != 0).then(Vec::new),
-            rep_levels: (max_rep_level != 0).then(Vec::new),
+            def_levels: LevelData::new(max_def_level != 0),
+            rep_levels: LevelData::new(max_rep_level != 0),
             non_null_indices: vec![],
             max_def_level,
             max_rep_level,
@@ -821,12 +913,12 @@ impl ArrayLevels {
         &self.array
     }
 
-    pub fn def_levels(&self) -> Option<&[i16]> {
-        self.def_levels.as_deref()
+    pub(crate) fn def_level_data(&self) -> &LevelData {
+        &self.def_levels
     }
 
-    pub fn rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels.as_deref()
+    pub(crate) fn rep_level_data(&self) -> &LevelData {
+        &self.rep_levels
     }
 
     pub fn non_null_indices(&self) -> &[usize] {
@@ -839,12 +931,8 @@ impl ArrayLevels {
     /// `non_null_indices`. The array is sliced to the range covered by
     /// those indices, and they are shifted to be relative to the slice.
     pub(crate) fn slice_for_chunk(&self, chunk: &CdcChunk) -> Self {
-        let def_levels = self.def_levels.as_ref().map(|levels| {
-            levels[chunk.level_offset..chunk.level_offset + chunk.num_levels].to_vec()
-        });
-        let rep_levels = self.rep_levels.as_ref().map(|levels| {
-            levels[chunk.level_offset..chunk.level_offset + chunk.num_levels].to_vec()
-        });
+        let def_levels = self.def_levels.slice(chunk.level_offset, chunk.num_levels);
+        let rep_levels = self.rep_levels.slice(chunk.level_offset, chunk.num_levels);
 
         // Select the non-null indices for this chunk.
         let nni = &self.non_null_indices[chunk.value_offset..chunk.value_offset + chunk.num_values];
@@ -869,6 +957,14 @@ impl ArrayLevels {
             array,
             logical_nulls,
         }
+    }
+
+    fn append_def_level_run(&mut self, value: i16, count: usize) {
+        self.def_levels.append_run(value, count);
+    }
+
+    fn append_rep_level_run(&mut self, value: i16, count: usize) {
+        self.rep_levels.append_run(value, count);
     }
 }
 
@@ -920,8 +1016,8 @@ mod tests {
         assert_eq!(levels.len(), 1);
 
         let expected = ArrayLevels {
-            def_levels: Some(vec![2; 10]),
-            rep_levels: Some(vec![0, 2, 2, 1, 2, 2, 2, 0, 1, 2]),
+            def_levels: LevelData::Materialized(vec![2; 10]),
+            rep_levels: LevelData::Materialized(vec![0, 2, 2, 1, 2, 2, 2, 0, 1, 2]),
             non_null_indices: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
             max_def_level: 2,
             max_rep_level: 2,
@@ -941,8 +1037,8 @@ mod tests {
         assert_eq!(levels.len(), 1);
 
         let expected_levels = ArrayLevels {
-            def_levels: None,
-            rep_levels: None,
+            def_levels: LevelData::Absent,
+            rep_levels: LevelData::Absent,
             non_null_indices: (0..10).collect(),
             max_def_level: 0,
             max_rep_level: 0,
@@ -969,8 +1065,8 @@ mod tests {
 
         let logical_nulls = array.logical_nulls();
         let expected_levels = ArrayLevels {
-            def_levels: Some(vec![1, 0, 1, 1, 0]),
-            rep_levels: None,
+            def_levels: LevelData::Materialized(vec![1, 0, 1, 1, 0]),
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 2, 3],
             max_def_level: 1,
             max_rep_level: 0,
@@ -1004,8 +1100,8 @@ mod tests {
         assert_eq!(levels.len(), 1);
 
         let expected_levels = ArrayLevels {
-            def_levels: Some(vec![1; 5]),
-            rep_levels: Some(vec![0; 5]),
+            def_levels: LevelData::Materialized(vec![1; 5]),
+            rep_levels: LevelData::Materialized(vec![0; 5]),
             non_null_indices: (0..5).collect(),
             max_def_level: 1,
             max_rep_level: 1,
@@ -1038,8 +1134,8 @@ mod tests {
         assert_eq!(levels.len(), 1);
 
         let expected_levels = ArrayLevels {
-            def_levels: Some(vec![2, 2, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
-            rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1]),
+            def_levels: LevelData::Materialized(vec![2, 2, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
+            rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1]),
             non_null_indices: (0..11).collect(),
             max_def_level: 2,
             max_rep_level: 1,
@@ -1088,8 +1184,8 @@ mod tests {
         assert_eq!(levels.len(), 1);
 
         let expected_levels = ArrayLevels {
-            def_levels: Some(vec![0, 2, 0, 3, 3, 3, 3, 3, 3, 3]),
-            rep_levels: Some(vec![0, 0, 0, 0, 1, 1, 1, 0, 1, 1]),
+            def_levels: LevelData::Materialized(vec![0, 2, 0, 3, 3, 3, 3, 3, 3, 3]),
+            rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 1, 1, 1, 0, 1, 1]),
             non_null_indices: (4..11).collect(),
             max_def_level: 3,
             max_rep_level: 1,
@@ -1135,10 +1231,10 @@ mod tests {
         assert_eq!(levels.len(), 1);
 
         let expected_levels = ArrayLevels {
-            def_levels: Some(vec![
+            def_levels: LevelData::Materialized(vec![
                 5, 5, 5, 5, 1, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
             ]),
-            rep_levels: Some(vec![
+            rep_levels: LevelData::Materialized(vec![
                 0, 2, 1, 2, 0, 0, 2, 1, 2, 0, 2, 1, 2, 1, 2, 1, 2, 0, 2, 1, 2, 1, 2,
             ]),
             non_null_indices: (0..22).collect(),
@@ -1177,8 +1273,8 @@ mod tests {
         assert_eq!(levels.len(), 1);
 
         let expected_levels = ArrayLevels {
-            def_levels: Some(vec![1; 4]),
-            rep_levels: Some(vec![0; 4]),
+            def_levels: LevelData::Materialized(vec![1; 4]),
+            rep_levels: LevelData::Materialized(vec![0; 4]),
             non_null_indices: (0..4).collect(),
             max_def_level: 1,
             max_rep_level: 1,
@@ -1210,8 +1306,8 @@ mod tests {
         assert_eq!(levels.len(), 1);
 
         let expected_levels = ArrayLevels {
-            def_levels: Some(vec![1, 3, 3, 3, 3, 3, 3, 3]),
-            rep_levels: Some(vec![0, 0, 1, 1, 0, 1, 0, 1]),
+            def_levels: LevelData::Materialized(vec![1, 3, 3, 3, 3, 3, 3, 3]),
+            rep_levels: LevelData::Materialized(vec![0, 0, 1, 1, 0, 1, 0, 1]),
             non_null_indices: (0..7).collect(),
             max_def_level: 3,
             max_rep_level: 1,
@@ -1259,8 +1355,12 @@ mod tests {
         assert_eq!(levels.len(), 1);
 
         let expected_levels = ArrayLevels {
-            def_levels: Some(vec![1, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5]),
-            rep_levels: Some(vec![0, 0, 1, 2, 1, 0, 2, 2, 1, 2, 2, 2, 0, 1, 2, 2, 2, 2]),
+            def_levels: LevelData::Materialized(vec![
+                1, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5,
+            ]),
+            rep_levels: LevelData::Materialized(vec![
+                0, 0, 1, 2, 1, 0, 2, 2, 1, 2, 2, 2, 0, 1, 2, 2, 2, 2,
+            ]),
             non_null_indices: (0..15).collect(),
             max_def_level: 5,
             max_rep_level: 2,
@@ -1300,8 +1400,8 @@ mod tests {
 
         let logical_nulls = leaf.logical_nulls();
         let expected_levels = ArrayLevels {
-            def_levels: Some(vec![3, 2, 3, 1, 0, 3]),
-            rep_levels: None,
+            def_levels: LevelData::Materialized(vec![3, 2, 3, 1, 0, 3]),
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 2, 5],
             max_def_level: 3,
             max_rep_level: 0,
@@ -1340,8 +1440,8 @@ mod tests {
         let list_level = &levels[0];
 
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![0, 3, 3, 3]),
-            rep_levels: Some(vec![0, 0, 1, 1]),
+            def_levels: LevelData::Materialized(vec![0, 3, 3, 3]),
+            rep_levels: LevelData::Materialized(vec![0, 0, 1, 1]),
             non_null_indices: vec![3, 4, 5],
             max_def_level: 3,
             max_rep_level: 1,
@@ -1433,8 +1533,8 @@ mod tests {
         let list_level = &levels[0];
 
         let expected_level = ArrayLevels {
-            def_levels: None,
-            rep_levels: None,
+            def_levels: LevelData::Absent,
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 1, 2, 3, 4],
             max_def_level: 0,
             max_rep_level: 0,
@@ -1448,8 +1548,8 @@ mod tests {
 
         let b_logical_nulls = b.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![1, 0, 0, 1, 1]),
-            rep_levels: None,
+            def_levels: LevelData::Materialized(vec![1, 0, 0, 1, 1]),
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 3, 4],
             max_def_level: 1,
             max_rep_level: 0,
@@ -1463,8 +1563,8 @@ mod tests {
 
         let d_logical_nulls = d.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![1, 1, 1, 2, 1]),
-            rep_levels: None,
+            def_levels: LevelData::Materialized(vec![1, 1, 1, 2, 1]),
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![3],
             max_def_level: 2,
             max_rep_level: 0,
@@ -1478,8 +1578,8 @@ mod tests {
 
         let f_logical_nulls = f.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![3, 2, 3, 2, 3]),
-            rep_levels: None,
+            def_levels: LevelData::Materialized(vec![3, 2, 3, 2, 3]),
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 2, 4],
             max_def_level: 3,
             max_rep_level: 0,
@@ -1586,8 +1686,8 @@ mod tests {
         let list_level = &levels[0];
 
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![1; 7]),
-            rep_levels: Some(vec![0, 1, 0, 1, 0, 1, 1]),
+            def_levels: LevelData::Materialized(vec![1; 7]),
+            rep_levels: LevelData::Materialized(vec![0, 1, 0, 1, 0, 1, 1]),
             non_null_indices: vec![0, 1, 2, 3, 4, 5, 6],
             max_def_level: 1,
             max_rep_level: 1,
@@ -1601,8 +1701,8 @@ mod tests {
         let map_values_logical_nulls = map.values().logical_nulls();
 
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![2, 2, 2, 1, 2, 1, 2]),
-            rep_levels: Some(vec![0, 1, 0, 1, 0, 1, 1]),
+            def_levels: LevelData::Materialized(vec![2, 2, 2, 1, 2, 1, 2]),
+            rep_levels: LevelData::Materialized(vec![0, 1, 0, 1, 0, 1, 1]),
             non_null_indices: vec![0, 1, 2, 4, 6],
             max_def_level: 2,
             max_rep_level: 1,
@@ -1688,8 +1788,8 @@ mod tests {
 
         let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![4, 1, 0, 2, 2, 3, 4]),
-            rep_levels: Some(vec![0, 0, 0, 0, 1, 0, 0]),
+            def_levels: LevelData::Materialized(vec![4, 1, 0, 2, 2, 3, 4]),
+            rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 1, 0, 0]),
             non_null_indices: vec![0, 4],
             max_def_level: 4,
             max_rep_level: 1,
@@ -1730,8 +1830,8 @@ mod tests {
 
         let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![4, 4, 3, 2, 0, 4, 4, 0, 1]),
-            rep_levels: Some(vec![0, 1, 0, 0, 0, 0, 1, 0, 0]),
+            def_levels: LevelData::Materialized(vec![4, 4, 3, 2, 0, 4, 4, 0, 1]),
+            rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 0, 0, 1, 0, 0]),
             non_null_indices: vec![0, 1, 5, 6],
             max_def_level: 4,
             max_rep_level: 1,
@@ -1817,8 +1917,8 @@ mod tests {
 
         let a1_logical_nulls = a1_values.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![0, 0, 1, 6, 5, 2, 3, 1]),
-            rep_levels: Some(vec![0, 0, 0, 0, 2, 0, 1, 0]),
+            def_levels: LevelData::Materialized(vec![0, 0, 1, 6, 5, 2, 3, 1]),
+            rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 2, 0, 1, 0]),
             non_null_indices: vec![1],
             max_def_level: 6,
             max_rep_level: 2,
@@ -1830,8 +1930,8 @@ mod tests {
 
         let a2_logical_nulls = a2_values.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![0, 0, 1, 3, 2, 4, 1]),
-            rep_levels: Some(vec![0, 0, 0, 0, 0, 1, 0]),
+            def_levels: LevelData::Materialized(vec![0, 0, 1, 3, 2, 4, 1]),
+            rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 0, 1, 0]),
             non_null_indices: vec![4],
             max_def_level: 4,
             max_rep_level: 1,
@@ -1870,8 +1970,8 @@ mod tests {
 
         let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![0, 0, 3, 3]),
-            rep_levels: Some(vec![0, 0, 0, 1]),
+            def_levels: LevelData::Materialized(vec![0, 0, 3, 3]),
+            rep_levels: LevelData::Materialized(vec![0, 0, 0, 1]),
             non_null_indices: vec![6, 7],
             max_def_level: 3,
             max_rep_level: 1,
@@ -2022,8 +2122,8 @@ mod tests {
         // [[{a: 1}, null], null, [null, null], [{a: null}, {a: 2}]]
         let values_a_logical_nulls = values_a.logical_nulls();
         let expected_a = ArrayLevels {
-            def_levels: Some(vec![4, 2, 0, 2, 2, 3, 4]),
-            rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1]),
+            def_levels: LevelData::Materialized(vec![4, 2, 0, 2, 2, 3, 4]),
+            rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 1, 0, 1]),
             non_null_indices: vec![0, 7],
             max_def_level: 4,
             max_rep_level: 1,
@@ -2033,8 +2133,8 @@ mod tests {
         // [[{b: 2}, null], null, [null, null], [{b: 3}, {b: 4}]]
         let values_b_logical_nulls = values_b.logical_nulls();
         let expected_b = ArrayLevels {
-            def_levels: Some(vec![3, 2, 0, 2, 2, 3, 3]),
-            rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1]),
+            def_levels: LevelData::Materialized(vec![3, 2, 0, 2, 2, 3, 3]),
+            rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 1, 0, 1]),
             non_null_indices: vec![0, 6, 7],
             max_def_level: 3,
             max_rep_level: 1,
@@ -2066,8 +2166,8 @@ mod tests {
 
         let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![1, 0, 1]),
-            rep_levels: Some(vec![0, 0, 0]),
+            def_levels: LevelData::Materialized(vec![1, 0, 1]),
+            rep_levels: LevelData::Materialized(vec![0, 0, 0]),
             non_null_indices: vec![],
             max_def_level: 3,
             max_rep_level: 1,
@@ -2103,8 +2203,8 @@ mod tests {
 
         let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
-            rep_levels: Some(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
+            def_levels: LevelData::Materialized(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
+            rep_levels: LevelData::Materialized(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
             non_null_indices: vec![0, 2, 3, 4, 5],
             max_def_level: 5,
             max_rep_level: 2,
@@ -2136,8 +2236,8 @@ mod tests {
 
         let logical_nulls = dict.logical_nulls();
         let expected_level = ArrayLevels {
-            def_levels: Some(vec![0, 0, 1, 1]),
-            rep_levels: None,
+            def_levels: LevelData::Materialized(vec![0, 0, 1, 1]),
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![2, 3],
             max_def_level: 1,
             max_rep_level: 0,
@@ -2176,8 +2276,8 @@ mod tests {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
         let logical_nulls = array.logical_nulls();
         let levels = ArrayLevels {
-            def_levels: None,
-            rep_levels: None,
+            def_levels: LevelData::Absent,
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 1, 2, 3, 4, 5],
             max_def_level: 0,
             max_rep_level: 0,
@@ -2190,8 +2290,8 @@ mod tests {
             value_offset: 2,
             num_values: 3,
         });
-        assert!(sliced.def_levels.is_none());
-        assert!(sliced.rep_levels.is_none());
+        assert!(matches!(sliced.def_levels, LevelData::Absent));
+        assert!(matches!(sliced.rep_levels, LevelData::Absent));
         assert_eq!(sliced.non_null_indices, vec![0, 1, 2]);
         assert_eq!(sliced.array.len(), 3);
 
@@ -2210,8 +2310,8 @@ mod tests {
         ]));
         let logical_nulls = array.logical_nulls();
         let levels = ArrayLevels {
-            def_levels: Some(vec![1, 0, 1, 0, 1, 1]),
-            rep_levels: None,
+            def_levels: LevelData::Materialized(vec![1, 0, 1, 0, 1, 1]),
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 2, 4, 5],
             max_def_level: 1,
             max_rep_level: 0,
@@ -2224,8 +2324,8 @@ mod tests {
             value_offset: 1,
             num_values: 1,
         });
-        assert_eq!(sliced.def_levels, Some(vec![0, 1, 0]));
-        assert!(sliced.rep_levels.is_none());
+        assert_eq!(sliced.def_levels, LevelData::Materialized(vec![0, 1, 0]));
+        assert!(matches!(sliced.rep_levels, LevelData::Absent));
         assert_eq!(sliced.non_null_indices, vec![0]); // [2] shifted by -2 (nni[0])
         assert_eq!(sliced.array.len(), 1);
     }
@@ -2264,8 +2364,8 @@ mod tests {
         ]));
         let logical_nulls = array.logical_nulls();
         let levels = ArrayLevels {
-            def_levels: Some(vec![3, 0, 3, 2, 0, 3, 3]),
-            rep_levels: Some(vec![0, 0, 0, 1, 0, 0, 1]),
+            def_levels: LevelData::Materialized(vec![3, 0, 3, 2, 0, 3, 3]),
+            rep_levels: LevelData::Materialized(vec![0, 0, 0, 1, 0, 0, 1]),
             non_null_indices: vec![0, 3, 8, 9],
             max_def_level: 3,
             max_rep_level: 1,
@@ -2310,8 +2410,8 @@ mod tests {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, None, Some(4)]));
         let logical_nulls = array.logical_nulls();
         let levels = ArrayLevels {
-            def_levels: Some(vec![1, 0, 0, 1]),
-            rep_levels: None,
+            def_levels: LevelData::Materialized(vec![1, 0, 0, 1]),
+            rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 3],
             max_def_level: 1,
             max_rep_level: 0,
@@ -2325,7 +2425,7 @@ mod tests {
             value_offset: 1,
             num_values: 0,
         });
-        assert_eq!(sliced.def_levels, Some(vec![0, 0]));
+        assert_eq!(sliced.def_levels, LevelData::Materialized(vec![0, 0]));
         assert_eq!(sliced.non_null_indices, Vec::<usize>::new());
         assert_eq!(sliced.array.len(), 0);
     }
