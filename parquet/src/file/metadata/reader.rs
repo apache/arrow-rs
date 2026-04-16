@@ -1451,7 +1451,8 @@ mod async_tests {
         let full_data = Bytes::from(full_data);
 
         // First, load the metadata normally to get the page index locations
-        let mut metadata_reader = ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
+        let mut metadata_reader =
+            ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
         let mut fetch = |range: Range<u64>| {
             futures::future::ready(Ok::<_, ParquetError>(
                 full_data.slice(range.start as usize..range.end as usize),
@@ -1462,10 +1463,11 @@ mod async_tests {
         let metadata = metadata_reader.finish().unwrap();
 
         // Create a push decoder to determine what ranges are needed for page indexes
-        let mut push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_len, metadata)
-            .unwrap()
-            .with_offset_index_policy(PageIndexPolicy::Required)
-            .with_column_index_policy(PageIndexPolicy::Required);
+        let mut push_decoder =
+            ParquetMetaDataPushDecoder::try_new_with_metadata(file_len, metadata)
+                .unwrap()
+                .with_offset_index_policy(PageIndexPolicy::Required)
+                .with_column_index_policy(PageIndexPolicy::Required);
 
         // Get the ranges needed for page index data
         let needs_data = needs_index_data(&mut push_decoder).unwrap();
