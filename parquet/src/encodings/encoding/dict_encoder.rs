@@ -188,6 +188,7 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
     ///
     /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
     fn estimated_memory_size(&self) -> usize {
-        self.interner.estimated_memory_size() + self.indices.len() * std::mem::size_of::<usize>()
+        self.interner.estimated_memory_size()
+            + self.indices.capacity() * std::mem::size_of::<usize>()
     }
 }
