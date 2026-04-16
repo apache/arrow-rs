@@ -198,7 +198,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::data_type::{ByteArray, ByteArrayType, FixedLenByteArray, FixedLenByteArrayType, Int32Type};
+    use crate::data_type::{
+        ByteArray, ByteArrayType, FixedLenByteArray, FixedLenByteArrayType, Int32Type,
+    };
     use crate::encodings::encoding::Encoder;
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
 
@@ -333,18 +335,18 @@ mod tests {
     #[test]
     fn test_estimated_memory_size_fixed_len_byte_array_with_duplicates() {
         const TYPE_LEN: usize = 3;
-        let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(
-            make_col_desc_with_length::<FixedLenByteArrayType>(TYPE_LEN as i32),
-        );
+        let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(make_col_desc_with_length::<
+            FixedLenByteArrayType,
+        >(TYPE_LEN as i32));
         let empty_size = encoder.estimated_memory_size();
 
         // 3 distinct 3-byte values, repeated to produce 9 indices total.
-        let vals: Vec<FixedLenByteArray> = [
+        let vals = [
             b"foo", b"bar", b"baz", b"foo", b"bar", b"baz", b"foo", b"bar", b"baz",
         ]
         .iter()
         .map(|b| FixedLenByteArray::from(b.to_vec()))
-        .collect();
+        .collect::<Vec<_>>();
         encoder.put(&vals).unwrap();
 
         let size = encoder.estimated_memory_size();
@@ -368,15 +370,15 @@ mod tests {
     #[test]
     fn test_estimated_memory_size_fixed_len_byte_array_all_distinct() {
         const TYPE_LEN: usize = 3;
-        let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(
-            make_col_desc_with_length::<FixedLenByteArrayType>(TYPE_LEN as i32),
-        );
+        let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(make_col_desc_with_length::<
+            FixedLenByteArrayType,
+        >(TYPE_LEN as i32));
         let empty_size = encoder.estimated_memory_size();
 
         // 100 distinct 3-byte values: zero-padded big-endian u8 indices.
-        let values: Vec<FixedLenByteArray> = (0..100_u8)
+        let values = (0..100_u8)
             .map(|i| FixedLenByteArray::from(vec![0u8, 0u8, i]))
-            .collect();
+            .collect::<Vec<_>>();
         encoder.put(&values).unwrap();
 
         let size = encoder.estimated_memory_size();
