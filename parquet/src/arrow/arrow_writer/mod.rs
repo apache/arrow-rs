@@ -41,7 +41,7 @@ use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::column::writer::{
-    ColumnCloseResult, ColumnWriter, GenericColumnWriter, get_column_writer,
+    ColumnCloseResult, ColumnWriter, GenericColumnWriter, ValueSelectionRef, get_column_writer,
 };
 use crate::data_type::{ByteArray, FixedLenByteArray};
 #[cfg(feature = "encryption")]
@@ -936,7 +936,7 @@ impl ArrowColumnWriter {
                 };
             }
             ArrowColumnWriterImpl::ByteArray(c) => {
-                write_primitive(c, levels.array().as_ref(), levels)?;
+                write_byte_array(c, levels.array().as_ref(), levels)?;
             }
         }
         Ok(())
@@ -1280,8 +1280,6 @@ fn write_leaf(
     column: &dyn arrow_array::Array,
     levels: &ArrayLevels,
 ) -> Result<usize> {
-    let indices = levels.non_null_indices();
-
     match writer {
         // Note: this should match the contents of arrow_to_parquet_type
         ColumnWriter::Int32ColumnWriter(typed) => {
@@ -1367,10 +1365,13 @@ fn write_leaf(
         }
         ColumnWriter::BoolColumnWriter(typed) => {
             let array = column.as_boolean();
-            let values = get_bool_array_slice(array, indices.iter().copied());
+            let values = get_bool_array_slice(array, levels.value_selection().iter());
             typed.write_batch_internal(
                 values.as_slice(),
-                None,
+                ValueSelectionRef::Dense {
+                    offset: 0,
+                    len: values.len(),
+                },
                 levels.def_level_data().as_ref(),
                 levels.rep_level_data().as_ref(),
                 None,
@@ -1480,15 +1481,16 @@ fn write_leaf(
             unreachable!("should use ByteArrayWriter")
         }
         ColumnWriter::FixedLenByteArrayColumnWriter(typed) => {
+            let val_sel = levels.value_selection();
             let bytes = match column.data_type() {
                 ArrowDataType::Interval(interval_unit) => match interval_unit {
                     IntervalUnit::YearMonth => {
                         let array = column.as_primitive::<IntervalYearMonthType>();
-                        get_interval_ym_array_slice(array, indices.iter().copied())
+                        get_interval_ym_array_slice(array, val_sel.iter())
                     }
                     IntervalUnit::DayTime => {
                         let array = column.as_primitive::<IntervalDayTimeType>();
-                        get_interval_dt_array_slice(array, indices.iter().copied())
+                        get_interval_dt_array_slice(array, val_sel.iter())
                     }
                     _ => {
                         return Err(ParquetError::NYI(format!(
@@ -1498,27 +1500,27 @@ fn write_leaf(
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
                     let array = column.as_fixed_size_binary();
-                    get_fsb_array_slice(array, indices.iter().copied())
+                    get_fsb_array_slice(array, val_sel.iter())
                 }
                 ArrowDataType::Decimal32(_, _) => {
                     let array = column.as_primitive::<Decimal32Type>();
-                    get_decimal_32_array_slice(array, indices.iter().copied())
+                    get_decimal_32_array_slice(array, val_sel.iter())
                 }
                 ArrowDataType::Decimal64(_, _) => {
                     let array = column.as_primitive::<Decimal64Type>();
-                    get_decimal_64_array_slice(array, indices.iter().copied())
+                    get_decimal_64_array_slice(array, val_sel.iter())
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     let array = column.as_primitive::<Decimal128Type>();
-                    get_decimal_128_array_slice(array, indices.iter().copied())
+                    get_decimal_128_array_slice(array, val_sel.iter())
                 }
                 ArrowDataType::Decimal256(_, _) => {
                     let array = column.as_primitive::<Decimal256Type>();
-                    get_decimal_256_array_slice(array, indices.iter().copied())
+                    get_decimal_256_array_slice(array, val_sel.iter())
                 }
                 ArrowDataType::Float16 => {
                     let array = column.as_primitive::<Float16Type>();
-                    get_float_16_array_slice(array, indices.iter().copied())
+                    get_float_16_array_slice(array, val_sel.iter())
                 }
                 _ => {
                     return Err(ParquetError::NYI(
@@ -1528,7 +1530,10 @@ fn write_leaf(
             };
             typed.write_batch_internal(
                 bytes.as_slice(),
-                None,
+                ValueSelectionRef::Dense {
+                    offset: 0,
+                    len: bytes.len(),
+                },
                 levels.def_level_data().as_ref(),
                 levels.rep_level_data().as_ref(),
                 None,
@@ -1546,7 +1551,23 @@ fn write_primitive<E: ColumnValueEncoder>(
 ) -> Result<usize> {
     writer.write_batch_internal(
         values,
-        Some(levels.non_null_indices()),
+        levels.value_selection().as_ref(),
+        levels.def_level_data().as_ref(),
+        levels.rep_level_data().as_ref(),
+        None,
+        None,
+        None,
+    )
+}
+
+fn write_byte_array(
+    writer: &mut GenericColumnWriter<ByteArrayEncoder>,
+    values: &(dyn arrow_array::Array + 'static),
+    levels: &ArrayLevels,
+) -> Result<usize> {
+    writer.write_batch_internal(
+        values,
+        levels.value_selection().as_ref(),
         levels.def_level_data().as_ref(),
         levels.rep_level_data().as_ref(),
         None,
