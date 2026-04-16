@@ -1402,11 +1402,11 @@ mod tests {
         let make_v2_page =
             |rep_levels: &[i16], def_levels: &[i16], values: &[i32], num_rows: u32| -> Page {
                 let mut rep_enc = LevelEncoder::v2_streaming(max_rep_level);
-                rep_enc.put(rep_levels);
+                rep_enc.put_with_observer(rep_levels, |_, _| {});
                 let rep_bytes = rep_enc.consume();
 
                 let mut def_enc = LevelEncoder::v2_streaming(max_def_level);
-                def_enc.put(def_levels);
+                def_enc.put_with_observer(def_levels, |_, _| {});
                 let def_bytes = def_enc.consume();
 
                 let val_bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
