@@ -651,25 +651,39 @@ where
             }
         }
         Some(output_nulls) => {
-            new_offsets.resize(indices.len() + 1, OffsetType::Native::zero());
+            assert_eq!(output_nulls.len(), indices.len());
+
             let mut last_filled = 0;
             for i in output_nulls.valid_indices() {
                 let current = OffsetType::Native::from_usize(array_data.len()).unwrap();
+                // Filling offsets for the null values between the two valid indices
                 if last_filled < i {
-                    new_offsets[last_filled + 1..=i].fill(current);
+                    new_offsets.extend(std::iter::repeat_n(current, i - last_filled));
                 }
+
                 // SAFETY: `i` comes from validity bitmap over `indices`, so in-bounds.
                 let ix = unsafe { indices.value_unchecked(i) }.as_usize();
                 let start = list_offsets[ix].as_usize();
                 let end = list_offsets[ix + 1].as_usize();
                 array_data.extend(0, start, end);
-                new_offsets[i + 1] = OffsetType::Native::from_usize(array_data.len()).unwrap();
+                new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
                 last_filled = i + 1;
             }
+
+            // Filling offsets for null values at the end
             let final_offset = OffsetType::Native::from_usize(array_data.len()).unwrap();
-            new_offsets[last_filled + 1..].fill(final_offset);
+            new_offsets.extend(std::iter::repeat_n(
+                final_offset,
+                indices.len() - last_filled,
+            ));
         }
     };
+
+    assert_eq!(
+        new_offsets.len(),
+        indices.len() + 1,
+        "New offsets was filled under/over the expected capacity"
+    );
 
     let child_data = array_data.freeze();
     let value_offsets = Buffer::from_vec(new_offsets);
@@ -1954,78 +1968,6 @@ mod tests {
         }};
     }
 
-    fn test_take_sliced_list_generic<S: OffsetSizeTrait + 'static>() {
-        let list = build_generic_list::<S, Int32Type>(vec![
-            Some(vec![0, 1]),
-            Some(vec![2, 3, 4]),
-            None,
-            Some(vec![]),
-            Some(vec![5, 6]),
-            Some(vec![7]),
-        ]);
-        let sliced = list.slice(1, 4);
-        let indices = UInt32Array::from(vec![Some(3), Some(0), None, Some(2), Some(1)]);
-
-        let taken = take(&sliced, &indices, None).unwrap();
-        let taken = taken.as_list::<S>();
-
-        let expected = build_generic_list::<S, Int32Type>(vec![
-            Some(vec![5, 6]),
-            Some(vec![2, 3, 4]),
-            None,
-            Some(vec![]),
-            None,
-        ]);
-
-        assert_eq!(taken, &expected);
-    }
-
-    fn test_take_sliced_list_with_value_nulls_generic<S: OffsetSizeTrait + 'static>() {
-        let list = GenericListArray::<S>::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(10)]),
-            Some(vec![None, Some(1)]),
-            None,
-            Some(vec![Some(2), None]),
-            Some(vec![]),
-            Some(vec![Some(3)]),
-        ]);
-        let sliced = list.slice(1, 4);
-        let indices = UInt32Array::from(vec![Some(2), Some(0), None, Some(3), Some(1)]);
-
-        let taken = take(&sliced, &indices, None).unwrap();
-        let taken = taken.as_list::<S>();
-
-        let expected = GenericListArray::<S>::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(2), None]),
-            Some(vec![None, Some(1)]),
-            None,
-            Some(vec![]),
-            None,
-        ]);
-
-        assert_eq!(taken, &expected);
-    }
-
-    #[test]
-    fn test_take_sliced_list() {
-        test_take_sliced_list_generic::<i32>();
-    }
-
-    #[test]
-    fn test_take_sliced_large_list() {
-        test_take_sliced_list_generic::<i64>();
-    }
-
-    #[test]
-    fn test_take_sliced_list_with_value_nulls() {
-        test_take_sliced_list_with_value_nulls_generic::<i32>();
-    }
-
-    #[test]
-    fn test_take_sliced_large_list_with_value_nulls() {
-        test_take_sliced_list_with_value_nulls_generic::<i64>();
-    }
-
     fn test_take_list_view_generic<OffsetType: OffsetSizeTrait, ValuesType: ArrowPrimitiveType, F>(
         values: Vec<Option<Vec<Option<ValuesType::Native>>>>,
         take_indices: Vec<Option<usize>>,
@@ -2536,6 +2478,78 @@ mod tests {
             data.iter()
                 .map(|x| x.as_ref().map(|x| x.iter().map(|x| Some(*x)))),
         )
+    }
+
+    fn test_take_sliced_list_generic<S: OffsetSizeTrait + 'static>() {
+        let list = build_generic_list::<S, Int32Type>(vec![
+            Some(vec![0, 1]),
+            Some(vec![2, 3, 4]),
+            None,
+            Some(vec![]),
+            Some(vec![5, 6]),
+            Some(vec![7]),
+        ]);
+        let sliced = list.slice(1, 4);
+        let indices = UInt32Array::from(vec![Some(3), Some(0), None, Some(2), Some(1)]);
+
+        let taken = take(&sliced, &indices, None).unwrap();
+        let taken = taken.as_list::<S>();
+
+        let expected = build_generic_list::<S, Int32Type>(vec![
+            Some(vec![5, 6]),
+            Some(vec![2, 3, 4]),
+            None,
+            Some(vec![]),
+            None,
+        ]);
+
+        assert_eq!(taken, &expected);
+    }
+
+    fn test_take_sliced_list_with_value_nulls_generic<S: OffsetSizeTrait + 'static>() {
+        let list = GenericListArray::<S>::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(10)]),
+            Some(vec![None, Some(1)]),
+            None,
+            Some(vec![Some(2), None]),
+            Some(vec![]),
+            Some(vec![Some(3)]),
+        ]);
+        let sliced = list.slice(1, 4);
+        let indices = UInt32Array::from(vec![Some(2), Some(0), None, Some(3), Some(1)]);
+
+        let taken = take(&sliced, &indices, None).unwrap();
+        let taken = taken.as_list::<S>();
+
+        let expected = GenericListArray::<S>::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(2), None]),
+            Some(vec![None, Some(1)]),
+            None,
+            Some(vec![]),
+            None,
+        ]);
+
+        assert_eq!(taken, &expected);
+    }
+
+    #[test]
+    fn test_take_sliced_list() {
+        test_take_sliced_list_generic::<i32>();
+    }
+
+    #[test]
+    fn test_take_sliced_large_list() {
+        test_take_sliced_list_generic::<i64>();
+    }
+
+    #[test]
+    fn test_take_sliced_list_with_value_nulls() {
+        test_take_sliced_list_with_value_nulls_generic::<i32>();
+    }
+
+    #[test]
+    fn test_take_sliced_large_list_with_value_nulls() {
+        test_take_sliced_list_with_value_nulls_generic::<i64>();
     }
 
     #[test]
