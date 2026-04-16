@@ -119,7 +119,7 @@ value = NotATuple()
         assert!(err.is_instance_of::<PyTypeError>(py));
         assert_eq!(
             err.to_string(),
-            "TypeError: Expected __arrow_c_array__ to return a tuple of (arrow_schema, arrow_array) capsules."
+            "TypeError: Expected __arrow_c_array__ to return a pair of capsules."
         );
     });
 }

@@ -578,7 +578,7 @@ fn call_capsule_pair_method<'py>(
         wrapping_type_error(
             object.py(),
             e,
-            format!("Expected {method_name} to return a pair of capsule."),
+            format!("Expected {method_name} to return a pair of capsules."),
         )
     })
 }
