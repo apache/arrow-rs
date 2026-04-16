@@ -64,7 +64,12 @@ impl<T: DataType> Storage for KeyStorage<T> {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        self.uniques.capacity() * std::mem::size_of::<T::T>()
+        let uniques_heap_bytes = match T::get_physical_type() {
+            Type::FIXED_LEN_BYTE_ARRAY => self.type_length * self.uniques.len(),
+            _ => <Self::Value as ParquetValueType>::variable_length_bytes(&self.uniques)
+                .unwrap_or(0) as usize,
+        };
+        self.uniques.capacity() * std::mem::size_of::<T::T>() + uniques_heap_bytes
     }
 }
 
