@@ -52,8 +52,9 @@ impl LevelEncoder {
         LevelEncoder::RleV2(RleEncoder::new_from_buf(bit_width, Vec::new()))
     }
 
-    /// Put/encode levels vector into this level encoder and call
-    /// `observer(value, count)` for each value encountered during encoding.
+    /// Put/encode levels vector into this level encoder and calls
+    /// `observer(value, count)` for each run of identical values encountered
+    /// during encoding.
     ///
     /// Returns number of encoded values that are less than or equal to length
     /// of the input buffer.
@@ -68,9 +69,23 @@ impl LevelEncoder {
     {
         match *self {
             LevelEncoder::Rle(ref mut encoder) | LevelEncoder::RleV2(ref mut encoder) => {
-                for &value in buffer {
+                let mut remaining = buffer;
+                while let Some((&value, rest)) = remaining.split_first() {
                     encoder.put(value as u64);
-                    observer(value, 1);
+                    // After put(), check if the encoder just entered RLE
+                    // accumulation mode. If so, scan ahead for the rest of
+                    // this run to batch the observer call and bulk-extend.
+                    if encoder.is_accumulating_rle(value as u64) {
+                        let run_len = rest.iter().take_while(|&&v| v == value).count();
+                        if run_len > 0 {
+                            encoder.extend_run(run_len);
+                        }
+                        observer(value, 1 + run_len);
+                        remaining = &rest[run_len..];
+                    } else {
+                        observer(value, 1);
+                        remaining = rest;
+                    }
                 }
                 buffer.len()
             }

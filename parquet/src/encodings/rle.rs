@@ -129,6 +129,30 @@ impl RleEncoder {
         bit_packed_max_size.max(rle_max_size)
     }
 
+    /// Returns `true` if the encoder is currently in RLE accumulation mode
+    /// for the given value (i.e., `repeat_count >= BIT_PACK_GROUP_SIZE` and `current_value == value`).
+    ///
+    /// The encoder enters accumulation mode as soon as the 8th consecutive identical
+    /// value has been seen: at that point `flush_buffered_values` has committed the
+    /// RLE decision and cleared the staging buffer, so no more per-element work is
+    /// needed.  Callers may use [`extend_run`](Self::extend_run) to add further
+    /// repetitions in O(1) once this returns `true`.
+    #[inline]
+    pub fn is_accumulating_rle(&self, value: u64) -> bool {
+        self.repeat_count >= BIT_PACK_GROUP_SIZE && self.current_value == value
+    }
+
+    /// Extends the current RLE run by `count` additional repetitions.
+    ///
+    /// # Preconditions
+    /// The caller **must** have verified [`is_accumulating_rle`](Self::is_accumulating_rle)
+    /// returns `true` for the same value before calling this method.
+    #[inline]
+    pub fn extend_run(&mut self, count: usize) {
+        debug_assert!(self.repeat_count >= BIT_PACK_GROUP_SIZE);
+        self.repeat_count += count;
+    }
+
     /// Encodes `value`, which must be representable with `bit_width` bits.
     #[inline]
     pub fn put(&mut self, value: u64) {
@@ -1022,6 +1046,42 @@ mod tests {
         assert_eq!(actual_values[..6], values);
         assert_eq!(actual_values[6], 0);
         assert_eq!(actual_values[7], 0);
+    }
+
+    /// The encoder enters RLE accumulation mode exactly on the 8th consecutive
+    /// identical value.
+    #[test]
+    fn test_is_accumulating_rle_boundary() {
+        let bit_width = 2;
+        let value = 1u64;
+
+        // 7 identical values: not yet accumulating
+        let mut enc = RleEncoder::new(bit_width, 256);
+        for _ in 0..7 {
+            enc.put(value);
+        }
+        assert!(
+            !enc.is_accumulating_rle(value),
+            "should not be accumulating after 7 values"
+        );
+
+        // 8th value tips into accumulation
+        enc.put(value);
+        assert!(
+            enc.is_accumulating_rle(value),
+            "should be accumulating after 8 values"
+        );
+
+        // extend_run from that state and verify the round-trip
+        enc.extend_run(92); // total: 100 identical values
+        let encoded = enc.consume();
+
+        let mut dec = RleDecoder::new(bit_width);
+        dec.set_data(encoded.into()).unwrap();
+        let mut out = vec![0i32; 100];
+        let n = dec.get_batch::<i32>(&mut out).unwrap();
+        assert_eq!(n, 100);
+        assert!(out.iter().all(|&v| v == value as i32));
     }
 
     #[test]
