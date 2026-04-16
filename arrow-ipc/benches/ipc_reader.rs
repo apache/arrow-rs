@@ -20,8 +20,8 @@ use arrow_array::{RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
-use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
-use arrow_ipc::{Block, CompressionType, root_as_footer};
+use arrow_ipc::writer::{FileWriter, IpcCompression, IpcWriteOptions, StreamWriter};
+use arrow_ipc::{Block, root_as_footer};
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::io::{Cursor, Write};
@@ -62,7 +62,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     group.bench_function("StreamReader/read_10/zstd", |b| {
         let buffer = ipc_stream(
             IpcWriteOptions::default()
-                .try_with_compression(Some(CompressionType::ZSTD))
+                .try_with_compression(Some(IpcCompression::zstd_default()))
                 .unwrap(),
         );
         b.iter(move || {
@@ -78,7 +78,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     group.bench_function("StreamReader/no_validation/read_10/zstd", |b| {
         let buffer = ipc_stream(
             IpcWriteOptions::default()
-                .try_with_compression(Some(CompressionType::ZSTD))
+                .try_with_compression(Some(IpcCompression::zstd_default()))
                 .unwrap(),
         );
         b.iter(move || {
