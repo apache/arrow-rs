@@ -252,6 +252,11 @@ required-features = ["arrow", "async", "object_store"]
 harness = false
 
 [[bench]]
+name = "cached_array_reader"
+required-features = ["arrow", "experimental"]
+harness = false
+
+[[bench]]
 name = "compression"
 required-features = ["experimental", "default"]
 harness = false
