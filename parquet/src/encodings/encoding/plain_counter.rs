@@ -46,7 +46,7 @@ impl PlainDataSizeCounter {
             Type::BOOLEAN => values.len(),
             Type::INT32 | Type::FLOAT => 4 * values.len(),
             Type::INT64 | Type::DOUBLE => 8 * values.len(),
-            Type::INT96 => 12 * values.len(),
+            Type::INT96 => Int96::SIZE_IN_BYTES * values.len(),
             Type::BYTE_ARRAY => {
                 // For variable-length types, the length prefix and the actual data are are encoded.
                 values.iter().map(|value| value.dict_encoding_size()).sum()

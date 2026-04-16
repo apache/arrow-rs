@@ -58,7 +58,7 @@ const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
 
 impl Int96 {
     /// Size of an INT96 value in bytes.
-    const SIZE_IN_BYTES: usize = 12;
+    pub const SIZE_IN_BYTES: usize = std::mem::size_of::<[u32; 3]>();
 
     /// Creates new INT96 type struct with no data set.
     pub fn new() -> Self {

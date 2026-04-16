@@ -301,8 +301,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn plain_encoded_data_size(&self) -> Option<usize> {
-        let counter = self.plain_data_size_counter.as_ref()?;
-        Some(counter.plain_encoded_data_size())
+        Some(self.plain_data_size_counter.as_ref()?.plain_encoded_data_size())
     }
 
     fn estimated_data_page_size(&self) -> usize {
