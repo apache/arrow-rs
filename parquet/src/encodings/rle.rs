@@ -245,7 +245,7 @@ impl RleEncoder {
         self.repeat_count = 0;
     }
 
-    fn flush_bit_packed_run(&mut self, update_indicator_byte: bool) {
+    fn flush_bit_packed_run(&mut self, end_current_run: bool) {
         if self.indicator_byte_pos < 0 {
             self.indicator_byte_pos = self.bit_writer.skip(1) as i64;
         }
@@ -255,25 +255,31 @@ impl RleEncoder {
             self.bit_writer.put_value(*v, self.bit_width as usize);
         }
         self.num_buffered_values = 0;
-        if update_indicator_byte {
-            // Write the indicator byte to the reserved position in `bit_writer`
-            let num_groups = self.bit_packed_count / 8;
-            let indicator_byte = ((num_groups << 1) | 1) as u8;
-            self.bit_writer
-                .put_aligned_offset(indicator_byte, 1, self.indicator_byte_pos as usize);
-            self.indicator_byte_pos = -1;
-            self.bit_packed_count = 0;
+        if end_current_run {
+            self.finish_bit_packed_run();
         }
+    }
+
+    // Called when ending a bit-packed run. Writes the indicator byte to the reserved
+    // position in `bit_writer`
+    fn finish_bit_packed_run(&mut self) {
+        let num_groups = self.bit_packed_count / 8;
+        let indicator_byte = ((num_groups << 1) | 1) as u8;
+        self.bit_writer
+            .put_aligned_offset(indicator_byte, 1, self.indicator_byte_pos as usize);
+        self.indicator_byte_pos = -1;
+        self.bit_packed_count = 0;
     }
 
     fn flush_buffered_values(&mut self) {
         if self.repeat_count >= 8 {
+            // Clear buffered values as they are not needed
             self.num_buffered_values = 0;
             if self.bit_packed_count > 0 {
-                // In this case we choose RLE encoding. Flush the current buffered values
-                // as bit-packed encoding.
+                // In this case we have chosen to switch to RLE encoding. Close out the
+                // previous bit-packed run.
                 debug_assert_eq!(self.bit_packed_count % 8, 0);
-                self.flush_bit_packed_run(true)
+                self.finish_bit_packed_run();
             }
             return;
         }
