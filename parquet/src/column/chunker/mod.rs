@@ -31,10 +31,10 @@ pub(crate) use cdc::ContentDefinedChunker;
 pub(crate) struct CdcChunk {
     /// The start offset of this chunk inside the given levels.
     pub level_offset: usize,
-    /// The start offset of this chunk inside the given values array.
-    pub value_offset: usize,
     /// The number of levels in this chunk.
     pub num_levels: usize,
-    /// The number of values (Arrow array elements) in this chunk.
+    /// The start index into `non_null_indices` for this chunk.
+    pub value_offset: usize,
+    /// The number of `non_null_indices` entries in this chunk.
     pub num_values: usize,
 }

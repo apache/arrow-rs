@@ -46,6 +46,17 @@ pub unsafe trait FromBytes: Sized {
     fn from_le_bytes(bs: Self::Buffer) -> Self;
 }
 
+/// Types that can be decoded from bitpacked representations.
+///
+/// This is implemented for primitive types and bool that can be
+/// directly converted from a u64 value. Types like Int96, ByteArray,
+/// and FixedLenByteArray that cannot be represented in 64 bits do not
+/// implement this trait.
+pub trait FromBitpacked: FromBytes {
+    /// Convert directly from a u64 value by truncation, avoiding byte slice copies.
+    fn from_u64(v: u64) -> Self;
+}
+
 macro_rules! from_le_bytes {
     ($($ty: ty),*) => {
         $(
@@ -60,11 +71,55 @@ macro_rules! from_le_bytes {
                 <$ty>::from_le_bytes(bs)
             }
         }
+        impl FromBitpacked for $ty {
+            #[inline]
+            fn from_u64(v: u64) -> Self {
+                v as Self
+            }
+        }
         )*
     };
 }
 
-from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64, f32, f64 }
+from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64 }
+
+// SAFETY: all bit patterns are valid for f32 and f64.
+unsafe impl FromBytes for f32 {
+    const BIT_CAPACITY: usize = 32;
+    type Buffer = [u8; 4];
+    fn try_from_le_slice(b: &[u8]) -> Result<Self> {
+        Ok(Self::from_le_bytes(array_from_slice(b)?))
+    }
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        f32::from_le_bytes(bs)
+    }
+}
+
+impl FromBitpacked for f32 {
+    #[inline]
+    fn from_u64(v: u64) -> Self {
+        f32::from_bits(v as u32)
+    }
+}
+
+// SAFETY: all bit patterns are valid for f64.
+unsafe impl FromBytes for f64 {
+    const BIT_CAPACITY: usize = 64;
+    type Buffer = [u8; 8];
+    fn try_from_le_slice(b: &[u8]) -> Result<Self> {
+        Ok(Self::from_le_bytes(array_from_slice(b)?))
+    }
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        f64::from_le_bytes(bs)
+    }
+}
+
+impl FromBitpacked for f64 {
+    #[inline]
+    fn from_u64(v: u64) -> Self {
+        f64::from_bits(v)
+    }
+}
 
 // SAFETY: the 0000000x bit pattern is always valid for `bool`.
 unsafe impl FromBytes for bool {
@@ -76,6 +131,13 @@ unsafe impl FromBytes for bool {
     }
     fn from_le_bytes(bs: Self::Buffer) -> Self {
         bs[0] != 0
+    }
+}
+
+impl FromBitpacked for bool {
+    #[inline]
+    fn from_u64(v: u64) -> Self {
+        v != 0
     }
 }
 
@@ -139,7 +201,7 @@ pub(crate) fn read_num_bytes<T>(size: usize, src: &[u8]) -> T
 where
     T: FromBytes,
 {
-    assert!(size <= src.len());
+    debug_assert!(size <= src.len());
     let mut buffer = <T as FromBytes>::Buffer::default();
     buffer.as_mut()[..size].copy_from_slice(&src[..size]);
     <T>::from_le_bytes(buffer)
@@ -217,6 +279,13 @@ impl BitWriter {
     pub fn flush_buffer(&mut self) -> &[u8] {
         self.flush();
         self.buffer()
+    }
+
+    /// Like `flush_buffer`, but returns mutable access to the buffer.
+    #[inline]
+    pub fn flush_buffer_mut(&mut self) -> &mut [u8] {
+        self.flush();
+        &mut self.buffer
     }
 
     /// Clears the internal state so the buffer can be reused.
@@ -406,9 +475,9 @@ impl BitReader {
     /// Reads a value of type `T` and of size `num_bits`.
     ///
     /// Returns `None` if there's not enough data available. `Some` otherwise.
-    pub fn get_value<T: FromBytes>(&mut self, num_bits: usize) -> Option<T> {
-        assert!(num_bits <= 64);
-        assert!(num_bits <= size_of::<T>() * 8);
+    pub fn get_value<T: FromBitpacked>(&mut self, num_bits: usize) -> Option<T> {
+        debug_assert!(num_bits <= 64);
+        debug_assert!(num_bits <= size_of::<T>() * 8);
 
         if self.byte_offset * 8 + self.bit_offset + num_bits > self.buffer.len() * 8 {
             return None;
@@ -438,8 +507,7 @@ impl BitReader {
             }
         }
 
-        // TODO: better to avoid copying here
-        T::try_from_le_slice(v.as_bytes()).ok()
+        Some(T::from_u64(v))
     }
 
     /// Read multiple values from their packed representation where each element is represented
@@ -450,8 +518,8 @@ impl BitReader {
     /// This function panics if
     /// - `num_bits` is larger than the bit-capacity of `T`
     ///
-    pub fn get_batch<T: FromBytes>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
-        assert!(num_bits <= size_of::<T>() * 8);
+    pub fn get_batch<T: FromBitpacked>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
+        debug_assert!(num_bits <= size_of::<T>() * 8);
 
         let mut values_to_read = batch.len();
         let needed_bits = num_bits * values_to_read;
@@ -595,7 +663,7 @@ impl BitReader {
     ///
     /// Return the number of values skipped (up to num_values)
     pub fn skip(&mut self, num_values: usize, num_bits: usize) -> usize {
-        assert!(num_bits <= 64);
+        debug_assert!(num_bits <= 64);
 
         let needed_bits = num_bits * num_values;
         let remaining_bits = (self.buffer.len() - self.byte_offset) * 8 - self.bit_offset;
@@ -1017,7 +1085,7 @@ mod tests {
 
     fn test_get_batch_helper<T>(total: usize, num_bits: usize)
     where
-        T: FromBytes + Default + Clone + Debug + Eq,
+        T: FromBitpacked + Default + Clone + Debug + Eq,
     {
         assert!(num_bits <= 64);
         let num_bytes = ceil(num_bits, 8);

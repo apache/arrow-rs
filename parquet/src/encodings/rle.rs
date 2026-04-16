@@ -39,7 +39,7 @@ use std::{cmp, mem::size_of};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::{self, BitReader, BitWriter, FromBytes};
+use crate::util::bit_util::{self, BitReader, BitWriter, FromBitpacked};
 
 /// Maximum groups of 8 values per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
@@ -84,7 +84,7 @@ impl RleEncoder {
 
     /// Initialize the encoder from existing `buffer`
     pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>) -> Self {
-        assert!(bit_width <= 64);
+        debug_assert!(bit_width <= 64);
         let bit_writer = BitWriter::new_from_buf(buffer);
         RleEncoder {
             bit_width,
@@ -177,16 +177,22 @@ impl RleEncoder {
     /// Borrow equivalent of the `consume` method.
     /// Call `clear()` after invoking this method.
     #[inline]
-    #[allow(unused)]
     pub fn flush_buffer(&mut self) -> &[u8] {
         self.flush();
         self.bit_writer.flush_buffer()
     }
 
+    /// Like `flush_buffer`, but returns mutable access to the internal buffer.
+    /// Call `clear()` after invoking this method.
+    #[inline]
+    pub fn flush_buffer_mut(&mut self) -> &mut [u8] {
+        self.flush();
+        self.bit_writer.flush_buffer_mut()
+    }
+
     /// Clears the internal state so this encoder can be reused (e.g., after becoming
     /// full).
     #[inline]
-    #[allow(unused)]
     pub fn clear(&mut self) {
         self.bit_writer.clear();
         self.num_buffered_values = 0;
@@ -194,6 +200,13 @@ impl RleEncoder {
         self.repeat_count = 0;
         self.bit_packed_count = 0;
         self.indicator_byte_pos = -1;
+    }
+
+    /// Advances the buffer by `num_bytes` zero bytes, delegating to the
+    /// underlying [`BitWriter::skip`].
+    #[inline]
+    pub fn skip(&mut self, num_bytes: usize) {
+        self.bit_writer.skip(num_bytes);
     }
 
     /// Flushes all remaining values and return the final byte buffer maintained by the
@@ -339,7 +352,7 @@ impl RleDecoder {
     // that damage L1d-cache occupancy. This results in a ~18% performance drop
     #[inline(never)]
     #[allow(unused)]
-    pub fn get<T: FromBytes>(&mut self) -> Result<Option<T>> {
+    pub fn get<T: FromBitpacked>(&mut self) -> Result<Option<T>> {
         assert!(size_of::<T>() <= 8);
 
         while self.rle_left == 0 && self.bit_packed_left == 0 {
@@ -375,7 +388,7 @@ impl RleDecoder {
     }
 
     #[inline(never)]
-    pub fn get_batch<T: FromBytes + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
+    pub fn get_batch<T: FromBitpacked + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
         assert!(size_of::<T>() <= 8);
 
         let mut values_read = 0;
@@ -456,7 +469,7 @@ impl RleDecoder {
     where
         T: Default + Clone,
     {
-        assert!(buffer.len() >= max_values);
+        debug_assert!(buffer.len() >= max_values);
 
         let mut values_read = 0;
         while values_read < max_values {
@@ -494,10 +507,30 @@ impl RleDecoder {
                         self.bit_packed_left = 0;
                         break;
                     }
-                    buffer[values_read..values_read + num_values]
-                        .iter_mut()
-                        .zip(index_buf[..num_values].iter())
-                        .for_each(|(b, i)| b.clone_from(&dict[*i as usize]));
+                    {
+                        let out = &mut buffer[values_read..values_read + num_values];
+                        let idx = &index_buf[..num_values];
+                        let mut out_chunks = out.chunks_exact_mut(8);
+                        let idx_chunks = idx.chunks_exact(8);
+                        for (out_chunk, idx_chunk) in out_chunks.by_ref().zip(idx_chunks) {
+                            let dict_len = dict.len();
+                            assert!(
+                                idx_chunk.iter().all(|&i| (i as usize) < dict_len),
+                                "dictionary index out of bounds"
+                            );
+                            for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
+                                // SAFETY: all indices checked above to be in bounds
+                                b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
+                            }
+                        }
+                        for (b, i) in out_chunks
+                            .into_remainder()
+                            .iter_mut()
+                            .zip(idx.chunks_exact(8).remainder().iter())
+                        {
+                            b.clone_from(&dict[*i as usize]);
+                        }
+                    }
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {
