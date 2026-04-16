@@ -4914,7 +4914,7 @@ mod tests {
         writer.write(&batch).unwrap();
         let data = Bytes::from(writer.into_inner().unwrap());
 
-        // println!("file length, dictionary: {}", data.len());
+        println!("file length, dictionary: {}", data.len());
 
         let mut metadata = ParquetMetaDataReader::new();
         metadata.try_parse(&data).unwrap();
@@ -4933,13 +4933,13 @@ mod tests {
         writer.write(&batch).unwrap();
         let data = Bytes::from(writer.into_inner().unwrap());
 
-        // println!("file length, fallback: {}", data.len());
+        println!("file length, fallback: {}", data.len());
 
         let mut metadata = ParquetMetaDataReader::new();
         metadata.try_parse(&data).unwrap();
         let metadata = metadata.finish().unwrap();
         let fallback_meta = metadata.row_group(0).column(0);
-        assert_eq!(get_dict_page_size(fallback_meta, data.clone()), 8192);
+        assert_eq!(get_dict_page_size(fallback_meta, data.clone()), 32_768);
     }
 
     struct WriteBatchesShape {
