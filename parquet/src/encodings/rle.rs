@@ -520,8 +520,13 @@ impl RleDecoder {
                         let idx_chunks = idx.chunks_exact(8);
                         for (out_chunk, idx_chunk) in out_chunks.by_ref().zip(idx_chunks) {
                             let dict_len = dict.len();
+                            // u32 max-reduction instead of `.all(|&i| ..)`: `.all`
+                            // short-circuits and blocks autovectorisation. Negative
+                            // i32 cast to u32 becomes a large value so the bounds
+                            // check still rejects it.
+                            let max_idx = idx_chunk.iter().fold(0u32, |acc, &i| acc.max(i as u32));
                             assert!(
-                                idx_chunk.iter().all(|&i| (i as usize) < dict_len),
+                                (max_idx as usize) < dict_len,
                                 "dictionary index out of bounds"
                             );
                             for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
