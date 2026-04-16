@@ -81,7 +81,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
                     "metadata field must be a binary-like array".to_string(),
                 )
             })?;
-            let metadata = VariantMetadata::new(metadata_bytes);
+            let metadata = VariantMetadata::try_new(metadata_bytes)?;
             let mut value_builder = value_builder.builder_ext(&metadata);
             row_builder.append_row(&mut value_builder, &metadata, i)?;
         }
@@ -338,7 +338,7 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
                     "value field must be a binary-like array".to_string(),
                 )
             })?;
-            let variant = Variant::new_with_metadata(metadata.clone(), value_bytes);
+            let variant = Variant::try_new_with_metadata(metadata.clone(), value_bytes)?;
             builder.append_value(variant);
         }
         Ok(())
@@ -368,7 +368,7 @@ macro_rules! handle_unshredded_case {
                         v.data_type(),
                     ))
                 })?;
-                Result::Ok(Variant::new_with_metadata($metadata.clone(), bytes))
+                Variant::try_new_with_metadata($metadata.clone(), bytes)
             })
             .transpose()?;
 
@@ -628,7 +628,8 @@ impl<'a> StructUnshredVariantBuilder<'a> {
                 ));
             };
 
-            for (field_name, field_value) in object.iter() {
+            for entry in object.iter_try() {
+                let (field_name, field_value) = entry?;
                 if self.field_unshredders.contains_key(field_name) {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Field '{field_name}' appears in both typed_value and value",
@@ -794,5 +795,25 @@ mod tests {
         assert_eq!(result.value(0), Variant::from(&b"\x00\x01\x02"[..]));
         assert_eq!(result.value(1), Variant::from(&b"\xff\xaa"[..]));
         assert_eq!(result.value(2), Variant::from(&b"\xde\xad\xbe\xef"[..]));
+    }
+
+    #[test]
+    fn test_unshred_returns_err_on_malformed_metadata() {
+        // empty metadata bytes fail VariantMetadata's header parse. before this fix the
+        // call inside unshred_variant used the panicking `VariantMetadata::new`, which
+        // crashed the thread instead of surfacing the spec violation through the
+        // documented `Result` return type.
+        let metadata: ArrayRef = Arc::new(BinaryViewArray::from_iter_values(vec![&b""[..]]));
+
+        let typed_value: ArrayRef = Arc::new(StringViewArray::from(vec![Some("hello")]));
+
+        let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
+
+        let result = crate::unshred_variant(&variant_array);
+
+        assert!(
+            result.is_err(),
+            "unshred_variant must return Err on malformed metadata, not panic",
+        );
     }
 }
