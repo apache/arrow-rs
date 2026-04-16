@@ -212,6 +212,11 @@ impl RowGroupReaderBuilder {
         self.buffers.buffered_bytes()
     }
 
+    /// Clear any staged ranges currently buffered for future decode work.
+    pub fn clear_all_ranges(&mut self) {
+        self.buffers.clear_all_ranges();
+    }
+
     /// take the current state, leaving None in its place.
     ///
     /// Returns an error if there the state wasn't put back after the previous

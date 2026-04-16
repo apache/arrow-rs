@@ -17,11 +17,13 @@
 
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
+use crate::variant_array::binary_array_value;
 use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
-    Array, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
-    FixedSizeListArray, GenericListArray, GenericListViewArray, LargeBinaryArray, LargeStringArray,
-    ListLikeArray, PrimitiveArray, StringArray, StringViewArray, StructArray,
+    Array, ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray,
+    FixedSizeBinaryArray, FixedSizeListArray, GenericListArray, GenericListViewArray,
+    LargeBinaryArray, LargeStringArray, ListLikeArray, PrimitiveArray, StringArray,
+    StringViewArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
@@ -38,6 +40,7 @@ use parquet_variant::{
     VariantDecimal16, VariantDecimalType, VariantMetadata,
 };
 use std::marker::PhantomData;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Removes all (nested) typed_value columns from a VariantArray by converting them back to binary
@@ -73,7 +76,12 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
         if array.is_null(i) {
             value_builder.append_null();
         } else {
-            let metadata = VariantMetadata::new(metadata.value(i));
+            let metadata_bytes = binary_array_value(metadata.as_ref(), i).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "metadata field must be a binary-like array".to_string(),
+                )
+            })?;
+            let metadata = VariantMetadata::new(metadata_bytes);
             let mut value_builder = value_builder.builder_ext(&metadata);
             row_builder.append_row(&mut value_builder, &metadata, i)?;
         }
@@ -82,7 +90,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     let value = value_builder.build()?;
     Ok(VariantArray::from_parts(
         metadata.clone(),
-        Some(value),
+        Some(Arc::new(value)),
         None,
         nulls.cloned(),
     ))
@@ -308,11 +316,11 @@ impl<'a> NullUnshredVariantBuilder<'a> {
 
 /// Builder for arrays that only have value column (already unshredded)
 struct ValueOnlyUnshredVariantBuilder<'a> {
-    value: &'a arrow::array::BinaryViewArray,
+    value: &'a ArrayRef,
 }
 
 impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
-    fn new(value: &'a BinaryViewArray) -> Self {
+    fn new(value: &'a ArrayRef) -> Self {
         Self { value }
     }
 
@@ -325,7 +333,12 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
         if self.value.is_null(index) {
             builder.append_null();
         } else {
-            let variant = Variant::new_with_metadata(metadata.clone(), self.value.value(index));
+            let value_bytes = binary_array_value(self.value.as_ref(), index).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "value field must be a binary-like array".to_string(),
+                )
+            })?;
+            let variant = Variant::new_with_metadata(metadata.clone(), value_bytes);
             builder.append_value(variant);
         }
         Ok(())
@@ -347,7 +360,17 @@ trait AppendToVariantBuilder: Array {
 macro_rules! handle_unshredded_case {
     ($self:expr, $builder:expr, $metadata:expr, $index:expr, $partial_shredding:expr) => {{
         let value = $self.value.as_ref().filter(|v| v.is_valid($index));
-        let value = value.map(|v| Variant::new_with_metadata($metadata.clone(), v.value($index)));
+        let value = value
+            .map(|v| {
+                let bytes = binary_array_value(v.as_ref(), $index).ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "value field must be a binary-like array, instead got {}",
+                        v.data_type(),
+                    ))
+                })?;
+                Result::Ok(Variant::new_with_metadata($metadata.clone(), bytes))
+            })
+            .transpose()?;
 
         // If typed_value is null, handle unshredded case and return early
         if $self.typed_value.is_null($index) {
@@ -372,12 +395,12 @@ macro_rules! handle_unshredded_case {
 
 /// Generic unshred builder that works with any Array implementing AppendToVariantBuilder
 struct UnshredPrimitiveRowBuilder<'a, T> {
-    value: Option<&'a BinaryViewArray>,
+    value: Option<&'a ArrayRef>,
     typed_value: &'a T,
 }
 
 impl<'a, T: AppendToVariantBuilder> UnshredPrimitiveRowBuilder<'a, T> {
-    fn new(value: Option<&'a BinaryViewArray>, typed_value: &'a T) -> Self {
+    fn new(value: Option<&'a ArrayRef>, typed_value: &'a T) -> Self {
         Self { value, typed_value }
     }
 
@@ -475,17 +498,13 @@ impl TimestampType for TimestampNanosecondType {
 
 /// Generic builder for timestamp types that handles timezone-aware conversion
 struct TimestampUnshredRowBuilder<'a, T: TimestampType> {
-    value: Option<&'a BinaryViewArray>,
+    value: Option<&'a ArrayRef>,
     typed_value: &'a PrimitiveArray<T>,
     has_timezone: bool,
 }
 
 impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
-    fn new(
-        value: Option<&'a BinaryViewArray>,
-        typed_value: &'a dyn Array,
-        has_timezone: bool,
-    ) -> Self {
+    fn new(value: Option<&'a ArrayRef>, typed_value: &'a dyn Array, has_timezone: bool) -> Self {
         Self {
             value,
             typed_value: typed_value.as_primitive(),
@@ -518,7 +537,7 @@ struct DecimalUnshredRowBuilder<'a, A: DecimalType, V>
 where
     V: VariantDecimalType<Native = A::Native>,
 {
-    value: Option<&'a BinaryViewArray>,
+    value: Option<&'a ArrayRef>,
     typed_value: &'a PrimitiveArray<A>,
     scale: i8,
     _phantom: PhantomData<V>,
@@ -528,7 +547,7 @@ impl<'a, A: DecimalType, V> DecimalUnshredRowBuilder<'a, A, V>
 where
     V: VariantDecimalType<Native = A::Native>,
 {
-    fn new(value: Option<&'a BinaryViewArray>, typed_value: &'a dyn Array, scale: i8) -> Self {
+    fn new(value: Option<&'a ArrayRef>, typed_value: &'a dyn Array, scale: i8) -> Self {
         Self {
             value,
             typed_value: typed_value.as_primitive(),
@@ -554,13 +573,13 @@ where
 
 /// Builder for unshredding struct/object types with nested fields
 struct StructUnshredVariantBuilder<'a> {
-    value: Option<&'a arrow::array::BinaryViewArray>,
+    value: Option<&'a ArrayRef>,
     typed_value: &'a arrow::array::StructArray,
     field_unshredders: IndexMap<&'a str, Option<UnshredVariantRowBuilder<'a>>>,
 }
 
 impl<'a> StructUnshredVariantBuilder<'a> {
-    fn try_new(value: Option<&'a BinaryViewArray>, typed_value: &'a StructArray) -> Result<Self> {
+    fn try_new(value: Option<&'a ArrayRef>, typed_value: &'a StructArray) -> Result<Self> {
         // Create unshredders for each field in constructor
         let mut field_unshredders = IndexMap::new();
         for (field, field_array) in typed_value.fields().iter().zip(typed_value.columns()) {
@@ -626,13 +645,13 @@ impl<'a> StructUnshredVariantBuilder<'a> {
 
 /// Builder for unshredding list/array types with recursive element processing
 struct ListUnshredVariantBuilder<'a, L: ListLikeArray> {
-    value: Option<&'a BinaryViewArray>,
+    value: Option<&'a ArrayRef>,
     typed_value: &'a L,
     element_unshredder: Box<UnshredVariantRowBuilder<'a>>,
 }
 
 impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
-    fn try_new(value: Option<&'a BinaryViewArray>, typed_value: &'a L) -> Result<Self> {
+    fn try_new(value: Option<&'a ArrayRef>, typed_value: &'a L) -> Result<Self> {
         // Create a recursive unshredder for the list elements
         // The element type comes from the values array of the list
         let element_values = typed_value.values();
@@ -684,16 +703,18 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
 mod tests {
     use crate::VariantArray;
     use arrow::array::{
-        BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringViewArray,
+        ArrayRef, BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringViewArray,
     };
     use parquet_variant::Variant;
+    use std::sync::Arc;
 
     #[test]
     fn test_unshred_utf8view_typed_value() {
         let metadata_bytes: &[u8] = &[0x01, 0x00, 0x00];
-        let metadata = BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]);
+        let metadata: ArrayRef =
+            Arc::new(BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]));
 
-        let typed_value: arrow::array::ArrayRef = std::sync::Arc::new(StringViewArray::from(vec![
+        let typed_value: ArrayRef = Arc::new(StringViewArray::from(vec![
             Some("hello"),
             Some("middle"),
             Some("world"),
@@ -712,14 +733,14 @@ mod tests {
     #[test]
     fn test_unshred_largeutf8_typed_value() {
         let metadata_bytes: &[u8] = &[0x01, 0x00, 0x00];
-        let metadata = BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]);
+        let metadata: ArrayRef =
+            Arc::new(BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]));
 
-        let typed_value: arrow::array::ArrayRef =
-            std::sync::Arc::new(LargeStringArray::from(vec![
-                Some("hello"),
-                Some("middle"),
-                Some("world"),
-            ]));
+        let typed_value: ArrayRef = Arc::new(LargeStringArray::from(vec![
+            Some("hello"),
+            Some("middle"),
+            Some("world"),
+        ]));
 
         let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
 
@@ -734,14 +755,14 @@ mod tests {
     #[test]
     fn test_unshred_binary_typed_value() {
         let metadata_bytes: &[u8] = &[0x01, 0x00, 0x00];
-        let metadata = BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]);
+        let metadata: ArrayRef =
+            Arc::new(BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]));
 
-        let typed_value: arrow::array::ArrayRef =
-            std::sync::Arc::new(BinaryArray::from_iter_values(vec![
-                &b"\x00\x01\x02"[..],
-                &b"\xff\xaa"[..],
-                &b"\xde\xad\xbe\xef"[..],
-            ]));
+        let typed_value: ArrayRef = Arc::new(BinaryArray::from_iter_values(vec![
+            &b"\x00\x01\x02"[..],
+            &b"\xff\xaa"[..],
+            &b"\xde\xad\xbe\xef"[..],
+        ]));
 
         let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
 
@@ -756,14 +777,14 @@ mod tests {
     #[test]
     fn test_unshred_largebinary_typed_value() {
         let metadata_bytes: &[u8] = &[0x01, 0x00, 0x00];
-        let metadata = BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]);
+        let metadata: ArrayRef =
+            Arc::new(BinaryViewArray::from_iter_values(vec![metadata_bytes; 3]));
 
-        let typed_value: arrow::array::ArrayRef =
-            std::sync::Arc::new(LargeBinaryArray::from_iter_values(vec![
-                &b"\x00\x01\x02"[..],
-                &b"\xff\xaa"[..],
-                &b"\xde\xad\xbe\xef"[..],
-            ]));
+        let typed_value: ArrayRef = Arc::new(LargeBinaryArray::from_iter_values(vec![
+            &b"\x00\x01\x02"[..],
+            &b"\xff\xaa"[..],
+            &b"\xde\xad\xbe\xef"[..],
+        ]));
 
         let variant_array = VariantArray::from_parts(metadata, None, Some(typed_value), None);
 

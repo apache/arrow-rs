@@ -401,23 +401,36 @@ where
     let output_array = array
         .iter()
         .map(|value| match value {
-            Some(value) => match value.to_ascii_lowercase().trim() {
-                "t" | "tr" | "tru" | "true" | "y" | "ye" | "yes" | "on" | "1" => Ok(Some(true)),
-                "f" | "fa" | "fal" | "fals" | "false" | "n" | "no" | "of" | "off" | "0" => {
-                    Ok(Some(false))
-                }
-                invalid_value => match cast_options.safe {
-                    true => Ok(None),
-                    false => Err(ArrowError::CastError(format!(
-                        "Cannot cast value '{invalid_value}' to value of Boolean type",
-                    ))),
-                },
-            },
+            Some(value) => cast_single_string_to_boolean(value, cast_options),
             None => Ok(None),
         })
         .collect::<Result<BooleanArray, _>>()?;
 
     Ok(Arc::new(output_array))
+}
+
+#[inline]
+fn cast_single_string_to_boolean(
+    value: &str,
+    cast_options: &CastOptions,
+) -> Result<Option<bool>, ArrowError> {
+    match value.to_ascii_lowercase().trim() {
+        "t" | "tr" | "tru" | "true" | "y" | "ye" | "yes" | "on" | "1" => Ok(Some(true)),
+        "f" | "fa" | "fal" | "fals" | "false" | "n" | "no" | "of" | "off" | "0" => Ok(Some(false)),
+        invalid_value => match cast_options.safe {
+            true => Ok(None),
+            false => Err(ArrowError::CastError(format!(
+                "Cannot cast value '{invalid_value}' to value of Boolean type",
+            ))),
+        },
+    }
+}
+
+/// Cast a single string to boolean with default cast option(safe=true).
+pub fn cast_single_string_to_boolean_default(value: &str) -> Option<bool> {
+    cast_single_string_to_boolean(value, &CastOptions::default())
+        .ok()
+        .flatten()
 }
 
 pub(crate) fn cast_utf8_to_boolean<OffsetSize>(

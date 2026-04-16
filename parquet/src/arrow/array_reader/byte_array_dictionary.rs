@@ -34,7 +34,7 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::encodings::rle::RleDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::FromBytes;
+use crate::util::bit_util::FromBitpacked;
 
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
@@ -131,7 +131,7 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
 where
-    K: FromBytes + Ord + ArrowNativeType,
+    K: FromBitpacked + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
 {
     fn new(
@@ -151,7 +151,7 @@ where
 
 impl<K, V> ArrayReader for ByteArrayDictionaryReader<K, V>
 where
-    K: FromBytes + Ord + ArrowNativeType,
+    K: FromBitpacked + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
 {
     fn as_any(&self) -> &dyn Any {
@@ -229,7 +229,7 @@ struct DictionaryDecoder<K, V> {
 
 impl<K, V> ColumnValueDecoder for DictionaryDecoder<K, V>
 where
-    K: FromBytes + Ord + ArrowNativeType,
+    K: FromBitpacked + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
 {
     type Buffer = DictionaryBuffer<K, V>;
