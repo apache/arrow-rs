@@ -43,7 +43,7 @@ use crate::file::metadata::{
     OffsetIndexBuilder, PageEncodingStats,
 };
 use crate::file::properties::{
-    EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
+    DictionaryFallback, EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
@@ -337,6 +337,7 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
     statistics_enabled: EnabledStatistics,
+    dict_fallback_sample_len: usize,
 
     page_writer: Box<dyn PageWriter + 'a>,
     codec: Compression,
@@ -379,6 +380,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let compressor = create_codec(codec, &codec_options).unwrap();
         let encoder = E::try_new(&descr, props.as_ref()).unwrap();
 
+        let dict_fallback_sample_len = match props.dictionary_fallback(descr.path()) {
+            DictionaryFallback::OnUnfavorableAfter(sample_len) if encoder.has_dictionary() => {
+                sample_len
+            }
+            _ => 0,
+        };
+
         let statistics_enabled = props.statistics_enabled(descr.path());
 
         let mut encodings = BTreeSet::new();
@@ -416,6 +424,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             descr,
             props,
             statistics_enabled,
+            dict_fallback_sample_len,
             page_writer,
             codec,
             compressor,
@@ -765,10 +774,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Second check, if enabled: the compression heuristic.
         // For similar logic in parquet-java,
         // see DictionaryValuesWriter.isCompressionSatisfying
-        if let Some(raw_size) = self.encoder.plain_encoded_data_size() {
-            let encoded_size = self.encoder.estimated_data_page_size();
-            if encoded_size + dict_size >= raw_size {
-                return true;
+        if self.encoder.num_values() >= self.dict_fallback_sample_len {
+            if let Some(raw_size) = self.encoder.plain_encoded_data_size() {
+                let encoded_size = self.encoder.estimated_data_page_size();
+                if encoded_size + dict_size >= raw_size {
+                    return true;
+                }
             }
         }
 

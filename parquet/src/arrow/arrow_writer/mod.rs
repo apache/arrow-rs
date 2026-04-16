@@ -2600,7 +2600,7 @@ mod tests {
 
         // Set dictionary fallback to trigger fallback to PLAIN encoding on unfavorable compression
         let props = WriterProperties::builder()
-            .set_dictionary_fallback(DictionaryFallback::OnUnfavorableCompression)
+            .set_dictionary_fallback(DictionaryFallback::OnUnfavorableAfter(1))
             .set_data_page_size_limit(1)
             .set_write_batch_size(1)
             .build();
@@ -4926,7 +4926,7 @@ mod tests {
             .set_dictionary_page_size_limit(1024 * 1024)
             .set_column_dictionary_fallback(
                 ColumnPath::from("col0"),
-                DictionaryFallback::OnUnfavorableCompression,
+                DictionaryFallback::OnUnfavorableAfter(8192),
             )
             .build();
         let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
@@ -4939,7 +4939,7 @@ mod tests {
         metadata.try_parse(&data).unwrap();
         let metadata = metadata.finish().unwrap();
         let fallback_meta = metadata.row_group(0).column(0);
-        assert_eq!(get_dict_page_size(fallback_meta, data.clone()), 4096);
+        assert_eq!(get_dict_page_size(fallback_meta, data.clone()), 8192);
     }
 
     struct WriteBatchesShape {

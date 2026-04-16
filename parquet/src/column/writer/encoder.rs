@@ -212,7 +212,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
         let plain_data_size_counter = match props.dictionary_fallback(descr.path()) {
             DictionaryFallback::OnPageSizeLimit => None,
-            DictionaryFallback::OnUnfavorableCompression => {
+            DictionaryFallback::OnUnfavorableAfter(_) => {
                 if dict_encoder.is_some() {
                     Some(PlainDataSizeCounter::new(descr))
                 } else {

@@ -451,7 +451,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let plain_data_size_counter = match props.dictionary_fallback(descr.path()) {
             DictionaryFallback::OnPageSizeLimit => None,
-            DictionaryFallback::OnUnfavorableCompression => {
+            DictionaryFallback::OnUnfavorableAfter(_) => {
                 if dictionary.is_some() {
                     Some(PlainDataSizeCounter::new(descr))
                 } else {

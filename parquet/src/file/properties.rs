@@ -1204,10 +1204,10 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
 pub enum DictionaryFallback {
     /// Fall back to non-dictionary encoding only if the dictionary page size limit is exceeded.
     OnPageSizeLimit,
-    /// Fall back to non-dictionary encoding if the dictionary page size limit is exceeded
-    /// or if the dictionary encoding upon encoding a write batch is larger than the plain
-    /// encoding for the same data.
-    OnUnfavorableCompression,
+    /// Fall back to non-dictionary encoding if the dictionary page size limit is exceeded,
+    /// or if the dictionary encoding upon encoding at least the given number of values
+    /// is larger than the plain encoding for the same data.
+    OnUnfavorableAfter(usize),
 }
 
 impl Default for DictionaryFallback {
