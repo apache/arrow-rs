@@ -1650,6 +1650,10 @@ mod tests {
             DEFAULT_DICTIONARY_ENABLED
         );
         assert_eq!(
+            props.dictionary_fallback(&ColumnPath::from("col")),
+            DEFAULT_DICTIONARY_FALLBACK
+        );
+        assert_eq!(
             props.statistics_enabled(&ColumnPath::from("col")),
             DEFAULT_STATISTICS_ENABLED
         );
@@ -1730,11 +1734,16 @@ mod tests {
             .set_encoding(Encoding::DELTA_BINARY_PACKED)
             .set_compression(Compression::GZIP(Default::default()))
             .set_dictionary_enabled(false)
+            .set_dictionary_fallback(DictionaryFallback::OnUnfavorableAfter(1024))
             .set_statistics_enabled(EnabledStatistics::None)
             // specific column settings
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .set_column_compression(ColumnPath::from("col"), Compression::SNAPPY)
             .set_column_dictionary_enabled(ColumnPath::from("col"), true)
+            .set_column_dictionary_fallback(
+                ColumnPath::from("col"),
+                DictionaryFallback::OnUnfavorableAfter(2048),
+            )
             .set_column_statistics_enabled(ColumnPath::from("col"), EnabledStatistics::Chunk)
             .set_column_bloom_filter_enabled(ColumnPath::from("col"), true)
             .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100_u64)
@@ -1765,6 +1774,10 @@ mod tests {
             );
             assert!(!props.dictionary_enabled(&ColumnPath::from("a")));
             assert_eq!(
+                props.dictionary_fallback(&ColumnPath::from("a")),
+                DictionaryFallback::OnUnfavorableAfter(1024)
+            );
+            assert_eq!(
                 props.statistics_enabled(&ColumnPath::from("a")),
                 EnabledStatistics::None
             );
@@ -1778,6 +1791,10 @@ mod tests {
                 Compression::SNAPPY
             );
             assert!(props.dictionary_enabled(&ColumnPath::from("col")));
+            assert_eq!(
+                props.dictionary_fallback(&ColumnPath::from("col")),
+                DictionaryFallback::OnUnfavorableAfter(2048)
+            );
             assert_eq!(
                 props.statistics_enabled(&ColumnPath::from("col")),
                 EnabledStatistics::Chunk
