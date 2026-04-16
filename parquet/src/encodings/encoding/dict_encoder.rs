@@ -192,3 +192,208 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
             + self.indices.capacity() * std::mem::size_of::<usize>()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::data_type::{ByteArray, ByteArrayType, FixedLenByteArray, FixedLenByteArrayType, Int32Type};
+    use crate::encodings::encoding::Encoder;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
+
+    fn make_col_desc<T: DataType>() -> ColumnDescPtr {
+        make_col_desc_with_length::<T>(-1)
+    }
+
+    fn make_col_desc_with_length<T: DataType>(type_length: i32) -> ColumnDescPtr {
+        let ty = SchemaType::primitive_type_builder("col", T::get_physical_type())
+            .with_length(type_length)
+            .build()
+            .unwrap();
+        Arc::new(ColumnDescriptor::new(
+            Arc::new(ty),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        ))
+    }
+
+    #[test]
+    fn test_estimated_memory_size_primitive_with_duplicates() {
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        let empty_size = encoder.estimated_memory_size();
+
+        // 3 distinct values, repeated to produce 9 indices total.
+        encoder.put(&[1, 2, 3, 1, 2, 3, 1, 2, 3]).unwrap();
+
+        let size = encoder.estimated_memory_size();
+
+        // Must account for the 3 unique dictionary entries.
+        let dict_entry_size = 3 * std::mem::size_of::<i32>();
+        assert!(
+            size >= empty_size + dict_entry_size,
+            "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
+        );
+
+        // Must also account for the 9 buffered indices.
+        let indices_size = 9 * std::mem::size_of::<usize>();
+        assert!(
+            size >= empty_size + dict_entry_size + indices_size,
+            "memory size {size} should include indices ({indices_size} bytes)"
+        );
+    }
+
+    #[test]
+    fn test_estimated_memory_size_primitive_all_distinct() {
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        let empty_size = encoder.estimated_memory_size();
+
+        let values: Vec<i32> = (0..100).collect();
+        encoder.put(&values).unwrap();
+
+        let size = encoder.estimated_memory_size();
+
+        // Must account for the 100 unique dictionary entries.
+        let dict_entry_size = 100 * std::mem::size_of::<i32>();
+        assert!(
+            size >= empty_size + dict_entry_size,
+            "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
+        );
+
+        // Must also account for the 100 buffered indices.
+        let indices_size = 100 * std::mem::size_of::<usize>();
+        assert!(
+            size >= empty_size + dict_entry_size + indices_size,
+            "memory size {size} should include indices ({indices_size} bytes)"
+        );
+    }
+
+    #[test]
+    fn test_estimated_memory_size_byte_array_with_duplicates() {
+        let mut encoder = DictEncoder::<ByteArrayType>::new(make_col_desc::<ByteArrayType>());
+        let empty_size = encoder.estimated_memory_size();
+
+        // 3 distinct byte strings ("foo", "bar", "baz" — 3 bytes each), repeated to produce
+        // 9 indices total.
+        let vals: Vec<ByteArray> = [
+            "foo", "bar", "baz", "foo", "bar", "baz", "foo", "bar", "baz",
+        ]
+        .iter()
+        .map(|s| ByteArray::from(*s))
+        .collect();
+        encoder.put(&vals).unwrap();
+
+        let size = encoder.estimated_memory_size();
+
+        // Must account for the 3 unique dictionary entries, including their heap-allocated bytes.
+        let dict_entry_size = 3 * std::mem::size_of::<ByteArray>() + 3 * 3; // 3 values × 3 bytes each
+        assert!(
+            size >= empty_size + dict_entry_size,
+            "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
+        );
+
+        // Must also account for the 9 buffered indices.
+        let indices_size = 9 * std::mem::size_of::<usize>();
+        assert!(
+            size >= empty_size + dict_entry_size + indices_size,
+            "memory size {size} should include indices ({indices_size} bytes)"
+        );
+    }
+
+    #[test]
+    fn test_estimated_memory_size_byte_array_all_distinct() {
+        let mut encoder = DictEncoder::<ByteArrayType>::new(make_col_desc::<ByteArrayType>());
+        let empty_size = encoder.estimated_memory_size();
+
+        // 100 distinct values: "0".."9" (1 byte each) and "10".."99" (2 bytes each).
+        let values: Vec<ByteArray> = (0..100_u32)
+            .map(|i| ByteArray::from(i.to_string().into_bytes()))
+            .collect();
+        let bytes_total: usize = values.iter().map(|v| v.len()).sum(); // 10×1 + 90×2 = 190
+        encoder.put(&values).unwrap();
+
+        let size = encoder.estimated_memory_size();
+
+        // Must account for the 100 unique dictionary entries, including their heap-allocated bytes.
+        let dict_entry_size = 100 * std::mem::size_of::<ByteArray>() + bytes_total;
+        assert!(
+            size >= empty_size + dict_entry_size,
+            "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
+        );
+
+        // Must also account for the 100 buffered indices.
+        let indices_size = 100 * std::mem::size_of::<usize>();
+        assert!(
+            size >= empty_size + dict_entry_size + indices_size,
+            "memory size {size} should include indices ({indices_size} bytes)"
+        );
+    }
+
+    #[test]
+    fn test_estimated_memory_size_fixed_len_byte_array_with_duplicates() {
+        const TYPE_LEN: usize = 3;
+        let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(
+            make_col_desc_with_length::<FixedLenByteArrayType>(TYPE_LEN as i32),
+        );
+        let empty_size = encoder.estimated_memory_size();
+
+        // 3 distinct 3-byte values, repeated to produce 9 indices total.
+        let vals: Vec<FixedLenByteArray> = [
+            b"foo", b"bar", b"baz", b"foo", b"bar", b"baz", b"foo", b"bar", b"baz",
+        ]
+        .iter()
+        .map(|b| FixedLenByteArray::from(b.to_vec()))
+        .collect();
+        encoder.put(&vals).unwrap();
+
+        let size = encoder.estimated_memory_size();
+
+        // Must account for the 3 unique dictionary entries: struct overhead plus the
+        // fixed-length bytes allocated per entry.
+        let dict_entry_size = 3 * std::mem::size_of::<FixedLenByteArray>() + 3 * TYPE_LEN;
+        assert!(
+            size >= empty_size + dict_entry_size,
+            "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
+        );
+
+        // Must also account for the 9 buffered indices.
+        let indices_size = 9 * std::mem::size_of::<usize>();
+        assert!(
+            size >= empty_size + dict_entry_size + indices_size,
+            "memory size {size} should include indices ({indices_size} bytes)"
+        );
+    }
+
+    #[test]
+    fn test_estimated_memory_size_fixed_len_byte_array_all_distinct() {
+        const TYPE_LEN: usize = 3;
+        let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(
+            make_col_desc_with_length::<FixedLenByteArrayType>(TYPE_LEN as i32),
+        );
+        let empty_size = encoder.estimated_memory_size();
+
+        // 100 distinct 3-byte values: zero-padded big-endian u8 indices.
+        let values: Vec<FixedLenByteArray> = (0..100_u8)
+            .map(|i| FixedLenByteArray::from(vec![0u8, 0u8, i]))
+            .collect();
+        encoder.put(&values).unwrap();
+
+        let size = encoder.estimated_memory_size();
+
+        // Must account for the 100 unique dictionary entries: struct overhead plus the
+        // fixed-length bytes allocated per entry.
+        let dict_entry_size = 100 * std::mem::size_of::<FixedLenByteArray>() + 100 * TYPE_LEN;
+        assert!(
+            size >= empty_size + dict_entry_size,
+            "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
+        );
+
+        // Must also account for the 100 buffered indices.
+        let indices_size = 100 * std::mem::size_of::<usize>();
+        assert!(
+            size >= empty_size + dict_entry_size + indices_size,
+            "memory size {size} should include indices ({indices_size} bytes)"
+        );
+    }
+}
