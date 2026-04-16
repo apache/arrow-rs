@@ -453,17 +453,13 @@ impl ByteViewArrayDecoderPlain {
 /// Rewrite `view`'s buffer index by `base` when the dictionary buffers were
 /// appended later than position 0 in the output buffer list. Inlined views
 /// (length ≤ 12) carry their data in the high 96 bits and must be copied
-/// verbatim.
+/// verbatim. Written branchlessly so LLVM emits `csel`/`cmov` inside the
+/// hot chunked gather loop instead of a per-view conditional branch.
 #[inline(always)]
 fn adjust_buffer_index(view: u128, base: u32) -> u128 {
-    let len = view as u32;
-    if len <= 12 {
-        view
-    } else {
-        let mut bv = ByteView::from(view);
-        bv.buffer_index += base;
-        bv.into()
-    }
+    // View layout: bits [0..32] = len, [64..96] = buffer_index (long-view only).
+    let is_long = ((view as u32) > 12) as u128;
+    view.wrapping_add((is_long * base as u128) << 64)
 }
 
 /// Slow-path error constructor for a chunk whose validity check failed. Kept
@@ -551,10 +547,21 @@ impl ByteViewArrayDecoderDictionary {
             const CHUNK: usize = 8;
             let mut chunks = keys.chunks_exact(CHUNK);
             let mut written = 0usize;
+            // Cast to u32 so that any negative i32 (corrupt data) compares as a
+            // very large value and fails the check.
+            let dict_len_u32 = dict_len as u32;
 
             if base_buffer_idx == 0 {
                 for chunk in chunks.by_ref() {
-                    if !chunk.iter().all(|&k| (k as usize) < dict_len) {
+                    // Branchless max-reduction over 8 keys: LLVM emits a SIMD
+                    // umax sequence on aarch64/x86_64 instead of the short-
+                    // circuited `.all()` form which compiles to a chain of
+                    // per-key `cmp + b.ls`.
+                    let mut max_key = 0u32;
+                    for &k in chunk {
+                        max_key = max_key.max(k as u32);
+                    }
+                    if max_key >= dict_len_u32 {
                         return Err(invalid_dict_key(chunk, dict_len));
                     }
                     for (i, &k) in chunk.iter().enumerate() {
@@ -576,7 +583,11 @@ impl ByteViewArrayDecoderDictionary {
                 }
             } else {
                 for chunk in chunks.by_ref() {
-                    if !chunk.iter().all(|&k| (k as usize) < dict_len) {
+                    let mut max_key = 0u32;
+                    for &k in chunk {
+                        max_key = max_key.max(k as u32);
+                    }
+                    if max_key >= dict_len_u32 {
                         return Err(invalid_dict_key(chunk, dict_len));
                     }
                     for (i, &k) in chunk.iter().enumerate() {
