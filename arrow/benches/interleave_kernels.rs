@@ -174,10 +174,7 @@ fn add_benchmark(c: &mut Criterion) {
         ("list<i64>(0.0,0.0,20)", &list_i64_no_nulls),
         ("list_view<i64>(0.1,0.1,20)", &list_view_i64),
         ("list_view<i64>(0.0,0.0,20)", &list_view_i64_no_nulls),
-        (
-            "list_view_overlapping<i64>(80x,20)",
-            &list_view_overlapping,
-        ),
+        ("list_view_overlapping<i64>(80x,20)", &list_view_overlapping),
     ];
 
     for (prefix, base) in cases {
