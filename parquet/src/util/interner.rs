@@ -79,7 +79,7 @@ impl<S: Storage> Interner<S> {
     pub fn estimated_memory_size(&self) -> usize {
         self.storage.estimated_memory_size() +
             // estimate size of dedup hashmap as just th size of the keys
-            self.dedup.capacity() + std::mem::size_of::<S::Key>()
+            self.dedup.capacity() * std::mem::size_of::<S::Key>()
     }
 
     /// Returns the storage for this interner
