@@ -166,6 +166,10 @@ where
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
     }
+
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        Arc::new(self.finish_preserve_values())
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T>
@@ -329,6 +333,23 @@ where
         GenericListArray::new(field, offsets, values, nulls)
     }
 
+    fn finish_preserve_values(&mut self) -> GenericListArray<OffsetSize> {
+        let values = self.values_builder.finish_preserve_values();
+        let nulls = self.null_buffer_builder.finish();
+
+        let offsets = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
+        // Safety: Safe by construction
+        let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+        self.offsets_builder.push(OffsetSize::zero());
+
+        let field = match &self.field {
+            Some(f) => f.clone(),
+            None => Arc::new(Field::new_list_field(values.data_type().clone(), true)),
+        };
+
+        GenericListArray::new(field, offsets, values, nulls)
+    }
+
     /// Returns the current offsets buffer as a slice
     pub fn offsets_slice(&self) -> &[OffsetSize] {
         self.offsets_builder.as_slice()
@@ -364,7 +385,7 @@ where
 mod tests {
     use super::*;
     use crate::Int32Array;
-    use crate::builder::{Int32Builder, ListBuilder, make_builder};
+    use crate::builder::{Int32Builder, ListBuilder, make_builder, tests::PreserveValuesMock};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use arrow_schema::DataType;
@@ -817,5 +838,18 @@ mod tests {
         let mut builder = ListBuilder::new(Int32Builder::new()).with_field(field.clone());
         builder.append_value([Some(1)]);
         builder.finish();
+    }
+
+    #[test]
+    fn test_finish_preserve_values() {
+        let mut builder = ListBuilder::new(PreserveValuesMock::default());
+
+        builder.values().inner.append_value(1);
+        builder.append(true);
+
+        let arr = builder.finish_preserve_values();
+
+        assert_eq!(1, arr.len());
+        assert_eq!(1, builder.values().called);
     }
 }

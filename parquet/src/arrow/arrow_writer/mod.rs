@@ -2681,6 +2681,7 @@ mod tests {
         values: ArrayRef,
         schema: SchemaRef,
         bloom_filter: bool,
+        bloom_filter_ndv: Option<u64>,
         bloom_filter_position: BloomFilterPosition,
     }
 
@@ -2692,6 +2693,7 @@ mod tests {
                 values,
                 schema: Arc::new(schema),
                 bloom_filter: false,
+                bloom_filter_ndv: None,
                 bloom_filter_position: BloomFilterPosition::AfterRowGroup,
             }
         }
@@ -2712,6 +2714,7 @@ mod tests {
             values,
             schema,
             bloom_filter,
+            bloom_filter_ndv,
             bloom_filter_position,
         } = options;
 
@@ -2750,15 +2753,18 @@ mod tests {
             for encoding in &encodings {
                 for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
                     for row_group_size in row_group_sizes {
-                        let props = WriterProperties::builder()
+                        let mut builder = WriterProperties::builder()
                             .set_writer_version(version)
                             .set_max_row_group_row_count(Some(row_group_size))
                             .set_dictionary_enabled(dictionary_size != 0)
                             .set_dictionary_page_size_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
                             .set_bloom_filter_enabled(bloom_filter)
-                            .set_bloom_filter_position(bloom_filter_position)
-                            .build();
+                            .set_bloom_filter_position(bloom_filter_position);
+                        if let Some(ndv) = bloom_filter_ndv {
+                            builder = builder.set_bloom_filter_ndv(ndv);
+                        }
+                        let props = builder.build();
 
                         files.push(roundtrip_opts(&expected_batch, props))
                     }
@@ -3132,6 +3138,41 @@ mod tests {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let mut options = RoundTripOptions::new(array, false);
         options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            (0..SMALL_SIZE as i32).collect(),
+            (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
+    }
+
+    /// Test that bloom filter folding produces correct results even when
+    /// the configured NDV differs significantly from actual NDV.
+    /// A large NDV means a larger initial filter that gets folded down;
+    /// a small NDV means a smaller initial filter.
+    #[test]
+    fn i32_column_bloom_filter_fixed_ndv() {
+        let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
+
+        // NDV much larger than actual distinct values — tests folding a large filter down
+        let mut options = RoundTripOptions::new(array.clone(), false);
+        options.bloom_filter = true;
+        options.bloom_filter_ndv = Some(1_000_000);
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            (0..SMALL_SIZE as i32).collect(),
+            (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
+
+        // NDV smaller than actual distinct values — tests the underestimate path
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+        options.bloom_filter_ndv = Some(3);
 
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(

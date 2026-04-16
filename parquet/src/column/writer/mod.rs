@@ -650,7 +650,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Creates a new streaming level encoder appropriate for the writer version.
     fn create_level_encoder(max_level: i16, props: &WriterProperties) -> LevelEncoder {
         match props.writer_version() {
-            WriterVersion::PARQUET_1_0 => LevelEncoder::v1_streaming(Encoding::RLE, max_level),
+            WriterVersion::PARQUET_1_0 => LevelEncoder::v1_streaming(max_level),
             WriterVersion::PARQUET_2_0 => LevelEncoder::v2_streaming(max_level),
         }
     }

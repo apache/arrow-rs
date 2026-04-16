@@ -19,10 +19,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_array::{ArrayRef, GenericListArray, OffsetSizeTrait, make_array};
+use arrow_array::{ArrayRef, GenericListArray, GenericListViewArray, OffsetSizeTrait};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{Buffer, OffsetBuffer, ScalarBuffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_buffer::{OffsetBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 
 use crate::reader::tape::{Tape, TapeElement};
@@ -35,6 +34,7 @@ pub struct ListLikeArrayDecoder<O, const IS_VIEW: bool> {
     field: FieldRef,
     decoder: Box<dyn ArrayDecoder>,
     phantom: PhantomData<O>,
+    ignore_type_conflicts: bool,
     is_nullable: bool,
 }
 
@@ -57,6 +57,7 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ListLikeArrayDecoder<O, IS_VIEW> {
             field: field.clone(),
             decoder,
             phantom: Default::default(),
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             is_nullable,
         })
     }
@@ -80,6 +81,10 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
                     end_idx
                 }
                 (TapeElement::Null, Some(nulls)) => {
+                    nulls.append(false);
+                    *p + 1
+                }
+                (_, Some(nulls)) if self.ignore_type_conflicts => {
                     nulls.append(false);
                     *p + 1
                 }
@@ -109,22 +114,17 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
                 sizes.push(offsets[i] - offsets[i - 1]);
             }
             offsets.pop();
-            let data_type = if O::IS_LARGE {
-                DataType::LargeListView(self.field.clone())
-            } else {
-                DataType::ListView(self.field.clone())
-            };
             // SAFETY: offsets and sizes are constructed correctly from the tape
-            let array_data = unsafe {
-                ArrayDataBuilder::new(data_type)
-                    .len(pos.len())
-                    .nulls(nulls)
-                    .child_data(vec![values.to_data()])
-                    .add_buffer(Buffer::from_vec(offsets))
-                    .add_buffer(Buffer::from_vec(sizes))
-                    .build_unchecked()
+            let array = unsafe {
+                GenericListViewArray::<O>::new_unchecked(
+                    self.field.clone(),
+                    ScalarBuffer::from(offsets),
+                    ScalarBuffer::from(sizes),
+                    values,
+                    nulls,
+                )
             };
-            Ok(make_array(array_data))
+            Ok(Arc::new(array))
         } else {
             // SAFETY: offsets are built monotonically starting from 0
             let offsets = unsafe { OffsetBuffer::<O>::new_unchecked(ScalarBuffer::from(offsets)) };

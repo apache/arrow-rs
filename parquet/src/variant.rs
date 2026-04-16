@@ -123,7 +123,7 @@
 //! // the VariantType extension type
 //! let schema = reader.schema();
 //! let field = schema.field_with_name("var")?;
-//! assert!(field.try_extension_type::<VariantType>().is_ok());
+//! assert!(field.has_valid_extension_type::<VariantType>());
 //!
 //! // The reader will yield RecordBatches with a StructArray
 //! // to convert them to VariantArray, use VariantArray::try_new
@@ -285,9 +285,7 @@ mod tests {
         assert_eq!(metadata_value, "arrow.parquet.variant");
 
         // verify that `VariantType` also correctly finds the metadata
-        field
-            .try_extension_type::<VariantType>()
-            .expect("VariantExtensionType should be readable");
+        assert!(field.has_valid_extension_type::<VariantType>());
     }
 
     /// Read the specified test case filename from parquet-testing
