@@ -30,7 +30,6 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::utf8::check_valid_utf8;
 use arrow_array::{ArrayRef, builder::make_view};
 use arrow_buffer::Buffer;
-use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
