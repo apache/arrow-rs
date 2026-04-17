@@ -514,21 +514,28 @@ impl RleDecoder {
                         break;
                     }
                     {
+                        #[cold]
+                        #[inline(never)]
+                        fn oob(max_idx: u32, dict_len: usize) -> ! {
+                            panic!(
+                                "dictionary index out of bounds: the len is {dict_len} but the index is {max_idx}"
+                            )
+                        }
+                        const CHUNK: usize = 16;
                         let out = &mut buffer[values_read..values_read + num_values];
                         let idx = &index_buf[..num_values];
-                        let mut out_chunks = out.chunks_exact_mut(8);
-                        let idx_chunks = idx.chunks_exact(8);
+                        let dict_len = dict.len();
+                        let mut out_chunks = out.chunks_exact_mut(CHUNK);
+                        let idx_chunks = idx.chunks_exact(CHUNK);
                         for (out_chunk, idx_chunk) in out_chunks.by_ref().zip(idx_chunks) {
-                            let dict_len = dict.len();
                             // u32 max-reduction instead of `.all(|&i| ..)`: `.all`
                             // short-circuits and blocks autovectorisation. Negative
                             // i32 cast to u32 becomes a large value so the bounds
                             // check still rejects it.
                             let max_idx = idx_chunk.iter().fold(0u32, |acc, &i| acc.max(i as u32));
-                            assert!(
-                                (max_idx as usize) < dict_len,
-                                "dictionary index out of bounds"
-                            );
+                            if (max_idx as usize) >= dict_len {
+                                oob(max_idx, dict_len);
+                            }
                             for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
                                 // SAFETY: all indices checked above to be in bounds
                                 b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
@@ -537,7 +544,7 @@ impl RleDecoder {
                         for (b, i) in out_chunks
                             .into_remainder()
                             .iter_mut()
-                            .zip(idx.chunks_exact(8).remainder().iter())
+                            .zip(idx.chunks_exact(CHUNK).remainder().iter())
                         {
                             b.clone_from(&dict[*i as usize]);
                         }
