@@ -515,7 +515,7 @@ fn concat_fallback(arrays: &[&dyn Array], capacity: Capacities) -> Result<ArrayR
     let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
 
     for (i, a) in arrays.iter().enumerate() {
-        mutable.extend(i, 0, a.len())
+        mutable.try_extend(i, 0, a.len())?
     }
 
     Ok(make_array(mutable.freeze()))

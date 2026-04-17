@@ -78,7 +78,9 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
                     ))
                 })?;
                 run_ends.push(run_end);
-                mutable.extend(0, run_start, run_start + 1);
+                mutable
+                    .try_extend(0, run_start, run_start + 1)
+                    .map_err(|e| ArrowError::JsonError(e.to_string()))?;
                 run_start = i;
             }
         }
@@ -89,7 +91,9 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
             ))
         })?;
         run_ends.push(run_end);
-        mutable.extend(0, run_start, run_start + 1);
+        mutable
+            .try_extend(0, run_start, run_start + 1)
+            .map_err(|e| ArrowError::JsonError(e.to_string()))?;
 
         let values_data = mutable.freeze();
         let run_ends_data =

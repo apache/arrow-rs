@@ -432,7 +432,7 @@ fn interleave_fallback(
         }
 
         // emit current batch of rows for current buffer
-        array_data.extend(cur_array, start_row_idx, end_row_idx);
+        array_data.try_extend(cur_array, start_row_idx, end_row_idx)?;
 
         // start new batch of rows
         cur_array = array;
@@ -441,7 +441,7 @@ fn interleave_fallback(
     }
 
     // emit final batch of rows
-    array_data.extend(cur_array, start_row_idx, end_row_idx);
+    array_data.try_extend(cur_array, start_row_idx, end_row_idx)?;
     Ok(make_array(array_data.freeze()))
 }
 

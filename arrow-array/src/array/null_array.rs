@@ -230,7 +230,7 @@ mod tests {
 
         // Simulate a NULL value in the parent array, for instance, if array being queried by
         // invalid index
-        mutable.extend_nulls(1);
+        mutable.try_extend_nulls(1).unwrap();
         let data = mutable.freeze();
 
         let struct_array = Arc::new(StructArray::from(data.clone()));
