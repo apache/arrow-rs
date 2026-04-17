@@ -1669,6 +1669,7 @@ mod tests {
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::{ARROW_SCHEMA_META_KEY, PARQUET_FIELD_ID_META_KEY};
+    use crate::basic::PageType;
     use crate::column::page::{Page, PageReader};
     use crate::file::metadata::thrift::PageHeader;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
@@ -2601,7 +2602,7 @@ mod tests {
         // Set dictionary fallback to trigger fallback to PLAIN encoding on unfavorable compression
         let props = WriterProperties::builder()
             .set_dictionary_fallback(DictionaryFallback::OnUnfavorableAfter(1))
-            .set_data_page_size_limit(1)
+            .set_data_page_row_count_limit(2)
             .set_write_batch_size(1)
             .build();
 
@@ -2611,7 +2612,9 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
-        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(false)
+            .build();
         let reader =
             SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap();
 
@@ -2619,25 +2622,29 @@ mod tests {
 
         assert_eq!(column.len(), 1);
 
-        // We should write one row before falling back to PLAIN encoding so there should still be a
-        // dictionary page.
+        // check page encoding stats, should be one dict page, one dict encoded page, and 5
+        // plain encoded pages
+        let stats = column[0].page_encoding_stats().unwrap();
+        println!("pes: {stats:?}");
         assert!(
-            column[0].dictionary_page_offset().is_some(),
-            "Expected a dictionary page"
+            stats
+                .iter()
+                .any(|s| s.page_type == PageType::DICTIONARY_PAGE)
         );
-
-        assert!(reader.metadata().offset_index().is_some());
-        let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
-
-        let page_locations = offset_indexes[0].page_locations.clone();
-
-        // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
-        // so we expect one dictionary encoded page and then a page per row thereafter.
-        assert_eq!(
-            page_locations.len(),
-            10,
-            "Expected 10 pages but got {page_locations:#?}"
-        );
+        let num_dict_encoded: i32 = stats
+            .iter()
+            .filter(|s| {
+                s.page_type == PageType::DATA_PAGE && s.encoding == Encoding::RLE_DICTIONARY
+            })
+            .map(|s| s.count)
+            .sum();
+        assert_eq!(num_dict_encoded, 1);
+        let num_plain_encoded: i32 = stats
+            .iter()
+            .filter(|s| s.page_type == PageType::DATA_PAGE && s.encoding == Encoding::PLAIN)
+            .map(|s| s.count)
+            .sum();
+        assert_eq!(num_plain_encoded, 5);
     }
 
     #[test]
@@ -4926,7 +4933,7 @@ mod tests {
             .set_dictionary_page_size_limit(1024 * 1024)
             .set_column_dictionary_fallback(
                 ColumnPath::from("col0"),
-                DictionaryFallback::OnUnfavorableAfter(8192),
+                DictionaryFallback::OnUnfavorableAfter(32_768),
             )
             .build();
         let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
@@ -4939,7 +4946,10 @@ mod tests {
         metadata.try_parse(&data).unwrap();
         let metadata = metadata.finish().unwrap();
         let fallback_meta = metadata.row_group(0).column(0);
-        assert_eq!(get_dict_page_size(fallback_meta, data.clone()), 32_768);
+        assert_eq!(
+            get_dict_page_size(fallback_meta, data.clone()),
+            32_768 * std::mem::size_of::<u32>()
+        );
     }
 
     struct WriteBatchesShape {
