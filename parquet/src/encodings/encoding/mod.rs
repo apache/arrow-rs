@@ -32,10 +32,10 @@ use bytes::Bytes;
 
 mod byte_stream_split_encoder;
 mod dict_encoder;
-mod plain_counter;
+mod dict_fallback;
 
 pub use dict_encoder::DictEncoder;
-pub use plain_counter::PlainDataSizeCounter;
+pub use dict_fallback::DictFallbackCounter;
 
 // ----------------------------------------------------------------------
 // Encoders
