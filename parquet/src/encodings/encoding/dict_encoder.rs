@@ -51,7 +51,7 @@ impl<T: DataType> Storage for KeyStorage<T> {
     fn push(&mut self, value: &Self::Value) -> Self::Key {
         let unique_size = match T::get_physical_type() {
             Type::FIXED_LEN_BYTE_ARRAY => self.type_length,
-            _ => value.dict_encoding_size(),
+            _ => value.plain_encoded_size(),
         };
         self.size_in_bytes += unique_size;
 

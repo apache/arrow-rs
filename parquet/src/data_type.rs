@@ -724,8 +724,8 @@ pub(crate) mod private {
 
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize>;
 
-        /// Return the size in bytes for the value encoded in the dictionary.
-        fn dict_encoding_size(&self) -> usize;
+        /// Return the size in bytes for the value encoded in the plain encoding.
+        fn plain_encoded_size(&self) -> usize;
 
         /// Return the number of variable length bytes in a given slice of data
         ///
@@ -804,7 +804,7 @@ pub(crate) mod private {
             Ok(values_read)
         }
 
-        fn dict_encoding_size(&self) -> usize {
+        fn plain_encoded_size(&self) -> usize {
             panic!("Dictionary encoding should not be used for BOOLEAN type")
         }
 
@@ -892,7 +892,7 @@ pub(crate) mod private {
                     Ok(num_values)
                 }
 
-                fn dict_encoding_size(&self) -> usize {
+                fn plain_encoded_size(&self) -> usize {
                     std::mem::size_of::<Self>()
                 }
 
@@ -993,7 +993,7 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
-        fn dict_encoding_size(&self) -> usize {
+        fn plain_encoded_size(&self) -> usize {
             Self::SIZE_IN_BYTES
         }
 
@@ -1084,7 +1084,7 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
-        fn dict_encoding_size(&self) -> usize {
+        fn plain_encoded_size(&self) -> usize {
             std::mem::size_of::<u32>() + self.len()
         }
 
@@ -1183,7 +1183,7 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
-        fn dict_encoding_size(&self) -> usize {
+        fn plain_encoded_size(&self) -> usize {
             // The encoding of fixed-length byte arrays only encodes the bytes
             // without a length prefix. In practice, the length of fixed-length
             // column values is taken from the column metadata and this call is avoided.
