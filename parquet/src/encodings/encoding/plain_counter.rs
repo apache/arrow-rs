@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::basic::Type;
+use crate::data_type::Int96;
 use crate::data_type::private::ParquetValueType;
 use crate::schema::types::ColumnDescriptor;
 
