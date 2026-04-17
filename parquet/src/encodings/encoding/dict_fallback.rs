@@ -89,16 +89,24 @@ impl DictFallbackCounter {
         self.num_values += 1;
     }
 
-    /// Increments the counter of the size of dictionary encoded data
-    /// by the given amount in bytes.
+    /// If the number of values accounted so far reaches or exceeds the minimum
+    /// sample length, returns false to indicate that the counting
+    /// should be stopped.
+    /// Otherwise, increments the total counted size of dictionary encoded data
+    /// by the given amount in bytes and returns true.
     #[inline]
-    pub fn count_dict_encoded_data(&mut self, encoded_len: usize) {
+    pub fn continue_with_dict_encoded_page(&mut self, encoded_len: usize) -> bool {
+        if self.num_values >= self.min_sample_len {
+            // The sample size has been reached, no need to proceed with counting.
+            return false;
+        }
         self.encoded_data_size = self.encoded_data_size.saturating_add(encoded_len);
+        true
     }
 
     /// Returns true if the estimated size of plainly encoded data, in bytes,
     /// would not exceed the size of data encoded with a dictionary,
-    /// as counted by the `count_dict_encoded_data` calls made on this counter.
+    /// as counted by the `continue_with_dict_encoded_page` calls made on this counter.
     #[inline]
     pub fn is_dict_encoding_unfavorable(&self, dict_encoded_size: usize) -> bool {
         self.num_values >= self.min_sample_len

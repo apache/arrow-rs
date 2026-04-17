@@ -344,7 +344,9 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             Some(encoder) => {
                 let buf = encoder.write_indices()?;
                 if let Some(counter) = self.dict_fallback_counter.as_mut() {
-                    counter.count_dict_encoded_data(buf.len());
+                    if !counter.continue_with_dict_encoded_page(buf.len()) {
+                        self.dict_fallback_counter = None;
+                    }
                 }
                 (buf, Encoding::RLE_DICTIONARY)
             }

@@ -1206,7 +1206,9 @@ pub enum DictionaryFallback {
     OnPageSizeLimit,
     /// Fall back to non-dictionary encoding if the dictionary page size limit is exceeded,
     /// or if the dictionary encoding upon encoding at least the given number of values
-    /// is larger than the plain encoding for the same data.
+    /// is larger than the plain encoding for the same data. The latter check is performed once
+    /// per column chunk, so the encoding efficiency may still degrade with subsequent pages in
+    /// the same column chunk.
     OnUnfavorableAfter(usize),
 }
 

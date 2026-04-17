@@ -567,7 +567,9 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             Some(encoder) => {
                 let data_page = encoder.flush_data_page(min_value, max_value);
                 if let Some(counter) = self.dict_fallback_counter.as_mut() {
-                    counter.count_dict_encoded_data(data_page.buf.len());
+                    if !counter.continue_with_dict_encoded_page(data_page.buf.len()) {
+                        self.dict_fallback_counter = None;
+                    }
                 }
                 Ok(data_page)
             }
