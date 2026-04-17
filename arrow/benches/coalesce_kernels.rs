@@ -50,11 +50,25 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         true,
     )]));
 
+    // Single BinaryViewArray
+    let single_binaryview_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::BinaryView,
+        true,
+    )]));
+
     // Mixed primitive, StringViewArray
     let mixed_utf8view_schema = SchemaRef::new(Schema::new(vec![
         Field::new("int32_val", DataType::Int32, true),
         Field::new("float_val", DataType::Float64, true),
         Field::new("utf8view_val", DataType::Utf8View, true),
+    ]));
+
+    // Mixed primitive, BinaryViewArray
+    let mixed_binaryview_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("float_val", DataType::Float64, true),
+        Field::new("binaryview_val", DataType::BinaryView, true),
     ]));
 
     // Mixed primitive, StringArray
@@ -105,6 +119,30 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
             }
             .build();
 
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_binaryview",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_binaryview_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_binaryview (max_string_len=8)",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 8,
+                schema: &single_binaryview_schema,
+            }
+            .build();
+
             // Model mostly short strings, but some longer ones
             FilterBenchmarkBuilder {
                 c,
@@ -128,6 +166,42 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 selectivity,
                 max_string_len: 128,
                 schema: &mixed_utf8view_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "mixed_binaryview (max_string_len=20)",
+                batch_size,
+                num_output_batches: 20,
+                null_density,
+                selectivity,
+                max_string_len: 20,
+                schema: &mixed_binaryview_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "mixed_binaryview (max_string_len=8)",
+                batch_size,
+                num_output_batches: 20,
+                null_density,
+                selectivity,
+                max_string_len: 8,
+                schema: &mixed_binaryview_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "mixed_binaryview (max_string_len=128)",
+                batch_size,
+                num_output_batches: 20,
+                null_density,
+                selectivity,
+                max_string_len: 128,
+                schema: &mixed_binaryview_schema,
             }
             .build();
 
@@ -455,6 +529,17 @@ impl DataStreamBuilder {
                     self.max_string_len,
                 )) // TODO seed
             }
+            DataType::BinaryView => Arc::new(BinaryViewArray::from_iter(
+                create_binary_array_with_len_range_and_prefix_and_seed::<i32>(
+                    self.batch_size,
+                    self.null_density,
+                    0,
+                    self.max_string_len,
+                    b"",
+                    seed,
+                )
+                .iter(),
+            )),
             DataType::Dictionary(key_type, value_type)
                 if key_type.as_ref() == &DataType::Int32
                     && value_type.as_ref() == &DataType::Utf8 =>
