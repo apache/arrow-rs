@@ -556,10 +556,7 @@ impl ByteViewArrayDecoderDictionary {
                     // umax sequence on aarch64/x86_64 instead of the short-
                     // circuited `.all()` form which compiles to a chain of
                     // per-key `cmp + b.ls`.
-                    let mut max_key = 0u32;
-                    for &k in chunk {
-                        max_key = max_key.max(k as u32);
-                    }
+                    let max_key = chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
                     if max_key >= dict_len_u32 {
                         return Err(invalid_dict_key(chunk, dict_len));
                     }
@@ -582,10 +579,7 @@ impl ByteViewArrayDecoderDictionary {
                 }
             } else {
                 for chunk in chunks.by_ref() {
-                    let mut max_key = 0u32;
-                    for &k in chunk {
-                        max_key = max_key.max(k as u32);
-                    }
+                    let max_key = chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
                     if max_key >= dict_len_u32 {
                         return Err(invalid_dict_key(chunk, dict_len));
                     }
