@@ -484,7 +484,13 @@ impl RleDecoder {
             if self.rle_left > 0 {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
-                let dict_value = dict[dict_idx].clone();
+                let dict_value = dict.get(dict_idx).ok_or_else(|| {
+                    general_err!(
+                        "dictionary index out of bounds: the len is {} but the index is {}",
+                        dict.len(),
+                        dict_idx
+                    )
+                })?.clone();
 
                 buffer[values_read..values_read + num_values].fill(dict_value);
 
@@ -516,9 +522,11 @@ impl RleDecoder {
                     {
                         #[cold]
                         #[inline(never)]
-                        fn oob(max_idx: u32, dict_len: usize) -> ! {
-                            panic!(
-                                "dictionary index out of bounds: the len is {dict_len} but the index is {max_idx}"
+                        fn oob(max_idx: u32, dict_len: usize) -> ParquetError {
+                            general_err!(
+                                "dictionary index out of bounds: the len is {} but the index is {}",
+                                dict_len,
+                                max_idx
                             )
                         }
                         const CHUNK: usize = 16;
@@ -534,7 +542,7 @@ impl RleDecoder {
                             // check still rejects it.
                             let max_idx = idx_chunk.iter().fold(0u32, |acc, &i| acc.max(i as u32));
                             if (max_idx as usize) >= dict_len {
-                                oob(max_idx, dict_len);
+                                return Err(oob(max_idx, dict_len));
                             }
                             for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
                                 // SAFETY: all indices checked above to be in bounds
@@ -546,7 +554,12 @@ impl RleDecoder {
                             .iter_mut()
                             .zip(idx.chunks_exact(CHUNK).remainder().iter())
                         {
-                            b.clone_from(&dict[*i as usize]);
+                            let dict_idx = *i as usize;
+                            if dict_idx >= dict_len {
+                                return Err(oob(*i as u32, dict_len));
+                            }
+                            // SAFETY: bounds checked above
+                            b.clone_from(unsafe { dict.get_unchecked(dict_idx) });
                         }
                     }
                     self.bit_packed_left -= num_values as u32;
