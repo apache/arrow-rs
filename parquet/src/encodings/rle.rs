@@ -484,13 +484,17 @@ impl RleDecoder {
             if self.rle_left > 0 {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
-                let dict_value = dict.get(dict_idx).ok_or_else(|| {
-                    general_err!(
-                        "dictionary index out of bounds: the len is {} but the index is {}",
-                        dict.len(),
-                        dict_idx
-                    )
-                })?.clone();
+                let dict_value = dict
+                    .get(dict_idx)
+                    .ok_or_else(|| {
+                        general_err!(
+                            "dictionary index out of bounds: the len is {} but the index is {}",
+                            dict.len(),
+                            dict_idx
+                        )
+                    })?
+                    .clone();
+
 
                 buffer[values_read..values_read + num_values].fill(dict_value);
 
