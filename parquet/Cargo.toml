@@ -171,6 +171,11 @@ required-features = ["arrow"]
 path = "./tests/arrow_writer.rs"
 
 [[test]]
+name = "corrupted_parquet"
+required-features = ["arrow"]
+path = "./tests/corrupted_parquet.rs"
+
+[[test]]
 name = "encryption"
 required-features = ["arrow"]
 path = "./tests/encryption/mod.rs"

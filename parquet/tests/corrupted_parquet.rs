@@ -86,8 +86,8 @@ fn zero_out_range(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
     if corrupted.len() > 10 {
         let range_len = rng.random_range(1..corrupted.len().min(100));
         let start_idx = rng.random_range(0..corrupted.len() - range_len);
-        for i in start_idx..start_idx + range_len {
-            corrupted[i] = 0;
+        for item in corrupted.iter_mut().skip(start_idx).take(range_len) {
+            *item = 0;
         }
     }
     corrupted
@@ -101,9 +101,9 @@ fn assert_read_fails_with_error(data: &[u8]) {
         Ok(builder) => {
             let reader = builder.build();
             match reader {
-                Ok(mut reader) => {
+                Ok(reader) => {
                     // Try to read batches
-                    while let Some(batch) = reader.next() {
+                    for batch in reader {
                         if batch.is_err() {
                             // Expected error
                             return;
