@@ -23,10 +23,7 @@
 use crate::filter::filter_record_batch;
 use crate::take::take_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
-use arrow_array::{
-    Array, ArrayRef, BooleanArray, RecordBatch, downcast_integer_array, downcast_primitive,
-};
-use arrow_buffer::ArrowNativeType;
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -275,13 +272,13 @@ impl BatchCoalescer {
         batch: RecordBatch,
         indices: &dyn Array,
     ) -> Result<(), ArrowError> {
+        // Only arrays with specialized `copy_indices` implementations use the
+        // direct path. All other schemas stay on the existing take fallback.
         if supports_direct_take_coalescing(&batch, indices) {
             return self.push_batch_with_indices_direct(batch, indices);
         }
 
-        // todo: optimize this to avoid materializing (copying the results of take indices to a new batch)
-        let taken_batch = take_record_batch(&batch, indices)?;
-        self.push_batch(taken_batch)
+        self.push_batch_with_indices_materialized(batch, indices)
     }
 
     /// Push all the rows from `batch` into the Coalescer
@@ -582,8 +579,7 @@ impl BatchCoalescer {
         }
 
         if self.should_materialize_large_take(indices.len()) {
-            let taken_batch = take_record_batch(&batch, indices)?;
-            return self.push_batch(taken_batch);
+            return self.push_batch_with_indices_materialized(batch, indices);
         }
 
         let (_schema, arrays, _num_rows) = batch.into_parts();
@@ -598,6 +594,49 @@ impl BatchCoalescer {
         self.clear_sources();
 
         result
+    }
+
+    fn push_batch_with_indices_materialized(
+        &mut self,
+        batch: RecordBatch,
+        indices: &dyn Array,
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+
+        let Some(limit) = self.biggest_coalesce_batch_size.filter(|limit| *limit > 0) else {
+            let taken_batch = take_record_batch(&batch, indices)?;
+            return self.push_batch(taken_batch);
+        };
+
+        // Match the large-batch path by flushing oversized buffered state
+        // before materializing additional index chunks.
+        if self.buffered_rows > limit {
+            self.finish_buffered_batch()?;
+        }
+
+        let mut offset = 0;
+        while offset < indices.len() {
+            let remaining_indices = indices.len() - offset;
+            let chunk_len = self.next_materialized_take_chunk_len(remaining_indices, limit);
+            let chunk = indices.slice(offset, chunk_len);
+            let taken_batch = take_record_batch(&batch, chunk.as_ref())?;
+            self.push_batch(taken_batch)?;
+            offset += chunk_len;
+        }
+
+        Ok(())
+    }
+
+    /// Fill the current buffered batch first, then keep subsequent materialized
+    /// takes under `limit` rows.
+    fn next_materialized_take_chunk_len(&self, remaining_indices: usize, limit: usize) -> usize {
+        if self.buffered_rows > 0 && self.buffered_rows < limit {
+            return (limit - self.buffered_rows).min(remaining_indices);
+        }
+
+        limit.min(remaining_indices)
     }
 
     fn should_materialize_large_take(&self, index_count: usize) -> bool {
@@ -719,17 +758,11 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
 
     /// Copy rows addressed by `indices` from the current source array.
-    fn copy_indices(&mut self, indices: &dyn Array) -> Result<(), ArrowError> {
-        downcast_integer_array!(indices => {
-            for index in indices.values() {
-                self.copy_rows(index.as_usize(), 1)?;
-            }
-            Ok(())
-        },
-        d => Err(ArrowError::InvalidArgumentError(format!(
-            "Internal Error: unsupported index type for coalescing: {d:?}"
-        ))))
-    }
+    ///
+    /// This is only used by the direct indexed coalescing fast path for
+    /// primitive and byte-view arrays. Other data types stay on the
+    /// `take_record_batch` fallback.
+    fn copy_indices(&mut self, indices: &dyn Array) -> Result<(), ArrowError>;
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
@@ -2430,6 +2463,40 @@ mod tests {
         coalescer.finish_buffered_batch().unwrap();
         let actual = coalescer.next_completed_batch().unwrap();
 
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_coalasce_push_batch_with_indices_respects_biggest_coalesce_batch_size() {
+        assert_push_batch_with_indices_respects_biggest_coalesce_batch_size(create_test_batch(
+            1200,
+        ));
+    }
+
+    #[test]
+    fn test_coalasce_push_batch_with_indices_utf8_respects_biggest_coalesce_batch_size() {
+        assert_push_batch_with_indices_respects_biggest_coalesce_batch_size(utf8_batch(0..1200));
+    }
+
+    fn assert_push_batch_with_indices_respects_biggest_coalesce_batch_size(batch: RecordBatch) {
+        let schema = batch.schema();
+        let indices = UInt32Array::from_iter_values(0..1200_u32);
+        let expected = take_record_batch(&batch, &indices).unwrap();
+
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), 1000)
+            .with_biggest_coalesce_batch_size(Some(500));
+        coalescer.push_batch_with_indices(batch, &indices).unwrap();
+
+        let first = coalescer.next_completed_batch().unwrap();
+        assert_eq!(first.num_rows(), 1000);
+        assert!(!coalescer.has_completed_batch());
+
+        coalescer.finish_buffered_batch().unwrap();
+        let second = coalescer.next_completed_batch().unwrap();
+        assert_eq!(second.num_rows(), 200);
+        assert!(coalescer.next_completed_batch().is_none());
+
+        let actual = concat_batches(&schema, &[first, second]).unwrap();
         assert_eq!(expected, actual);
     }
 
