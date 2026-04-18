@@ -138,18 +138,16 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         }
 
         let values = s.values();
-        self.current.reserve(filter.count());
 
         match filter.strategy() {
             IterationStrategy::Indices(indices) => {
-                for &idx in indices {
-                    self.current.push(values[idx]);
-                }
+                self.current.extend(indices.iter().map(|&idx| values[idx]));
             }
             IterationStrategy::IndexIterator => {
-                for idx in IndexIterator::new(filter.filter_array(), filter.count()) {
-                    self.current.push(values[idx]);
-                }
+                self.current.extend(
+                    IndexIterator::new(filter.filter_array(), filter.count())
+                        .map(|idx| values[idx]),
+                );
             }
             IterationStrategy::None
             | IterationStrategy::All
@@ -182,10 +180,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         }
 
         let values = s.values();
-        self.current.reserve(indices.len());
-        for &idx in indices {
-            self.current.push(values[idx]);
-        }
+        self.current.extend(indices.iter().map(|&idx| values[idx]));
 
         Ok(())
     }

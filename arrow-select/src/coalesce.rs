@@ -151,6 +151,13 @@ pub struct BatchCoalescer {
     biggest_coalesce_batch_size: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FusedFilterPath {
+    InlineBinaryViewOnly,
+    MixedPrimitiveInlineBinaryView,
+    Unsupported,
+}
+
 impl BatchCoalescer {
     /// Create a new `BatchCoalescer`
     ///
@@ -242,81 +249,16 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        if supports_fused_inline_binary_view_filter(&batch) {
-            if filter.len() > batch.num_rows() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Filter predicate of length {} is larger than target array of length {}",
-                    filter.len(),
-                    batch.num_rows()
-                )));
+        match classify_fused_filter_path(&batch) {
+            FusedFilterPath::InlineBinaryViewOnly => {
+                return self.push_batch_with_filter_fused_inline_binary_view_only(batch, filter);
             }
-
-            let mut filter_builder = FilterBuilder::new(filter);
-            if batch.num_columns() > 1 {
-                filter_builder = filter_builder.optimize();
+            FusedFilterPath::MixedPrimitiveInlineBinaryView => {
+                return self.push_batch_with_filter_fused_mixed_primitive_inline_binary_view(
+                    batch, filter,
+                );
             }
-            let predicate = filter_builder.build();
-            let selected_count = predicate.count();
-
-            if selected_count == 0 {
-                return Ok(());
-            }
-
-            if selected_count == batch.num_rows() && filter.len() == batch.num_rows() {
-                return self.push_batch(batch);
-            }
-
-            if let Some(limit) = self.biggest_coalesce_batch_size {
-                if selected_count > limit {
-                    let filtered_batch = predicate.filter_record_batch(&batch)?;
-                    return self.push_batch(filtered_batch);
-                }
-            }
-
-            // For dense inline filters, the existing filter kernel remains faster.
-            if selected_count.saturating_mul(4) > filter.len() {
-                let filtered_batch = predicate.filter_record_batch(&batch)?;
-                return self.push_batch(filtered_batch);
-            }
-
-            let space_in_batch = self.target_batch_size - self.buffered_rows;
-            if selected_count <= space_in_batch {
-                let (_schema, arrays, _num_rows) = batch.into_parts();
-
-                if arrays.len() != self.in_progress_arrays.len() {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Batch has {} columns but BatchCoalescer expects {}",
-                        arrays.len(),
-                        self.in_progress_arrays.len()
-                    )));
-                }
-
-                self.in_progress_arrays
-                    .iter_mut()
-                    .zip(arrays)
-                    .for_each(|(in_progress, array)| {
-                        in_progress.set_source(Some(array));
-                    });
-
-                let result = (|| {
-                    for in_progress in self.in_progress_arrays.iter_mut() {
-                        in_progress.copy_rows_by_filter(&predicate)?;
-                    }
-
-                    self.buffered_rows += selected_count;
-                    if self.buffered_rows >= self.target_batch_size {
-                        self.finish_buffered_batch()?;
-                    }
-
-                    Ok(())
-                })();
-
-                for in_progress in self.in_progress_arrays.iter_mut() {
-                    in_progress.set_source(None);
-                }
-
-                return result;
-            }
+            FusedFilterPath::Unsupported => {}
         }
 
         // TODO: optimize this to avoid materializing (copying the results
@@ -647,6 +589,142 @@ impl BatchCoalescer {
     }
 }
 
+#[inline]
+fn classify_fused_filter_path(batch: &RecordBatch) -> FusedFilterPath {
+    let mut has_inline_binary_view = false;
+    let mut has_primitive = false;
+
+    // The fused path only supports fully inline BinaryView columns, optionally
+    // mixed with primitive columns. Any non-inline BinaryView still uses the
+    // existing filter_record_batch path.
+    for (field, array) in batch.schema().fields().iter().zip(batch.columns()) {
+        if field.data_type().is_primitive() {
+            has_primitive = true;
+            continue;
+        }
+
+        let Some(binary_view) = array.as_binary_view_opt() else {
+            return FusedFilterPath::Unsupported;
+        };
+
+        if !binary_view.data_buffers().is_empty() {
+            return FusedFilterPath::Unsupported;
+        }
+
+        has_inline_binary_view = true;
+    }
+
+    match (has_inline_binary_view, has_primitive) {
+        (true, true) => FusedFilterPath::MixedPrimitiveInlineBinaryView,
+        (true, false) => FusedFilterPath::InlineBinaryViewOnly,
+        (false, _) => FusedFilterPath::Unsupported,
+    }
+}
+
+impl BatchCoalescer {
+    #[inline]
+    fn push_batch_with_filter_fused_inline_binary_view_only(
+        &mut self,
+        batch: RecordBatch,
+        filter: &BooleanArray,
+    ) -> Result<(), ArrowError> {
+        self.push_batch_with_filter_fused_inline_binary_view(batch, filter)
+    }
+
+    #[inline]
+    fn push_batch_with_filter_fused_mixed_primitive_inline_binary_view(
+        &mut self,
+        batch: RecordBatch,
+        filter: &BooleanArray,
+    ) -> Result<(), ArrowError> {
+        self.push_batch_with_filter_fused_inline_binary_view(batch, filter)
+    }
+
+    fn push_batch_with_filter_fused_inline_binary_view(
+        &mut self,
+        batch: RecordBatch,
+        filter: &BooleanArray,
+    ) -> Result<(), ArrowError> {
+        if filter.len() > batch.num_rows() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Filter predicate of length {} is larger than target array of length {}",
+                filter.len(),
+                batch.num_rows()
+            )));
+        }
+
+        let mut filter_builder = FilterBuilder::new(filter);
+        if batch.num_columns() > 1 {
+            filter_builder = filter_builder.optimize();
+        }
+        let predicate = filter_builder.build();
+        let selected_count = predicate.count();
+
+        if selected_count == 0 {
+            return Ok(());
+        }
+
+        if selected_count == batch.num_rows() && filter.len() == batch.num_rows() {
+            return self.push_batch(batch);
+        }
+
+        if let Some(limit) = self.biggest_coalesce_batch_size {
+            if selected_count > limit {
+                let filtered_batch = predicate.filter_record_batch(&batch)?;
+                return self.push_batch(filtered_batch);
+            }
+        }
+
+        // For dense inline filters, the existing filter kernel remains faster.
+        if selected_count.saturating_mul(4) > filter.len() {
+            let filtered_batch = predicate.filter_record_batch(&batch)?;
+            return self.push_batch(filtered_batch);
+        }
+
+        let space_in_batch = self.target_batch_size - self.buffered_rows;
+        if selected_count > space_in_batch {
+            let filtered_batch = predicate.filter_record_batch(&batch)?;
+            return self.push_batch(filtered_batch);
+        }
+
+        let (_schema, arrays, _num_rows) = batch.into_parts();
+
+        if arrays.len() != self.in_progress_arrays.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Batch has {} columns but BatchCoalescer expects {}",
+                arrays.len(),
+                self.in_progress_arrays.len()
+            )));
+        }
+
+        self.in_progress_arrays
+            .iter_mut()
+            .zip(arrays)
+            .for_each(|(in_progress, array)| {
+                in_progress.set_source(Some(array));
+            });
+
+        let result = (|| {
+            for in_progress in self.in_progress_arrays.iter_mut() {
+                in_progress.copy_rows_by_filter(&predicate)?;
+            }
+
+            self.buffered_rows += selected_count;
+            if self.buffered_rows >= self.target_batch_size {
+                self.finish_buffered_batch()?;
+            }
+
+            Ok(())
+        })();
+
+        for in_progress in self.in_progress_arrays.iter_mut() {
+            in_progress.set_source(None);
+        }
+
+        result
+    }
+}
+
 /// Return a new `InProgressArray` for the given data type
 fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn InProgressArray> {
     macro_rules! instantiate_primitive {
@@ -667,31 +745,6 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
-}
-
-fn supports_fused_inline_binary_view_filter(batch: &RecordBatch) -> bool {
-    let mut has_inline_binary_view = false;
-
-    let supported = batch
-        .schema()
-        .fields()
-        .iter()
-        .zip(batch.columns())
-        .all(|(field, array)| {
-            if field.data_type().is_primitive() {
-                return true;
-            }
-
-            let Some(binary_view) = array.as_binary_view_opt() else {
-                return false;
-            };
-
-            let inline = binary_view.data_buffers().is_empty();
-            has_inline_binary_view |= inline;
-            inline
-        });
-
-    supported && has_inline_binary_view
 }
 
 /// Incrementally builds up arrays
