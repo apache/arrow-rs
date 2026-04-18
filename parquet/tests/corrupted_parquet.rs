@@ -16,7 +16,7 @@
 // under the License.
 
 //! Fuzzer tests for corrupted parquet files
-//! 
+//!
 //! These tests verify that the parquet reader returns errors (not panics)
 //! when encountering various types of data corruption.
 
@@ -24,8 +24,8 @@ use arrow::array::{ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use rand::prelude::*;
 use std::sync::Arc;
 
@@ -96,7 +96,7 @@ fn zero_out_range(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
 /// Try to read a corrupted parquet file and verify it returns an error
 fn assert_read_fails_with_error(data: &[u8]) {
     let result = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(data.to_vec()));
-    
+
     match result {
         Ok(builder) => {
             let reader = builder.build();
@@ -163,7 +163,7 @@ fn test_truncate_start_large() {
 fn test_flip_random_bit() {
     let valid_data = create_test_parquet_data();
     let mut rng = StdRng::seed_from_u64(42);
-    
+
     for _ in 0..10 {
         let corrupted = flip_random_bit(&valid_data, &mut rng);
         assert_read_fails_with_error(&corrupted);
@@ -174,7 +174,7 @@ fn test_flip_random_bit() {
 fn test_zero_out_range() {
     let valid_data = create_test_parquet_data();
     let mut rng = StdRng::seed_from_u64(42);
-    
+
     for _ in 0..10 {
         let corrupted = zero_out_range(&valid_data, &mut rng);
         assert_read_fails_with_error(&corrupted);
@@ -186,15 +186,15 @@ fn test_zero_out_range() {
 fn test_combined_corruptions() {
     let valid_data = create_test_parquet_data();
     let mut rng = StdRng::seed_from_u64(42);
-    
+
     for _ in 0..5 {
         let mut corrupted = valid_data.clone();
-        
+
         // Apply multiple corruptions
         corrupted = truncate_end(&corrupted, rng.random_range(1..100));
         corrupted = flip_random_bit(&corrupted, &mut rng);
         corrupted = zero_out_range(&corrupted, &mut rng);
-        
+
         assert_read_fails_with_error(&corrupted);
     }
 }
