@@ -2467,18 +2467,16 @@ mod tests {
     }
 
     #[test]
-    fn test_coalasce_push_batch_with_indices_respects_biggest_coalesce_batch_size() {
-        assert_push_batch_with_indices_respects_biggest_coalesce_batch_size(create_test_batch(
-            1200,
-        ));
+    fn test_push_batch_with_indices_chunks_large_take() {
+        assert_chunked_push_batch_with_indices(create_test_batch(1200));
     }
 
     #[test]
-    fn test_coalasce_push_batch_with_indices_utf8_respects_biggest_coalesce_batch_size() {
-        assert_push_batch_with_indices_respects_biggest_coalesce_batch_size(utf8_batch(0..1200));
+    fn test_push_batch_with_indices_chunks_large_take_utf8() {
+        assert_chunked_push_batch_with_indices(utf8_batch(0..1200));
     }
 
-    fn assert_push_batch_with_indices_respects_biggest_coalesce_batch_size(batch: RecordBatch) {
+    fn assert_chunked_push_batch_with_indices(batch: RecordBatch) {
         let schema = batch.schema();
         let indices = UInt32Array::from_iter_values(0..1200_u32);
         let expected = take_record_batch(&batch, &indices).unwrap();
