@@ -919,15 +919,10 @@ impl LevelHistogram {
         }
     }
 
-    /// Updates histogram values using provided repetition levels
-    ///
-    /// # Panics
-    /// if any of the levels is greater than the length of the histogram (
-    /// the argument supplied to [`Self::try_new`])
-    pub fn update_from_levels(&mut self, levels: &[i16]) {
-        for &level in levels {
-            self.inner[level as usize] += 1;
-        }
+    /// Increments the count for a level value by `count`.
+    #[inline]
+    pub fn increment_by(&mut self, level: i16, count: i64) {
+        self.inner[level as usize] += count;
     }
 }
 
