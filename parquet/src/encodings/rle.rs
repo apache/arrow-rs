@@ -495,7 +495,6 @@ impl RleDecoder {
                     })?
                     .clone();
 
-
                 buffer[values_read..values_read + num_values].fill(dict_value);
 
                 self.rle_left -= num_values as u32;
