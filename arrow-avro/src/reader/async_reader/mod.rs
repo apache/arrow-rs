@@ -25,10 +25,9 @@ use crate::reader::Decoder;
 use crate::reader::block::{BlockDecoder, BlockDecoderState};
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef};
-use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::{FutureExt, Stream};
-use std::mem;
+use bytes::{Bytes, BytesMut};
+use futures::{Stream, StreamExt, stream::BoxStream};
+use std::marker::PhantomData;
 use std::ops::Range;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -42,43 +41,217 @@ pub use builder::{ReaderBuilder, read_header_info};
 #[cfg(feature = "object_store")]
 mod store;
 
-use crate::errors::AvroError;
 #[cfg(feature = "object_store")]
 pub use store::AvroObjectReader;
 
-enum FetchNextBehaviour {
-    /// Initial read: scan for sync marker, then move to decoding blocks
-    ReadSyncMarker,
-    /// Parse VLQ header bytes one at a time until Data state, then continue decoding
-    DecodeVLQHeader,
-    /// Continue decoding the current block with the fetched data
-    ContinueDecoding,
+/// State of the block-reading loop inside [`make_stream`].
+///
+/// The active `stream` lives alongside `reader` as a local variable in the async block;
+/// the compiler's async state machine (via `Pin`) handles that self-referential borrow
+/// automatically — no `unsafe` required.
+enum Phase {
+    ReadSyncMarker {
+        accumulated: BytesMut,
+    },
+    DecodingBlock {
+        buffered: Bytes,
+    },
+    ReadingBatches {
+        block_data: Bytes,
+        remaining: usize,
+        /// Bytes left over in the stream chunk after the completed block.
+        next_buffered: Bytes,
+    },
 }
 
-enum ReaderState<R> {
-    /// Intermediate state to fix ownership issues
-    InvalidState,
-    /// Initial state, fetch initial range
-    Idle { reader: R },
-    /// Fetching data from the reader
-    FetchingData {
-        future: BoxFuture<'static, Result<(R, Bytes), AvroError>>,
-        next_behaviour: FetchNextBehaviour,
-    },
-    /// Decode a block in a loop until completion
-    DecodingBlock { data: Bytes, reader: R },
-    /// Output batches from a decoded block
-    ReadingBatches {
-        data: Bytes,
-        block_data: Bytes,
-        remaining_in_block: usize,
-        reader: R,
-    },
-    /// Successfully finished reading file contents; drain any remaining buffered records
-    /// from the decoder into (possibly partial) output batches.
-    Flushing,
-    /// Done, flush decoder and return
-    Finished,
+/// The non-reader fields of [`AvroReaderState`], split out so that
+/// `remaining_block_range` can borrow them while `reader` is mutably borrowed by the active stream.
+struct AvroReaderMeta {
+    range: Range<u64>,
+    file_size: u64,
+    decoder: Decoder,
+    codec: Option<CompressionCodec>,
+    sync_marker: [u8; 16],
+}
+
+impl AvroReaderMeta {
+    /// Calculate the byte range needed to complete the current block.
+    /// Only valid when `block_decoder` is in `Data` or `Sync` state.
+    fn remaining_block_range(
+        &self,
+        block_decoder: &BlockDecoder,
+    ) -> Result<Range<u64>, ArrowError> {
+        let remaining = block_decoder.bytes_remaining() as u64
+            + match block_decoder.state() {
+                BlockDecoderState::Data => 16, // Include sync marker
+                BlockDecoderState::Sync => 0,
+                state => {
+                    return Err(ArrowError::ParseError(format!(
+                        "remaining_block_range called in unexpected state: {state:?}"
+                    )));
+                }
+            };
+        let fetch_end = self.range.end + remaining;
+        if fetch_end > self.file_size {
+            return Err(ArrowError::ParseError(format!(
+                "Avro block requires more bytes than what exists in the file: \
+                 fetch_end {fetch_end}, remaining {remaining}, file_size {}",
+                self.file_size
+            )));
+        }
+        Ok(self.range.end..fetch_end)
+    }
+}
+
+/// Owns all the state needed to drive the Avro block-reading loop.
+struct AvroReaderState<R> {
+    reader: R,
+    meta: AvroReaderMeta,
+}
+
+/// Drives all reading and decoding as a natural async generator.
+///
+/// `state.reader` is owned (moved in). `stream` is a local borrow of `state.reader` inside the
+/// `async_stream::try_stream!` block; the compiler's generated async state machine stores
+/// both and manages the lifetime relationship safely via `Pin`.
+fn make_stream<R: AsyncFileReader + Unpin + Send + 'static>(
+    mut state: AvroReaderState<R>,
+) -> impl Stream<Item = Result<RecordBatch, ArrowError>> + Send + 'static {
+    async_stream::try_stream! {
+        if state.meta.range.start >= state.meta.range.end {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid range specified for Avro file: start {} >= end {}, file_size: {}",
+                state.meta.range.start, state.meta.range.end, state.meta.file_size
+            )))?;
+        }
+
+        let mut block_decoder = BlockDecoder::default();
+        let mut finishing_partial_block = false;
+
+        // Obtain the initial stream and begin scanning for the first sync marker.
+        let mut stream = state.reader.get_stream(state.meta.range.clone()).await?;
+        let mut phase = Phase::ReadSyncMarker { accumulated: BytesMut::new() };
+
+        loop {
+            phase = match phase {
+                Phase::ReadSyncMarker { mut accumulated } => {
+                    match stream.next().await {
+                        Some(Ok(chunk)) => {
+                            accumulated.extend_from_slice(&chunk);
+                            match accumulated.windows(16).position(|w| w == state.meta.sync_marker) {
+                                Some(pos) => Phase::DecodingBlock {
+                                    buffered: accumulated.freeze().slice(pos + 16..),
+                                },
+                                None => {
+                                    // Only the trailing 15 bytes matter: the marker could
+                                    // straddle a chunk boundary by at most (sync_marker.len() - 1) bytes.
+                                    // Copy them to the front to avoid reallocation on the next extend.
+                                    let discard = accumulated.len().saturating_sub(state.meta.sync_marker.len() - 1);
+                                    accumulated.copy_within(discard.., 0);
+                                    accumulated.truncate(accumulated.len() - discard);
+                                    Phase::ReadSyncMarker { accumulated }
+                                }
+                            }
+                        }
+                        Some(Err(e)) => Err(e)?,
+                        None => break, // file has no blocks after the header
+                    }
+                }
+
+                Phase::DecodingBlock { mut buffered } => {
+                    let consumed = block_decoder.decode(&buffered)?;
+                    buffered = buffered.slice(consumed..);
+
+                    if let Some(block) = block_decoder.flush() {
+                        // A complete block is ready — decompress and start yielding batches.
+                        let block_data = Bytes::from_owner(match &state.meta.codec {
+                            Some(c) => c.decompress(&block.data)?,
+                            None => block.data,
+                        });
+                        Phase::ReadingBatches {
+                            block_data,
+                            remaining: block.count,
+                            next_buffered: buffered,
+                        }
+                    } else if !buffered.is_empty() {
+                        Err(ArrowError::ParseError(
+                            "BlockDecoder failed to make progress decoding Avro block".into(),
+                        ))?
+                    } else {
+                        // Block incomplete and buffer empty — pull next chunk from stream.
+                        match stream.next().await {
+                            Some(Ok(chunk)) => Phase::DecodingBlock { buffered: chunk },
+                            Some(Err(e)) => Err(e)?,
+                            None => {
+                                // Stream exhausted — compute the next range to fetch.
+                                let range_to_fetch = match block_decoder.state() {
+                                    BlockDecoderState::Count | BlockDecoderState::Size =>
+                                    {
+                                        // VLQ header is at most 20 bytes; fetch just enough to
+                                        // complete it so block_decoder can parse count + size.
+                                        const MAX_VLQ_HEADER_SIZE: u64 = 20;
+                                        let fetch_end =
+                                            (state.meta.range.end + MAX_VLQ_HEADER_SIZE).min(state.meta.file_size);
+                                        if fetch_end == state.meta.range.end || finishing_partial_block {
+                                            // Nothing more to fetch, or partial fetch already done.
+                                            break;
+                                        }
+                                        let r = state.meta.range.end..fetch_end;
+                                        state.meta.range.end = fetch_end;
+                                        r
+                                    },
+                                    BlockDecoderState::Data | BlockDecoderState::Sync | BlockDecoderState::Finished => {
+                                        // Mid-block (Data/Sync): fetch exactly the bytes needed
+                                        // to finish this block (data remainder + sync marker).
+                                        if finishing_partial_block {
+                                            Err(ArrowError::ParseError(
+                                                    "Unexpected EOF while reading last Avro block".into(),
+                                            ))?;
+                                        }
+                                        finishing_partial_block = true;
+                                        state.meta.remaining_block_range(&block_decoder)?
+                                    },
+                                };
+
+                                // Drop the exhausted stream before reborrowing `state.reader`.
+                                drop(stream);
+                                stream = state.reader.get_stream(range_to_fetch).await?;
+                                Phase::DecodingBlock { buffered: Bytes::new() }
+                            }
+                        }
+                    }
+                }
+
+                Phase::ReadingBatches { mut block_data, mut remaining, next_buffered } => {
+                    let (consumed, decoded) = state.meta.decoder.decode_block(&block_data, remaining)?;
+                    remaining -= decoded;
+                    block_data = block_data.slice(consumed..);
+
+                    let next_phase = if remaining == 0 {
+                        Phase::DecodingBlock { buffered: next_buffered }
+                    } else {
+                        Phase::ReadingBatches { block_data, remaining, next_buffered }
+                    };
+
+                    if state.meta.decoder.batch_is_full() {
+                        match state.meta.decoder.flush()? {
+                            Some(batch) => yield batch,
+                            None => Err(ArrowError::ParseError(
+                                "Decoder reported a full batch, but flush returned None".into(),
+                            ))?,
+                        }
+                    }
+
+                    next_phase
+                }
+            };
+        }
+
+        // Flush any records that did not fill a complete batch.
+        while let Some(batch) = state.meta.decoder.flush()? {
+            yield batch;
+        }
+    }
 }
 
 /// An asynchronous Avro file reader that implements `Stream<Item = Result<RecordBatch, ArrowError>>`.
@@ -135,19 +308,9 @@ enum ReaderState<R> {
 /// }
 /// ```
 pub struct AsyncAvroFileReader<R> {
-    // Members required to fetch data
-    range: Range<u64>,
-    file_size: u64,
-
-    // Members required to actually decode and read data
-    decoder: Decoder,
-    block_decoder: BlockDecoder,
-    codec: Option<CompressionCodec>,
-    sync_marker: [u8; 16],
-
-    // Members keeping the current state of the reader
-    reader_state: ReaderState<R>,
-    finishing_partial_block: bool,
+    inner: BoxStream<'static, Result<RecordBatch, ArrowError>>,
+    schema: SchemaRef,
+    _phantom: PhantomData<R>,
 }
 
 impl<R> AsyncAvroFileReader<R> {
@@ -156,390 +319,53 @@ impl<R> AsyncAvroFileReader<R> {
         ReaderBuilder::new(reader, file_size, batch_size)
     }
 
+    /// Returns the Arrow schema for batches produced by this reader.
+    ///
+    /// The schema is determined by the writer schema in the file and the reader schema provided to the builder.
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
+
+impl<R: AsyncFileReader + Unpin + Send + 'static> AsyncAvroFileReader<R> {
     fn new(
+        reader: R,
         range: Range<u64>,
         file_size: u64,
         decoder: Decoder,
         codec: Option<CompressionCodec>,
         sync_marker: [u8; 16],
-        reader_state: ReaderState<R>,
+        finished: bool,
     ) -> Self {
-        Self {
-            range,
-            file_size,
-
-            decoder,
-            block_decoder: Default::default(),
-            codec,
-            sync_marker,
-
-            reader_state,
-            finishing_partial_block: false,
-        }
-    }
-
-    /// Returns the Arrow schema for batches produced by this reader.
-    ///
-    /// The schema is determined by the writer schema in the file and the reader schema provided to the builder.
-    pub fn schema(&self) -> SchemaRef {
-        self.decoder.schema()
-    }
-
-    /// Calculate the byte range needed to complete the current block.
-    /// Only valid when block_decoder is in Data or Sync state.
-    /// Returns the range to fetch, or an error if EOF would be reached.
-    fn remaining_block_range(&self) -> Result<Range<u64>, AvroError> {
-        let remaining = self.block_decoder.bytes_remaining() as u64
-            + match self.block_decoder.state() {
-                BlockDecoderState::Data => 16, // Include sync marker
-                BlockDecoderState::Sync => 0,
-                state => {
-                    return Err(AvroError::General(format!(
-                        "remaining_block_range called in unexpected state: {state:?}"
-                    )));
-                }
+        let schema = decoder.schema();
+        let inner: BoxStream<'static, Result<RecordBatch, ArrowError>> = if finished {
+            Box::pin(futures::stream::empty())
+        } else {
+            let state = AvroReaderState {
+                reader,
+                meta: AvroReaderMeta {
+                    range,
+                    file_size,
+                    decoder,
+                    codec,
+                    sync_marker,
+                },
             };
-
-        let fetch_end = self.range.end + remaining;
-        if fetch_end > self.file_size {
-            return Err(AvroError::EOF(
-                "Avro block requires more bytes than what exists in the file".into(),
-            ));
-        }
-
-        Ok(self.range.end..fetch_end)
-    }
-
-    /// Terminate the stream after returning this error once.
-    #[inline]
-    fn finish_with_error(
-        &mut self,
-        error: AvroError,
-    ) -> Poll<Option<Result<RecordBatch, AvroError>>> {
-        self.reader_state = ReaderState::Finished;
-        Poll::Ready(Some(Err(error)))
-    }
-
-    #[inline]
-    fn start_flushing(&mut self) {
-        self.reader_state = ReaderState::Flushing;
-    }
-
-    /// Drain any remaining buffered records from the decoder.
-    #[inline]
-    fn poll_flush(&mut self) -> Poll<Option<Result<RecordBatch, AvroError>>> {
-        match self.decoder.flush() {
-            Ok(Some(batch)) => {
-                self.reader_state = ReaderState::Flushing;
-                Poll::Ready(Some(Ok(batch)))
-            }
-            Ok(None) => {
-                self.reader_state = ReaderState::Finished;
-                Poll::Ready(None)
-            }
-            Err(e) => self.finish_with_error(e),
+            Box::pin(make_stream(state))
+        };
+        Self {
+            inner,
+            schema,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReader<R> {
-    // The forbid question mark thing shouldn't apply here, as it is within the future,
-    // so exported this to a separate function.
-    async fn fetch_bytes(mut reader: R, range: Range<u64>) -> Result<(R, Bytes), AvroError> {
-        let data = reader.get_bytes(range).await?;
-        Ok((reader, data))
-    }
-
-    #[forbid(clippy::question_mark_used)]
-    fn read_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<RecordBatch, AvroError>>> {
-        loop {
-            match mem::replace(&mut self.reader_state, ReaderState::InvalidState) {
-                ReaderState::Idle { reader } => {
-                    let range = self.range.clone();
-                    if range.start >= range.end {
-                        return self.finish_with_error(AvroError::InvalidArgument(format!(
-                            "Invalid range specified for Avro file: start {} >= end {}, file_size: {}",
-                            range.start, range.end, self.file_size
-                        )));
-                    }
-
-                    let future = Self::fetch_bytes(reader, range).boxed();
-                    self.reader_state = ReaderState::FetchingData {
-                        future,
-                        next_behaviour: FetchNextBehaviour::ReadSyncMarker,
-                    };
-                }
-                ReaderState::FetchingData {
-                    mut future,
-                    next_behaviour,
-                } => {
-                    let (reader, data_chunk) = match future.poll_unpin(cx) {
-                        Poll::Ready(Ok(data)) => data,
-                        Poll::Ready(Err(e)) => return self.finish_with_error(e),
-                        Poll::Pending => {
-                            self.reader_state = ReaderState::FetchingData {
-                                future,
-                                next_behaviour,
-                            };
-                            return Poll::Pending;
-                        }
-                    };
-
-                    match next_behaviour {
-                        FetchNextBehaviour::ReadSyncMarker => {
-                            let sync_marker_pos = data_chunk
-                                .windows(16)
-                                .position(|slice| slice == self.sync_marker);
-                            let block_start = match sync_marker_pos {
-                                Some(pos) => pos + 16, // Move past the sync marker
-                                None => {
-                                    // Sync marker not found, valid if we arbitrarily split the file at its end.
-                                    self.reader_state = ReaderState::Finished;
-                                    return Poll::Ready(None);
-                                }
-                            };
-
-                            self.reader_state = ReaderState::DecodingBlock {
-                                reader,
-                                data: data_chunk.slice(block_start..),
-                            };
-                        }
-                        FetchNextBehaviour::DecodeVLQHeader => {
-                            let mut data = data_chunk;
-
-                            // Feed bytes one at a time until we reach Data state (VLQ header complete)
-                            while !matches!(self.block_decoder.state(), BlockDecoderState::Data) {
-                                if data.is_empty() {
-                                    return self.finish_with_error(AvroError::EOF(
-                                        "Unexpected EOF while reading Avro block header".into(),
-                                    ));
-                                }
-                                let consumed = match self.block_decoder.decode(&data[..1]) {
-                                    Ok(consumed) => consumed,
-                                    Err(e) => return self.finish_with_error(e),
-                                };
-                                if consumed == 0 {
-                                    return self.finish_with_error(AvroError::General(
-                                        "BlockDecoder failed to consume byte during VLQ header parsing"
-                                            .into(),
-                                    ));
-                                }
-                                data = data.slice(consumed..);
-                            }
-
-                            // Now we know the block size. Slice remaining data to what we need.
-                            let bytes_remaining = self.block_decoder.bytes_remaining();
-                            let data_to_use = data.slice(..data.len().min(bytes_remaining));
-                            let consumed = match self.block_decoder.decode(&data_to_use) {
-                                Ok(consumed) => consumed,
-                                Err(e) => return self.finish_with_error(e),
-                            };
-                            if consumed != data_to_use.len() {
-                                return self.finish_with_error(AvroError::General(
-                                    "BlockDecoder failed to consume all bytes after VLQ header parsing"
-                                        .into(),
-                                ));
-                            }
-
-                            // May need more data to finish the block.
-                            let range_to_fetch = match self.remaining_block_range() {
-                                Ok(range) if range.is_empty() => {
-                                    // All bytes fetched, move to decoding block directly
-                                    self.reader_state = ReaderState::DecodingBlock {
-                                        reader,
-                                        data: Bytes::new(),
-                                    };
-                                    continue;
-                                }
-                                Ok(range) => range,
-                                Err(e) => return self.finish_with_error(e),
-                            };
-
-                            let future = Self::fetch_bytes(reader, range_to_fetch).boxed();
-                            self.reader_state = ReaderState::FetchingData {
-                                future,
-                                next_behaviour: FetchNextBehaviour::ContinueDecoding,
-                            };
-                            continue;
-                        }
-                        FetchNextBehaviour::ContinueDecoding => {
-                            self.reader_state = ReaderState::DecodingBlock {
-                                reader,
-                                data: data_chunk,
-                            };
-                        }
-                    }
-                }
-                ReaderState::InvalidState => {
-                    return self.finish_with_error(AvroError::General(
-                        "AsyncAvroFileReader in invalid state".into(),
-                    ));
-                }
-                ReaderState::DecodingBlock { reader, mut data } => {
-                    // Try to decode another block from the buffered reader.
-                    let consumed = match self.block_decoder.decode(&data) {
-                        Ok(consumed) => consumed,
-                        Err(e) => return self.finish_with_error(e),
-                    };
-                    data = data.slice(consumed..);
-
-                    // If we reached the end of the block, flush it, and move to read batches.
-                    if let Some(block) = self.block_decoder.flush() {
-                        // Successfully decoded a block.
-                        let block_count = block.count;
-                        let block_data = Bytes::from_owner(if let Some(ref codec) = self.codec {
-                            match codec.decompress(&block.data) {
-                                Ok(decompressed) => decompressed,
-                                Err(e) => return self.finish_with_error(e),
-                            }
-                        } else {
-                            block.data
-                        });
-
-                        // Since we have an active block, move to reading batches
-                        self.reader_state = ReaderState::ReadingBatches {
-                            reader,
-                            data,
-                            block_data,
-                            remaining_in_block: block_count,
-                        };
-                        continue;
-                    }
-
-                    // data should always be consumed unless Finished, if it wasn't, something went wrong
-                    if !data.is_empty() {
-                        return self.finish_with_error(AvroError::General(
-                            "BlockDecoder failed to make progress decoding Avro block".into(),
-                        ));
-                    }
-
-                    if matches!(self.block_decoder.state(), BlockDecoderState::Finished) {
-                        // We've already flushed, so if no batch was produced, we are simply done.
-                        self.finishing_partial_block = false;
-                        self.start_flushing();
-                        continue;
-                    }
-
-                    // If we've tried the following stage before, and still can't decode,
-                    // this means the file is truncated or corrupted.
-                    if self.finishing_partial_block {
-                        return self.finish_with_error(AvroError::EOF(
-                            "Unexpected EOF while reading last Avro block".into(),
-                        ));
-                    }
-
-                    // Avro splitting case: block is incomplete, we need to:
-                    // 1. Parse the length so we know how much to read
-                    // 2. Fetch more data from the reader
-                    // 3. Create a new block data from the remaining slice and the newly fetched data
-                    // 4. Continue decoding until end of block
-                    self.finishing_partial_block = true;
-
-                    // Mid-block, but we don't know how many bytes are missing yet
-                    if matches!(
-                        self.block_decoder.state(),
-                        BlockDecoderState::Count | BlockDecoderState::Size
-                    ) {
-                        // Max VLQ header is 20 bytes (10 bytes each for count and size).
-                        // Fetch just enough to complete it.
-                        const MAX_VLQ_HEADER_SIZE: u64 = 20;
-                        let fetch_end = (self.range.end + MAX_VLQ_HEADER_SIZE).min(self.file_size);
-
-                        // If there is nothing more to fetch, error out
-                        if fetch_end == self.range.end {
-                            return self.finish_with_error(AvroError::EOF(
-                                "Unexpected EOF while reading Avro block header".into(),
-                            ));
-                        }
-
-                        let range_to_fetch = self.range.end..fetch_end;
-                        self.range.end = fetch_end; // Track that we've fetched these bytes
-
-                        let future = Self::fetch_bytes(reader, range_to_fetch).boxed();
-                        self.reader_state = ReaderState::FetchingData {
-                            future,
-                            next_behaviour: FetchNextBehaviour::DecodeVLQHeader,
-                        };
-                        continue;
-                    }
-
-                    // Otherwise, we're mid-block but know how many bytes are remaining to fetch.
-                    let range_to_fetch = match self.remaining_block_range() {
-                        Ok(range) => range,
-                        Err(e) => return self.finish_with_error(e),
-                    };
-
-                    let future = Self::fetch_bytes(reader, range_to_fetch).boxed();
-                    self.reader_state = ReaderState::FetchingData {
-                        future,
-                        next_behaviour: FetchNextBehaviour::ContinueDecoding,
-                    };
-                    continue;
-                }
-                ReaderState::ReadingBatches {
-                    reader,
-                    data,
-                    mut block_data,
-                    mut remaining_in_block,
-                } => {
-                    let (consumed, records_decoded) =
-                        match self.decoder.decode_block(&block_data, remaining_in_block) {
-                            Ok((consumed, records_decoded)) => (consumed, records_decoded),
-                            Err(e) => return self.finish_with_error(e),
-                        };
-
-                    remaining_in_block -= records_decoded;
-
-                    if remaining_in_block == 0 {
-                        if data.is_empty() {
-                            // No more data to read, drain remaining buffered records
-                            self.start_flushing();
-                        } else {
-                            // Finished this block, move to decode next block in the next iteration
-                            self.reader_state = ReaderState::DecodingBlock { reader, data };
-                        }
-                    } else {
-                        // Still more records to decode in this block, slice the already-read data and stay in this state
-                        block_data = block_data.slice(consumed..);
-                        self.reader_state = ReaderState::ReadingBatches {
-                            reader,
-                            data,
-                            block_data,
-                            remaining_in_block,
-                        };
-                    }
-
-                    // We have a full batch ready, emit it
-                    // (This is not mutually exclusive with the block being finished, so the state change is valid)
-                    if self.decoder.batch_is_full() {
-                        return match self.decoder.flush() {
-                            Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
-                            Ok(None) => self.finish_with_error(AvroError::General(
-                                "Decoder reported a full batch, but flush returned None".into(),
-                            )),
-                            Err(e) => self.finish_with_error(e),
-                        };
-                    }
-                }
-                ReaderState::Flushing => {
-                    return self.poll_flush();
-                }
-                ReaderState::Finished => {
-                    // Terminal: once finished (including after an error), always yield None
-                    self.reader_state = ReaderState::Finished;
-                    return Poll::Ready(None);
-                }
-            }
-        }
-    }
-}
-
-// To maintain compatibility with the expected stream results in the ecosystem, this returns ArrowError.
 impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.read_next(cx).map_err(Into::into)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::get_mut(self).inner.as_mut().poll_next(cx)
     }
 }
 
@@ -547,6 +373,7 @@ impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
 mod tests {
     use super::*;
     use crate::codec::Tz;
+    use crate::errors::AvroError;
     use crate::schema::{
         AVRO_NAME_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AvroSchema, SCHEMA_METADATA_KEY,
     };
@@ -554,7 +381,8 @@ mod tests {
     use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::*;
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
-    use futures::{StreamExt, TryStreamExt};
+    use futures::future::BoxFuture;
+    use futures::{FutureExt, StreamExt, TryStreamExt};
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{ObjectStore, ObjectStoreExt};
@@ -1963,5 +1791,210 @@ mod tests {
         let f1_struct = f1_col.as_struct();
         let f1_1_field = f1_struct.column_by_name("f1_1").unwrap();
         assert_eq!(f1_1_field.data_type(), &DataType::Utf8View);
+    }
+
+    /// A test [`AsyncFileReader`] that returns the byte stream as small fixed-size chunks,
+    /// simulating a real object store that streams HTTP responses in multiple pieces.
+    ///
+    /// This exercises the multi-chunk streaming path: when a block completes mid-stream
+    /// the remaining chunks must not be discarded.
+    struct ChunkedReader {
+        data: bytes::Bytes,
+        chunk_size: usize,
+    }
+
+    impl ChunkedReader {
+        fn new(data: bytes::Bytes, chunk_size: usize) -> Self {
+            Self { data, chunk_size }
+        }
+    }
+
+    impl AsyncFileReader for ChunkedReader {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
+            let slice = self.data.slice(range.start as usize..range.end as usize);
+            async move { Ok(slice) }.boxed()
+        }
+
+        fn get_stream(
+            &mut self,
+            range: Range<u64>,
+        ) -> BoxFuture<'_, Result<BoxStream<'_, Result<Bytes, AvroError>>, AvroError>> {
+            let range_data = self.data.slice(range.start as usize..range.end as usize);
+            let chunk_size = self.chunk_size;
+
+            let mut chunks: Vec<Result<Bytes, AvroError>> = Vec::new();
+            let mut pos = 0;
+            let len = range_data.len();
+            while pos < len {
+                let end = (pos + chunk_size).min(len);
+                chunks.push(Ok(range_data.slice(pos..end)));
+                pos = end;
+            }
+
+            // The stream is built from owned `Bytes` clones so it is in fact 'static,
+            // but we declare '_ to match the trait signature.
+            let stream: BoxStream<'_, _> = futures::stream::iter(chunks).boxed();
+            std::future::ready(Ok(stream)).boxed()
+        }
+    }
+
+    /// Regression test for the bug where multi-chunk streaming discards bytes for subsequent blocks.
+    ///
+    /// When an Avro block completes mid-stream the remaining stream chunks contain bytes for the
+    /// next block. The old code recovered the reader (discarding those chunks) and then tried to
+    /// fetch from `range.end`, which is past EOF when the range covers the full file — producing:
+    ///   "Avro block requires more bytes than what exists in the file"
+    #[tokio::test]
+    async fn test_multi_chunk_stream_multiple_blocks() {
+        use crate::writer::AvroWriter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        // Write 3 separate batches → 3 separate Avro blocks in the file.
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut writer = AvroWriter::new(&mut buffer, schema.as_ref().clone()).unwrap();
+        for i in 0..3_i32 {
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int32Array::from(vec![i])) as _],
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        let bytes = bytes::Bytes::from(buffer);
+        let file_size = bytes.len() as u64;
+
+        // Use a tiny chunk size so every block boundary falls in the middle of a stream.
+        let reader = ChunkedReader::new(bytes, 32);
+        let batches: Vec<RecordBatch> = AsyncAvroFileReader::builder(reader, file_size, 1024)
+            .try_build()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
+
+        let id_values: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+        assert_eq!(id_values, vec![0, 1, 2]);
+    }
+
+    /// Regression test: after a partial-block fetch (`finishing_partial_block = true`),
+    /// the reader must stop — no further blocks beyond the assigned range should be read.
+    ///
+    /// Uses 4 blocks and a range ending mid-block-2.  Blocks 1 and 2 must be returned;
+    /// blocks 3 and 4 must be skipped (they belong to the next Spark task's range).
+    #[tokio::test]
+    async fn test_range_ends_mid_block_no_further_blocks_read() {
+        use crate::writer::AvroWriter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        const ROWS_PER_BLOCK: i32 = 500;
+        const NUM_BLOCKS: i32 = 4;
+
+        // Write 4 separate batches → 4 separate Avro blocks.
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut writer = AvroWriter::new(&mut buffer, schema.as_ref().clone()).unwrap();
+        for block in 0..NUM_BLOCKS {
+            let start = block * ROWS_PER_BLOCK;
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int32Array::from(
+                    (start..start + ROWS_PER_BLOCK).collect::<Vec<i32>>(),
+                )) as _],
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        let bytes = bytes::Bytes::from(buffer);
+        let file_size = bytes.len() as u64;
+
+        // file_size/2 falls in the middle of block 2 (blocks 1+2 occupy roughly half the
+        // file after the small header; each block is ~1 KB of zigzag-encoded ints).
+        // Block 2 needs a partial-block fetch; blocks 3 and 4 must NOT be read.
+        let range = 0..(file_size / 2);
+
+        let reader = ChunkedReader::new(bytes.clone(), 32);
+        let batches: Vec<RecordBatch> = AsyncAvroFileReader::builder(reader, file_size, 1024)
+            .with_range(range)
+            .try_build()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Exactly blocks 1 and 2 should be returned (1000 rows total).
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows,
+            (ROWS_PER_BLOCK * 2) as usize,
+            "expected blocks 1+2 only; got {total_rows} rows (file_size={file_size})"
+        );
+    }
+
+    /// Verifies that when a range ends mid-block, the reader completes that block via a
+    /// partial-block fetch and returns exactly its rows — the following block is not read.
+    #[tokio::test]
+    async fn test_range_ending_mid_block_returns_correct_rows() {
+        use crate::writer::AvroWriter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        const ROWS_PER_BLOCK: i32 = 500;
+
+        // Two blocks: block 1 will be completed via a partial-block fetch; block 2 must
+        // not be touched (it belongs to the next Spark range).
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut writer = AvroWriter::new(&mut buffer, schema.as_ref().clone()).unwrap();
+        for block in 0..2_i32 {
+            let start = block * ROWS_PER_BLOCK;
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int32Array::from(
+                    (start..start + ROWS_PER_BLOCK).collect::<Vec<i32>>(),
+                )) as _],
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        let bytes = bytes::Bytes::from(buffer);
+        let file_size = bytes.len() as u64;
+
+        // file_size/4 lands in the middle of block 1 (the header is small relative to
+        // the ~1 KB blocks), so a partial-block fetch is required to complete it.
+        let range = 0..(file_size / 4);
+
+        let reader = ChunkedReader::new(bytes.clone(), 32);
+        let batches: Vec<RecordBatch> = AsyncAvroFileReader::builder(reader, file_size, 1024)
+            .with_range(range)
+            .try_build()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows, ROWS_PER_BLOCK as usize,
+            "expected block 1 only; got {total_rows} rows (file_size={file_size})"
+        );
     }
 }
