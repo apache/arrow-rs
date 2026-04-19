@@ -53,8 +53,14 @@ pub const DEFAULT_CREATED_BY: &str = concat!("parquet-rs version ", env!("CARGO_
 pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`BloomFilterProperties::fpp`]
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
-/// Default value for [`BloomFilterProperties::ndv`]
-pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
+/// Default value for [`BloomFilterProperties::ndv`].
+///
+/// Note: this is only the fallback default used when constructing [`BloomFilterProperties`]
+/// directly. When using [`WriterPropertiesBuilder`], columns with bloom filters enabled
+/// but without an explicit NDV will have their NDV resolved at build time to
+/// [`WriterProperties::max_row_group_row_count`], which may differ from this constant
+/// if the user configured a custom row group size.
+pub const DEFAULT_BLOOM_FILTER_NDV: u64 = DEFAULT_MAX_ROW_GROUP_ROW_COUNT as u64;
 /// Default values for [`WriterProperties::statistics_truncate_length`]
 pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`WriterProperties::offset_index_disabled`]
@@ -80,7 +86,7 @@ pub const DEFAULT_CDC_NORM_LEVEL: i32 = 0;
 /// following options control the chunks' size and the chunking process. Note
 /// that the chunk size is calculated based on the logical value of the data,
 /// before any encoding or compression is applied.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CdcOptions {
     /// Minimum chunk size in bytes, default is 256 KiB.
     /// The rolling hash will not be updated until this size is reached for each chunk.
@@ -175,6 +181,23 @@ pub enum BloomFilterPosition {
 /// Reference counted writer properties.
 pub type WriterPropertiesPtr = Arc<WriterProperties>;
 
+/// Resolved state of [`WriterPropertiesBuilder::set_offset_index_disabled`].
+///
+/// When a user disables offset indexes but page-level statistics are enabled,
+/// the setting is overridden (offset indexes remain enabled). This enum
+/// preserves the user's original intent so that a round-trip through
+/// `WriterPropertiesBuilder` does not lose it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OffsetIndexSetting {
+    /// Offset indexes are enabled (the default).
+    Enabled,
+    /// User disabled offset indexes and no page-level statistics override it.
+    Disabled,
+    /// User disabled offset indexes, but page-level statistics require them,
+    /// so they remain enabled.
+    DisabledOverridden,
+}
+
 /// Configuration settings for writing parquet files.
 ///
 /// Use [`Self::builder`] to create a [`WriterPropertiesBuilder`] to change settings.
@@ -218,7 +241,7 @@ pub struct WriterProperties {
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
-    offset_index_disabled: bool,
+    offset_index_setting: OffsetIndexSetting,
     pub(crate) key_value_metadata: Option<Vec<KeyValue>>,
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
@@ -368,18 +391,7 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_offset_index_disabled`]
     pub fn offset_index_disabled(&self) -> bool {
-        // If page statistics are to be collected, then do not disable the offset indexes.
-        let default_page_stats_enabled =
-            self.default_column_properties.statistics_enabled() == Some(EnabledStatistics::Page);
-        let column_page_stats_enabled = self
-            .column_properties
-            .iter()
-            .any(|path_props| path_props.1.statistics_enabled() == Some(EnabledStatistics::Page));
-        if default_page_stats_enabled || column_page_stats_enabled {
-            return false;
-        }
-
-        self.offset_index_disabled
+        matches!(self.offset_index_setting, OffsetIndexSetting::Disabled)
     }
 
     /// Returns `key_value_metadata` KeyValue pairs.
@@ -587,6 +599,34 @@ impl Default for WriterPropertiesBuilder {
 impl WriterPropertiesBuilder {
     /// Finalizes the configuration and returns immutable writer properties struct.
     pub fn build(self) -> WriterProperties {
+        // Pre-compute offset_index_setting
+        let offset_index_setting = if self.offset_index_disabled {
+            let default_page_stats_enabled = self.default_column_properties.statistics_enabled()
+                == Some(EnabledStatistics::Page);
+            let column_page_stats_enabled = self.column_properties.iter().any(|path_props| {
+                path_props.1.statistics_enabled() == Some(EnabledStatistics::Page)
+            });
+            if default_page_stats_enabled || column_page_stats_enabled {
+                OffsetIndexSetting::DisabledOverridden
+            } else {
+                OffsetIndexSetting::Disabled
+            }
+        } else {
+            OffsetIndexSetting::Enabled
+        };
+
+        // Resolve bloom filter NDV for columns where it wasn't explicitly set:
+        // default to max_row_group_row_count so the filter is never undersized.
+        let default_ndv = self
+            .max_row_group_row_count
+            .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT) as u64;
+        let mut default_column_properties = self.default_column_properties;
+        default_column_properties.resolve_bloom_filter_ndv(default_ndv);
+        let mut column_properties = self.column_properties;
+        for props in column_properties.values_mut() {
+            props.resolve_bloom_filter_ndv(default_ndv);
+        }
+
         WriterProperties {
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
@@ -595,10 +635,10 @@ impl WriterPropertiesBuilder {
             bloom_filter_position: self.bloom_filter_position,
             writer_version: self.writer_version,
             created_by: self.created_by,
-            offset_index_disabled: self.offset_index_disabled,
+            offset_index_setting,
             key_value_metadata: self.key_value_metadata,
-            default_column_properties: self.default_column_properties,
-            column_properties: self.column_properties,
+            default_column_properties,
+            column_properties,
             sorting_columns: self.sorting_columns,
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
@@ -996,8 +1036,13 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default number of distinct values (ndv) for bloom filter for all
-    /// columns (defaults to `1_000_000` via [`DEFAULT_BLOOM_FILTER_NDV`]).
+    /// Sets default maximum expected number of distinct values (ndv) for bloom filter
+    /// for all columns (defaults to [`DEFAULT_BLOOM_FILTER_NDV`]).
+    ///
+    /// The bloom filter is initially sized for this many distinct values at the
+    /// configured FPP, then folded down after all values are inserted to achieve
+    /// optimal size. A good heuristic is to set this to the expected number of rows
+    /// in the row group.
     ///
     /// Implicitly enables bloom writing, as if [`set_bloom_filter_enabled`] had
     /// been called.
@@ -1125,7 +1170,10 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             bloom_filter_position: props.bloom_filter_position,
             writer_version: props.writer_version,
             created_by: props.created_by,
-            offset_index_disabled: props.offset_index_disabled,
+            offset_index_disabled: !matches!(
+                props.offset_index_setting,
+                OffsetIndexSetting::Enabled
+            ),
             key_value_metadata: props.key_value_metadata,
             default_column_properties: props.default_column_properties,
             column_properties: props.column_properties,
@@ -1191,6 +1239,13 @@ impl Default for EnabledStatistics {
 }
 
 /// Controls the bloom filter to be computed by the writer.
+///
+/// The bloom filter is initially sized for `ndv` distinct values at the given `fpp`, then
+/// automatically folded down after all values are inserted to achieve optimal size while
+/// maintaining the target `fpp`. See [`Sbbf::fold_to_target_fpp`] for details on the
+/// folding algorithm.
+///
+/// [`Sbbf::fold_to_target_fpp`]: crate::bloom_filter::Sbbf::fold_to_target_fpp
 #[derive(Debug, Clone, PartialEq)]
 pub struct BloomFilterProperties {
     /// False positive probability. This should be always between 0 and 1 exclusive. Defaults to [`DEFAULT_BLOOM_FILTER_FPP`].
@@ -1201,20 +1256,30 @@ pub struct BloomFilterProperties {
     /// smaller the fpp, the more memory and disk space is required, thus setting it to a reasonable value
     /// e.g. 0.1, 0.05, or 0.001 is recommended.
     ///
-    /// Setting to a very small number diminishes the value of the filter itself, as the bitset size is
-    /// even larger than just storing the whole value. You are also expected to set `ndv` if it can
-    /// be known in advance to greatly reduce space usage.
+    /// This value also serves as the target FPP for bloom filter folding: after all values
+    /// are inserted, the filter is folded down to the smallest size that still meets this FPP.
     pub fpp: f64,
-    /// Number of distinct values, should be non-negative to be meaningful. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
+    /// Maximum expected number of distinct values. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
     ///
     /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_ndv`].
     ///
-    /// Usage of bloom filter is most beneficial for columns with large cardinality, so a good heuristic
-    /// is to set ndv to the number of rows. However, it can reduce disk size if you know in advance a smaller
-    /// number of distinct values. For very small ndv value it is probably not worth it to use bloom filter
-    /// anyway.
+    /// When not explicitly set via the builder, this defaults to
+    /// [`max_row_group_row_count`](WriterProperties::max_row_group_row_count) (resolved at
+    /// build time). The bloom filter is initially sized for this many distinct values at the
+    /// given `fpp`, then folded down after insertion to achieve optimal size. A good heuristic
+    /// is to set this to the expected number of rows in the row group. If fewer distinct values
+    /// are actually written, the filter will be automatically compacted via folding.
     ///
-    /// Increasing this value (without increasing fpp) will result in an increase in disk or memory size.
+    /// Thus the only negative side of overestimating this value is that the bloom filter
+    /// will use more memory during writing than necessary, but it will not affect the final
+    /// bloom filter size on disk.
+    ///
+    /// If you wish to reduce memory usage during writing and are able to make a reasonable estimate
+    /// of the number of distinct values in a row group, it is recommended to set this value explicitly
+    /// rather than relying on the default dynamic sizing based on `max_row_group_row_count`.
+    /// If you do set this value explicitly it is probably best to set it for each column
+    /// individually via [`WriterPropertiesBuilder::set_column_bloom_filter_ndv`] rather than globally,
+    /// since different columns may have different numbers of distinct values.
     pub ndv: u64,
 }
 
@@ -1242,6 +1307,8 @@ struct ColumnProperties {
     write_page_header_statistics: Option<bool>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
+    /// Whether the bloom filter NDV was explicitly set by the user
+    bloom_filter_ndv_is_set: bool,
 }
 
 impl ColumnProperties {
@@ -1319,12 +1386,13 @@ impl ColumnProperties {
             .fpp = value;
     }
 
-    /// Sets the number of distinct (unique) values for bloom filter for this column, and implicitly
-    /// enables bloom filter if not previously enabled.
+    /// Sets the maximum expected number of distinct (unique) values for bloom filter for this
+    /// column, and implicitly enables bloom filter if not previously enabled.
     fn set_bloom_filter_ndv(&mut self, value: u64) {
         self.bloom_filter_properties
             .get_or_insert_with(Default::default)
             .ndv = value;
+        self.bloom_filter_ndv_is_set = true;
     }
 
     /// Returns optional encoding for this column.
@@ -1371,6 +1439,16 @@ impl ColumnProperties {
     /// Returns the bloom filter properties, or `None` if not enabled
     fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
         self.bloom_filter_properties.as_ref()
+    }
+
+    /// If bloom filter is enabled and NDV was not explicitly set, resolve it to the
+    /// given `default_ndv` (typically derived from `max_row_group_row_count`).
+    fn resolve_bloom_filter_ndv(&mut self, default_ndv: u64) {
+        if !self.bloom_filter_ndv_is_set {
+            if let Some(ref mut bf) = self.bloom_filter_properties {
+                bf.ndv = default_ndv;
+            }
+        }
     }
 }
 
@@ -1703,8 +1781,8 @@ mod tests {
         assert_eq!(
             props.bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
-                fpp: 0.05,
-                ndv: 1_000_000_u64
+                fpp: DEFAULT_BLOOM_FILTER_FPP,
+                ndv: DEFAULT_BLOOM_FILTER_NDV,
             })
         );
     }
@@ -1746,8 +1824,8 @@ mod tests {
                 .build()
                 .bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
-                fpp: 0.05,
-                ndv: 100
+                fpp: DEFAULT_BLOOM_FILTER_FPP,
+                ndv: 100,
             })
         );
         assert_eq!(
@@ -1757,7 +1835,7 @@ mod tests {
                 .bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
                 fpp: 0.1,
-                ndv: 1_000_000_u64
+                ndv: DEFAULT_BLOOM_FILTER_NDV,
             })
         );
     }
@@ -1863,5 +1941,19 @@ mod tests {
                 assert_eq!(e, "Invalid statistics arg: ChunkAndPage");
             }
         }
+    }
+
+    #[test]
+    fn test_cdc_options_equality() {
+        let opts = CdcOptions::default();
+        assert_eq!(opts, CdcOptions::default());
+
+        let custom = CdcOptions {
+            min_chunk_size: 1024,
+            max_chunk_size: 8192,
+            norm_level: 1,
+        };
+        assert_eq!(custom, custom);
+        assert_ne!(opts, custom);
     }
 }

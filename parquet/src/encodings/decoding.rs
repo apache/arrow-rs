@@ -31,7 +31,7 @@ use crate::encodings::decoding::byte_stream_split_decoder::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{self, BitReader};
+use crate::util::bit_util::{self, BitReader, FromBitpacked};
 
 mod byte_stream_split_decoder;
 
@@ -455,7 +455,10 @@ impl<T: DataType> RleValueDecoder<T> {
     }
 }
 
-impl<T: DataType> Decoder<T> for RleValueDecoder<T> {
+impl<T: DataType> Decoder<T> for RleValueDecoder<T>
+where
+    T::T: FromBitpacked,
+{
     #[inline]
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         // Only support RLE value reader for boolean values with bit width of 1.
@@ -658,7 +661,7 @@ where
 
 impl<T: DataType> Decoder<T> for DeltaBitPackDecoder<T>
 where
-    T::T: Default + FromPrimitive + WrappingAdd + Copy,
+    T::T: Default + FromPrimitive + FromBitpacked + WrappingAdd + Copy,
 {
     // # of total values is derived from encoding
     #[inline]
