@@ -304,6 +304,26 @@ impl RowGroupReaderBuilder {
     ) -> Result<NextState, ParquetError> {
         let result = match current_state {
             RowGroupDecoderState::Start { row_group_info } => {
+                // Short-circuit once the overall output limit is exhausted.
+                //
+                // `self.limit` tracks how many more rows the reader is still
+                // allowed to emit and is decremented as each row group is
+                // planned in `StartData`, so `Some(0)` means earlier row
+                // groups have already produced the full requested output.
+                //
+                // Without this guard we would still fall through to
+                // `Filters`, set up the filter plan, fetch at least one
+                // batch of this row group's filter columns, and fully
+                // evaluate any intermediate predicates before
+                // `with_limit(Some(0))` discarded the selection in
+                // `StartData` and finally returned `Finished`.
+                if matches!(self.limit, Some(0)) {
+                    return Ok(NextState::result(
+                        RowGroupDecoderState::Finished,
+                        DecodeResult::Finished,
+                    ));
+                }
+
                 let column_chunks = None; // no prior column chunks
 
                 let Some(filter) = self.filter.take() else {
@@ -452,10 +472,30 @@ impl RowGroupReaderBuilder {
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
                 );
-                // `with_predicate` actually evaluates the filter
+                // `with_predicate` actually evaluates the filter.
+                //
+                // When this is the final predicate in the chain and an output
+                // limit is set, tell the filter evaluation to stop once enough
+                // matching rows have been accumulated. Only safe for the last
+                // predicate: match counts of intermediate predicates do not
+                // correspond 1:1 to output rows.
+                //
+                // The cap must include `self.offset`: the later
+                // `with_offset(self.offset)` step skips that many selected
+                // rows before `with_limit` counts output, so the predicate
+                // must retain at least `offset + limit` matches or offset
+                // would drop matches the output still needs.
+                let predicate_limit = self
+                    .limit
+                    .filter(|_| filter_info.is_last())
+                    .map(|l| l.saturating_add(self.offset.unwrap_or(0)));
 
-                plan_builder =
-                    plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
+                plan_builder = plan_builder.with_predicate_limited(
+                    array_reader,
+                    filter_info.current_mut(),
+                    predicate_limit,
+                    row_count,
+                )?;
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,

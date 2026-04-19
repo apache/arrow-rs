@@ -25,7 +25,8 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
-use arrow_array::Array;
+use arrow_array::{Array, BooleanArray};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
 
@@ -144,12 +145,64 @@ impl ReadPlanBuilder {
     /// or if the [`ParquetRecordBatchReader`] specified an explicit
     /// [`RowSelection`] in addition to one or more predicates.
     pub fn with_predicate(
-        mut self,
+        self,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
     ) -> Result<Self> {
+        // No limit ⇒ loop always exhausts, so `total_rows` is not consulted.
+        self.with_predicate_limited(array_reader, predicate, None, 0)
+    }
+
+    /// Like [`Self::with_predicate`] but additionally caps the number of
+    /// matches retained from `predicate` at `limit`, stopping the scan of
+    /// `array_reader` once that many matches have been accumulated.
+    ///
+    /// This is a performance optimization for TopK / `LIMIT` queries: once
+    /// the cumulative `true_count` across evaluated filter batches reaches
+    /// `limit`, the current batch's filter is truncated at the `limit`-th
+    /// match and iteration of `array_reader` stops. Remaining batches of
+    /// the predicate's column chunks are never decoded and the predicate is
+    /// never re-invoked — avoiding both decode and predicate work.
+    ///
+    /// `limit` counts predicate matches, not final output rows. Callers that
+    /// also apply an offset must pass `offset + limit` here so enough matches
+    /// survive the later offset step.
+    ///
+    /// `total_rows` is the number of rows the predicate's `array_reader`
+    /// would yield if iterated to completion (i.e. the row-group size when
+    /// no prior selection exists). It is only consulted on early break, to
+    /// pad the trailing un-evaluated rows as "not selected" so the resulting
+    /// [`RowSelection`] covers the full row group. When `limit` is `None`
+    /// this parameter is ignored.
+    ///
+    /// This must only be called when `predicate` is the *last* predicate in a
+    /// filter chain: match counts of intermediate predicates do not correspond
+    /// 1:1 to output rows, so truncating them early would drop rows that
+    /// should have been passed to subsequent predicates.
+    ///
+    /// If `limit` is `None` this behaves exactly like [`Self::with_predicate`].
+    pub fn with_predicate_limited(
+        mut self,
+        array_reader: Box<dyn ArrayReader>,
+        predicate: &mut dyn ArrowPredicate,
+        limit: Option<usize>,
+        total_rows: usize,
+    ) -> Result<Self> {
+        // Target length for the concatenated filter output:
+        // - Prior selection ⇒ the reader yields that many rows; `and_then`
+        //   below requires the filter output to match.
+        // - No prior selection ⇒ the reader yields `total_rows`. We only
+        //   need to pad when `limit` may short-circuit the loop; otherwise
+        //   iteration naturally exhausts.
+        let expected_rows = match self.selection.as_ref() {
+            Some(s) => Some(s.row_count()),
+            None => limit.map(|_| total_rows),
+        };
+
         let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
         let mut filters = vec![];
+        let mut processed_rows: usize = 0;
+        let mut cumulative_matches: usize = 0;
         for maybe_batch in reader {
             let maybe_batch = maybe_batch?;
             let input_rows = maybe_batch.num_rows();
@@ -161,10 +214,37 @@ impl ReadPlanBuilder {
                     filter.len()
                 ));
             }
-            match filter.null_count() {
-                0 => filters.push(filter),
-                _ => filters.push(prep_null_mask_filter(&filter)),
+            let filter = match filter.null_count() {
+                0 => filter,
+                _ => prep_null_mask_filter(&filter),
             };
+
+            processed_rows += input_rows;
+
+            match limit {
+                Some(limit) if cumulative_matches + filter.true_count() >= limit => {
+                    let needed = limit - cumulative_matches;
+                    let truncated = truncate_filter_after_n_trues(&filter, needed);
+                    filters.push(truncated);
+                    break;
+                }
+                _ => {
+                    cumulative_matches += filter.true_count();
+                    filters.push(filter);
+                }
+            }
+        }
+
+        // Pad the tail so the filters cover `expected_rows` total. This keeps
+        // the invariant that the resulting `RowSelection` spans every row the
+        // reader would have produced — rows past the early break are marked
+        // "not selected". When no limit is set the loop always exhausts and
+        // no padding is needed.
+        if let Some(expected) = expected_rows
+            && processed_rows < expected
+        {
+            let pad_len = expected - processed_rows;
+            filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
         }
 
         // If the predicate selected all rows and there is no prior selection,
@@ -305,6 +385,35 @@ impl LimitedReadPlanBuilder {
     }
 }
 
+/// Produce a new `BooleanArray` of the same length as `filter` in which only
+/// the first `n` `true` positions from `filter` remain `true`; any `true`
+/// positions beyond the first `n` are replaced with `false`.
+///
+/// `filter` must not contain nulls (callers apply [`prep_null_mask_filter`]
+/// first). If `filter` has at most `n` `true` values, a clone is returned.
+fn truncate_filter_after_n_trues(filter: &BooleanArray, n: usize) -> BooleanArray {
+    if filter.true_count() <= n {
+        return filter.clone();
+    }
+    let len = filter.len();
+    if n == 0 {
+        return BooleanArray::new(BooleanBuffer::new_unset(len), None);
+    }
+    // `set_indices` scans 64 bits at a time via `trailing_zeros`, so locating
+    // the `n`-th set bit is cheaper than visiting every bit. Everything up to
+    // and including that position is copied verbatim; the rest is zeroed.
+    let values = filter.values();
+    let last_kept = values
+        .set_indices()
+        .nth(n - 1)
+        .expect("n - 1 < true_count, checked above");
+
+    let mut builder = BooleanBufferBuilder::new(len);
+    builder.append_buffer(&values.slice(0, last_kept + 1));
+    builder.append_n(len - last_kept - 1, false);
+    BooleanArray::new(builder.finish(), None)
+}
+
 /// A plan reading specific rows from a Parquet Row Group.
 ///
 /// See [`ReadPlanBuilder`] to create `ReadPlan`s
@@ -365,6 +474,93 @@ mod tests {
         assert_eq!(
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors
+        );
+    }
+
+    #[test]
+    fn truncate_filter_after_n_trues_keeps_first_n_matches() {
+        let f = BooleanArray::from(vec![true, false, true, true, false, true, true]);
+        // true positions: 0, 2, 3, 5, 6
+        let t = truncate_filter_after_n_trues(&f, 3);
+        assert_eq!(t.len(), f.len());
+        assert_eq!(t.true_count(), 3);
+        let out: Vec<bool> = (0..t.len()).map(|i| t.value(i)).collect();
+        assert_eq!(
+            out,
+            vec![true, false, true, true, false, false, false],
+            "first three trues should survive, the rest become false"
+        );
+    }
+
+    #[test]
+    fn truncate_filter_after_n_trues_passes_through_when_already_small_enough() {
+        let f = BooleanArray::from(vec![true, false, true, false]);
+        let t = truncate_filter_after_n_trues(&f, 5);
+        assert_eq!(t.len(), f.len());
+        assert_eq!(t.true_count(), 2);
+    }
+
+    #[test]
+    fn truncate_filter_after_n_trues_zero_returns_all_false() {
+        let f = BooleanArray::from(vec![true, true, true]);
+        let t = truncate_filter_after_n_trues(&f, 0);
+        assert_eq!(t.len(), 3);
+        assert_eq!(t.true_count(), 0);
+    }
+
+    #[test]
+    fn with_predicate_limited_pads_tail_when_no_prior_selection() {
+        use crate::arrow::ProjectionMask;
+        use crate::arrow::array_reader::StructArrayReader;
+        use crate::arrow::array_reader::test_util::InMemoryArrayReader;
+        use crate::arrow::arrow_reader::ArrowPredicateFn;
+        use arrow_array::Int32Array;
+        use arrow_schema::{DataType as ArrowType, Field, Fields};
+        use std::sync::Arc;
+
+        // 100 rows, all match the predicate. Limit stops the loop after 10
+        // matches — but the resulting RowSelection must still describe the
+        // full 100-row row group (90 trailing rows as "not selected"), not
+        // only the 10 rows we happened to evaluate before breaking.
+        const TOTAL_ROWS: usize = 100;
+        const LIMIT: usize = 10;
+
+        let data: Vec<i32> = (0..TOTAL_ROWS as i32).collect();
+        let array = Arc::new(Int32Array::from(data));
+        let leaf = InMemoryArrayReader::new(ArrowType::Int32, array.clone(), None, None);
+        let struct_type = ArrowType::Struct(Fields::from(vec![Field::new(
+            "c0",
+            ArrowType::Int32,
+            false,
+        )]));
+        let struct_reader = StructArrayReader::new(struct_type, vec![Box::new(leaf)], 0, 0, false);
+
+        let mut predicate = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
+            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+        });
+
+        let builder = ReadPlanBuilder::new(16)
+            .with_predicate_limited(
+                Box::new(struct_reader),
+                &mut predicate,
+                Some(LIMIT),
+                TOTAL_ROWS,
+            )
+            .unwrap();
+
+        let selection = builder
+            .selection()
+            .expect("limit-driven early break must produce a selection");
+
+        // `row_count` counts selected rows — must equal the limit.
+        assert_eq!(selection.row_count(), LIMIT);
+
+        // Total rows covered (selects + skips) must equal the full row group
+        // so downstream offset/limit math stays in absolute-row space.
+        let total: usize = selection.iter().map(|s| s.row_count).sum();
+        assert_eq!(
+            total, TOTAL_ROWS,
+            "selection must span the full row group, not only the prefix evaluated before the limit"
         );
     }
 }
