@@ -40,10 +40,14 @@ use std::ops::Range;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided fixed length byte array column
+///
+/// `batch_size` is used to pre-allocate internal buffers,
+/// avoiding reallocations when reading the first batch of data.
 pub fn make_fixed_len_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    batch_size: usize,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -126,6 +130,7 @@ pub fn make_fixed_len_byte_array_reader(
         column_desc,
         data_type,
         byte_length,
+        batch_size,
     )))
 }
 
@@ -144,14 +149,16 @@ impl FixedLenByteArrayReader {
         column_desc: ColumnDescPtr,
         data_type: ArrowType,
         byte_length: usize,
+        batch_size: usize,
     ) -> Self {
+        let record_reader = GenericRecordReader::new(column_desc, batch_size);
         Self {
             data_type,
             byte_length,
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
-            record_reader: GenericRecordReader::new(column_desc),
+            record_reader,
         }
     }
 }
@@ -284,6 +291,15 @@ fn move_values<F>(
 }
 
 impl ValuesBuffer for FixedLenByteArrayBuffer {
+    fn with_capacity(_capacity: usize) -> Self {
+        // byte_length is not known at trait level, so we return a default buffer
+        // The decoder will pre-allocate when it knows both capacity and byte_length
+        Self {
+            buffer: Vec::new(),
+            byte_length: None,
+        }
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
