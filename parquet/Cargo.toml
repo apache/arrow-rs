@@ -227,6 +227,11 @@ required-features = ["arrow"]
 harness = false
 
 [[bench]]
+name = "writer_overhead"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "arrow_reader"
 required-features = ["arrow", "test_common", "experimental"]
 harness = false
