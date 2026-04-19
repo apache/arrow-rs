@@ -7364,7 +7364,7 @@ mod tests {
         // Dict<Int8, Binary> -> Utf8View with invalid UTF-8: safe=false returns an error
         let mut builder = BinaryBuilder::new();
         builder.append_value(b"valid");
-        builder.append_value(&[0xFF]); // invalid UTF-8
+        builder.append_value([0xFF]); // invalid UTF-8
         builder.append_value(b"also valid");
         let values = builder.finish();
 
@@ -7387,7 +7387,7 @@ mod tests {
         // Dict<Int8, Binary> -> Utf8View with invalid UTF-8: safe=true nullifies affected rows
         let mut builder = BinaryBuilder::new();
         builder.append_value(b"valid");
-        builder.append_value(&[0xFF]); // invalid UTF-8 - dict index 1
+        builder.append_value([0xFF]); // invalid UTF-8 - dict index 1
         builder.append_value(b"also valid");
         let values = builder.finish();
 
