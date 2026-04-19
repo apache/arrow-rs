@@ -180,10 +180,16 @@ fn create_record_batch(size: usize) -> RecordBatch {
     RecordBatch::try_new(schema, arrays).unwrap()
 }
 
+/// Total number of rows.
+const TOTAL_ROWS: usize = 500_000;
+
+/// Maximum rows per row group.
+const ROW_GROUP_SIZE: usize = 100_000;
+
 /// Writes the RecordBatch to an in memory buffer, returning the buffer
 fn write_parquet_file() -> Vec<u8> {
-    let batch = create_record_batch(100_000);
-    println!("Batch created with {} rows", 100_000);
+    let batch = create_record_batch(TOTAL_ROWS);
+    println!("Batch created with {TOTAL_ROWS} rows, row group size = {ROW_GROUP_SIZE}");
     println!(
         "First 100 rows:\n{}",
         pretty_format_batches(&[batch.clone().slice(0, 100)]).unwrap()
@@ -191,6 +197,7 @@ fn write_parquet_file() -> Vec<u8> {
     let schema = batch.schema();
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
+        .set_max_row_group_row_count(Some(ROW_GROUP_SIZE))
         .build();
     let mut buffer = vec![];
     {
@@ -522,6 +529,28 @@ async fn benchmark_async_reader(
     }
 }
 
+/// Like [`benchmark_async_reader`] but also threads `with_limit(limit)` into
+/// the stream builder. Used by the `LIMIT` benchmark below.
+async fn benchmark_async_reader_with_limit(
+    reader: InMemoryReader,
+    projection_mask: ProjectionMask,
+    row_filter: RowFilter,
+    limit: usize,
+) {
+    let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
+        .await
+        .unwrap()
+        .with_batch_size(8192)
+        .with_projection(projection_mask)
+        .with_row_filter(row_filter)
+        .with_limit(limit)
+        .build()
+        .unwrap();
+    while let Some(b) = stream.next().await {
+        b.unwrap(); // consume the batches, no buffering
+    }
+}
+
 /// Use sync API
 fn benchmark_sync_reader(
     reader: InMemoryReader,
@@ -586,5 +615,87 @@ impl AsyncFileReader for InMemoryReader {
     }
 }
 
-criterion_group!(benches, benchmark_filters_and_projections,);
+/// Benchmark filters with `LIMIT` short-circuit (`with_limit(N)`)
+///
+/// `PointLookup` is excluded because the filter has only 1 match in the
+/// whole file; `LIMIT 10` is not binding.
+fn benchmark_filters_with_limit(c: &mut Criterion) {
+    const LIMIT: usize = 10;
+
+    let parquet_file = Bytes::from(write_parquet_file());
+    let filter_types = vec![
+        FilterType::SelectiveUnclustered,
+        FilterType::ModeratelySelectiveClustered,
+        FilterType::ModeratelySelectiveUnclustered,
+        FilterType::UnselectiveUnclustered,
+        FilterType::UnselectiveClustered,
+        FilterType::Utf8ViewNonEmpty,
+        FilterType::Composite,
+    ];
+    let projection_cases = vec![
+        ProjectionCase::AllColumns,
+        ProjectionCase::ExcludeFilterColumn,
+    ];
+    let all_indices = vec![0, 1, 2, 3];
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("arrow_reader_row_filter_limit");
+
+    for filter_type in filter_types {
+        for proj_case in &projection_cases {
+            let filter_col = filter_type.filter_projection().to_vec();
+            let output_projection: Vec<usize> = match proj_case {
+                ProjectionCase::AllColumns => all_indices.clone(),
+                ProjectionCase::ExcludeFilterColumn => all_indices
+                    .iter()
+                    .copied()
+                    .filter(|i| !filter_col.contains(i))
+                    .collect(),
+            };
+
+            let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+            let metadata = Arc::clone(reader.metadata());
+            let schema_descr = metadata.file_metadata().schema_descr();
+            let projection_mask = ProjectionMask::roots(schema_descr, output_projection);
+            let pred_mask = ProjectionMask::roots(schema_descr, filter_col);
+
+            let benchmark_name = format!("{filter_type}/{proj_case}/limit{LIMIT}");
+
+            // async variant
+            let bench_id = BenchmarkId::new(benchmark_name.clone(), "async");
+            let rt_handle = rt.handle().clone();
+            let pred_mask_async = pred_mask.clone();
+            let projection_mask_async = projection_mask.clone();
+            let reader_async = reader.clone();
+            group.bench_function(bench_id, |b| {
+                b.iter(|| {
+                    let reader = reader_async.clone();
+                    let pred_mask = pred_mask_async.clone();
+                    let projection_mask = projection_mask_async.clone();
+                    // RowFilter and ArrowPredicateFn are not Clone — fresh each iter.
+                    let predicate = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
+                        Ok(filter_type.filter_batch(&batch).unwrap())
+                    });
+                    let row_filter = RowFilter::new(vec![Box::new(predicate)]);
+                    rt_handle.block_on(benchmark_async_reader_with_limit(
+                        reader,
+                        projection_mask,
+                        row_filter,
+                        LIMIT,
+                    ));
+                });
+            });
+        }
+    }
+}
+
+criterion_group!(
+    benches,
+    benchmark_filters_and_projections,
+    benchmark_filters_with_limit,
+);
 criterion_main!(benches);
