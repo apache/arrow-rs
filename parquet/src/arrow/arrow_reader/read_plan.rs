@@ -240,11 +240,11 @@ impl ReadPlanBuilder {
         // reader would have produced — rows past the early break are marked
         // "not selected". When no limit is set the loop always exhausts and
         // no padding is needed.
-        if let Some(expected) = expected_rows
-            && processed_rows < expected
-        {
-            let pad_len = expected - processed_rows;
-            filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
+        if let Some(expected) = expected_rows {
+            if processed_rows < expected {
+                let pad_len = expected - processed_rows;
+                filters.push(BooleanArray::new(BooleanBuffer::new_unset(pad_len), None));
+            }
         }
 
         // If the predicate selected all rows and there is no prior selection,
