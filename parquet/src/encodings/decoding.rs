@@ -882,9 +882,9 @@ where
             self.values_left -= 1;
         }
 
-        // Terminal skip: caller is discarding all remaining values on this page.
-        // last_value will never be read again, so we can use O(1) arithmetic
-        // skips (BitReader::skip) instead of decoding through get_batch.
+        // Terminal skip: caller discards all remaining values on this page.
+        // last_value is not needed again, so we can use O(1) arithmetic skips
+        // (BitReader::skip) instead of decoding through get_batch.
         let terminal = to_skip >= self.values_left + skip;
 
         if terminal {
@@ -895,7 +895,7 @@ where
                 let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
                 self.check_bit_width(bit_width)?;
                 let n = self.mini_block_remaining.min(to_skip - skip);
-                // bit_width=0 produces a no-op here (correct: 0-byte payloads)
+                // bit_width=0 is a no-op here (correct: 0-byte payloads).
                 self.bit_reader.skip(n, bit_width);
                 skip += n;
                 self.mini_block_remaining -= n;
@@ -904,8 +904,7 @@ where
             return Ok(to_skip);
         }
 
-        // Non-terminal skip: last_value must be exact so subsequent get() calls
-        // produce correct absolute values.
+        // Non-terminal: last_value must be exact for subsequent get() calls.
         let mini_block_batch_size = match T::T::PHYSICAL_TYPE {
             Type::INT32 => 32,
             Type::INT64 => 64,
@@ -922,13 +921,12 @@ where
             self.check_bit_width(bit_width)?;
             let mini_block_to_skip = self.mini_block_remaining.min(to_skip - skip);
 
-            let min_delta = self.min_delta.as_i64()?;
             if bit_width == 0 {
                 // All remainders are zero: every delta equals min_delta exactly.
                 // Advance last_value by n * min_delta with no bit reads.
+                let min_delta = self.min_delta.as_i64()?;
                 if min_delta != 0 {
-                    let total =
-                        min_delta.wrapping_mul(mini_block_to_skip as i64);
+                    let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
                     let step = T::T::from_i64(total)
                         .ok_or_else(|| general_err!("delta*n overflow in skip"))?;
                     self.last_value = self.last_value.wrapping_add(&step);
@@ -948,6 +946,7 @@ where
                     ));
                 }
 
+                let min_delta = self.min_delta.as_i64()?;
                 if min_delta == 0 {
                     for v in &mut skip_buffer[0..skip_count] {
                         *v = v.wrapping_add(&self.last_value);
@@ -1027,9 +1026,7 @@ where
             let ni = n as i64;
             let lv = self.last_value.as_i64()?;
             let lo = lv.saturating_add(ni.saturating_mul(min_delta.min(0)));
-            let hi = lv.saturating_add(
-                ni.saturating_mul(min_delta.saturating_add(max_rem).max(0)),
-            );
+            let hi = lv.saturating_add(ni.saturating_mul(min_delta.saturating_add(max_rem).max(0)));
 
             if !predicate(lo, hi) {
                 // This miniblock cannot satisfy the predicate — skip it.
@@ -2530,9 +2527,7 @@ mod tests {
         let bytes = encoder.flush_buffer().expect("ok to flush");
 
         let mut decoder = get_decoder::<T>(col_descr, encoding).expect("get decoder");
-        decoder
-            .set_data(bytes, data.len())
-            .expect("ok to set data");
+        decoder.set_data(bytes, data.len()).expect("ok to set data");
 
         let mut out = Vec::new();
         let (emitted, consumed) = decoder
@@ -2596,11 +2591,10 @@ mod tests {
     #[test]
     fn test_scan_filtered_delta_conservative_overlap() {
         let data: Vec<i32> = (0..64).collect();
-        let (out, emitted, consumed) = test_scan_filtered::<Int32Type>(
-            &data,
-            Encoding::DELTA_BINARY_PACKED,
-            &|_lo, hi| hi >= 32,
-        );
+        let (out, emitted, consumed) =
+            test_scan_filtered::<Int32Type>(&data, Encoding::DELTA_BINARY_PACKED, &|_lo, hi| {
+                hi >= 32
+            });
         assert_eq!(consumed, 64);
         assert_eq!(emitted, 63); // value 0 rejected at first_value point check
         assert_eq!(out, data[1..].to_vec());

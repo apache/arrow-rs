@@ -24,7 +24,8 @@ use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
+    MiniblockPredicate, ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection,
+    RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -126,7 +127,6 @@ impl NextState {
 /// This struct drives the main state machine for decoding each row group -- it
 /// determines what data is needed, and then assembles the
 /// `ParquetRecordBatchReader` when all data is available.
-#[derive(Debug)]
 pub(crate) struct RowGroupReaderBuilder {
     /// The output batch size
     batch_size: usize,
@@ -142,6 +142,9 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// Optional filter
     filter: Option<RowFilter>,
+
+    /// Optional miniblock predicate for sub-page predicate pushdown
+    miniblock_predicate: Option<MiniblockPredicate>,
 
     /// Limit to apply to remaining row groups (decremented as rows are read)
     limit: Option<usize>,
@@ -170,6 +173,29 @@ pub(crate) struct RowGroupReaderBuilder {
     buffers: PushBuffers,
 }
 
+impl std::fmt::Debug for RowGroupReaderBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RowGroupReaderBuilder")
+            .field("batch_size", &self.batch_size)
+            .field("projection", &self.projection)
+            .field("metadata", &self.metadata)
+            .field("fields", &self.fields)
+            .field("filter", &self.filter)
+            .field("limit", &self.limit)
+            .field("offset", &self.offset)
+            .field("metrics", &self.metrics)
+            .field("max_predicate_cache_size", &self.max_predicate_cache_size)
+            .field("row_selection_policy", &self.row_selection_policy)
+            .field(
+                "miniblock_predicate",
+                &self.miniblock_predicate.as_ref().map(|_| "<predicate>"),
+            )
+            .field("state", &self.state)
+            .field("buffers", &self.buffers)
+            .finish()
+    }
+}
+
 impl RowGroupReaderBuilder {
     /// Create a new RowGroupReaderBuilder
     #[expect(clippy::too_many_arguments)]
@@ -185,6 +211,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        miniblock_predicate: Option<MiniblockPredicate>,
     ) -> Self {
         Self {
             batch_size,
@@ -197,6 +224,7 @@ impl RowGroupReaderBuilder {
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
+            miniblock_predicate,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -627,7 +655,11 @@ impl RowGroupReaderBuilder {
                         .build_array_reader(self.fields.as_deref(), &self.projection)
                 }?;
 
-                let reader = ParquetRecordBatchReader::new(array_reader, plan);
+                let reader = ParquetRecordBatchReader::new(
+                    array_reader,
+                    plan,
+                    self.miniblock_predicate.clone(),
+                );
                 NextState::result(RowGroupDecoderState::Finished, DecodeResult::Data(reader))
             }
             RowGroupDecoderState::Finished => {

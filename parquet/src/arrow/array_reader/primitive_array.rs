@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
+use crate::arrow::array_reader::{ArrayReader, read_records, scan_filtered_records, skip_records};
 use crate::arrow::record_reader::RecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::Type as PhysicalType;
@@ -210,6 +210,20 @@ where
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
         skip_records(&mut self.record_reader, self.pages.as_mut(), num_records)
+    }
+
+    fn scan_records(
+        &mut self,
+        batch_size: usize,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> Result<usize> {
+        let (consumed, _emitted) = scan_filtered_records(
+            &mut self.record_reader,
+            self.pages.as_mut(),
+            batch_size,
+            predicate,
+        )?;
+        Ok(consumed)
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
@@ -942,6 +956,70 @@ mod tests {
                 .with_precision_and_scale(34, 0)
                 .unwrap();
             assert_ne!(array, &data_decimal_array)
+        }
+    }
+
+    #[test]
+    fn test_scan_records_delta_binary_packed_mandatory() {
+        use crate::util::test_common::page_util::{DataPageBuilder, DataPageBuilderImpl};
+
+        // Build a mandatory INT64 column schema.
+        let message_type = "
+            message test_schema {
+                REQUIRED INT64 col;
+            }
+        ";
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+        let column_desc = schema.column(0);
+
+        // 512 monotone values: 0, 1, 2, …, 511 (step=1, constant within each miniblock).
+        // DELTA_BINARY_PACKED uses miniblocks of 64 values for INT64.
+        // 512 values = 8 miniblocks.  The predicate selects lo >= 256, i.e. the upper 4.
+        let n: i64 = 512;
+        let values: Vec<i64> = (0..n).collect();
+
+        let mut pb = DataPageBuilderImpl::new(column_desc.clone(), n as u32, true);
+        pb.add_values::<Int64Type>(Encoding::DELTA_BINARY_PACKED, &values);
+        let page = pb.consume();
+
+        let page_lists = vec![vec![page]];
+        let page_iterator = InMemoryPageIterator::new(page_lists);
+
+        let mut array_reader = PrimitiveArrayReader::<Int64Type>::new(
+            Box::new(page_iterator),
+            column_desc,
+            None,
+            DEFAULT_BATCH_SIZE,
+        )
+        .unwrap();
+
+        // Predicate: keep miniblocks whose value range overlaps [257, ∞).
+        // INT64 miniblock_size=64, block_size=256.  Block 0 has 4 miniblocks:
+        //   mb0: lv=0,  hi=0+64=64   → 64  < 257 → skip
+        //   mb1: lv=64, hi=64+64=128  → 128 < 257 → skip
+        //   mb2: lv=128,hi=192        → skip
+        //   mb3: lv=192,hi=256        → 256 < 257 → skip (no false-positive here)
+        // Block 1 miniblocks all have hi ≥ 320 ≥ 257 → emit (values 257..511).
+        let predicate = |_lo: i64, hi: i64| hi >= 257;
+
+        let consumed = array_reader.scan_records(n as usize, &predicate).unwrap();
+        // scan_records returns number of rows *consumed* from the page (all 512).
+        assert_eq!(consumed, n as usize);
+
+        let array = array_reader.consume_batch().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+
+        // Block 0 (0..256) all skipped; block 1 emits values 257..511 = 255 values.
+        // (First value 0 is skipped as a point [0,0]; 256 is the last value of block 0.)
+        let expected: Vec<i64> = (257..512).collect();
+        assert_eq!(array.len(), expected.len(), "emitted count mismatch");
+        for (i, &v) in expected.iter().enumerate() {
+            assert_eq!(array.value(i), v, "mismatch at index {i}");
         }
     }
 

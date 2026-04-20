@@ -132,6 +132,31 @@ pub trait ColumnValueDecoder {
     ///
     /// Returns the number of values skipped
     fn skip_values(&mut self, num_values: usize) -> Result<usize>;
+
+    /// Scan up to `num_values` values, appending to `out` only those from
+    /// miniblock regions where `predicate(lo, hi)` returns `true`.
+    ///
+    /// `predicate` receives the inclusive value range `[lo, hi]` for a region
+    /// and returns `true` if it could contain a matching value.  Returning
+    /// `true` for a non-matching region is safe (produces false positives that
+    /// the caller filters); returning `false` for a matching region would drop
+    /// values, so implementations must be conservative.
+    ///
+    /// Returns `(values_emitted, values_consumed)`.
+    ///
+    /// The default implementation ignores the predicate and decodes everything,
+    /// which is safe for all encodings.  [`crate::basic::Encoding::DELTA_BINARY_PACKED`]
+    /// overrides this to skip non-matching miniblocks in O(1).
+    fn scan_filtered_values(
+        &mut self,
+        num_values: usize,
+        out: &mut Self::Buffer,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> Result<(usize, usize)> {
+        let _ = predicate;
+        let read = self.read(out, num_values)?;
+        Ok((read, read))
+    }
 }
 
 /// Bucket-based storage for decoder instances keyed by `Encoding`.
@@ -255,6 +280,23 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             .unwrap_or_else(|| panic!("decoder for encoding {encoding} should be set"));
 
         current_decoder.skip(num_values)
+    }
+
+    fn scan_filtered_values(
+        &mut self,
+        num_values: usize,
+        out: &mut Self::Buffer,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> Result<(usize, usize)> {
+        let encoding = self
+            .current_encoding
+            .expect("current_encoding should be set");
+
+        let current_decoder = self.decoders[encoding as usize]
+            .as_mut()
+            .unwrap_or_else(|| panic!("decoder for encoding {encoding} should be set"));
+
+        current_decoder.scan_filtered(num_values, out, predicate)
     }
 }
 

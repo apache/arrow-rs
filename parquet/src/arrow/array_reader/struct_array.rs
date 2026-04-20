@@ -187,6 +187,25 @@ impl ArrayReader for StructArrayReader {
         }
     }
 
+    fn scan_records(
+        &mut self,
+        batch_size: usize,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> Result<usize> {
+        // Miniblock-level predicate skipping requires all children to produce the same
+        // number of values.  For a single-child struct (a single-column projection) we
+        // can safely delegate — the predicate is applied to the one leaf and the struct
+        // assembles from whatever count that leaf emits.
+        //
+        // For multi-column structs the columns have independent value ranges so a shared
+        // predicate would cause mismatched output lengths; fall back to full decoding.
+        if self.children.len() == 1 {
+            self.children[0].scan_records(batch_size, predicate)
+        } else {
+            self.read_records(batch_size)
+        }
+    }
+
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
         let mut skipped = None;
         for child in self.children.iter_mut() {
