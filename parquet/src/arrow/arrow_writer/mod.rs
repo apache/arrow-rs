@@ -1699,6 +1699,7 @@ mod tests {
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
     };
+    use crate::record::RowAccessor;
 
     #[test]
     fn arrow_writer() {
@@ -2595,7 +2596,7 @@ mod tests {
 
         let array = Arc::new(builder.finish());
 
-        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+        let batch = RecordBatch::try_new(schema, vec![array.clone()]).unwrap();
 
         let file = tempfile::tempfile().unwrap();
 
@@ -2645,6 +2646,17 @@ mod tests {
             .map(|s| s.count)
             .sum();
         assert_eq!(num_plain_encoded, 5);
+
+        // Read back the values and confirm they match the original array.
+        let rows: Vec<_> = reader
+            .get_row_iter(None)
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows.len(), array.len());
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(row.get_string(0).unwrap(), array.value(i));
+        }
     }
 
     #[test]
