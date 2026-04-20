@@ -236,6 +236,41 @@ pub trait Decoder<T: DataType>: Send {
 
     /// Skip the specified number of values in this decoder stream.
     fn skip(&mut self, num_values: usize) -> Result<usize>;
+
+    /// Scan up to `num_values`, appending to `out` only values from regions
+    /// where `predicate(lo, hi)` returns `true`.
+    ///
+    /// `predicate` receives the inclusive value range `[lo, hi]` for a
+    /// region (e.g. a miniblock) and returns `true` if that region could
+    /// contain a matching value.  Returning `true` for a region that does
+    /// not actually match is safe — it produces false positives that the
+    /// caller filters row-by-row.  Returning `false` for a region that
+    /// does match would silently drop values, so implementations must be
+    /// conservative.
+    ///
+    /// Returns `(values_emitted, values_consumed)`.  `values_consumed` is
+    /// the number of logical positions advanced in the stream (always <=
+    /// `num_values`); `values_emitted` is how many were appended to `out`
+    /// (always <= `values_consumed`).
+    ///
+    /// The default implementation cannot inspect region ranges, so it
+    /// decodes everything (predicate is effectively ignored, all values
+    /// are emitted).  Encodings that carry per-region metadata — such as
+    /// `DELTA_BINARY_PACKED` with its per-miniblock bit-width headers —
+    /// should override this to skip non-matching regions in O(1).
+    fn scan_filtered(
+        &mut self,
+        num_values: usize,
+        out: &mut Vec<T::T>,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> Result<(usize, usize)> {
+        let _ = predicate; // conservative default: can't check ranges
+        let start = out.len();
+        out.resize(start + num_values, T::T::default());
+        let emitted = self.get(&mut out[start..])?;
+        out.truncate(start + emitted);
+        Ok((emitted, emitted))
+    }
 }
 
 /// Gets a decoder for the column descriptor `descr` and encoding type `encoding`.
@@ -911,6 +946,143 @@ where
         }
 
         Ok(to_skip)
+    }
+
+    fn scan_filtered(
+        &mut self,
+        num_values: usize,
+        out: &mut Vec<T::T>,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> Result<(usize, usize)> {
+        assert!(self.initialized, "Bit reader is not initialized");
+
+        let mut emitted = 0usize;
+        let mut consumed = 0usize;
+        let to_scan = num_values.min(self.values_left);
+
+        if to_scan == 0 {
+            return Ok((0, 0));
+        }
+
+        // The first value is stored as an absolute in the page header (not delta-encoded).
+        // Check it as a single-point range [v, v].
+        if let Some(value) = self.first_value.take() {
+            self.last_value = value;
+            let lv = self.last_value.as_i64()?;
+            if predicate(lv, lv) {
+                out.push(value);
+                emitted += 1;
+            }
+            consumed += 1;
+            self.values_left -= 1;
+        }
+
+        // Scratch buffer for non-emitting decodes (bw>0 predicate misses mid-stream).
+        let mut scratch = Vec::<T::T>::new();
+
+        while consumed < to_scan {
+            if self.mini_block_remaining == 0 {
+                self.next_mini_block()?;
+            }
+
+            let bw = self.mini_block_bit_widths[self.mini_block_idx] as usize;
+            self.check_bit_width(bw)?;
+            let n = self.mini_block_remaining.min(to_scan - consumed);
+            let min_delta = self.min_delta.as_i64()?;
+
+            // Conservative range for the n values that follow last_value:
+            //   each step adds (min_delta + remainder), remainder ∈ [0, max_rem]
+            //   worst-case lo: n steps at min_delta, remainder=0
+            //   worst-case hi: n steps at min_delta+max_rem
+            let max_rem: i64 = if bw == 0 {
+                0
+            } else if bw >= 63 {
+                i64::MAX
+            } else {
+                (1i64 << bw) - 1
+            };
+            let ni = n as i64;
+            let lv = self.last_value.as_i64()?;
+            let lo = lv.saturating_add(ni.saturating_mul(min_delta.min(0)));
+            let hi = lv.saturating_add(
+                ni.saturating_mul(min_delta.saturating_add(max_rem).max(0)),
+            );
+
+            if !predicate(lo, hi) {
+                // This miniblock cannot satisfy the predicate — skip it.
+                if bw == 0 {
+                    // Zero-byte payload: advance last_value arithmetically, no reads.
+                    if min_delta != 0 {
+                        let total = min_delta.wrapping_mul(ni);
+                        let step = T::T::from_i64(total)
+                            .ok_or_else(|| general_err!("delta*n overflow in scan_filtered"))?;
+                        self.last_value = self.last_value.wrapping_add(&step);
+                    }
+                } else if consumed + n >= to_scan {
+                    // Last miniblock of this scan call — last_value won't be used again
+                    // within this call, so skip bits without decoding.
+                    self.bit_reader.skip(n, bw);
+                } else {
+                    // Mid-stream bw>0 miss: must decode to keep last_value exact for
+                    // the subsequent predicate range checks in this same scan call.
+                    scratch.resize(n, T::T::default());
+                    let got = self.bit_reader.get_batch(&mut scratch[..n], bw);
+                    if min_delta == 0 {
+                        for v in &scratch[..got] {
+                            self.last_value = v.wrapping_add(&self.last_value);
+                        }
+                    } else {
+                        for v in &scratch[..got] {
+                            self.last_value = v
+                                .wrapping_add(&self.min_delta)
+                                .wrapping_add(&self.last_value);
+                        }
+                    }
+                }
+            } else {
+                // Predicate may match — decode and emit all values in this miniblock.
+                // (Caller filters individual values if a finer predicate is needed.)
+                let start = out.len();
+                out.resize(start + n, T::T::default());
+                let got = self.bit_reader.get_batch(&mut out[start..start + n], bw);
+                out.truncate(start + got);
+
+                if bw == 0 {
+                    if min_delta == 0 {
+                        out[start..start + got].fill(self.last_value);
+                    } else {
+                        let mut delta = self.min_delta;
+                        for v in &mut out[start..start + got] {
+                            *v = self.last_value.wrapping_add(&delta);
+                            delta = delta.wrapping_add(&self.min_delta);
+                        }
+                        if got > 0 {
+                            self.last_value = out[start + got - 1];
+                        }
+                    }
+                } else if min_delta == 0 {
+                    for v in &mut out[start..start + got] {
+                        *v = v.wrapping_add(&self.last_value);
+                        self.last_value = *v;
+                    }
+                } else {
+                    for v in &mut out[start..start + got] {
+                        *v = v
+                            .wrapping_add(&self.min_delta)
+                            .wrapping_add(&self.last_value);
+                        self.last_value = *v;
+                    }
+                }
+
+                emitted += got;
+            }
+
+            consumed += n;
+            self.mini_block_remaining -= n;
+            self.values_left -= n;
+        }
+
+        Ok((emitted, consumed))
     }
 }
 
@@ -2316,5 +2488,124 @@ mod tests {
             "{}",
             err
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // scan_filtered tests
+    // -----------------------------------------------------------------------
+
+    /// Encode `data` with `encoding`, then call `scan_filtered` with `predicate`.
+    /// Returns `(out, emitted, consumed)`.
+    fn test_scan_filtered<T: DataType>(
+        data: &[T::T],
+        encoding: Encoding,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> (Vec<T::T>, usize, usize) {
+        let col_descr = create_test_col_desc_ptr(-1, T::get_physical_type());
+        let mut encoder = get_encoder::<T>(encoding, &col_descr).expect("get encoder");
+        encoder.put(data).expect("ok to encode");
+        let bytes = encoder.flush_buffer().expect("ok to flush");
+
+        let mut decoder = get_decoder::<T>(col_descr, encoding).expect("get decoder");
+        decoder
+            .set_data(bytes, data.len())
+            .expect("ok to set data");
+
+        let mut out = Vec::new();
+        let (emitted, consumed) = decoder
+            .scan_filtered(data.len(), &mut out, predicate)
+            .expect("ok to scan_filtered");
+        (out, emitted, consumed)
+    }
+
+    /// Default provided impl (PLAIN encoding): predicate is ignored — all values emitted.
+    #[test]
+    fn test_scan_filtered_plain_default_always_true() {
+        let data: Vec<i32> = (1..=10).collect();
+        let (out, emitted, consumed) =
+            test_scan_filtered::<Int32Type>(&data, Encoding::PLAIN, &|_, _| true);
+        assert_eq!(emitted, 10);
+        assert_eq!(consumed, 10);
+        assert_eq!(out, data);
+    }
+
+    /// Default provided impl: even with a reject-all predicate, all values are emitted
+    /// because the default cannot inspect region ranges.
+    #[test]
+    fn test_scan_filtered_plain_default_always_false() {
+        let data: Vec<i32> = (1..=10).collect();
+        let (out, emitted, consumed) =
+            test_scan_filtered::<Int32Type>(&data, Encoding::PLAIN, &|_, _| false);
+        // Default implementation: predicate ignored, everything decoded
+        assert_eq!(emitted, 10);
+        assert_eq!(consumed, 10);
+        assert_eq!(out, data);
+    }
+
+    /// DeltaBitPackDecoder override: reject-all predicate emits nothing.
+    #[test]
+    fn test_scan_filtered_delta_reject_all() {
+        let data: Vec<i32> = (0..64).collect();
+        let (out, emitted, consumed) =
+            test_scan_filtered::<Int32Type>(&data, Encoding::DELTA_BINARY_PACKED, &|_, _| false);
+        assert_eq!(emitted, 0);
+        assert_eq!(consumed, 64);
+        assert!(out.is_empty());
+    }
+
+    /// DeltaBitPackDecoder override: accept-all predicate emits everything (same as get).
+    #[test]
+    fn test_scan_filtered_delta_accept_all() {
+        let data: Vec<i32> = (0..64).collect();
+        let (out, emitted, consumed) =
+            test_scan_filtered::<Int32Type>(&data, Encoding::DELTA_BINARY_PACKED, &|_, _| true);
+        assert_eq!(emitted, 64);
+        assert_eq!(consumed, 64);
+        assert_eq!(out, data);
+    }
+
+    /// DeltaBitPackDecoder override: predicate hi >= 32 on ascending 0..64.
+    ///
+    /// The first_value (0) is checked as a point [0,0] → rejected (0 < 32).
+    /// Miniblock 1 covers [1..=32], range check [0,32]: hi=32 >= 32 → accepted.
+    /// Miniblock 2 covers [33..=63], range [32,63]: hi=63 >= 32 → accepted.
+    /// Result: values 1..=63 emitted (63 values); 0 was correctly rejected at point check.
+    #[test]
+    fn test_scan_filtered_delta_conservative_overlap() {
+        let data: Vec<i32> = (0..64).collect();
+        let (out, emitted, consumed) = test_scan_filtered::<Int32Type>(
+            &data,
+            Encoding::DELTA_BINARY_PACKED,
+            &|_lo, hi| hi >= 32,
+        );
+        assert_eq!(consumed, 64);
+        assert_eq!(emitted, 63); // value 0 rejected at first_value point check
+        assert_eq!(out, data[1..].to_vec());
+    }
+
+    /// DeltaBitPackDecoder override: constant column (bw=0) — reject predicate skips O(1).
+    #[test]
+    fn test_scan_filtered_delta_bw0_reject() {
+        let data = vec![42i32; 64]; // constant → bw=0 miniblocks
+        let (out, emitted, consumed) =
+            test_scan_filtered::<Int32Type>(&data, Encoding::DELTA_BINARY_PACKED, &|lo, hi| {
+                lo <= 99 && hi >= 100 // requires value >= 100; 42 is outside
+            });
+        assert_eq!(consumed, 64);
+        assert_eq!(emitted, 0);
+        assert!(out.is_empty());
+    }
+
+    /// DeltaBitPackDecoder override: constant column (bw=0) — accept predicate emits all.
+    #[test]
+    fn test_scan_filtered_delta_bw0_accept() {
+        let data = vec![42i32; 64];
+        let (out, emitted, consumed) =
+            test_scan_filtered::<Int32Type>(&data, Encoding::DELTA_BINARY_PACKED, &|lo, _hi| {
+                lo <= 42 // range includes 42
+            });
+        assert_eq!(consumed, 64);
+        assert_eq!(emitted, 64);
+        assert_eq!(out, data);
     }
 }
