@@ -484,7 +484,16 @@ impl RleDecoder {
             if self.rle_left > 0 {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
-                let dict_value = dict[dict_idx].clone();
+                let dict_value = dict
+                    .get(dict_idx)
+                    .ok_or_else(|| {
+                        general_err!(
+                            "dictionary index out of bounds: the len is {} but the index is {}",
+                            dict.len(),
+                            dict_idx
+                        )
+                    })?
+                    .clone();
 
                 buffer[values_read..values_read + num_values].fill(dict_value);
 
@@ -514,16 +523,30 @@ impl RleDecoder {
                         break;
                     }
                     {
+                        #[cold]
+                        #[inline(never)]
+                        fn oob(max_idx: u32, dict_len: usize) -> ParquetError {
+                            general_err!(
+                                "dictionary index out of bounds: the len is {} but the index is {}",
+                                dict_len,
+                                max_idx
+                            )
+                        }
+                        const CHUNK: usize = 16;
                         let out = &mut buffer[values_read..values_read + num_values];
                         let idx = &index_buf[..num_values];
-                        let mut out_chunks = out.chunks_exact_mut(8);
-                        let idx_chunks = idx.chunks_exact(8);
+                        let dict_len = dict.len();
+                        let mut out_chunks = out.chunks_exact_mut(CHUNK);
+                        let idx_chunks = idx.chunks_exact(CHUNK);
                         for (out_chunk, idx_chunk) in out_chunks.by_ref().zip(idx_chunks) {
-                            let dict_len = dict.len();
-                            assert!(
-                                idx_chunk.iter().all(|&i| (i as usize) < dict_len),
-                                "dictionary index out of bounds"
-                            );
+                            // u32 max-reduction instead of `.all(|&i| ..)`: `.all`
+                            // short-circuits and blocks autovectorisation. Negative
+                            // i32 cast to u32 becomes a large value so the bounds
+                            // check still rejects it.
+                            let max_idx = idx_chunk.iter().fold(0u32, |acc, &i| acc.max(i as u32));
+                            if (max_idx as usize) >= dict_len {
+                                return Err(oob(max_idx, dict_len));
+                            }
                             for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
                                 // SAFETY: all indices checked above to be in bounds
                                 b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
@@ -532,9 +555,14 @@ impl RleDecoder {
                         for (b, i) in out_chunks
                             .into_remainder()
                             .iter_mut()
-                            .zip(idx.chunks_exact(8).remainder().iter())
+                            .zip(idx.chunks_exact(CHUNK).remainder().iter())
                         {
-                            b.clone_from(&dict[*i as usize]);
+                            let dict_idx = *i as usize;
+                            if dict_idx >= dict_len {
+                                return Err(oob(*i as u32, dict_len));
+                            }
+                            // SAFETY: bounds checked above
+                            b.clone_from(unsafe { dict.get_unchecked(dict_idx) });
                         }
                     }
                     self.bit_packed_left -= num_values as u32;
