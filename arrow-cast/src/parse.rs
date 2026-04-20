@@ -826,7 +826,9 @@ fn parse_e_notation<T: DecimalType>(
     }
 
     if exp < 0 {
-        result = result.div_wrapping(base.pow_wrapping(-exp as _));
+        let divisor = base.pow_wrapping(-exp as _);
+        let half_divisor = divisor.div_wrapping(T::Native::usize_as(2));
+        result = result.add_wrapping(half_divisor).div_wrapping(divisor);
     } else {
         result = result.mul_wrapping(base.pow_wrapping(exp as _));
     }
@@ -851,6 +853,8 @@ pub fn parse_decimal<T: DecimalType>(
     let base = T::Native::usize_as(10);
 
     let bs = s.as_bytes();
+    let mut round_up = false;
+    let mut rounding_checked = false;
 
     if !bs
         .last()
@@ -915,6 +919,12 @@ pub fn parse_decimal<T: DecimalType>(
                         // We have processed all the digits that we need. All that
                         // is left is to validate that the rest of the string contains
                         // valid digits.
+                        if !rounding_checked {
+                            if *b >= b'5' {
+                                round_up = true;
+                            }
+                            rounding_checked = true;
+                        }
                         continue;
                     }
                     fractionals += 1;
@@ -964,6 +974,8 @@ pub fn parse_decimal<T: DecimalType>(
             return Err(ArrowError::ParseError(format!(
                 "parse decimal overflow ({s})"
             )));
+        } else if round_up {
+            result = result.add_wrapping(T::Native::usize_as(1));
         }
     }
 
@@ -2813,5 +2825,53 @@ mod tests {
         assert_eq!(interval.months, 0);
         assert_eq!(interval.days, 0);
         assert_eq!(interval.nanoseconds, NANOS_PER_SECOND);
+    }
+
+    #[test]
+    fn test_parse_decimal_should_round_up_carry_over() {
+        let string = "1.99";
+        let result = parse_decimal::<Decimal128Type>(string, 10, 1).unwrap();
+
+        assert_eq!(
+            result, 20,
+            "Parsing should round 1.99 to 2.0 (value 20), but found: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_parse_decimal_should_keep_exact_value() {
+        let string = "1.99";
+        let result = parse_decimal::<Decimal128Type>(string, 10, 2).unwrap();
+
+        assert_eq!(
+            result, 199,
+            "Parsing should keep 1.99 exactly (value 199), but found: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_parse_decimal_should_round_up_simple() {
+        let string = "1.39";
+        let result = parse_decimal::<Decimal128Type>(string, 10, 1).unwrap();
+
+        assert_eq!(
+            result, 14,
+            "Parsing should round 1.39 to 1.4 (value 14), but found: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_parse_decimal_should_round_down() {
+        let string = "1.33";
+        let result = parse_decimal::<Decimal128Type>(string, 10, 1).unwrap();
+
+        assert_eq!(
+            result, 13,
+            "Parsing should round down 1.33 to 1.3 (value 13), but found: {}",
+            result
+        );
     }
 }
