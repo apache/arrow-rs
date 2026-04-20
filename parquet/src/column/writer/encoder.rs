@@ -341,26 +341,24 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn flush_data_page(&mut self) -> Result<DataPageValues<T::T>> {
         let (buf, encoding) = match &mut self.dict_encoder {
-            Some(encoder) => {
-                let buf = encoder.write_indices()?;
-                if let Some(counter) = self.dict_fallback_counter.as_mut() {
-                    if !counter.continue_with_dict_encoded_page(buf.len()) {
-                        self.dict_fallback_counter = None;
-                    }
-                }
-                (buf, Encoding::RLE_DICTIONARY)
-            }
+            Some(encoder) => (encoder.write_indices()?, Encoding::RLE_DICTIONARY),
             _ => (self.encoder.flush_buffer()?, self.encoder.encoding()),
         };
 
-        Ok(DataPageValues {
+        let page = DataPageValues {
             buf,
             encoding,
             num_values: std::mem::take(&mut self.num_values),
             min_value: self.min_value.take(),
             max_value: self.max_value.take(),
             variable_length_bytes: self.variable_length_bytes.take(),
-        })
+        };
+
+        if let Some(counter) = self.dict_fallback_counter.as_mut() {
+            counter.commit_page(&page);
+        }
+
+        Ok(page)
     }
 
     fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {

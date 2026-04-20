@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::basic::Type;
+use crate::basic::{Encoding, Type};
+use crate::column::writer::encoder::DataPageValues;
 use crate::data_type::Int96;
 use crate::data_type::private::ParquetValueType;
 use crate::schema::types::ColumnDescriptor;
@@ -89,27 +90,37 @@ impl DictFallbackCounter {
         self.num_values += 1;
     }
 
-    /// If the number of values accounted so far reaches or exceeds the minimum
-    /// sample length, returns false to indicate that the counting
-    /// should be stopped.
-    /// Otherwise, increments the total counted size of dictionary encoded data
-    /// by the given amount in bytes and returns true.
+    /// Increments the total counted size of dictionary encoded data
+    /// for a page encoded with the dictionary encoding.
+    pub fn commit_page<T>(&mut self, page: &DataPageValues<T>)
+    where
+        T: ParquetValueType,
+    {
+        assert_eq!(
+            page.encoding,
+            Encoding::RLE_DICTIONARY,
+            "should only be used with the dictionary encoder"
+        );
+        self.encoded_data_size = self.encoded_data_size.saturating_add(page.buf.len());
+    }
+
+    /// If the number of dictionary encoded values accounted so far
+    /// reaches or exceeds the configured minimum, returns true to indicate
+    /// that the counting should be stopped, otherwise returns false.
     #[inline]
-    pub fn continue_with_dict_encoded_page(&mut self, encoded_len: usize) -> bool {
-        if self.num_values >= self.min_sample_len {
-            // The sample size has been reached, no need to proceed with counting.
-            return false;
-        }
-        self.encoded_data_size = self.encoded_data_size.saturating_add(encoded_len);
-        true
+    pub fn min_sample_len_reached(&self) -> bool {
+        self.num_values >= self.min_sample_len
     }
 
     /// Returns true if the estimated size of plainly encoded data, in bytes,
     /// would not exceed the size of data encoded with a dictionary,
-    /// as counted by the `continue_with_dict_encoded_page` calls made on this counter.
+    /// as counted by the `commit_page` calls made on this counter.
+    ///
+    /// This method does not return true until the minimum sample length has been reached,
+    /// as indicated by the `min_sample_len_reached` method.
     #[inline]
     pub fn is_dict_encoding_unfavorable(&self, dict_encoded_size: usize) -> bool {
-        self.num_values >= self.min_sample_len
+        self.min_sample_len_reached()
             && self.raw_data_size <= dict_encoded_size.saturating_add(self.encoded_data_size)
     }
 }
