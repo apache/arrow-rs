@@ -1467,6 +1467,7 @@ impl<W: Write> StreamWriter<W> {
         }
 
         write_continuation(&mut self.writer, &self.write_options, 0)?;
+        self.writer.flush()?;
 
         self.finished = true;
 
@@ -1618,7 +1619,6 @@ fn write_body_buffers<W: Write>(
         writer.write_all(&PADDING[..pad_len])?;
     }
 
-    writer.flush()?;
     Ok(total_len)
 }
 
@@ -1651,8 +1651,6 @@ fn write_continuation<W: Write>(
         }
         z => panic!("Unsupported crate::MetadataVersion {z:?}"),
     };
-
-    writer.flush()?;
 
     Ok(written)
 }
@@ -3823,7 +3821,7 @@ mod tests {
 
             // Importantly we set `require_alignment`, checking that 16-byte alignment is sufficient
             // for `read_record_batch` later on to read the data in a zero-copy manner.
-            let decoder =
+            let mut decoder =
                 FileDecoder::new(Arc::new(schema), footer.version()).with_require_alignment(true);
 
             let batches = footer.recordBatches().unwrap();
@@ -3875,7 +3873,7 @@ mod tests {
 
         // Importantly we set `require_alignment`, otherwise the error later is suppressed due to copying
         // to an aligned buffer in `ArrayDataBuilder.build_aligned`.
-        let decoder =
+        let mut decoder =
             FileDecoder::new(Arc::new(schema), footer.version()).with_require_alignment(true);
 
         let batches = footer.recordBatches().unwrap();

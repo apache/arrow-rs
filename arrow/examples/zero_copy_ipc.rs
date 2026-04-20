@@ -48,7 +48,7 @@ fn main() {
 
     // Now, use the FileDecoder API (wrapped by `IPCBufferDecoder` for
     // convenience) to crate Arrays re-using the data in the underlying buffer
-    let decoder = IPCBufferDecoder::new(buffer);
+    let mut decoder = IPCBufferDecoder::new(buffer);
     assert_eq!(decoder.num_batches(), 3);
 
     // Create the Arrays and print them
@@ -133,7 +133,7 @@ impl IPCBufferDecoder {
     /// Return the [`RecordBatch`] at message index `i`.
     ///
     /// This may return `None` if the IPC message was None
-    fn get_batch(&self, i: usize) -> Result<Option<RecordBatch>> {
+    fn get_batch(&mut self, i: usize) -> Result<Option<RecordBatch>> {
         let block = &self.batches[i];
         let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
         let data = self

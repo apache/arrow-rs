@@ -25,7 +25,10 @@ use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{RecordBatchDecoder, read_dictionary_impl};
+use crate::reader::{
+    RecordBatchDecoder, get_dictionary_values, materialize_dictionary_deltas,
+    update_dictionaries_lazy,
+};
 use crate::{CONTINUATION_MARKER, MessageHeader};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -37,6 +40,7 @@ pub struct StreamDecoder {
     schema: Option<SchemaRef>,
     /// Lookup table for dictionaries by ID
     dictionaries: HashMap<i64, ArrayRef>,
+    pending_dictionary_deltas: HashMap<i64, Vec<ArrayRef>>,
     /// The decoder state
     state: DecoderState,
     /// A scratch buffer when a read is split across multiple `Buffer`
@@ -222,6 +226,11 @@ impl StreamDecoder {
                             self.schema = Some(Arc::new(schema));
                         }
                         MessageHeader::RecordBatch => {
+                            materialize_dictionary_deltas(
+                                &mut self.dictionaries,
+                                &mut self.pending_dictionary_deltas,
+                            )?;
+
                             let batch = message.header_as_record_batch().unwrap();
                             let schema = self.schema.clone().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
@@ -234,6 +243,7 @@ impl StreamDecoder {
                                 &version,
                             )?
                             .with_require_alignment(self.require_alignment)
+                            .with_skip_validation(self.skip_validation.clone())
                             .read_record_batch()?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
@@ -243,7 +253,8 @@ impl StreamDecoder {
                             let schema = self.schema.as_deref().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            read_dictionary_impl(
+
+                            let dictionary_values = get_dictionary_values(
                                 &body,
                                 dictionary,
                                 schema,
@@ -252,6 +263,15 @@ impl StreamDecoder {
                                 self.require_alignment,
                                 self.skip_validation.clone(),
                             )?;
+
+                            update_dictionaries_lazy(
+                                &mut self.dictionaries,
+                                &mut self.pending_dictionary_deltas,
+                                dictionary.isDelta(),
+                                dictionary.id(),
+                                dictionary_values,
+                            )?;
+
                             self.state = DecoderState::default();
                         }
                         MessageHeader::NONE => {

@@ -781,14 +781,6 @@ fn read_dictionary_impl(
     Ok(())
 }
 
-/// Updates the `dictionaries_by_id` with the provided dictionary values and id.
-///
-/// # Errors
-/// - If `is_delta` is true and there is no existing dictionary for the given
-///   `dict_id`
-/// - If `is_delta` is true and the concatenation of the existing and new
-///   dictionary fails. This usually signals a type mismatch between the old and
-///   new values.
 fn update_dictionaries(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     is_delta: bool,
@@ -796,9 +788,6 @@ fn update_dictionaries(
     dict_values: ArrayRef,
 ) -> Result<(), ArrowError> {
     if !is_delta {
-        // We don't currently record the isOrdered field. This could be general
-        // attributes of arrays.
-        // Add (possibly multiple) array refs to the dictionaries array.
         dictionaries_by_id.insert(dict_id, dict_values.clone());
         return Ok(());
     }
@@ -814,6 +803,70 @@ fn update_dictionaries(
     })?;
 
     dictionaries_by_id.insert(dict_id, combined);
+
+    Ok(())
+}
+
+/// Internal lazy update helper used by StreamReader / FileDecoder / StreamDecoder.
+///
+/// Keeps the decode boundary as `HashMap<i64, ArrayRef>` and stores only pending
+/// delta chunks separately until a record batch actually needs them.
+fn update_dictionaries_lazy(
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    pending_dictionary_deltas: &mut HashMap<i64, Vec<ArrayRef>>,
+    is_delta: bool,
+    dict_id: i64,
+    dict_values: ArrayRef,
+) -> Result<(), ArrowError> {
+    if !is_delta {
+        dictionaries_by_id.insert(dict_id, dict_values);
+        pending_dictionary_deltas.remove(&dict_id);
+        return Ok(());
+    }
+
+    if !dictionaries_by_id.contains_key(&dict_id) {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "No existing dictionary for delta dictionary with id '{dict_id}'"
+        )));
+    }
+
+    pending_dictionary_deltas
+        .entry(dict_id)
+        .or_default()
+        .push(dict_values);
+
+    Ok(())
+}
+
+fn materialize_dictionary_deltas(
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    pending_dictionary_deltas: &mut HashMap<i64, Vec<ArrayRef>>,
+) -> Result<(), ArrowError> {
+    if pending_dictionary_deltas.is_empty() {
+        return Ok(());
+    }
+
+    let pending = std::mem::take(pending_dictionary_deltas);
+
+    for (dict_id, deltas) in pending {
+        let existing = dictionaries_by_id.get(&dict_id).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "No existing dictionary for delta dictionary with id '{dict_id}'"
+            ))
+        })?;
+
+        let mut arrays: Vec<&dyn Array> = Vec::with_capacity(1 + deltas.len());
+        arrays.push(existing.as_ref());
+        for delta in &deltas {
+            arrays.push(delta.as_ref());
+        }
+
+        let combined = concat::concat(&arrays).map_err(|e| {
+            ArrowError::InvalidArgumentError(format!("Failed to concat delta dictionary: {e}"))
+        })?;
+
+        dictionaries_by_id.insert(dict_id, combined);
+    }
 
     Ok(())
 }
@@ -977,6 +1030,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 pub struct FileDecoder {
     schema: SchemaRef,
     dictionaries: HashMap<i64, ArrayRef>,
+    pending_dictionary_deltas: HashMap<i64, Vec<ArrayRef>>,
     version: MetadataVersion,
     projection: Option<Vec<usize>>,
     require_alignment: bool,
@@ -990,6 +1044,7 @@ impl FileDecoder {
             schema,
             version,
             dictionaries: Default::default(),
+            pending_dictionary_deltas: Default::default(),
             projection: None,
             require_alignment: false,
             skip_validation: UnsafeFlag::new(),
@@ -1052,7 +1107,8 @@ impl FileDecoder {
         match message.header_type() {
             crate::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().unwrap();
-                read_dictionary_impl(
+
+                let dict_values = get_dictionary_values(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
                     &self.schema,
@@ -1060,6 +1116,14 @@ impl FileDecoder {
                     &message.version(),
                     self.require_alignment,
                     self.skip_validation.clone(),
+                )?;
+
+                update_dictionaries_lazy(
+                    &mut self.dictionaries,
+                    &mut self.pending_dictionary_deltas,
+                    batch.isDelta(),
+                    batch.id(),
+                    dict_values,
                 )
             }
             t => Err(ArrowError::ParseError(format!(
@@ -1070,7 +1134,7 @@ impl FileDecoder {
 
     /// Read the RecordBatch with the given block and data buffer
     pub fn read_record_batch(
-        &self,
+        &mut self,
         block: &Block,
         buf: &Buffer,
     ) -> Result<Option<RecordBatch>, ArrowError> {
@@ -1080,10 +1144,14 @@ impl FileDecoder {
                 "Not expecting a schema when messages are read".to_string(),
             )),
             crate::MessageHeader::RecordBatch => {
+                materialize_dictionary_deltas(
+                    &mut self.dictionaries,
+                    &mut self.pending_dictionary_deltas,
+                )?;
+
                 let batch = message.header_as_record_batch().ok_or_else(|| {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
-                // read the block that makes up the record batch into a buffer
                 RecordBatchDecoder::try_new(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
@@ -1480,6 +1548,8 @@ pub struct StreamReader<R> {
     /// Dictionaries may be appended to in the streaming format.
     dictionaries_by_id: HashMap<i64, ArrayRef>,
 
+    pending_dictionary_deltas: HashMap<i64, Vec<ArrayRef>>,
+
     /// An indicator of whether the stream is complete.
     ///
     /// This value is set to `true` the first time the reader's `next()` returns `None`.
@@ -1553,6 +1623,7 @@ impl<R: Read> StreamReader<R> {
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();
+        let pending_dictionary_deltas = HashMap::new();
 
         let projection = match projection {
             Some(projection_indices) => {
@@ -1567,6 +1638,7 @@ impl<R: Read> StreamReader<R> {
             schema: Arc::new(schema),
             finished: false,
             dictionaries_by_id,
+            pending_dictionary_deltas,
             projection,
             skip_validation: UnsafeFlag::new(),
         })
@@ -1644,6 +1716,11 @@ impl<R: Read> StreamReader<R> {
                 IpcMessage::Schema(arrow_schema)
             }
             Message::MessageHeader::RecordBatch => {
+                materialize_dictionary_deltas(
+                    &mut self.dictionaries_by_id,
+                    &mut self.pending_dictionary_deltas,
+                )?;
+
                 let batch = message.header_as_record_batch().ok_or_else(|| {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
@@ -1681,8 +1758,9 @@ impl<R: Read> StreamReader<R> {
                     self.skip_validation.clone(),
                 )?;
 
-                update_dictionaries(
+                update_dictionaries_lazy(
                     &mut self.dictionaries_by_id,
+                    &mut self.pending_dictionary_deltas,
                     dict.isDelta(),
                     dict.id(),
                     dict_values.clone(),
@@ -1690,10 +1768,11 @@ impl<R: Read> StreamReader<R> {
 
                 IpcMessage::DictionaryBatch {
                     id: dict.id(),
-                    is_delta: (dict.isDelta()),
-                    values: (dict_values),
+                    is_delta: dict.isDelta(),
+                    values: dict_values,
                 }
             }
+
             x => {
                 return Err(ArrowError::ParseError(format!(
                     "Unsupported message header type in IPC stream: '{x:?}'"
