@@ -847,6 +847,30 @@ where
             self.values_left -= 1;
         }
 
+        // Terminal skip: caller is discarding all remaining values on this page.
+        // last_value will never be read again, so we can use O(1) arithmetic
+        // skips (BitReader::skip) instead of decoding through get_batch.
+        let terminal = to_skip >= self.values_left + skip;
+
+        if terminal {
+            while skip < to_skip {
+                if self.mini_block_remaining == 0 {
+                    self.next_mini_block()?;
+                }
+                let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
+                self.check_bit_width(bit_width)?;
+                let n = self.mini_block_remaining.min(to_skip - skip);
+                // bit_width=0 produces a no-op here (correct: 0-byte payloads)
+                self.bit_reader.skip(n, bit_width);
+                skip += n;
+                self.mini_block_remaining -= n;
+                self.values_left -= n;
+            }
+            return Ok(to_skip);
+        }
+
+        // Non-terminal skip: last_value must be exact so subsequent get() calls
+        // produce correct absolute values.
         let mini_block_batch_size = match T::T::PHYSICAL_TYPE {
             Type::INT32 => 32,
             Type::INT64 => 64,
