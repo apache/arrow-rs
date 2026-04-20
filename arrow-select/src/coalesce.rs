@@ -149,22 +149,19 @@ pub struct BatchCoalescer {
     completed: VecDeque<RecordBatch>,
     /// Biggest coalesce batch size. See [`Self::with_biggest_coalesce_batch_size`]
     biggest_coalesce_batch_size: Option<usize>,
-    /// Cached schema-level support for fused filter coalescing.
-    fused_filter_support: FusedFilterSupport,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FusedFilterPath {
-    InlineBinaryViewOnly,
-    MixedPrimitiveInlineBinaryView,
-    Unsupported,
+    /// Cached schema-level fused filter support, if supported.
+    fused_filter: Option<FusedFilter>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum FusedFilterSupport {
-    InlineBinaryViewOnly(Vec<usize>),
-    MixedPrimitiveInlineBinaryView(Vec<usize>),
-    Unsupported,
+struct FusedFilter {
+    view_columns: Vec<FusedViewColumn>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FusedViewColumn {
+    Utf8(usize),
+    Binary(usize),
 }
 
 impl BatchCoalescer {
@@ -176,7 +173,7 @@ impl BatchCoalescer {
     ///   Typical values are `4096` or `8192` rows.
     ///
     pub fn new(schema: SchemaRef, target_batch_size: usize) -> Self {
-        let fused_filter_support = classify_fused_filter_support(&schema);
+        let fused_filter = classify_fused_filter(&schema);
         let in_progress_arrays = schema
             .fields()
             .iter()
@@ -191,7 +188,7 @@ impl BatchCoalescer {
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
             biggest_coalesce_batch_size: None,
-            fused_filter_support,
+            fused_filter,
         }
     }
 
@@ -260,16 +257,10 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        match classify_fused_filter_path(&self.fused_filter_support, &batch) {
-            FusedFilterPath::InlineBinaryViewOnly => {
-                return self.push_batch_with_filter_fused_inline_binary_view_only(batch, filter);
+        if let Some(fused_filter) = &self.fused_filter {
+            if fused_filter.supports_batch(&batch) {
+                return self.push_batch_with_filter_fused_inline_view(batch, filter);
             }
-            FusedFilterPath::MixedPrimitiveInlineBinaryView => {
-                return self.push_batch_with_filter_fused_mixed_primitive_inline_binary_view(
-                    batch, filter,
-                );
-            }
-            FusedFilterPath::Unsupported => {}
         }
 
         // TODO: optimize this to avoid materializing (copying the results
@@ -601,86 +592,54 @@ impl BatchCoalescer {
 }
 
 #[inline]
-fn classify_fused_filter_support(schema: &SchemaRef) -> FusedFilterSupport {
-    let mut binary_view_indices = Vec::new();
-    let mut has_primitive = false;
+fn classify_fused_filter(schema: &SchemaRef) -> Option<FusedFilter> {
+    let mut view_columns = Vec::new();
 
     for (index, field) in schema.fields().iter().enumerate() {
         if field.data_type().is_primitive() {
-            has_primitive = true;
             continue;
         }
 
-        if field.data_type() == &DataType::BinaryView {
-            binary_view_indices.push(index);
-            continue;
+        match field.data_type() {
+            DataType::Utf8View => view_columns.push(FusedViewColumn::Utf8(index)),
+            DataType::BinaryView => view_columns.push(FusedViewColumn::Binary(index)),
+            _ => return None,
         }
-
-        return FusedFilterSupport::Unsupported;
     }
 
-    match (!binary_view_indices.is_empty(), has_primitive) {
-        (true, true) => FusedFilterSupport::MixedPrimitiveInlineBinaryView(binary_view_indices),
-        (true, false) => FusedFilterSupport::InlineBinaryViewOnly(binary_view_indices),
-        (false, _) => FusedFilterSupport::Unsupported,
-    }
+    (!view_columns.is_empty()).then_some(FusedFilter { view_columns })
 }
 
-#[inline]
-fn classify_fused_filter_path(
-    fused_filter_support: &FusedFilterSupport,
-    batch: &RecordBatch,
-) -> FusedFilterPath {
-    let (path, binary_view_indices) = match fused_filter_support {
-        FusedFilterSupport::InlineBinaryViewOnly(indices) => {
-            (FusedFilterPath::InlineBinaryViewOnly, indices.as_slice())
-        }
-        FusedFilterSupport::MixedPrimitiveInlineBinaryView(indices) => (
-            FusedFilterPath::MixedPrimitiveInlineBinaryView,
-            indices.as_slice(),
-        ),
-        FusedFilterSupport::Unsupported => return FusedFilterPath::Unsupported,
-    };
+impl FusedFilter {
+    #[inline]
+    fn supports_batch(&self, batch: &RecordBatch) -> bool {
+        // Only candidate schemas pay the per-batch check that all supported view values
+        // are inline and therefore eligible for the fused direct-copy path.
+        for view_column in &self.view_columns {
+            let is_inline = match *view_column {
+                FusedViewColumn::Utf8(index) => batch
+                    .columns()
+                    .get(index)
+                    .and_then(|array| array.as_string_view_opt())
+                    .is_some_and(|view| view.data_buffers().is_empty()),
+                FusedViewColumn::Binary(index) => batch
+                    .columns()
+                    .get(index)
+                    .and_then(|array| array.as_binary_view_opt())
+                    .is_some_and(|view| view.data_buffers().is_empty()),
+            };
 
-    // Only candidate schemas pay the per-batch check that all BinaryView values
-    // are inline and therefore eligible for the fused direct-copy path.
-    for &index in binary_view_indices {
-        let Some(binary_view) = batch
-            .columns()
-            .get(index)
-            .and_then(|array| array.as_binary_view_opt())
-        else {
-            return FusedFilterPath::Unsupported;
-        };
-
-        if !binary_view.data_buffers().is_empty() {
-            return FusedFilterPath::Unsupported;
+            if !is_inline {
+                return false;
+            }
         }
+
+        true
     }
-
-    path
 }
 
 impl BatchCoalescer {
-    #[inline]
-    fn push_batch_with_filter_fused_inline_binary_view_only(
-        &mut self,
-        batch: RecordBatch,
-        filter: &BooleanArray,
-    ) -> Result<(), ArrowError> {
-        self.push_batch_with_filter_fused_inline_binary_view(batch, filter)
-    }
-
-    #[inline]
-    fn push_batch_with_filter_fused_mixed_primitive_inline_binary_view(
-        &mut self,
-        batch: RecordBatch,
-        filter: &BooleanArray,
-    ) -> Result<(), ArrowError> {
-        self.push_batch_with_filter_fused_inline_binary_view(batch, filter)
-    }
-
-    fn push_batch_with_filter_fused_inline_binary_view(
+    fn push_batch_with_filter_fused_inline_view(
         &mut self,
         batch: RecordBatch,
         filter: &BooleanArray,
@@ -1474,6 +1433,26 @@ mod tests {
     }
 
     #[test]
+    fn test_string_view_filtered_inline() {
+        let values: Vec<Option<&str>> = vec![Some("foo"), None, Some("barbaz")];
+
+        let string_view =
+            StringViewArray::from_iter(std::iter::repeat(values.iter()).flatten().take(1000));
+        let batch =
+            RecordBatch::try_from_iter(vec![("c0", Arc::new(string_view) as ArrayRef)]).unwrap();
+        let filter = BooleanArray::from_iter((0..1000).map(|idx| Some(idx % 3 != 1)));
+
+        Test::new("coalesce_string_view_filtered_inline")
+            .with_batch(batch.clone())
+            .with_filter(filter.clone())
+            .with_batch(batch)
+            .with_filter(filter)
+            .with_batch_size(300)
+            .with_expected_output_sizes(vec![300, 300, 300, 300, 134])
+            .run();
+    }
+
+    #[test]
     fn test_mixed_inline_binary_view_filtered() {
         let int_values = Int32Array::from_iter((0..1000).map(Some));
         let float_values = arrow_array::Float64Array::from_iter((0..1000).map(|v| Some(v as f64)));
@@ -1492,6 +1471,34 @@ mod tests {
         let filter = BooleanArray::from_iter((0..1000).map(|idx| Some(idx % 3 != 1)));
 
         Test::new("coalesce_mixed_inline_binary_view_filtered")
+            .with_batch(batch.clone())
+            .with_filter(filter.clone())
+            .with_batch(batch)
+            .with_filter(filter)
+            .with_batch_size(300)
+            .with_expected_output_sizes(vec![300, 300, 300, 300, 134])
+            .run();
+    }
+
+    #[test]
+    fn test_mixed_inline_string_view_filtered() {
+        let int_values = Int32Array::from_iter((0..1000).map(Some));
+        let float_values = arrow_array::Float64Array::from_iter((0..1000).map(|v| Some(v as f64)));
+        let string_values: Vec<Option<&str>> = vec![Some("foo"), None, Some("barbaz")];
+        let string_view = StringViewArray::from_iter(
+            std::iter::repeat(string_values.iter()).flatten().take(1000),
+        );
+
+        let batch = RecordBatch::try_from_iter(vec![
+            ("i", Arc::new(int_values) as ArrayRef),
+            ("f", Arc::new(float_values) as ArrayRef),
+            ("s", Arc::new(string_view) as ArrayRef),
+        ])
+        .unwrap();
+
+        let filter = BooleanArray::from_iter((0..1000).map(|idx| Some(idx % 3 != 1)));
+
+        Test::new("coalesce_mixed_inline_string_view_filtered")
             .with_batch(batch.clone())
             .with_filter(filter.clone())
             .with_batch(batch)
