@@ -521,16 +521,6 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         Some(self.dict_encoder.as_ref()?.estimated_dict_page_size())
     }
 
-    fn is_dict_encoding_unfavorable(&self) -> bool {
-        match (&self.dict_encoder, &self.dict_fallback_counter) {
-            (Some(encoder), Some(counter)) => {
-                let dict_size = encoder.estimated_dict_page_size();
-                counter.is_dict_encoding_unfavorable(dict_size)
-            }
-            _ => false,
-        }
-    }
-
     /// Returns an estimate of the data page size in bytes
     ///
     /// This includes:
@@ -540,6 +530,20 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             Some(encoder) => encoder.estimated_data_page_size(),
             None => self.fallback.estimated_data_page_size(),
         }
+    }
+
+    fn is_dict_encoding_unfavorable(&self) -> Option<bool> {
+        match (&self.dict_encoder, &self.dict_fallback_counter) {
+            (Some(encoder), Some(counter)) => {
+                let dict_size = encoder.estimated_dict_page_size();
+                counter.is_dict_encoding_unfavorable(dict_size)
+            }
+            _ => None,
+        }
+    }
+
+    fn disable_dict_fallback_accounting(&mut self) {
+        self.dict_fallback_counter = None;
     }
 
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {

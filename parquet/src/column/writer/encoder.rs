@@ -109,13 +109,17 @@ pub trait ColumnValueEncoder {
     /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_page_size(&self) -> usize;
 
-    /// Returns true if the estimated size of plainly encoded data, in bytes,
+    /// Returns `Some(true)` if the estimated size of plainly encoded data, in bytes,
     /// would be smaller than the size of data encoded with a dictionary.
+    /// If the estimate does not show a clear benefit, returns `Some(false)`.
     /// If there is no dictionary, or the data size statistic is not available,
-    /// returns false.
+    /// or it is not yet possible to make an estimate due to insufficient
+    /// collected data, returns `None`.
     /// For similar logic in parquet-java,
     /// see `DictionaryValuesWriter.isCompressionSatisfying`.
-    fn is_dict_encoding_unfavorable(&self) -> bool;
+    fn is_dict_encoding_unfavorable(&self) -> Option<bool>;
+
+    fn disable_dict_fallback_accounting(&mut self);
 
     /// Flush the dictionary page for this column chunk if any. Any subsequent calls to
     /// [`Self::write`] will not be dictionary encoded
@@ -299,21 +303,25 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         Some(self.dict_encoder.as_ref()?.dict_encoded_size())
     }
 
-    fn is_dict_encoding_unfavorable(&self) -> bool {
-        match (&self.dict_encoder, &self.dict_fallback_counter) {
-            (Some(encoder), Some(counter)) => {
-                let dict_size = encoder.dict_encoded_size();
-                counter.is_dict_encoding_unfavorable(dict_size)
-            }
-            _ => false,
-        }
-    }
-
     fn estimated_data_page_size(&self) -> usize {
         match &self.dict_encoder {
             Some(encoder) => encoder.estimated_data_encoded_size(),
             _ => self.encoder.estimated_data_encoded_size(),
         }
+    }
+
+    fn is_dict_encoding_unfavorable(&self) -> Option<bool> {
+        match (&self.dict_encoder, &self.dict_fallback_counter) {
+            (Some(encoder), Some(counter)) => {
+                let dict_size = encoder.dict_encoded_size();
+                counter.is_dict_encoding_unfavorable(dict_size)
+            }
+            _ => None,
+        }
+    }
+
+    fn disable_dict_fallback_accounting(&mut self) {
+        self.dict_fallback_counter = None;
     }
 
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {

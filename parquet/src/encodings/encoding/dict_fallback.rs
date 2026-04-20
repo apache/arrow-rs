@@ -107,20 +107,23 @@ impl DictFallbackCounter {
     /// If the number of dictionary encoded values accounted so far
     /// reaches or exceeds the configured minimum, returns true to indicate
     /// that the counting should be stopped, otherwise returns false.
-    #[inline]
-    pub fn min_sample_len_reached(&self) -> bool {
+    fn min_sample_len_reached(&self) -> bool {
         self.num_values >= self.min_sample_len
     }
 
-    /// Returns true if the estimated size of plainly encoded data, in bytes,
+    /// Returns `Some(true)` if the estimated size of plainly encoded data, in bytes,
     /// would not exceed the size of data encoded with a dictionary,
-    /// as counted by the `commit_page` calls made on this counter.
-    ///
-    /// This method does not return true until the minimum sample length has been reached,
-    /// as indicated by the `min_sample_len_reached` method.
+    /// as counted by the `commit_page` calls made on this counter and the provided size of
+    /// the encoded dictionary page.
+    /// This method returns `None` until the minimum number of values given in
+    /// `DictFallbackCounter::new` has been processed. The third alternative,
+    /// `Some(false)`, indicates that the sample size is sufficient, but the dictionary encoding
+    /// is not-unfavorable, that is, the collected metrics show no clear advantage in falling
+    /// back to plain (or other, presumably more efficient) encoding.
     #[inline]
-    pub fn is_dict_encoding_unfavorable(&self, dict_encoded_size: usize) -> bool {
-        self.min_sample_len_reached()
-            && self.raw_data_size <= dict_encoded_size.saturating_add(self.encoded_data_size)
+    pub fn is_dict_encoding_unfavorable(&self, dict_encoded_size: usize) -> Option<bool> {
+        self.min_sample_len_reached().then_some(
+            self.raw_data_size <= dict_encoded_size.saturating_add(self.encoded_data_size),
+        )
     }
 }

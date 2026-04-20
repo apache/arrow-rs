@@ -747,7 +747,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Returns true if we need to fall back to non-dictionary encoding.
     ///
     /// The behavior is governed by the `dictionary_fallback` column property.
-    fn should_dict_fallback(&self) -> bool {
+    fn should_dict_fallback(&mut self) -> bool {
         let dict_size = match self.encoder.estimated_dict_page_size() {
             Some(size) => size,
             None => return false,
@@ -763,8 +763,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         // Second check, if enabled: the compression heuristic.
-        if self.encoder.is_dict_encoding_unfavorable() {
-            return true;
+        if let Some(should_fallback) = self.encoder.is_dict_encoding_unfavorable() {
+            // The decision on the efficiency is made after processing
+            // the requisite number of values, so disable further accounting
+            // to avoid the overhead.
+            self.encoder.disable_dict_fallback_accounting();
+            return should_fallback;
         }
 
         false
