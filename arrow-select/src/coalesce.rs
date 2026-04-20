@@ -149,12 +149,21 @@ pub struct BatchCoalescer {
     completed: VecDeque<RecordBatch>,
     /// Biggest coalesce batch size. See [`Self::with_biggest_coalesce_batch_size`]
     biggest_coalesce_batch_size: Option<usize>,
+    /// Cached schema-level support for fused filter coalescing.
+    fused_filter_support: FusedFilterSupport,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FusedFilterPath {
     InlineBinaryViewOnly,
     MixedPrimitiveInlineBinaryView,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FusedFilterSupport {
+    InlineBinaryViewOnly(Vec<usize>),
+    MixedPrimitiveInlineBinaryView(Vec<usize>),
     Unsupported,
 }
 
@@ -167,6 +176,7 @@ impl BatchCoalescer {
     ///   Typical values are `4096` or `8192` rows.
     ///
     pub fn new(schema: SchemaRef, target_batch_size: usize) -> Self {
+        let fused_filter_support = classify_fused_filter_support(&schema);
         let in_progress_arrays = schema
             .fields()
             .iter()
@@ -181,6 +191,7 @@ impl BatchCoalescer {
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
             biggest_coalesce_batch_size: None,
+            fused_filter_support,
         }
     }
 
@@ -249,7 +260,7 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        match classify_fused_filter_path(&batch) {
+        match classify_fused_filter_path(&self.fused_filter_support, &batch) {
             FusedFilterPath::InlineBinaryViewOnly => {
                 return self.push_batch_with_filter_fused_inline_binary_view_only(batch, filter);
             }
@@ -590,35 +601,64 @@ impl BatchCoalescer {
 }
 
 #[inline]
-fn classify_fused_filter_path(batch: &RecordBatch) -> FusedFilterPath {
-    let mut has_inline_binary_view = false;
+fn classify_fused_filter_support(schema: &SchemaRef) -> FusedFilterSupport {
+    let mut binary_view_indices = Vec::new();
     let mut has_primitive = false;
 
-    // The fused path only supports fully inline BinaryView columns, optionally
-    // mixed with primitive columns. Any non-inline BinaryView still uses the
-    // existing filter_record_batch path.
-    for (field, array) in batch.schema().fields().iter().zip(batch.columns()) {
+    for (index, field) in schema.fields().iter().enumerate() {
         if field.data_type().is_primitive() {
             has_primitive = true;
             continue;
         }
 
-        let Some(binary_view) = array.as_binary_view_opt() else {
+        if field.data_type() == &DataType::BinaryView {
+            binary_view_indices.push(index);
+            continue;
+        }
+
+        return FusedFilterSupport::Unsupported;
+    }
+
+    match (!binary_view_indices.is_empty(), has_primitive) {
+        (true, true) => FusedFilterSupport::MixedPrimitiveInlineBinaryView(binary_view_indices),
+        (true, false) => FusedFilterSupport::InlineBinaryViewOnly(binary_view_indices),
+        (false, _) => FusedFilterSupport::Unsupported,
+    }
+}
+
+#[inline]
+fn classify_fused_filter_path(
+    fused_filter_support: &FusedFilterSupport,
+    batch: &RecordBatch,
+) -> FusedFilterPath {
+    let (path, binary_view_indices) = match fused_filter_support {
+        FusedFilterSupport::InlineBinaryViewOnly(indices) => {
+            (FusedFilterPath::InlineBinaryViewOnly, indices.as_slice())
+        }
+        FusedFilterSupport::MixedPrimitiveInlineBinaryView(indices) => (
+            FusedFilterPath::MixedPrimitiveInlineBinaryView,
+            indices.as_slice(),
+        ),
+        FusedFilterSupport::Unsupported => return FusedFilterPath::Unsupported,
+    };
+
+    // Only candidate schemas pay the per-batch check that all BinaryView values
+    // are inline and therefore eligible for the fused direct-copy path.
+    for &index in binary_view_indices {
+        let Some(binary_view) = batch
+            .columns()
+            .get(index)
+            .and_then(|array| array.as_binary_view_opt())
+        else {
             return FusedFilterPath::Unsupported;
         };
 
         if !binary_view.data_buffers().is_empty() {
             return FusedFilterPath::Unsupported;
         }
-
-        has_inline_binary_view = true;
     }
 
-    match (has_inline_binary_view, has_primitive) {
-        (true, true) => FusedFilterPath::MixedPrimitiveInlineBinaryView,
-        (true, false) => FusedFilterPath::InlineBinaryViewOnly,
-        (false, _) => FusedFilterPath::Unsupported,
-    }
+    path
 }
 
 impl BatchCoalescer {
