@@ -1690,6 +1690,23 @@ mod tests {
     }
 
     #[test]
+    fn test_skip_delta_bit_packed_bw0_uniform_step_i32() {
+        // Uniform-step column: every delta equals min_delta, so bw=0 miniblocks.
+        // Partial skip must advance last_value by n * min_delta (min_delta != 0 path).
+        let data: Vec<i32> = (0..128).map(|i| i * 7).collect();
+        test_skip::<Int32Type>(data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
+        test_skip::<Int32Type>(data, Encoding::DELTA_BINARY_PACKED, 200);
+    }
+
+    #[test]
+    fn test_skip_delta_bit_packed_bw0_uniform_step_i64() {
+        // Same as above for i64.
+        let data: Vec<i64> = (0..128).map(|i| i * 100).collect();
+        test_skip::<Int64Type>(data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
+        test_skip::<Int64Type>(data, Encoding::DELTA_BINARY_PACKED, 200);
+    }
+
+    #[test]
     fn test_delta_bit_packed_int32_multiple_blocks() {
         // Test multiple 'put' calls on the same encoder
         let data = vec![
