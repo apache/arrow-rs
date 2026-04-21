@@ -66,7 +66,6 @@ impl DictFallbackCounter {
     /// Updates the counter with the given slice of values.
     pub fn update_values<T: ParquetValueType>(&mut self, values: &[T]) {
         let raw_size = match T::PHYSICAL_TYPE {
-            Type::BOOLEAN => values.len(),
             Type::INT32 | Type::FLOAT => 4 * values.len(),
             Type::INT64 | Type::DOUBLE => 8 * values.len(),
             Type::INT96 => Int96::SIZE_IN_BYTES * values.len(),
@@ -75,6 +74,7 @@ impl DictFallbackCounter {
                 values.iter().map(|value| value.plain_encoded_size()).sum()
             }
             Type::FIXED_LEN_BYTE_ARRAY => self.type_length * values.len(),
+            Type::BOOLEAN => panic!("dictionary encoding should not be used for BOOLEAN type"),
         };
         self.raw_data_size = self.raw_data_size.saturating_add(raw_size);
         self.num_values += values.len();

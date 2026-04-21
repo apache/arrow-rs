@@ -809,7 +809,7 @@ pub(crate) mod private {
         }
 
         fn plain_encoded_size(&self) -> usize {
-            panic!("Dictionary encoding should not be used for BOOLEAN type")
+            panic!("dictionary encoding should not be used for BOOLEAN type")
         }
 
         #[inline]
