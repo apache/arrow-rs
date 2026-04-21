@@ -230,8 +230,8 @@ cargo bench --bench parse_time -- --baseline main
 If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description.
 If you need to add new benchmarks to cover your change, make a separate PR first (for example, [#9729]) so we can run the benchmarks on an automated runner.
 
-
 [#9729]: https://github.com/apache/arrow-rs/pull/9729
+
 ## Git Pre-Commit Hook
 
 We can use [git pre-commit hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) to automate various kinds of git pre-commit checking/formatting.
