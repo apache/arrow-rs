@@ -875,8 +875,12 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
     let metadata_len = block.metaDataLength().to_usize().unwrap();
     let total_len = body_len.checked_add(metadata_len).unwrap();
 
-    let mut buf = MutableBuffer::from_len_zeroed(total_len);
-    reader.read_exact(&mut buf)?;
+    let mut buf = MutableBuffer::with_capacity(total_len);
+    // Buffer is immediately fully initialized by `read_exact` before any read occurs
+    // SAFETY: no future code must directly access the buffer contents between
+    // `set_len` and the successful completion of `read_exact`.
+    unsafe { buf.set_len(total_len) };
+    reader.read_exact(buf.as_slice_mut())?;
     Ok(buf.into())
 }
 
@@ -1798,9 +1802,13 @@ impl<R: Read> MessageReader<R> {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
 
-        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-        self.reader.read_exact(&mut buf)?;
-
+        let body_len = message.bodyLength() as usize;
+        let mut buf = MutableBuffer::with_capacity(body_len);
+        // SAFETY: `set_len` exposes uninitialized bytes, but they are not read or observed.
+        // The buffer is immediately and fully initialized by `read_exact` before any access.
+        // No furture code must access `buf` between `set_len` and the successful return of `read_exact`.
+        unsafe { buf.set_len(body_len) };
+        self.reader.read_exact(buf.as_slice_mut())?;
         Ok(Some((message, buf)))
     }
 
