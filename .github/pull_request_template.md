@@ -28,7 +28,7 @@ We typically require tests for all PRs in order to:
 
 If tests are not included in your PR, please explain why (for example, are they covered by existing tests)?
 
-If this PR claims performance improvement, please include evidence, such as benchmark results.
+If this PR claims a performance improvement, please include evidence such as benchmark results.
 -->
 
 # Are there any user-facing changes?
