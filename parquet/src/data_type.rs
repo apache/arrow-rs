@@ -725,6 +725,10 @@ pub(crate) mod private {
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize>;
 
         /// Return the size in bytes for the value encoded in the plain encoding.
+        ///
+        /// This method is only used with the dictionary encoding. Since the writer
+        /// does not use the dictionary encoding for BOOLEAN type, this method's
+        /// implementation for bool will panic if called.
         fn plain_encoded_size(&self) -> usize;
 
         /// Return the number of variable length bytes in a given slice of data
