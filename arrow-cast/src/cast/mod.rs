@@ -913,9 +913,9 @@ pub fn cast_with_options(
             Utf8 => value_to_string::<i32>(array, cast_options),
             LargeUtf8 => value_to_string::<i64>(array, cast_options),
             Utf8View => value_to_string_view(array, cast_options),
-            _ => Err(ArrowError::CastError(
-                "Cannot cast list to non-list data types".to_string(),
-            )),
+            dt => Err(ArrowError::CastError(format!(
+                "Cannot cast LIST to non-list data type {dt}"
+            ))),
         },
         (_, List(to)) => cast_values_to_list::<i32>(array, to, cast_options),
         (_, LargeList(to)) => cast_values_to_list::<i64>(array, to, cast_options),
