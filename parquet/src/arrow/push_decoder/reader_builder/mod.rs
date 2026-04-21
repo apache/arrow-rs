@@ -471,19 +471,11 @@ impl RowGroupReaderBuilder {
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
                 );
-                // `with_predicate` actually evaluates the filter.
+                // `with_predicate_limited` actually evaluates the filter.
                 //
                 // When this is the final predicate in the chain and an output
                 // limit is set, tell the filter evaluation to stop once enough
-                // matching rows have been accumulated. Only safe for the last
-                // predicate: match counts of intermediate predicates do not
-                // correspond 1:1 to output rows.
-                //
-                // The cap must include `self.offset`: the later
-                // `with_offset(self.offset)` step skips that many selected
-                // rows before `with_limit` counts output, so the predicate
-                // must retain at least `offset + limit` matches or offset
-                // would drop matches the output still needs.
+                // matching rows have been accumulated.
                 let predicate_limit = self
                     .limit
                     .filter(|_| filter_info.is_last())
