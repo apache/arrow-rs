@@ -39,7 +39,7 @@ use std::{cmp, mem::size_of};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::{self, BitReader, BitWriter, FromBytes};
+use crate::util::bit_util::{self, BitReader, BitWriter, FromBitpacked};
 
 /// Maximum groups of 8 values per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
@@ -84,7 +84,7 @@ impl RleEncoder {
 
     /// Initialize the encoder from existing `buffer`
     pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>) -> Self {
-        assert!(bit_width <= 64);
+        debug_assert!(bit_width <= 64);
         let bit_writer = BitWriter::new_from_buf(buffer);
         RleEncoder {
             bit_width,
@@ -177,16 +177,22 @@ impl RleEncoder {
     /// Borrow equivalent of the `consume` method.
     /// Call `clear()` after invoking this method.
     #[inline]
-    #[allow(unused)]
     pub fn flush_buffer(&mut self) -> &[u8] {
         self.flush();
         self.bit_writer.flush_buffer()
     }
 
+    /// Like `flush_buffer`, but returns mutable access to the internal buffer.
+    /// Call `clear()` after invoking this method.
+    #[inline]
+    pub fn flush_buffer_mut(&mut self) -> &mut [u8] {
+        self.flush();
+        self.bit_writer.flush_buffer_mut()
+    }
+
     /// Clears the internal state so this encoder can be reused (e.g., after becoming
     /// full).
     #[inline]
-    #[allow(unused)]
     pub fn clear(&mut self) {
         self.bit_writer.clear();
         self.num_buffered_values = 0;
@@ -194,6 +200,13 @@ impl RleEncoder {
         self.repeat_count = 0;
         self.bit_packed_count = 0;
         self.indicator_byte_pos = -1;
+    }
+
+    /// Advances the buffer by `num_bytes` zero bytes, delegating to the
+    /// underlying [`BitWriter::skip`].
+    #[inline]
+    pub fn skip(&mut self, num_bytes: usize) {
+        self.bit_writer.skip(num_bytes);
     }
 
     /// Flushes all remaining values and return the final byte buffer maintained by the
@@ -232,7 +245,7 @@ impl RleEncoder {
         self.repeat_count = 0;
     }
 
-    fn flush_bit_packed_run(&mut self, update_indicator_byte: bool) {
+    fn flush_bit_packed_run(&mut self, end_current_run: bool) {
         if self.indicator_byte_pos < 0 {
             self.indicator_byte_pos = self.bit_writer.skip(1) as i64;
         }
@@ -242,25 +255,31 @@ impl RleEncoder {
             self.bit_writer.put_value(*v, self.bit_width as usize);
         }
         self.num_buffered_values = 0;
-        if update_indicator_byte {
-            // Write the indicator byte to the reserved position in `bit_writer`
-            let num_groups = self.bit_packed_count / 8;
-            let indicator_byte = ((num_groups << 1) | 1) as u8;
-            self.bit_writer
-                .put_aligned_offset(indicator_byte, 1, self.indicator_byte_pos as usize);
-            self.indicator_byte_pos = -1;
-            self.bit_packed_count = 0;
+        if end_current_run {
+            self.finish_bit_packed_run();
         }
+    }
+
+    // Called when ending a bit-packed run. Writes the indicator byte to the reserved
+    // position in `bit_writer`
+    fn finish_bit_packed_run(&mut self) {
+        let num_groups = self.bit_packed_count / 8;
+        let indicator_byte = ((num_groups << 1) | 1) as u8;
+        self.bit_writer
+            .put_aligned_offset(indicator_byte, 1, self.indicator_byte_pos as usize);
+        self.indicator_byte_pos = -1;
+        self.bit_packed_count = 0;
     }
 
     fn flush_buffered_values(&mut self) {
         if self.repeat_count >= 8 {
+            // Clear buffered values as they are not needed
             self.num_buffered_values = 0;
             if self.bit_packed_count > 0 {
-                // In this case we choose RLE encoding. Flush the current buffered values
-                // as bit-packed encoding.
+                // In this case we have chosen to switch to RLE encoding. Close out the
+                // previous bit-packed run.
                 debug_assert_eq!(self.bit_packed_count % 8, 0);
-                self.flush_bit_packed_run(true)
+                self.finish_bit_packed_run();
             }
             return;
         }
@@ -339,7 +358,7 @@ impl RleDecoder {
     // that damage L1d-cache occupancy. This results in a ~18% performance drop
     #[inline(never)]
     #[allow(unused)]
-    pub fn get<T: FromBytes>(&mut self) -> Result<Option<T>> {
+    pub fn get<T: FromBitpacked>(&mut self) -> Result<Option<T>> {
         assert!(size_of::<T>() <= 8);
 
         while self.rle_left == 0 && self.bit_packed_left == 0 {
@@ -375,7 +394,7 @@ impl RleDecoder {
     }
 
     #[inline(never)]
-    pub fn get_batch<T: FromBytes + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
+    pub fn get_batch<T: FromBitpacked + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
         assert!(size_of::<T>() <= 8);
 
         let mut values_read = 0;
@@ -456,7 +475,7 @@ impl RleDecoder {
     where
         T: Default + Clone,
     {
-        assert!(buffer.len() >= max_values);
+        debug_assert!(buffer.len() >= max_values);
 
         let mut values_read = 0;
         while values_read < max_values {
@@ -465,7 +484,16 @@ impl RleDecoder {
             if self.rle_left > 0 {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
-                let dict_value = dict[dict_idx].clone();
+                let dict_value = dict
+                    .get(dict_idx)
+                    .ok_or_else(|| {
+                        general_err!(
+                            "dictionary index out of bounds: the len is {} but the index is {}",
+                            dict.len(),
+                            dict_idx
+                        )
+                    })?
+                    .clone();
 
                 buffer[values_read..values_read + num_values].fill(dict_value);
 
@@ -494,10 +522,49 @@ impl RleDecoder {
                         self.bit_packed_left = 0;
                         break;
                     }
-                    buffer[values_read..values_read + num_values]
-                        .iter_mut()
-                        .zip(index_buf[..num_values].iter())
-                        .for_each(|(b, i)| b.clone_from(&dict[*i as usize]));
+                    {
+                        #[cold]
+                        #[inline(never)]
+                        fn oob(max_idx: u32, dict_len: usize) -> ParquetError {
+                            general_err!(
+                                "dictionary index out of bounds: the len is {} but the index is {}",
+                                dict_len,
+                                max_idx
+                            )
+                        }
+                        const CHUNK: usize = 16;
+                        let out = &mut buffer[values_read..values_read + num_values];
+                        let idx = &index_buf[..num_values];
+                        let dict_len = dict.len();
+                        let mut out_chunks = out.chunks_exact_mut(CHUNK);
+                        let idx_chunks = idx.chunks_exact(CHUNK);
+                        for (out_chunk, idx_chunk) in out_chunks.by_ref().zip(idx_chunks) {
+                            // u32 max-reduction instead of `.all(|&i| ..)`: `.all`
+                            // short-circuits and blocks autovectorisation. Negative
+                            // i32 cast to u32 becomes a large value so the bounds
+                            // check still rejects it.
+                            let max_idx = idx_chunk.iter().fold(0u32, |acc, &i| acc.max(i as u32));
+                            if (max_idx as usize) >= dict_len {
+                                return Err(oob(max_idx, dict_len));
+                            }
+                            for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
+                                // SAFETY: all indices checked above to be in bounds
+                                b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
+                            }
+                        }
+                        for (b, i) in out_chunks
+                            .into_remainder()
+                            .iter_mut()
+                            .zip(idx.chunks_exact(CHUNK).remainder().iter())
+                        {
+                            let dict_idx = *i as usize;
+                            if dict_idx >= dict_len {
+                                return Err(oob(*i as u32, dict_len));
+                            }
+                            // SAFETY: bounds checked above
+                            b.clone_from(unsafe { dict.get_unchecked(dict_idx) });
+                        }
+                    }
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {

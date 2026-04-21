@@ -22,12 +22,16 @@
 //!
 //! Extension types are represented using the metadata from Arrow [`Field`]s
 //! with the key "ARROW:extension:name".
+//!
+//! Extension types are represented using the metadata from Arrow [`Field`]s
+//! with the key "ARROW:extension:name".
+//!
+//! [`ExtensionType`]: arrow_schema::extension::ExtensionType
 
 use crate::basic::LogicalType;
 use crate::errors::ParquetError;
 use crate::schema::types::Type;
 use arrow_schema::Field;
-use arrow_schema::extension::ExtensionType;
 
 /// Adds extension type metadata, if necessary, based on the Parquet field's
 /// [`LogicalType`]
@@ -36,39 +40,48 @@ use arrow_schema::extension::ExtensionType;
 /// Arrow DataType, and instead are represented by an Arrow ExtensionType.
 /// Extension types are attached to Arrow Fields via metadata.
 pub(crate) fn try_add_extension_type(
-    mut arrow_field: Field,
+    arrow_field: Field,
     parquet_type: &Type,
 ) -> Result<Field, ParquetError> {
     let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type_ref() else {
         return Ok(arrow_field);
     };
-    match parquet_logical_type {
+    Ok(match parquet_logical_type {
         #[cfg(feature = "variant_experimental")]
         LogicalType::Variant { .. } => {
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_variant_compute::VariantType)?;
+            arrow_field
         }
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Uuid => {
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(arrow_schema::extension::Uuid)?;
+            arrow_field
         }
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Json => {
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(arrow_schema::extension::Json::default())?;
+            arrow_field
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geometry { crs } => {
             let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), None);
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
+            arrow_field
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geography { crs, algorithm } => {
             let algorithm = algorithm.map(|a| a.try_as_edges()).transpose()?;
             let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), algorithm);
+            let mut arrow_field = arrow_field;
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
+            arrow_field
         }
-        _ => {}
-    };
-    Ok(arrow_field)
+        _ => arrow_field,
+    })
 }
 
 /// Returns true if [`try_add_extension_type`] would add an extension type
@@ -98,17 +111,12 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
 #[cfg(feature = "variant_experimental")]
 pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
     use parquet_variant_compute::VariantType;
-    // Check the name (= quick and cheap) and only try_extension_type if the name matches
-    // to avoid unnecessary String allocations in ArrowError
-    if field.extension_type_name()? != VariantType::NAME {
-        return None;
-    }
-    match field.try_extension_type::<VariantType>() {
-        Ok(VariantType) => Some(LogicalType::Variant {
+    if field.has_valid_extension_type::<VariantType>() {
+        Some(LogicalType::Variant {
             specification_version: None,
-        }),
-        // Given check above, this should not error, but if it does ignore
-        Err(_e) => None,
+        })
+    } else {
+        None
     }
 }
 
@@ -123,9 +131,8 @@ pub(crate) fn logical_type_for_fixed_size_binary(field: &Field) -> Option<Logica
     use arrow_schema::extension::Uuid;
     // If set, map arrow uuid extension type to parquet uuid logical type.
     field
-        .try_extension_type::<Uuid>()
-        .ok()
-        .map(|_| LogicalType::Uuid)
+        .has_valid_extension_type::<Uuid>()
+        .then_some(LogicalType::Uuid)
 }
 
 #[cfg(not(feature = "arrow_canonical_extension_types"))]
@@ -139,9 +146,11 @@ pub(crate) fn logical_type_for_string(field: &Field) -> Option<LogicalType> {
     use arrow_schema::extension::Json;
     // Use the Json logical type if the canonical Json
     // extension type is set on this field.
-    field
-        .try_extension_type::<Json>()
-        .map_or(Some(LogicalType::String), |_| Some(LogicalType::Json))
+    Some(if field.has_valid_extension_type::<Json>() {
+        LogicalType::Json
+    } else {
+        LogicalType::String
+    })
 }
 
 #[cfg(not(feature = "arrow_canonical_extension_types"))]
@@ -151,6 +160,7 @@ pub(crate) fn logical_type_for_string(_field: &Field) -> Option<LogicalType> {
 
 #[cfg(feature = "geospatial")]
 pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+    use arrow_schema::extension::ExtensionType;
     use parquet_geospatial::WkbType;
     use parquet_geospatial::WkbTypeHint;
 
@@ -172,7 +182,7 @@ pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
 }
 
 #[cfg(not(feature = "geospatial"))]
-pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+pub(crate) fn logical_type_for_binary(_field: &Field) -> Option<LogicalType> {
     None
 }
 
@@ -182,6 +192,6 @@ pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType>
 }
 
 #[cfg(not(feature = "geospatial"))]
-pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType> {
+pub(crate) fn logical_type_for_binary_view(_field: &Field) -> Option<LogicalType> {
     None
 }

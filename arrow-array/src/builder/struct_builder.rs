@@ -135,6 +135,10 @@ impl ArrayBuilder for StructBuilder {
         Arc::new(self.finish_cloned())
     }
 
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        Arc::new(self.finish_preserve_values())
+    }
+
     /// Returns the builder as a non-mutable `Any` reference.
     ///
     /// This is most useful when one wants to call non-mutable APIs on a specific builder
@@ -213,6 +217,12 @@ impl StructBuilder {
         self.null_buffer_builder.append(is_valid);
     }
 
+    /// Appends `n` non-null entries into the builder.
+    #[inline]
+    pub fn append_non_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_non_nulls(n);
+    }
+
     /// Appends a null element to the struct.
     #[inline]
     pub fn append_null(&mut self) {
@@ -222,7 +232,7 @@ impl StructBuilder {
     /// Appends `n` `null`s into the builder.
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
-        self.null_buffer_builder.append_slice(&vec![false; n]);
+        self.null_buffer_builder.append_n_nulls(n);
     }
 
     /// Builds the `StructArray` and reset this builder.
@@ -255,6 +265,23 @@ impl StructBuilder {
             .collect();
 
         let nulls = self.null_buffer_builder.finish_cloned();
+
+        StructArray::new(self.fields.clone(), arrays, nulls)
+    }
+
+    fn finish_preserve_values(&mut self) -> StructArray {
+        self.validate_content();
+        if self.fields.is_empty() {
+            return StructArray::new_empty_fields(self.len(), self.null_buffer_builder.finish());
+        }
+
+        let arrays = self
+            .field_builders
+            .iter_mut()
+            .map(|f| f.finish_preserve_values())
+            .collect();
+
+        let nulls = self.null_buffer_builder.finish();
 
         StructArray::new(self.fields.clone(), arrays, nulls)
     }
@@ -298,7 +325,7 @@ mod tests {
     use arrow_data::ArrayData;
     use arrow_schema::Field;
 
-    use crate::{array::Array, types::ArrowDictionaryKeyType};
+    use crate::{array::Array, builder::tests::PreserveValuesMock, types::ArrowDictionaryKeyType};
 
     #[test]
     fn test_struct_array_builder() {
@@ -518,6 +545,33 @@ mod tests {
     }
 
     #[test]
+    fn test_struct_array_builder_finish_preserve_values() {
+        let fields = vec![Field::new("mock", DataType::Int32, false)];
+        let field_builders = vec![Box::new(PreserveValuesMock::default()) as Box<dyn ArrayBuilder>];
+
+        let mut builder = StructBuilder::new(fields, field_builders);
+        builder
+            .field_builder::<PreserveValuesMock>(0)
+            .unwrap()
+            .inner
+            .append_value(1);
+        builder.append(true);
+
+        assert_eq!(1, builder.len());
+
+        let arr = builder.finish_preserve_values();
+
+        assert_eq!(1, arr.len());
+        assert_eq!(
+            1,
+            builder
+                .field_builder::<PreserveValuesMock>(0)
+                .unwrap()
+                .called
+        );
+    }
+
+    #[test]
     fn test_struct_array_builder_from_schema() {
         let mut fields = vec![
             Field::new("f1", DataType::Float32, false),
@@ -726,5 +780,61 @@ mod tests {
         assert_eq!(a1.null_count(), 1);
         assert!(a1.is_valid(0));
         assert!(a1.is_null(1));
+    }
+
+    #[test]
+    fn test_append_non_nulls() {
+        let int_builder = Int32Builder::new();
+        let fields = vec![Field::new("f1", DataType::Int32, false)];
+        let field_builders = vec![Box::new(int_builder) as Box<dyn ArrayBuilder>];
+
+        let mut builder = StructBuilder::new(fields, field_builders);
+        builder
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_slice(&[1, 2, 3, 4, 5]);
+        builder.append_non_nulls(5);
+
+        let arr = builder.finish();
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr.null_count(), 0);
+        for i in 0..5 {
+            assert!(arr.is_valid(i));
+        }
+    }
+
+    #[test]
+    fn test_append_non_nulls_with_nulls() {
+        let mut builder = StructBuilder::new(Fields::empty(), vec![]);
+        builder.append_null();
+        builder.append_non_nulls(3);
+        builder.append_nulls(2);
+        builder.append_non_nulls(1);
+
+        let arr = builder.finish();
+        assert_eq!(arr.len(), 7);
+        assert_eq!(arr.null_count(), 3);
+        assert!(arr.is_null(0));
+        assert!(arr.is_valid(1));
+        assert!(arr.is_valid(2));
+        assert!(arr.is_valid(3));
+        assert!(arr.is_null(4));
+        assert!(arr.is_null(5));
+        assert!(arr.is_valid(6));
+    }
+
+    #[test]
+    fn test_append_non_nulls_zero() {
+        let mut builder = StructBuilder::new(Fields::empty(), vec![]);
+        builder.append_non_nulls(0);
+        assert_eq!(builder.len(), 0);
+
+        builder.append(true);
+        builder.append_non_nulls(0);
+        assert_eq!(builder.len(), 1);
+
+        let arr = builder.finish();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr.null_count(), 0);
     }
 }

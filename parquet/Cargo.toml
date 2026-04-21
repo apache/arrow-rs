@@ -49,7 +49,7 @@ parquet-variant = { workspace = true, optional = true }
 parquet-variant-json = { workspace = true, optional = true }
 parquet-variant-compute = { workspace = true, optional = true }
 
-object_store = { version = "0.13.1", default-features = false, optional = true }
+object_store = { workspace = true, optional = true, features = ["tokio"] }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
@@ -57,7 +57,7 @@ snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
 # To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
 flate2 = { version = "1.1", default-features = false, optional = true }
-lz4_flex = { version = "0.12", default-features = false, features = ["std", "frame"], optional = true }
+lz4_flex = { version = "0.13", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
 chrono = { workspace = true }
 num-bigint = { version = "0.4", default-features = false }
@@ -70,7 +70,7 @@ serde_json = { version = "1.0", default-features = false, features = ["std"], op
 seq-macro = { version = "0.3", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "rt", "io-util"] }
-hashbrown = { version = "0.16", default-features = false }
+hashbrown = { version = "0.17", default-features = false }
 twox-hash = { version = "2.0", default-features = false, features = ["xxhash64"] }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
@@ -83,17 +83,17 @@ base64 = { version = "0.22", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
-insta = "1.43.1"
+insta = { workspace = true, default-features = true }
 brotli = { version = "8.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
-lz4_flex = { version = "0.12", default-features = false, features = ["std", "frame"] }
+lz4_flex = { version = "0.13", default-features = false, features = ["std", "frame"] }
 zstd = { version = "0.13", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-object_store = { version = "0.13.1", default-features = false, features = ["azure", "fs"] }
+object_store = { workspace = true, features = ["azure", "fs"] }
 sysinfo = { version = "0.38.1", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
@@ -166,6 +166,11 @@ required-features = ["arrow"]
 path = "./tests/arrow_reader/mod.rs"
 
 [[test]]
+name = "arrow_writer"
+required-features = ["arrow"]
+path = "./tests/arrow_writer.rs"
+
+[[test]]
 name = "encryption"
 required-features = ["arrow"]
 path = "./tests/encryption/mod.rs"
@@ -217,6 +222,16 @@ required-features = ["arrow"]
 harness = false
 
 [[bench]]
+name = "push_decoder"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
+name = "writer_overhead"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "arrow_reader"
 required-features = ["arrow", "test_common", "experimental"]
 harness = false
@@ -233,7 +248,7 @@ harness = false
 
 [[bench]]
 name = "arrow_reader_clickbench"
-required-features = ["arrow", "async"]
+required-features = ["arrow", "async", "object_store"]
 harness = false
 
 [[bench]]
@@ -269,6 +284,10 @@ harness = false
 name = "row_selection_cursor"
 harness = false
 required-features = ["arrow"]
+
+[[bench]]
+name = "bloom_filter"
+harness = false
 
 [lib]
 bench = false

@@ -19,6 +19,7 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -156,7 +157,18 @@ impl BooleanArray {
         &self.values
     }
 
-    /// Returns the number of non null, true values within this array
+    /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
+    /// Using `chunks_exact` with this size lets the compiler fully unroll the inner
+    /// fold (no inner branch/loop), enabling short-circuit exits every N chunks.
+    const CHUNK_FOLD_BLOCK_SIZE: usize = 16;
+
+    /// Returns an [`UnalignedBitChunk`] over this array's values.
+    fn unaligned_bit_chunks(&self) -> UnalignedBitChunk<'_> {
+        UnalignedBitChunk::new(self.values().values(), self.values().offset(), self.len())
+    }
+
+    /// Returns the number of non null, true values within this array.
+    /// If you only need to check if there is at least one true value, consider using `has_true()` which can short-circuit and be more efficient.
     pub fn true_count(&self) -> usize {
         match self.nulls() {
             Some(nulls) => {
@@ -171,9 +183,81 @@ impl BooleanArray {
         }
     }
 
-    /// Returns the number of non null, false values within this array
+    /// Returns the number of non null, false values within this array.
+    /// If you only need to check if there is at least one false value, consider using `has_false()` which can short-circuit and be more efficient.
     pub fn false_count(&self) -> usize {
         self.len() - self.null_count() - self.true_count()
+    }
+
+    /// Returns whether there is at least one non-null `true` value in this array.
+    ///
+    /// This is more efficient than `true_count() > 0` because it can short-circuit
+    /// as soon as a `true` value is found, without counting all set bits.
+    ///
+    /// Null values are not counted as `true`. Returns `false` for empty arrays.
+    pub fn has_true(&self) -> bool {
+        match self.nulls() {
+            Some(nulls) => {
+                let null_chunks = nulls.inner().bit_chunks().iter_padded();
+                let value_chunks = self.values().bit_chunks().iter_padded();
+                null_chunks.zip(value_chunks).any(|(n, v)| (n & v) != 0)
+            }
+            None => {
+                let bit_chunks = self.unaligned_bit_chunks();
+                let chunks = bit_chunks.chunks();
+                let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
+                let found = bit_chunks.prefix().unwrap_or(0) != 0
+                    || exact.any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0);
+                found
+                    || exact.remainder().iter().any(|&c| c != 0)
+                    || bit_chunks.suffix().unwrap_or(0) != 0
+            }
+        }
+    }
+
+    /// Returns whether there is at least one non-null `false` value in this array.
+    ///
+    /// This is more efficient than `false_count() > 0` because it can short-circuit
+    /// as soon as a `false` value is found, without counting all set bits.
+    ///
+    /// Null values are not counted as `false`. Returns `false` for empty arrays.
+    pub fn has_false(&self) -> bool {
+        match self.nulls() {
+            Some(nulls) => {
+                let null_chunks = nulls.inner().bit_chunks().iter_padded();
+                let value_chunks = self.values().bit_chunks().iter_padded();
+                null_chunks.zip(value_chunks).any(|(n, v)| (n & !v) != 0)
+            }
+            None => {
+                let bit_chunks = self.unaligned_bit_chunks();
+                // UnalignedBitChunk zeros padding bits; fill them with 1s so
+                // they don't appear as false values.
+                let lead_mask = !((1u64 << bit_chunks.lead_padding()) - 1);
+                let trail_mask = if bit_chunks.trailing_padding() == 0 {
+                    u64::MAX
+                } else {
+                    (1u64 << (64 - bit_chunks.trailing_padding())) - 1
+                };
+                let (prefix_fill, suffix_fill) = match (bit_chunks.prefix(), bit_chunks.suffix()) {
+                    (Some(_), Some(_)) => (!lead_mask, !trail_mask),
+                    (Some(_), None) => (!lead_mask | !trail_mask, 0),
+                    (None, Some(_)) => (0, !trail_mask),
+                    (None, None) => (0, 0),
+                };
+                let chunks = bit_chunks.chunks();
+                let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
+                let found = bit_chunks
+                    .prefix()
+                    .is_some_and(|v| (v | prefix_fill) != u64::MAX)
+                    || exact
+                        .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX);
+                found
+                    || exact.remainder().iter().any(|&c| c != u64::MAX)
+                    || bit_chunks
+                        .suffix()
+                        .is_some_and(|v| (v | suffix_fill) != u64::MAX)
+            }
+        }
     }
 
     /// Returns the boolean value at index `i`.
@@ -280,6 +364,250 @@ impl BooleanArray {
         Self::new(values, nulls)
     }
 
+    /// Apply a bitwise operation to this array's values using u64 operations,
+    /// returning a new [`BooleanArray`].
+    ///
+    /// The null buffer is preserved unchanged.
+    ///
+    /// See [`BooleanBuffer::from_bitwise_unary_op`] for details on the operation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::BooleanArray;
+    /// let array = BooleanArray::from(vec![true, false, true]);
+    /// let result = array.bitwise_unary(|x| !x);
+    /// assert_eq!(result, BooleanArray::from(vec![false, true, false]));
+    /// ```
+    pub fn bitwise_unary<F>(&self, op: F) -> BooleanArray
+    where
+        F: FnMut(u64) -> u64,
+    {
+        let values = BooleanBuffer::from_bitwise_unary_op(
+            self.values.values(),
+            self.values.offset(),
+            self.values.len(),
+            op,
+        );
+        BooleanArray::new(values, self.nulls.clone())
+    }
+
+    /// Try to apply a bitwise operation to this array's values in place using
+    /// u64 operations.
+    ///
+    /// If the underlying buffer is uniquely owned, the operation is applied
+    /// in place and `Ok` is returned. If the buffer is shared, `Err(self)` is
+    /// returned so the caller can fall back to [`bitwise_unary`](Self::bitwise_unary).
+    ///
+    /// The null buffer is preserved unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::BooleanArray;
+    /// let array = BooleanArray::from(vec![true, false, true]);
+    /// let result = array.bitwise_unary_mut(|x| !x).unwrap();
+    /// assert_eq!(result, BooleanArray::from(vec![false, true, false]));
+    /// ```
+    pub fn bitwise_unary_mut<F>(self, op: F) -> Result<BooleanArray, BooleanArray>
+    where
+        F: FnMut(u64) -> u64,
+    {
+        self.try_bitwise_unary_in_place(op)
+            .map_err(|(array, _op)| array)
+    }
+
+    /// Apply a bitwise operation to this array's values in place if the buffer
+    /// is uniquely owned, or clone and apply if shared.
+    ///
+    /// This is a convenience wrapper around [`bitwise_unary_mut`](Self::bitwise_unary_mut)
+    /// that falls back to [`bitwise_unary`](Self::bitwise_unary) when the buffer is shared.
+    ///
+    /// The null buffer is preserved unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::BooleanArray;
+    /// let array = BooleanArray::from(vec![true, false, true]);
+    /// let result = array.bitwise_unary_mut_or_clone(|x| !x);
+    /// assert_eq!(result, BooleanArray::from(vec![false, true, false]));
+    /// ```
+    pub fn bitwise_unary_mut_or_clone<F>(self, op: F) -> BooleanArray
+    where
+        F: FnMut(u64) -> u64,
+    {
+        match self.try_bitwise_unary_in_place(op) {
+            Ok(array) => array,
+            Err((array, op)) => array.bitwise_unary(op),
+        }
+    }
+
+    /// Try to apply a unary op in place. Returns `op` back on failure so
+    /// callers can fall back to an allocating path without requiring `F: Clone`.
+    fn try_bitwise_unary_in_place<F>(self, op: F) -> Result<BooleanArray, (BooleanArray, F)>
+    where
+        F: FnMut(u64) -> u64,
+    {
+        let (values, nulls) = self.into_parts();
+        let offset = values.offset();
+        let len = values.len();
+        let buffer = values.into_inner();
+        match buffer.into_mutable() {
+            Ok(mut buf) => {
+                bit_util::apply_bitwise_unary_op(buf.as_slice_mut(), offset, len, op);
+                let values = BooleanBuffer::new(buf.into(), offset, len);
+                Ok(BooleanArray::new(values, nulls))
+            }
+            Err(buffer) => {
+                let values = BooleanBuffer::new(buffer, offset, len);
+                Err((BooleanArray::new(values, nulls), op))
+            }
+        }
+    }
+
+    /// Apply a bitwise binary operation to this array and `rhs` using u64
+    /// operations, returning a new [`BooleanArray`].
+    ///
+    /// Null buffers are unioned: the result is null where either input is null.
+    ///
+    /// See [`BooleanBuffer::from_bitwise_binary_op`] for details on the operation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` and `rhs` have different lengths.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::BooleanArray;
+    /// let a = BooleanArray::from(vec![true, false, true, true]);
+    /// let b = BooleanArray::from(vec![true, true, false, true]);
+    /// let result = a.bitwise_bin_op(&b, |a, b| a & b);
+    /// assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+    /// ```
+    pub fn bitwise_bin_op<F>(&self, rhs: &BooleanArray, op: F) -> BooleanArray
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        assert_eq!(self.len(), rhs.len());
+        let nulls = NullBuffer::union(self.nulls(), rhs.nulls());
+        let values = BooleanBuffer::from_bitwise_binary_op(
+            self.values.values(),
+            self.values.offset(),
+            rhs.values.values(),
+            rhs.values.offset(),
+            self.values.len(),
+            op,
+        );
+        BooleanArray::new(values, nulls)
+    }
+
+    /// Try to apply a bitwise binary operation to this array and `rhs` in
+    /// place using u64 operations.
+    ///
+    /// If this array's underlying buffer is uniquely owned, the operation is
+    /// applied in place and `Ok` is returned. If the buffer is shared,
+    /// `Err(self)` is returned so the caller can fall back to
+    /// [`bitwise_bin_op`](Self::bitwise_bin_op).
+    ///
+    /// Null buffers are unioned: the result is null where either input is null.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` and `rhs` have different lengths.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::BooleanArray;
+    /// let a = BooleanArray::from(vec![true, false, true, true]);
+    /// let b = BooleanArray::from(vec![true, true, false, true]);
+    /// let result = a.bitwise_bin_op_mut(&b, |a, b| a & b).unwrap();
+    /// assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+    /// ```
+    pub fn bitwise_bin_op_mut<F>(
+        self,
+        rhs: &BooleanArray,
+        op: F,
+    ) -> Result<BooleanArray, BooleanArray>
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        self.try_bitwise_bin_op_in_place(rhs, op)
+            .map_err(|(array, _op)| array)
+    }
+
+    /// Apply a bitwise binary operation to this array and `rhs` in place if the
+    /// buffer is uniquely owned, or clone and apply if shared.
+    ///
+    /// This is a convenience wrapper around [`bitwise_bin_op_mut`](Self::bitwise_bin_op_mut)
+    /// that falls back to [`bitwise_bin_op`](Self::bitwise_bin_op) when the buffer is shared.
+    ///
+    /// Null buffers are unioned: the result is null where either input is null.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` and `rhs` have different lengths.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_array::BooleanArray;
+    /// let a = BooleanArray::from(vec![true, false, true, true]);
+    /// let b = BooleanArray::from(vec![true, true, false, true]);
+    /// let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
+    /// assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+    /// ```
+    pub fn bitwise_bin_op_mut_or_clone<F>(self, rhs: &BooleanArray, op: F) -> BooleanArray
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        match self.try_bitwise_bin_op_in_place(rhs, op) {
+            Ok(array) => array,
+            Err((array, op)) => array.bitwise_bin_op(rhs, op),
+        }
+    }
+
+    /// Try to apply a binary op in place. Returns `op` back on failure so
+    /// callers can fall back to an allocating path without requiring `F: Clone`.
+    fn try_bitwise_bin_op_in_place<F>(
+        self,
+        rhs: &BooleanArray,
+        op: F,
+    ) -> Result<BooleanArray, (BooleanArray, F)>
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        assert_eq!(self.len(), rhs.len());
+        let (values, nulls) = self.into_parts();
+        let offset = values.offset();
+        let len = values.len();
+        let buffer = values.into_inner();
+        match buffer.into_mutable() {
+            Ok(mut buf) => {
+                bit_util::apply_bitwise_binary_op(
+                    buf.as_slice_mut(),
+                    offset,
+                    rhs.values.inner(),
+                    rhs.values.offset(),
+                    len,
+                    op,
+                );
+                // Defer null union to the success path so the Err path returns
+                // self's original nulls, avoiding a redundant union in callers
+                // that fall back to bitwise_bin_op.
+                let nulls = NullBuffer::union(nulls.as_ref(), rhs.nulls());
+                let values = BooleanBuffer::new(buf.into(), offset, len);
+                Ok(BooleanArray::new(values, nulls))
+            }
+            Err(buffer) => {
+                let values = BooleanBuffer::new(buffer, offset, len);
+                Err((BooleanArray::new(values, nulls), op))
+            }
+        }
+    }
+
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (BooleanBuffer, Option<NullBuffer>) {
         (self.values, self.nulls)
@@ -345,6 +673,14 @@ unsafe impl Array for BooleanArray {
 
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>() + self.get_buffer_memory_size()
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.values.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
     }
 }
 
@@ -534,12 +870,7 @@ impl BooleanArray {
         });
 
         let values = BooleanBuffer::new(val_builder.into(), 0, data_len);
-        let nulls = Some(NullBuffer::new(BooleanBuffer::new(
-            null_builder.into(),
-            0,
-            data_len,
-        )))
-        .filter(|n| n.null_count() > 0);
+        let nulls = NullBuffer::from_unsliced_buffer(null_builder, data_len);
         BooleanArray::new(values, nulls)
     }
 }
@@ -556,6 +887,41 @@ impl From<BooleanBuffer> for BooleanArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Captures the values-buffer identity for a BooleanArray so tests can assert
+    // whether an operation reused the original allocation or produced a new one.
+    struct PointerInfo {
+        ptr: *const u8,
+        offset: usize,
+        len: usize,
+    }
+
+    impl PointerInfo {
+        // Record the current values buffer pointer plus bit offset/length. The
+        // offset/length checks ensure a logically equivalent slice wasn't rebuilt
+        // with a different view over the same allocation.
+        fn new(array: &BooleanArray) -> Self {
+            Self {
+                ptr: array.values().inner().as_ptr(),
+                offset: array.values().offset(),
+                len: array.values().len(),
+            }
+        }
+
+        // Assert that the array still points at the exact same values buffer and
+        // preserves the same bit view.
+        fn assert_same(&self, array: &BooleanArray) {
+            assert_eq!(array.values().inner().as_ptr(), self.ptr);
+            assert_eq!(array.values().offset(), self.offset);
+            assert_eq!(array.values().len(), self.len);
+        }
+
+        // Assert that the array now points at a different values allocation,
+        // indicating the operation fell back to an allocating path.
+        fn assert_different(&self, array: &BooleanArray) {
+            assert_ne!(array.values().inner().as_ptr(), self.ptr);
+        }
+    }
     use arrow_buffer::Buffer;
     use rand::{Rng, rng};
 
@@ -850,5 +1216,418 @@ mod tests {
         assert!(sliced.is_null(0));
         assert!(sliced.is_valid(1));
         assert!(!sliced.value(1));
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_true() {
+        let arr = BooleanArray::from(vec![true, true, true]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_false() {
+        let arr = BooleanArray::from(vec![false, false, false]);
+        assert!(!arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_mixed() {
+        let arr = BooleanArray::from(vec![true, false, true]);
+        assert!(arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_empty() {
+        let arr = BooleanArray::from(Vec::<bool>::new());
+        assert!(!arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_nulls_all_valid_true() {
+        let arr = BooleanArray::from(vec![Some(true), None, Some(true)]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_nulls_all_valid_false() {
+        let arr = BooleanArray::from(vec![Some(false), None, Some(false)]);
+        assert!(!arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_all_null() {
+        let arr = BooleanArray::new_null(5);
+        assert!(!arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_aligned_suffix_all_true() {
+        let arr = BooleanArray::from(vec![true; 129]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_non_aligned_all_true() {
+        // 65 elements: exercises the remainder path in has_false
+        let arr = BooleanArray::from(vec![true; 65]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_non_aligned_last_false() {
+        // 64 trues + 1 false: remainder path should find the false
+        let mut values = vec![true; 64];
+        values.push(false);
+        let arr = BooleanArray::from(values);
+        assert!(arr.has_true());
+        assert!(arr.has_false());
+    }
+
+    #[test]
+    fn test_has_false_exact_64_all_true() {
+        // Exactly 64 elements, no remainder
+        let arr = BooleanArray::from(vec![true; 64]);
+        assert!(arr.has_true());
+        assert!(!arr.has_false());
+    }
+
+    #[test]
+    fn test_has_true_has_false_unaligned_slices() {
+        let cases = [
+            (1, 129, true, false),
+            (3, 130, true, false),
+            (5, 65, true, false),
+            (7, 64, true, false),
+        ];
+
+        let base = BooleanArray::from(vec![true; 300]);
+
+        for (offset, len, expected_has_true, expected_has_false) in cases {
+            let arr = base.slice(offset, len);
+            assert_eq!(
+                arr.has_true(),
+                expected_has_true,
+                "offset={offset} len={len}"
+            );
+            assert_eq!(
+                arr.has_false(),
+                expected_has_false,
+                "offset={offset} len={len}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_has_true_has_false_exact_multiples_of_64() {
+        let cases = [
+            (64, true, false),
+            (128, true, false),
+            (192, true, false),
+            (256, true, false),
+        ];
+
+        for (len, expected_has_true, expected_has_false) in cases {
+            let arr = BooleanArray::from(vec![true; len]);
+            assert_eq!(arr.has_true(), expected_has_true, "len={len}");
+            assert_eq!(arr.has_false(), expected_has_false, "len={len}");
+        }
+    }
+
+    #[test]
+    fn test_bitwise_unary_not() {
+        let arr = BooleanArray::from(vec![true, false, true, false]);
+        let result = arr.bitwise_unary(|x| !x);
+        let expected = BooleanArray::from(vec![false, true, false, true]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_bitwise_unary_preserves_nulls() {
+        let arr = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
+        let result = arr.bitwise_unary(|x| !x);
+
+        assert_eq!(result.null_count(), 1);
+        assert!(result.is_null(1));
+        assert!(!result.value(0));
+        assert!(result.value(2));
+        assert!(!result.value(3));
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_unshared() {
+        let arr = BooleanArray::from(vec![true, false, true, false]);
+        let info = PointerInfo::new(&arr);
+        let result = arr.bitwise_unary_mut(|x| !x).unwrap();
+        let expected = BooleanArray::from(vec![false, true, false, true]);
+        assert_eq!(result, expected);
+        info.assert_same(&result);
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_shared() {
+        let arr = BooleanArray::from(vec![true, false, true, false]);
+        let info = PointerInfo::new(&arr);
+        let _shared = arr.clone();
+        let result = arr.bitwise_unary_mut(|x| !x);
+        assert!(result.is_err());
+
+        let returned = result.unwrap_err();
+        assert_eq!(returned, BooleanArray::from(vec![true, false, true, false]));
+        info.assert_same(&returned);
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_with_nulls() {
+        let arr = BooleanArray::from(vec![Some(true), None, Some(false)]);
+        let result = arr.bitwise_unary_mut(|x| !x).unwrap();
+
+        assert_eq!(result.null_count(), 1);
+        assert!(result.is_null(1));
+        assert!(!result.value(0));
+        assert!(result.value(2));
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_or_clone_shared() {
+        let arr = BooleanArray::from(vec![true, false, true]);
+        let info = PointerInfo::new(&arr);
+        let _shared = arr.clone();
+        let result = arr.bitwise_unary_mut_or_clone(|x| !x);
+        assert_eq!(result, BooleanArray::from(vec![false, true, false]));
+        info.assert_different(&result);
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_or_clone_unshared() {
+        // Covers the uniquely-owned fast path in bitwise_unary_mut_or_clone.
+        let arr = BooleanArray::from(vec![true, false, true]);
+        let info = PointerInfo::new(&arr);
+        let result = arr.bitwise_unary_mut_or_clone(|x| !x);
+        assert_eq!(result, BooleanArray::from(vec![false, true, false]));
+        info.assert_same(&result);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_and() {
+        let a = BooleanArray::from(vec![true, false, true, true]);
+        let b = BooleanArray::from(vec![true, true, false, true]);
+        let result = a.bitwise_bin_op(&b, |a, b| a & b);
+        assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_or() {
+        let a = BooleanArray::from(vec![true, false, true, false]);
+        let b = BooleanArray::from(vec![false, true, false, false]);
+        let result = a.bitwise_bin_op(&b, |a, b| a | b);
+        assert_eq!(result, BooleanArray::from(vec![true, true, true, false]));
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_null_union() {
+        let a = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+        let b = BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]);
+        let result = a.bitwise_bin_op(&b, |a, b| a & b);
+
+        assert_eq!(result.null_count(), 2);
+        assert!(result.is_null(1));
+        assert!(result.is_null(2));
+        assert!(result.value(0));
+        assert!(!result.value(3));
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_one_nullable() {
+        let a = BooleanArray::from(vec![Some(true), None, Some(true)]);
+        let b = BooleanArray::from(vec![false, true, true]);
+        let result = a.bitwise_bin_op(&b, |a, b| a & b);
+
+        assert_eq!(result.null_count(), 1);
+        assert!(result.is_null(1));
+        assert!(!result.value(0));
+        assert!(result.value(2));
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_no_nulls() {
+        let a = BooleanArray::from(vec![true, false, true]);
+        let b = BooleanArray::from(vec![false, true, true]);
+        let result = a.bitwise_bin_op(&b, |a, b| a | b);
+
+        assert!(result.nulls().is_none());
+        assert_eq!(result, BooleanArray::from(vec![true, true, true]));
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_unshared() {
+        let a = BooleanArray::from(vec![true, false, true, true]);
+        let info = PointerInfo::new(&a);
+        let b = BooleanArray::from(vec![true, true, false, true]);
+        let result = a.bitwise_bin_op_mut(&b, |a, b| a & b).unwrap();
+        assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+        info.assert_same(&result);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_shared() {
+        let a = BooleanArray::from(vec![true, false, true, true]);
+        let info = PointerInfo::new(&a);
+        let _shared = a.clone();
+        let result = a.bitwise_bin_op_mut(
+            &BooleanArray::from(vec![true, true, false, true]),
+            |a, b| a & b,
+        );
+        assert!(result.is_err());
+        let returned = result.unwrap_err();
+        info.assert_same(&returned);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_with_nulls() {
+        let a = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+        let b = BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]);
+        let result = a.bitwise_bin_op_mut(&b, |a, b| a & b).unwrap();
+
+        assert_eq!(result.null_count(), 2);
+        assert!(result.is_null(1));
+        assert!(result.is_null(2));
+        assert!(result.value(0));
+        assert!(!result.value(3));
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_or_clone_shared() {
+        let a = BooleanArray::from(vec![true, false, true, true]);
+        let info = PointerInfo::new(&a);
+        let _shared = a.clone();
+        let b = BooleanArray::from(vec![true, true, false, true]);
+        let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
+        assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
+        info.assert_different(&result);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_or_clone_shared_with_nulls() {
+        // When the buffer is shared, _mut_or_clone falls back to bitwise_bin_op.
+        // The null union must only be applied once, not double-applied.
+        let a = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+        let info = PointerInfo::new(&a);
+        let _shared = a.clone();
+        let b = BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]);
+
+        let expected = a.bitwise_bin_op(&b, |a, b| a & b);
+        let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
+
+        assert_eq!(result, expected);
+        assert_eq!(result.null_count(), 2);
+        assert!(result.is_null(1));
+        assert!(result.is_null(2));
+        info.assert_different(&result);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_or_clone_unshared_with_nulls() {
+        // Covers the uniquely-owned fast path in bitwise_bin_op_mut_or_clone,
+        // including null union on the in-place path.
+        let a = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+        let info = PointerInfo::new(&a);
+        let b = BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]);
+        let result = a.bitwise_bin_op_mut_or_clone(&b, |a, b| a & b);
+
+        assert_eq!(result.null_count(), 2);
+        assert!(result.is_null(1));
+        assert!(result.is_null(2));
+        assert!(result.value(0));
+        assert!(!result.value(3));
+        info.assert_same(&result);
+    }
+
+    #[test]
+    fn test_bitwise_unary_empty() {
+        let arr = BooleanArray::from(Vec::<bool>::new());
+        let result = arr.bitwise_unary(|x| !x);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_empty() {
+        let a = BooleanArray::from(Vec::<bool>::new());
+        let b = BooleanArray::from(Vec::<bool>::new());
+        let result = a.bitwise_bin_op(&b, |a, b| a & b);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_bitwise_unary_sliced() {
+        // Slicing creates a non-zero offset into the underlying buffer.
+        let arr = BooleanArray::from(vec![true, false, true, true, false]);
+        let sliced = arr.slice(1, 3); // [false, true, true]
+
+        let result = sliced.bitwise_unary(|x| !x);
+        assert_eq!(result.len(), 3);
+        assert!(result.value(0));
+        assert!(!result.value(1));
+        assert!(!result.value(2));
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_sliced() {
+        // Slicing shares the buffer, so _mut must return Err.
+        let arr = BooleanArray::from(vec![true, false, true, true, false]);
+        let sliced = arr.slice(1, 3);
+        assert!(sliced.bitwise_unary_mut(|x| !x).is_err());
+    }
+
+    #[test]
+    fn test_bitwise_unary_mut_or_clone_sliced() {
+        // Slicing shares the buffer, so _mut_or_clone falls back to allocating.
+        let arr = BooleanArray::from(vec![true, false, true, true, false]);
+        let sliced = arr.slice(1, 3); // [false, true, true]
+
+        let result = sliced.bitwise_unary_mut_or_clone(|x| !x);
+        assert_eq!(result.len(), 3);
+        assert!(result.value(0));
+        assert!(!result.value(1));
+        assert!(!result.value(2));
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_different_offsets() {
+        // Left and right sliced to different offsets exercises misaligned
+        // bit handling in from_bitwise_binary_op.
+        let left_full = BooleanArray::from(vec![false, true, false, true, true]);
+        let right_full = BooleanArray::from(vec![true, true, true, false, true, false]);
+
+        let left = left_full.slice(1, 3); // [true, false, true]
+        let right = right_full.slice(2, 3); // [true, false, true]
+
+        let result = left.bitwise_bin_op(&right, |a, b| a & b);
+        assert_eq!(result.len(), 3);
+        assert!(result.value(0));
+        assert!(!result.value(1));
+        assert!(result.value(2));
+    }
+
+    #[test]
+    fn test_bitwise_bin_op_mut_or_clone_different_offsets() {
+        // Both sliced (shared buffers), so falls back to allocating path.
+        let left_full = BooleanArray::from(vec![false, true, true, false, true]);
+        let right_full = BooleanArray::from(vec![true, true, false, false, true, false]);
+
+        let left = left_full.slice(1, 3); // [true, true, false]
+        let right = right_full.slice(2, 3); // [false, false, true]
+
+        let expected = left.bitwise_bin_op(&right, |a, b| a & b);
+        let result = left.bitwise_bin_op_mut_or_clone(&right, |a, b| a & b);
+        assert_eq!(result, expected);
     }
 }
