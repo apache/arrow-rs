@@ -1724,6 +1724,8 @@ fn reencode_offsets<O: OffsetSizeTrait>(
 /// size of sliced arrays, as values that have been sliced away are not encoded
 fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
     if data.is_empty() {
+        // As per specification, offsets buffer has N+1 elements.
+        // So an empty array should still be encoded with a single 0 offset.
         let mut offsets = MutableBuffer::new(size_of::<O>());
         offsets.extend_from_slice(O::usize_as(0).to_byte_slice());
         return (offsets.into(), MutableBuffer::new(0).into());
@@ -1738,6 +1740,8 @@ fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buff
 /// of a values buffer.
 fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, ArrayData) {
     if data.is_empty() {
+        // As per specification, offsets buffer has N+1 elements.
+        // So an empty array should still be encoded with a single 0 offset.
         let mut offsets = MutableBuffer::new(size_of::<O>());
         offsets.extend_from_slice(O::usize_as(0).to_byte_slice());
         return (offsets.into(), data.child_data()[0].slice(0, 0));
