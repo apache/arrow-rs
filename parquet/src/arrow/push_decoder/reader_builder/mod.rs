@@ -315,13 +315,6 @@ impl RowGroupReaderBuilder {
                 // allowed to emit and is decremented as each row group is
                 // planned in `StartData`, so `Some(0)` means earlier row
                 // groups have already produced the full requested output.
-                //
-                // Without this guard we would still fall through to
-                // `Filters`, set up the filter plan, fetch at least one
-                // batch of this row group's filter columns, and fully
-                // evaluate any intermediate predicates before
-                // `with_limit(Some(0))` discarded the selection in
-                // `StartData` and finally returned `Finished`.
                 if matches!(self.limit, Some(0)) {
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,

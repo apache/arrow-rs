@@ -1149,18 +1149,10 @@ mod test {
         // short-circuits to `Finished`.
         expect_finished(decoder.try_decode());
 
-        // within row group 0, the predicate should have seen
-        // strictly fewer than 200 rows — the short-circuit stops filter
-        // evaluation as soon as `limit` matches have been produced. Without
-        // the fix, all 200 rows of row group 0 would be evaluated.
-        let evaluated = rows_filtered.load(Ordering::Relaxed);
-        assert!(
-            evaluated < 200,
-            "predicate evaluated {evaluated} rows; expected < 200 with limit=10 short-circuit"
-        );
         // Row 186 is the 11th match; the scan should stop no later than the
         // batch containing it (batch 18 of 10 rows = rows 180..189), so at
         // most 190 rows are evaluated.
+        let evaluated = rows_filtered.load(Ordering::Relaxed);
         assert!(
             evaluated <= 190,
             "predicate evaluated {evaluated} rows; expected ≤ 190 (stop within batch containing 11th match)"
