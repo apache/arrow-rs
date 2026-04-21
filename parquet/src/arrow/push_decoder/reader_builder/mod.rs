@@ -471,8 +471,7 @@ impl RowGroupReaderBuilder {
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
                 );
-                // `with_predicate_limited` actually evaluates the filter.
-                //
+
                 // When this is the final predicate in the chain and an output
                 // limit is set, tell the filter evaluation to stop once enough
                 // matching rows have been accumulated.
@@ -481,6 +480,7 @@ impl RowGroupReaderBuilder {
                     .filter(|_| filter_info.is_last())
                     .map(|l| l.saturating_add(self.offset.unwrap_or(0)));
 
+                // `with_predicate_limited` actually evaluates the filter.
                 plan_builder = plan_builder.with_predicate_limited(
                     array_reader,
                     filter_info.current_mut(),
