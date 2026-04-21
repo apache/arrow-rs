@@ -2626,11 +2626,11 @@ mod tests {
         // check page encoding stats, should be one dict page, one dict encoded page, and 5
         // plain encoded pages
         let stats = column[0].page_encoding_stats().unwrap();
-        println!("pes: {stats:?}");
         assert!(
             stats
                 .iter()
-                .any(|s| s.page_type == PageType::DICTIONARY_PAGE)
+                .any(|s| s.page_type == PageType::DICTIONARY_PAGE),
+            "stats are {stats:?}"
         );
         let num_dict_encoded: i32 = stats
             .iter()
