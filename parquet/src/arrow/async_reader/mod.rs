@@ -420,7 +420,8 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// )?;
     /// let mut streams = vec![];
     ///  for row_group_index in 0..10 {
-    ///   // each stream needs its own source instance to issue parallel IO requests, so we clone the file for each stream
+    ///   // Each stream needs its own source instance to issue
+    ///   // parallel IO requests, so clone the file for each stream
     ///   let this_file = file.try_clone().await?;
     ///   let stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
     ///        this_file,
