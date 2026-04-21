@@ -4933,7 +4933,7 @@ mod tests {
         writer.write(&batch).unwrap();
         let data = Bytes::from(writer.into_inner().unwrap());
 
-        println!("file length, dictionary: {}", data.len());
+        let file_length_dict = data.len();
 
         let mut metadata = ParquetMetaDataReader::new();
         metadata.try_parse(&data).unwrap();
@@ -4952,7 +4952,7 @@ mod tests {
         writer.write(&batch).unwrap();
         let data = Bytes::from(writer.into_inner().unwrap());
 
-        println!("file length, fallback: {}", data.len());
+        let file_length_fallback = data.len();
 
         let mut metadata = ParquetMetaDataReader::new();
         metadata.try_parse(&data).unwrap();
@@ -4961,6 +4961,14 @@ mod tests {
         assert_eq!(
             get_dict_page_size(fallback_meta, data.clone()),
             32_768 * std::mem::size_of::<u32>()
+        );
+
+        let compression_ratio = file_length_fallback as f64 / file_length_dict as f64;
+        assert!(
+            compression_ratio < 0.9,
+            "File encoded with dictionary fallback encoding does not result in sufficient compression, 
+            got {file_length_fallback} vs {file_length_dict} ({:.2}%)",
+            compression_ratio * 100.0
         );
     }
 
