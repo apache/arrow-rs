@@ -1715,6 +1715,35 @@ mod tests {
     }
 
     #[test]
+    fn test_skip_delta_bit_packed_terminal_after_partial_get() {
+        // Decode K values, then skip all remaining values (terminal path).
+        // Verifies the terminal fast-path doesn't corrupt state when last_value
+        // was already updated by prior get() calls.
+        let col_descr = create_test_col_desc_ptr(-1, Type::INT32);
+        let data: Vec<i32> = (0..100).collect();
+
+        let mut encoder =
+            get_encoder::<Int32Type>(Encoding::DELTA_BINARY_PACKED, &col_descr).unwrap();
+        encoder.put(&data).unwrap();
+        let bytes = encoder.flush_buffer().unwrap();
+
+        let mut decoder =
+            get_decoder::<Int32Type>(col_descr, Encoding::DELTA_BINARY_PACKED).unwrap();
+        decoder.set_data(bytes, data.len()).unwrap();
+
+        // Decode first 20 values normally.
+        let mut buf = vec![0i32; 20];
+        assert_eq!(decoder.get(&mut buf).unwrap(), 20);
+        assert_eq!(buf, data[..20]);
+
+        // Terminally skip all remaining 80 values.
+        assert_eq!(decoder.skip(80).unwrap(), 80);
+
+        // Nothing left.
+        assert_eq!(decoder.skip(1).unwrap(), 0);
+    }
+
+    #[test]
     fn test_delta_bit_packed_int32_multiple_blocks() {
         // Test multiple 'put' calls on the same encoder
         let data = vec![
