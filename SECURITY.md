@@ -39,11 +39,31 @@ vulnerability, unless it is **exploitable** by an attacker to
 * Execute arbitrary code (Remote Code Execution);
 * Exfiltrate sensitive information from process memory (Information Disclosure);
 
-Similarly, undefined behavior using safe APIs is considered a bug unless it can
-be exploited as above.
+It should be clear how an attacker could use the unexpected behavior to cause a
+security vulnerability. If it is not clear, then the issue is likely a bug and
+should be reported as such.
 
+## Rust Safety, Soundness, and Undefined Behavior
 
-## Reporting Bugs
+The Rust programming language has a very [specific definition of unsafe]. When
+unsafe behavior results from using safe code, the code is unsound and can lead
+to undefined behavior (UB). Undefined behavior in general may be exploitable by
+an attacker to cause security vulnerabilities.
+
+However, not all soundness issues are exploitable. In general, issues that result
+in undefined behavior using `safe` APIs are considered bugs unless it can be
+exploited, as defined in the Security Model above.
+
+Note that we purposely avoid blindly classifying all unsoundness bugs as
+security vulnerabilities (e.g. filing [RUSTSEC] and/or [CVE] advisories) to avoid
+unnecessary downstream maintainer ecosystem churn and focus our limited
+resources on the most critical issues.
+
+[specific definition of unsafe]: https://doc.rust-lang.org/book/ch20-01-unsafe-rust.html
+[rustsec]: https://rustsec.org/
+[cve]: https://cve.mitre.org/
+
+## Reporting a Bug
 
 We treat all bugs seriously and welcome help fixing them. If you find a bug
 that does not meet the criteria for a security vulnerability, please report it
