@@ -2098,6 +2098,133 @@ mod tests {
         }
     }
 
+    /// Test that the reader can read legacy files where empty list arrays were written with a 0-byte offsets buffer.
+    #[test]
+    fn test_read_legacy_empty_list_without_offsets_buffer() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new_list(
+            "items",
+            Field::new_list_field(DataType::Int32, true),
+            true,
+        )]));
+
+        // Legacy arrow-rs versions wrote empty offsets buffers for empty list arrays.
+        // Keep reader compatibility with such files by accepting a 0-byte offsets buffer.
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[
+            FieldNode::new(0, 0), // list node
+            FieldNode::new(0, 0), // child int32 node
+        ]);
+        let buffers = fbb.create_vector(&[
+            crate::Buffer::new(0, 0), // list validity
+            crate::Buffer::new(0, 0), // list offsets (legacy empty buffer)
+            crate::Buffer::new(0, 0), // child validity
+            crate::Buffer::new(0, 0), // child values
+        ]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 0,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: None,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let body = Buffer::from(Vec::<u8>::new());
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+        let metadata = MetadataVersion::V5;
+
+        let decoder =
+            RecordBatchDecoder::try_new(&body, batch, schema.clone(), &dictionaries, &metadata)
+                .unwrap();
+
+        let read_batch = decoder.read_record_batch().unwrap();
+        assert_eq!(read_batch.num_rows(), 0);
+
+        let list = read_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(list.len(), 0);
+        assert_eq!(list.values().len(), 0);
+    }
+
+    /// Test that the reader can read legacy files where empty Utf8/Binary arrays were written with a 0-byte offsets buffer.
+    #[test]
+    fn test_read_legacy_empty_utf8_and_binary_without_offsets_buffer() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("payload", DataType::Binary, true),
+        ]));
+
+        // Legacy arrow-rs versions wrote empty offsets buffers for empty Utf8/Binary arrays.
+        // Keep reader compatibility with such files by accepting 0-byte offsets buffers.
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[
+            FieldNode::new(0, 0), // utf8 node
+            FieldNode::new(0, 0), // binary node
+        ]);
+        let buffers = fbb.create_vector(&[
+            crate::Buffer::new(0, 0), // utf8 validity
+            crate::Buffer::new(0, 0), // utf8 offsets (legacy empty buffer)
+            crate::Buffer::new(0, 0), // utf8 values
+            crate::Buffer::new(0, 0), // binary validity
+            crate::Buffer::new(0, 0), // binary offsets (legacy empty buffer)
+            crate::Buffer::new(0, 0), // binary values
+        ]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 0,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: None,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let body = Buffer::from(Vec::<u8>::new());
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+        let metadata = MetadataVersion::V5;
+
+        let decoder =
+            RecordBatchDecoder::try_new(&body, batch, schema.clone(), &dictionaries, &metadata)
+                .unwrap();
+
+        let read_batch = decoder.read_record_batch().unwrap();
+        assert_eq!(read_batch.num_rows(), 0);
+
+        let utf8 = read_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(utf8.len(), 0);
+        assert_eq!(utf8.value_offsets(), [0]);
+
+        let binary = read_batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(binary.len(), 0);
+        assert_eq!(binary.value_offsets(), [0]);
+    }
+
     #[test]
     fn test_projection_array_values() {
         // define schema
