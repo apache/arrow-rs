@@ -18,7 +18,7 @@
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
 use crate::variant_array::binary_array_value;
-use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
+use crate::{ShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     Array, ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray,
     FixedSizeBinaryArray, FixedSizeListArray, GenericListArray, GenericListViewArray,
@@ -67,8 +67,8 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     // NOTE: None/None at top-level is technically invalid, but the shredding spec requires us to
     // emit `Variant::Null` when a required value is missing.
     let nulls = array.nulls();
-    let mut row_builder = UnshredVariantRowBuilder::try_new_opt(array.shredding_state().borrow())?
-        .unwrap_or_else(|| UnshredVariantRowBuilder::null(nulls));
+    let mut row_builder = UnshredVariantRowBuilder::try_new_opt(array.shredding_state())?
+        .unwrap_or_else(|| UnshredVariantRowBuilder::null(nulls.cloned()));
 
     let metadata = array.metadata_field();
     let mut value_builder = VariantValueArrayBuilder::new(array.len());
@@ -97,41 +97,41 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
 }
 
 /// Row builder for converting shredded VariantArray rows back to unshredded form
-enum UnshredVariantRowBuilder<'a> {
-    PrimitiveInt8(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Int8Type>>),
-    PrimitiveInt16(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Int16Type>>),
-    PrimitiveInt32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Int32Type>>),
-    PrimitiveInt64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Int64Type>>),
-    PrimitiveFloat32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float32Type>>),
-    PrimitiveFloat64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float64Type>>),
-    Decimal32(DecimalUnshredRowBuilder<'a, Decimal32Type, VariantDecimal4>),
-    Decimal64(DecimalUnshredRowBuilder<'a, Decimal64Type, VariantDecimal8>),
-    Decimal128(DecimalUnshredRowBuilder<'a, Decimal128Type, VariantDecimal16>),
-    PrimitiveDate32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Date32Type>>),
-    PrimitiveTime64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Time64MicrosecondType>>),
-    TimestampMicrosecond(TimestampUnshredRowBuilder<'a, TimestampMicrosecondType>),
-    TimestampNanosecond(TimestampUnshredRowBuilder<'a, TimestampNanosecondType>),
-    PrimitiveBoolean(UnshredPrimitiveRowBuilder<'a, BooleanArray>),
-    PrimitiveString(UnshredPrimitiveRowBuilder<'a, StringArray>),
-    PrimitiveStringView(UnshredPrimitiveRowBuilder<'a, StringViewArray>),
-    PrimitiveLargeString(UnshredPrimitiveRowBuilder<'a, LargeStringArray>),
-    PrimitiveBinary(UnshredPrimitiveRowBuilder<'a, BinaryArray>),
-    PrimitiveBinaryView(UnshredPrimitiveRowBuilder<'a, BinaryViewArray>),
-    PrimitiveLargeBinary(UnshredPrimitiveRowBuilder<'a, LargeBinaryArray>),
-    PrimitiveUuid(UnshredPrimitiveRowBuilder<'a, FixedSizeBinaryArray>),
-    List(ListUnshredVariantBuilder<'a, GenericListArray<i32>>),
-    LargeList(ListUnshredVariantBuilder<'a, GenericListArray<i64>>),
-    ListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i32>>),
-    LargeListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i64>>),
-    FixedSizeList(ListUnshredVariantBuilder<'a, FixedSizeListArray>),
-    Struct(StructUnshredVariantBuilder<'a>),
-    ValueOnly(ValueOnlyUnshredVariantBuilder<'a>),
-    Null(NullUnshredVariantBuilder<'a>),
+enum UnshredVariantRowBuilder {
+    PrimitiveInt8(UnshredPrimitiveRowBuilder<PrimitiveArray<Int8Type>>),
+    PrimitiveInt16(UnshredPrimitiveRowBuilder<PrimitiveArray<Int16Type>>),
+    PrimitiveInt32(UnshredPrimitiveRowBuilder<PrimitiveArray<Int32Type>>),
+    PrimitiveInt64(UnshredPrimitiveRowBuilder<PrimitiveArray<Int64Type>>),
+    PrimitiveFloat32(UnshredPrimitiveRowBuilder<PrimitiveArray<Float32Type>>),
+    PrimitiveFloat64(UnshredPrimitiveRowBuilder<PrimitiveArray<Float64Type>>),
+    Decimal32(DecimalUnshredRowBuilder<Decimal32Type, VariantDecimal4>),
+    Decimal64(DecimalUnshredRowBuilder<Decimal64Type, VariantDecimal8>),
+    Decimal128(DecimalUnshredRowBuilder<Decimal128Type, VariantDecimal16>),
+    PrimitiveDate32(UnshredPrimitiveRowBuilder<PrimitiveArray<Date32Type>>),
+    PrimitiveTime64(UnshredPrimitiveRowBuilder<PrimitiveArray<Time64MicrosecondType>>),
+    TimestampMicrosecond(TimestampUnshredRowBuilder<TimestampMicrosecondType>),
+    TimestampNanosecond(TimestampUnshredRowBuilder<TimestampNanosecondType>),
+    PrimitiveBoolean(UnshredPrimitiveRowBuilder<BooleanArray>),
+    PrimitiveString(UnshredPrimitiveRowBuilder<StringArray>),
+    PrimitiveStringView(UnshredPrimitiveRowBuilder<StringViewArray>),
+    PrimitiveLargeString(UnshredPrimitiveRowBuilder<LargeStringArray>),
+    PrimitiveBinary(UnshredPrimitiveRowBuilder<BinaryArray>),
+    PrimitiveBinaryView(UnshredPrimitiveRowBuilder<BinaryViewArray>),
+    PrimitiveLargeBinary(UnshredPrimitiveRowBuilder<LargeBinaryArray>),
+    PrimitiveUuid(UnshredPrimitiveRowBuilder<FixedSizeBinaryArray>),
+    List(ListUnshredVariantBuilder<GenericListArray<i32>>),
+    LargeList(ListUnshredVariantBuilder<GenericListArray<i64>>),
+    ListView(ListUnshredVariantBuilder<GenericListViewArray<i32>>),
+    LargeListView(ListUnshredVariantBuilder<GenericListViewArray<i64>>),
+    FixedSizeList(ListUnshredVariantBuilder<FixedSizeListArray>),
+    Struct(StructUnshredVariantBuilder),
+    ValueOnly(ValueOnlyUnshredVariantBuilder),
+    Null(NullUnshredVariantBuilder),
 }
 
-impl<'a> UnshredVariantRowBuilder<'a> {
+impl UnshredVariantRowBuilder {
     /// Creates an all-null row builder.
-    fn null(nulls: Option<&'a NullBuffer>) -> Self {
+    fn null(nulls: Option<NullBuffer>) -> Self {
         Self::Null(NullUnshredVariantBuilder::new(nulls))
     }
 
@@ -175,12 +175,11 @@ impl<'a> UnshredVariantRowBuilder<'a> {
         }
     }
 
-    /// Creates a new UnshredVariantRowBuilder from shredding state
-    /// Returns None for None/None case - caller decides how to handle based on context
-    fn try_new_opt(shredding_state: BorrowedShreddingState<'a>) -> Result<Option<Self>> {
-        let value = shredding_state.value_field();
-        let typed_value = shredding_state.typed_value_field();
-        let Some(typed_value) = typed_value else {
+    /// Creates a new UnshredVariantRowBuilder from the given shredding state.
+    /// Returns None for the None/None case - caller decides how to handle based on context.
+    fn try_new_opt(shredding_state: &ShreddingState) -> Result<Option<Self>> {
+        let value = shredding_state.value_field().cloned();
+        let Some(typed_value) = shredding_state.typed_value_field().cloned() else {
             // Copy the value across directly, if present. Else caller decides what to do.
             return Ok(value.map(|v| Self::ValueOnly(ValueOnlyUnshredVariantBuilder::new(v))));
         };
@@ -190,7 +189,7 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             ($enum_variant:ident, $cast_fn:ident) => {
                 Self::$enum_variant(UnshredPrimitiveRowBuilder::new(
                     value,
-                    typed_value.$cast_fn(),
+                    typed_value.$cast_fn().clone(),
                 ))
             };
         }
@@ -203,13 +202,25 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
             DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
             DataType::Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal32(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+                Self::Decimal32(DecimalUnshredRowBuilder::new(
+                    value,
+                    typed_value.as_primitive().clone(),
+                    *s as _,
+                ))
             }
             DataType::Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal64(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+                Self::Decimal64(DecimalUnshredRowBuilder::new(
+                    value,
+                    typed_value.as_primitive().clone(),
+                    *s as _,
+                ))
             }
             DataType::Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal128(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+                Self::Decimal128(DecimalUnshredRowBuilder::new(
+                    value,
+                    typed_value.as_primitive().clone(),
+                    *s as _,
+                ))
             }
             DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
@@ -229,12 +240,20 @@ impl<'a> UnshredVariantRowBuilder<'a> {
                     "Time64({time_unit}) is not a valid variant shredding type",
                 )));
             }
-            DataType::Timestamp(TimeUnit::Microsecond, timezone) => Self::TimestampMicrosecond(
-                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
-            ),
-            DataType::Timestamp(TimeUnit::Nanosecond, timezone) => Self::TimestampNanosecond(
-                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
-            ),
+            DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
+                Self::TimestampMicrosecond(TimestampUnshredRowBuilder::new(
+                    value,
+                    typed_value.as_primitive().clone(),
+                    timezone.is_some(),
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
+                Self::TimestampNanosecond(TimestampUnshredRowBuilder::new(
+                    value,
+                    typed_value.as_primitive().clone(),
+                    timezone.is_some(),
+                ))
+            }
             DataType::Timestamp(time_unit, _) => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Timestamp({time_unit}) is not a valid variant shredding type",
@@ -257,27 +276,30 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             }
             DataType::Struct(_) => Self::Struct(StructUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_struct(),
+                typed_value.as_struct().clone(),
             )?),
             DataType::List(_) => Self::List(ListUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_list(),
+                typed_value.as_list::<i32>().clone(),
             )?),
             DataType::LargeList(_) => Self::LargeList(ListUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_list(),
+                typed_value.as_list::<i64>().clone(),
             )?),
             DataType::ListView(_) => Self::ListView(ListUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_list_view(),
+                typed_value.as_list_view::<i32>().clone(),
             )?),
             DataType::LargeListView(_) => Self::LargeListView(ListUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_list_view(),
+                typed_value.as_list_view::<i64>().clone(),
             )?),
-            DataType::FixedSizeList(_, _) => Self::FixedSizeList(
-                ListUnshredVariantBuilder::try_new(value, typed_value.as_fixed_size_list())?,
-            ),
+            DataType::FixedSizeList(_, _) => {
+                Self::FixedSizeList(ListUnshredVariantBuilder::try_new(
+                    value,
+                    typed_value.as_fixed_size_list().clone(),
+                )?)
+            }
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "Unshredding not yet supported for type: {}",
@@ -290,12 +312,12 @@ impl<'a> UnshredVariantRowBuilder<'a> {
 }
 
 /// Builder for arrays with neither typed_value nor value (all NULL/Variant::Null)
-struct NullUnshredVariantBuilder<'a> {
-    nulls: Option<&'a NullBuffer>,
+struct NullUnshredVariantBuilder {
+    nulls: Option<NullBuffer>,
 }
 
-impl<'a> NullUnshredVariantBuilder<'a> {
-    fn new(nulls: Option<&'a NullBuffer>) -> Self {
+impl NullUnshredVariantBuilder {
+    fn new(nulls: Option<NullBuffer>) -> Self {
         Self { nulls }
     }
 
@@ -305,7 +327,11 @@ impl<'a> NullUnshredVariantBuilder<'a> {
         _metadata: &VariantMetadata,
         index: usize,
     ) -> Result<()> {
-        if self.nulls.is_some_and(|nulls| nulls.is_null(index)) {
+        if self
+            .nulls
+            .as_ref()
+            .is_some_and(|nulls| nulls.is_null(index))
+        {
             builder.append_null();
         } else {
             builder.append_value(Variant::Null);
@@ -315,12 +341,12 @@ impl<'a> NullUnshredVariantBuilder<'a> {
 }
 
 /// Builder for arrays that only have value column (already unshredded)
-struct ValueOnlyUnshredVariantBuilder<'a> {
-    value: &'a ArrayRef,
+struct ValueOnlyUnshredVariantBuilder {
+    value: ArrayRef,
 }
 
-impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
-    fn new(value: &'a ArrayRef) -> Self {
+impl ValueOnlyUnshredVariantBuilder {
+    fn new(value: ArrayRef) -> Self {
         Self { value }
     }
 
@@ -394,13 +420,13 @@ macro_rules! handle_unshredded_case {
 }
 
 /// Generic unshred builder that works with any Array implementing AppendToVariantBuilder
-struct UnshredPrimitiveRowBuilder<'a, T> {
-    value: Option<&'a ArrayRef>,
-    typed_value: &'a T,
+struct UnshredPrimitiveRowBuilder<T> {
+    value: Option<ArrayRef>,
+    typed_value: T,
 }
 
-impl<'a, T: AppendToVariantBuilder> UnshredPrimitiveRowBuilder<'a, T> {
-    fn new(value: Option<&'a ArrayRef>, typed_value: &'a T) -> Self {
+impl<T: AppendToVariantBuilder> UnshredPrimitiveRowBuilder<T> {
+    fn new(value: Option<ArrayRef>, typed_value: T) -> Self {
         Self { value, typed_value }
     }
 
@@ -497,17 +523,17 @@ impl TimestampType for TimestampNanosecondType {
 }
 
 /// Generic builder for timestamp types that handles timezone-aware conversion
-struct TimestampUnshredRowBuilder<'a, T: TimestampType> {
-    value: Option<&'a ArrayRef>,
-    typed_value: &'a PrimitiveArray<T>,
+struct TimestampUnshredRowBuilder<T: TimestampType> {
+    value: Option<ArrayRef>,
+    typed_value: PrimitiveArray<T>,
     has_timezone: bool,
 }
 
-impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
-    fn new(value: Option<&'a ArrayRef>, typed_value: &'a dyn Array, has_timezone: bool) -> Self {
+impl<T: TimestampType> TimestampUnshredRowBuilder<T> {
+    fn new(value: Option<ArrayRef>, typed_value: PrimitiveArray<T>, has_timezone: bool) -> Self {
         Self {
             value,
-            typed_value: typed_value.as_primitive(),
+            typed_value,
             has_timezone,
         }
     }
@@ -533,24 +559,24 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
 }
 
 /// Generic builder for decimal unshredding
-struct DecimalUnshredRowBuilder<'a, A: DecimalType, V>
+struct DecimalUnshredRowBuilder<A: DecimalType, V>
 where
     V: VariantDecimalType<Native = A::Native>,
 {
-    value: Option<&'a ArrayRef>,
-    typed_value: &'a PrimitiveArray<A>,
+    value: Option<ArrayRef>,
+    typed_value: PrimitiveArray<A>,
     scale: i8,
     _phantom: PhantomData<V>,
 }
 
-impl<'a, A: DecimalType, V> DecimalUnshredRowBuilder<'a, A, V>
+impl<A: DecimalType, V> DecimalUnshredRowBuilder<A, V>
 where
     V: VariantDecimalType<Native = A::Native>,
 {
-    fn new(value: Option<&'a ArrayRef>, typed_value: &'a dyn Array, scale: i8) -> Self {
+    fn new(value: Option<ArrayRef>, typed_value: PrimitiveArray<A>, scale: i8) -> Self {
         Self {
             value,
-            typed_value: typed_value.as_primitive(),
+            typed_value,
             scale,
             _phantom: PhantomData,
         }
@@ -572,14 +598,14 @@ where
 }
 
 /// Builder for unshredding struct/object types with nested fields
-struct StructUnshredVariantBuilder<'a> {
-    value: Option<&'a ArrayRef>,
-    typed_value: &'a arrow::array::StructArray,
-    field_unshredders: IndexMap<&'a str, Option<UnshredVariantRowBuilder<'a>>>,
+struct StructUnshredVariantBuilder {
+    value: Option<ArrayRef>,
+    typed_value: StructArray,
+    field_unshredders: IndexMap<String, Option<UnshredVariantRowBuilder>>,
 }
 
-impl<'a> StructUnshredVariantBuilder<'a> {
-    fn try_new(value: Option<&'a ArrayRef>, typed_value: &'a StructArray) -> Result<Self> {
+impl StructUnshredVariantBuilder {
+    fn try_new(value: Option<ArrayRef>, typed_value: StructArray) -> Result<Self> {
         // Create unshredders for each field in constructor
         let mut field_unshredders = IndexMap::new();
         for (field, field_array) in typed_value.fields().iter().zip(typed_value.columns()) {
@@ -590,8 +616,9 @@ impl<'a> StructUnshredVariantBuilder<'a> {
                     field_array.data_type()
                 )));
             };
-            let field_unshredder = UnshredVariantRowBuilder::try_new_opt(field_array.try_into()?)?;
-            field_unshredders.insert(field.name().as_ref(), field_unshredder);
+            let field_state = ShreddingState::try_from(field_array)?;
+            let field_unshredder = UnshredVariantRowBuilder::try_new_opt(&field_state)?;
+            field_unshredders.insert(field.name().clone(), field_unshredder);
         }
 
         Ok(Self {
@@ -615,7 +642,8 @@ impl<'a> StructUnshredVariantBuilder<'a> {
         // Process typed fields (skip empty builders that indicate missing fields)
         for (field_name, field_unshredder_opt) in &mut self.field_unshredders {
             if let Some(field_unshredder) = field_unshredder_opt {
-                let mut field_builder = ObjectFieldBuilder::new(field_name, &mut object_builder);
+                let mut field_builder =
+                    ObjectFieldBuilder::new(field_name.as_str(), &mut object_builder);
                 field_unshredder.append_row(&mut field_builder, metadata, index)?;
             }
         }
@@ -645,14 +673,14 @@ impl<'a> StructUnshredVariantBuilder<'a> {
 }
 
 /// Builder for unshredding list/array types with recursive element processing
-struct ListUnshredVariantBuilder<'a, L: ListLikeArray> {
-    value: Option<&'a ArrayRef>,
-    typed_value: &'a L,
-    element_unshredder: Box<UnshredVariantRowBuilder<'a>>,
+struct ListUnshredVariantBuilder<L: ListLikeArray> {
+    value: Option<ArrayRef>,
+    typed_value: L,
+    element_unshredder: Box<UnshredVariantRowBuilder>,
 }
 
-impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
-    fn try_new(value: Option<&'a ArrayRef>, typed_value: &'a L) -> Result<Self> {
+impl<L: ListLikeArray + Clone> ListUnshredVariantBuilder<L> {
+    fn try_new(value: Option<ArrayRef>, typed_value: L) -> Result<Self> {
         // Create a recursive unshredder for the list elements
         // The element type comes from the values array of the list
         let element_values = typed_value.values();
@@ -670,7 +698,8 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
         //
         // NOTE: A None/None array element is technically invalid, but the shredding spec
         // requires us to emit `Variant::Null` when a required value is missing.
-        let element_unshredder = UnshredVariantRowBuilder::try_new_opt(element_values.try_into()?)?
+        let element_state = ShreddingState::try_from(element_values)?;
+        let element_unshredder = UnshredVariantRowBuilder::try_new_opt(&element_state)?
             .unwrap_or_else(|| UnshredVariantRowBuilder::null(None));
 
         Ok(Self {
