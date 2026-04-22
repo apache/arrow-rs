@@ -37,7 +37,7 @@ use arrow_array::cast::*;
 use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, layout};
 use arrow_schema::*;
 
@@ -1484,6 +1484,7 @@ impl<W: Write> StreamWriter<W> {
         }
 
         write_continuation(&mut self.writer, &self.write_options, 0)?;
+        self.writer.flush()?;
 
         self.finished = true;
 
@@ -1635,7 +1636,6 @@ fn write_body_buffers<W: Write>(
         writer.write_all(&PADDING[..pad_len])?;
     }
 
-    writer.flush()?;
     Ok(total_len)
 }
 
@@ -1668,8 +1668,6 @@ fn write_continuation<W: Write>(
         }
         z => panic!("Unsupported crate::MetadataVersion {z:?}"),
     };
-
-    writer.flush()?;
 
     Ok(written)
 }
@@ -1741,7 +1739,11 @@ fn reencode_offsets<O: OffsetSizeTrait>(
 /// size of sliced arrays, as values that have been sliced away are not encoded
 fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
     if data.is_empty() {
-        return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
+        // As per specification, offsets buffer has N+1 elements.
+        // So an empty array should still be encoded with a single 0 offset.
+        let mut offsets = MutableBuffer::new(size_of::<O>());
+        offsets.extend_from_slice(O::usize_as(0).to_byte_slice());
+        return (offsets.into(), MutableBuffer::new(0).into());
     }
 
     let (offsets, original_start_offset, len) = reencode_offsets::<O>(&data.buffers()[0], data);
@@ -1753,10 +1755,11 @@ fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buff
 /// of a values buffer.
 fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, ArrayData) {
     if data.is_empty() {
-        return (
-            MutableBuffer::new(0).into(),
-            data.child_data()[0].slice(0, 0),
-        );
+        // As per specification, offsets buffer has N+1 elements.
+        // So an empty array should still be encoded with a single 0 offset.
+        let mut offsets = MutableBuffer::new(size_of::<O>());
+        offsets.extend_from_slice(O::usize_as(0).to_byte_slice());
+        return (offsets.into(), data.child_data()[0].slice(0, 0));
     }
 
     let (offsets, original_start_offset, len) = reencode_offsets::<O>(&data.buffers()[0], data);
@@ -2435,6 +2438,62 @@ mod tests {
                     });
             }
         }
+    }
+
+    #[test]
+    fn test_empty_utf8_ipc_writes_nonempty_offsets_buffer() {
+        let name = StringArray::from(Vec::<String>::new());
+        let (offsets, values) = get_byte_array_buffers::<i32>(&name.to_data());
+
+        assert_eq!(name.len(), 0);
+        assert_eq!(
+            offsets.len(),
+            std::mem::size_of::<i32>(),
+            "offsets buffer should contain one zero i32 offset"
+        );
+        assert_eq!(values.len(), 0, "values buffer should remain empty");
+    }
+
+    #[test]
+    fn test_empty_large_utf8_ipc_writes_nonempty_offsets_buffer() {
+        let name = LargeStringArray::from(Vec::<String>::new());
+        let (offsets, values) = get_byte_array_buffers::<i64>(&name.to_data());
+
+        assert_eq!(name.len(), 0);
+        assert_eq!(
+            offsets.len(),
+            std::mem::size_of::<i64>(),
+            "offsets buffer should contain one zero i64 offset"
+        );
+        assert_eq!(values.len(), 0, "values buffer should remain empty");
+    }
+
+    #[test]
+    fn test_empty_list_ipc_writes_nonempty_offsets_buffer() {
+        let list = GenericListBuilder::<i32, _>::new(UInt32Builder::new()).finish();
+        let (offsets, child_data) = get_list_array_buffers::<i32>(&list.to_data());
+
+        assert_eq!(list.len(), 0);
+        assert_eq!(
+            offsets.len(),
+            std::mem::size_of::<i32>(),
+            "offsets buffer should contain one zero i32 offset"
+        );
+        assert_eq!(child_data.len(), 0, "child data should remain empty");
+    }
+
+    #[test]
+    fn test_empty_large_list_ipc_writes_nonempty_offsets_buffer() {
+        let list = GenericListBuilder::<i64, _>::new(UInt32Builder::new()).finish();
+        let (offsets, child_data) = get_list_array_buffers::<i64>(&list.to_data());
+
+        assert_eq!(list.len(), 0);
+        assert_eq!(
+            offsets.len(),
+            std::mem::size_of::<i64>(),
+            "offsets buffer should contain one zero i64 offset"
+        );
+        assert_eq!(child_data.len(), 0, "child data should remain empty");
     }
 
     fn write_null_file(options: IpcWriteOptions) {
