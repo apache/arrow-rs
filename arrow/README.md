@@ -79,9 +79,9 @@ The [Apache Arrow Status](https://arrow.apache.org/docs/status.html) page lists 
 
 ## Security
 
-`arrow-rs` follows the [Apache Arrow Security Model]. 
+`arrow-rs` follows the [Apache Arrow Security Model].
 
-Unexpected behavior (e.g., panics, crashes or infinite loops) triggered by
+Unexpected behavior (e.g., panics, crashes, or infinite loops) triggered by
 malformed input, and instances of undefined behavior (UB) triggered via safe
 APIs are considered bugs rather than security vulnerabilities unless they are exploitable
 by an attacker to
@@ -91,6 +91,9 @@ by an attacker to
 
 We welcome your help in fixing such bugs and security issues. See our
 [Security Policy] for reporting.
+
+[Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
+[Security Policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
 
 ## Safety
 

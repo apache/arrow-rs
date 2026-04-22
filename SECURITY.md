@@ -24,29 +24,30 @@ This document outlines the security model for the Rust implementation of Apache 
 ## Security Model
 
 The `arrow-rs` project follows the [Apache Arrow Security Model]. Key aspects include:
+
 - Reading data from untrusted sources (e.g., over a network or from a file) requires explicit validation.
-- Failure to validate untrusted data before use may lead to security issues. 
+- Failure to validate untrusted data before use may lead to security issues.
 
 This implementation provides APIs to validate Arrow data such as
 [`ArrayData::validate_full`] to ensure that data conforms to the Arrow
 specification.
 
-Unexpected behavior (e.g., panics, crashes or infinite loops) triggered by
+Unexpected behavior (e.g., panics, crashes, or infinite loops) triggered by
 malformed input is generally considered a **bug**, not a security
 vulnerability, unless it is **exploitable** by an attacker to
 
 * Execute arbitrary code (Remote Code Execution);
 * Exfiltrate sensitive information from process memory (Information Disclosure);
 
-Similarly, undefined behavior using `safe` APIs is considered a bug unless it
-can be exploited as above. 
+Similarly, undefined behavior using safe APIs is considered a bug unless it can
+be exploited as above.
 
 
 ## Reporting Bugs
 
-We treat all bugs seriously, and welcome help fixing them. If you find a bug,
+We treat all bugs seriously and welcome help fixing them. If you find a bug
 that does not meet the criteria for a security vulnerability, please report it
-in the public issue tracker so we can fix it togther.
+in the public issue tracker so we can fix it together.
 
 ## Reporting a Vulnerability
 
@@ -63,5 +64,4 @@ Include in your report:
 
 [Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
 [`ArrayData::validate_full`]: https://docs.rs/arrow/latest/arrow/array/struct.ArrayData.html#method.validate_full
-[Rust Soundness Pledge]: https://raphlinus.github.io/rust/2020/01/18/soundness-pledge.html
 [ASF security reporting process]: https://www.apache.org/security/#reporting-a-vulnerability

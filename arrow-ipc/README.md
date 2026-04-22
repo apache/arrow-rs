@@ -19,7 +19,7 @@
 
 # `arrow-ipc`
 
-Support for reading/writing files and streams of the [Arrow IPC Format] to/from [Apache Arrow].
+Support for reading and writing files and streams in the [Arrow IPC Format] to and from [Apache Arrow].
 
 See the [main repository README] and the [API documentation] for more details.
 

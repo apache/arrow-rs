@@ -339,7 +339,7 @@
 //!
 //! This project follows the [Apache Arrow Security Model].
 //!
-//! Unexpected behavior (e.g., panics, crashes or infinite loops) triggered by
+//! Unexpected behavior (e.g., panics, crashes, or infinite loops) triggered by
 //! malformed input is considered a **bug**, not a security vulnerability,
 //! unless it is **exploitable** by an attacker to
 //!
@@ -347,7 +347,7 @@
 //! * Exfiltrate sensitive information from process memory (Information Disclosure);
 //!
 //! If you think you have found a security vulnerability, please follow the
-//! instructions in our [security policy] for reporting.
+//! reporting instructions in the repository `SECURITY.md` file.
 //!
 //! # Safety
 //!
@@ -357,7 +357,6 @@
 //! For more information on the use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
 //!
 //! [Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
-//! [security policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
 //!
 //! # Higher-level Processing
 //!

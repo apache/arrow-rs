@@ -19,7 +19,7 @@
 
 # `arrow-csv`
 
-Support for reading/writing CSV files to/from [Apache Arrow].
+Support for reading and writing CSV files to and from [Apache Arrow].
 
 See the [main repository README] and the [API documentation] for more details.
 
