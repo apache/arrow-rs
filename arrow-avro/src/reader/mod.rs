@@ -3091,6 +3091,36 @@ mod test {
         );
     }
 
+    #[cfg(feature = "avro_1_12")]
+    #[test]
+    fn test_schema_resolution_defaults_cases_supported_by_avro_1_12() {
+        let path = "test/data/skippable_types.avro";
+        let reader_schema = make_reader_schema_with_default_fields(
+            path,
+            vec![
+                serde_json::json!({"name":"d_nullable_null_second","type":["int","null"],"default":null}),
+            ],
+        );
+        let actual = read_alltypes_with_reader_schema(path, reader_schema);
+        let num_rows = actual.num_rows();
+        assert!(num_rows > 0, "skippable_types.avro should contain rows");
+        assert_eq!(
+            actual.num_columns(),
+            1,
+            "expected exactly our defaulted fields"
+        );
+        let mut arrays: Vec<Arc<dyn Array>> = Vec::with_capacity(22);
+        arrays.push(Arc::new(Int32Array::from_iter(std::iter::repeat_n(
+            None::<i32>,
+            num_rows,
+        ))));
+        let expected = RecordBatch::try_new(actual.schema(), arrays).unwrap();
+        assert_eq!(
+            actual, expected,
+            "defaults should materialize correctly for all fields"
+        );
+    }
+
     #[test]
     fn test_schema_resolution_default_enum_invalid_symbol_errors() {
         let path = "test/data/skippable_types.avro";
