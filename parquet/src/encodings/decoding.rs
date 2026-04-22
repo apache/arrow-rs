@@ -847,13 +847,7 @@ where
             self.values_left -= 1;
         }
 
-        let mini_block_batch_size = match T::T::PHYSICAL_TYPE {
-            Type::INT32 => 32,
-            Type::INT64 => 64,
-            _ => unreachable!(),
-        };
-
-        let mut skip_buffer = vec![T::T::default(); mini_block_batch_size];
+        let mut skip_buffer = vec![T::T::default(); self.values_per_mini_block];
         while skip < to_skip {
             if self.mini_block_remaining == 0 {
                 self.next_mini_block()?;
