@@ -868,8 +868,7 @@ where
                 // All remainders are zero: every delta equals min_delta exactly.
                 // Advance last_value by n * min_delta with no bit reads.
                 if min_delta != 0 {
-                    let total =
-                        min_delta.wrapping_mul(mini_block_to_skip as i64);
+                    let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
                     let step = T::T::from_i64(total)
                         .ok_or_else(|| general_err!("delta*n overflow in skip"))?;
                     self.last_value = self.last_value.wrapping_add(&step);
