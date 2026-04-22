@@ -347,14 +347,20 @@
 //! * Exfiltrate sensitive information from process memory (Information Disclosure);
 //!
 //! If you think you have found a security vulnerability, please follow the
-//! reporting instructions in the repository `SECURITY.md` file.
+//! reporting instructions in the [security policy].
+//!
+//! [security policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
 //!
 //! # Safety
 //!
 //! Like many crates, this crate makes use of `unsafe` where prudent. However, it endeavors to be
 //! sound. Specifically, **it should not be possible to trigger undefined behavior using safe APIs.**
 //!
-//! For more information on the use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
+//! Undefined behavior using safe APIs is considered a bug, not a security
+//! vulnerability, unless it can be exploited. Please see the [security policy]
+//! for details.
+//!
+//! For more information on the use of `unsafe`, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
 //!
 //! [Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
 //!
