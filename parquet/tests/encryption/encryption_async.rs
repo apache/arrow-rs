@@ -545,9 +545,7 @@ async fn test_write_non_uniform_encryption() {
     .await;
 
     // AES-256
-    // The asymmetric column names is because we check column paths in the validate_encrypted_column_names function of [encryption::encrypt]
-    // The column path of the repeated field (int64_field) is int64_field.list.int64_field
-    // Switching from `c.path().string()` to `c.name().to_string()` can fix the asymmetricity
+    // TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
     write_non_uniform_encryption(
         b"01234567890123456789012345678901",
         vec![
