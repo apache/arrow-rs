@@ -51,6 +51,29 @@ where
         .collect()
 }
 
+/// Creates a random (but fixed-seeded) array of a given size and null density with a specific range
+pub fn create_primitive_array_range<T>(
+    size: usize,
+    null_density: f32,
+    range: Range<T::Native>,
+) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+    T::Native: SampleUniform,
+{
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                Some(rng.random_range(range.clone()))
+            }
+        })
+        .collect()
+}
+
 /// Creates a [`PrimitiveArray`] of a given `size` and `null_density`
 /// filling it with random numbers generated using the provided `seed`.
 pub fn create_primitive_array_with_seed<T>(

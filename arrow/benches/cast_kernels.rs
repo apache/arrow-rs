@@ -83,36 +83,6 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(builder.finish())
 }
 
-fn build_decimal32_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
-    let mut rng = seedable_rng();
-    let mut builder = Decimal32Builder::with_capacity(size);
-
-    for _ in 0..size {
-        builder.append_value(rng.random_range::<i32, _>(0..1000000));
-    }
-    Arc::new(
-        builder
-            .finish()
-            .with_precision_and_scale(precision, scale)
-            .unwrap(),
-    )
-}
-
-fn build_decimal64_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
-    let mut rng = seedable_rng();
-    let mut builder = Decimal64Builder::with_capacity(size);
-
-    for _ in 0..size {
-        builder.append_value(rng.random_range::<i64, _>(0..1000000000));
-    }
-    Arc::new(
-        builder
-            .finish()
-            .with_precision_and_scale(precision, scale)
-            .unwrap(),
-    )
-}
-
 fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut rng = seedable_rng();
     let mut builder = Decimal128Builder::with_capacity(size);
@@ -157,6 +127,53 @@ fn build_string_array(size: usize) -> ArrayRef {
     Arc::new(builder.finish())
 }
 
+fn build_string_float_array(size: usize, null_density: f32) -> ArrayRef {
+    let mut builder = StringBuilder::new();
+
+    let mut rng = seedable_rng();
+
+    for _ in 0..size {
+        if rng.random::<f32>() < null_density {
+            builder.append_null()
+        } else {
+            builder.append_value(
+                rng.random_range(-999_999_999f32..999_999_999f32)
+                    .to_string(),
+            )
+        }
+    }
+    Arc::new(builder.finish())
+}
+
+macro_rules! build_array_with_samples {
+    ($builder: ident, $size: ident, $null_density: expr, $samples: ident) => {{
+        let mut rng = seedable_rng();
+        for i in 0..$size {
+            if rng.random::<f32>() < $null_density {
+                $builder.append_null();
+            } else {
+                $builder.append_value($samples[i % $samples.len()])
+            }
+        }
+        Arc::new($builder.finish())
+    }};
+}
+
+fn build_float64_array_for_cast_to_decimal(size: usize, null_density: f32) -> ArrayRef {
+    Arc::new(create_primitive_array_range::<Float64Type>(
+        size,
+        null_density,
+        -999_999_999f64..999_999_999f64,
+    ))
+}
+
+fn build_float64_array_invalid_items(size: usize, null_density: f32) -> ArrayRef {
+    let mut builder = Float64Builder::with_capacity(size);
+    let invalid_values = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+
+    build_array_with_samples!(builder, size, null_density, invalid_values)
+}
+
 fn build_dict_array(size: usize) -> ArrayRef {
     let values = StringArray::from_iter([
         Some("small"),
@@ -170,7 +187,7 @@ fn build_dict_array(size: usize) -> ArrayRef {
 
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
-    hint::black_box(cast(array, &to_type).unwrap());
+    hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -189,16 +206,18 @@ fn add_benchmark(c: &mut Criterion) {
     let utf8_date_array = build_utf8_date_array(512, true);
     let utf8_date_time_array = build_utf8_date_time_array(512, true);
 
-    let decimal32_array = build_decimal32_array(512, 9, 3);
-    let decimal64_array = build_decimal64_array(512, 10, 3);
-    let decimal128_array = build_decimal128_array(512, 10, 3);
-    let decimal256_array = build_decimal256_array(512, 50, 3);
+    let decimal128_array = build_decimal128_array(8_000, 10, 3);
+    let decimal256_array = build_decimal256_array(8_000, 50, 3);
     let string_array = build_string_array(512);
     let wide_string_array = cast(&string_array, &DataType::LargeUtf8).unwrap();
 
     let dict_array = build_dict_array(10_000);
     let string_view_array = cast(&dict_array, &DataType::Utf8View).unwrap();
     let binary_view_array = cast(&string_view_array, &DataType::BinaryView).unwrap();
+
+    let string_float_array_normal = build_string_float_array(5_000, 0.1);
+    let float64_array_cast_to_decimal = build_float64_array_for_cast_to_decimal(8_000, 0.1);
+    let invalid_float64_array_to_decimal = build_float64_array_invalid_items(8_000, 0.1);
 
     c.bench_function("cast int32 to int32 512", |b| {
         b.iter(|| cast_array(&i32_array, DataType::Int32))
@@ -280,22 +299,6 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| cast_array(&utf8_date_time_array, DataType::Date64))
     });
 
-    c.bench_function("cast decimal32 to decimal32 512", |b| {
-        b.iter(|| cast_array(&decimal32_array, DataType::Decimal32(9, 4)))
-    });
-    c.bench_function("cast decimal32 to decimal32 512 lower precision", |b| {
-        b.iter(|| cast_array(&decimal32_array, DataType::Decimal32(6, 5)))
-    });
-    c.bench_function("cast decimal32 to decimal64 512", |b| {
-        b.iter(|| cast_array(&decimal32_array, DataType::Decimal64(11, 5)))
-    });
-    c.bench_function("cast decimal64 to decimal32 512", |b| {
-        b.iter(|| cast_array(&decimal64_array, DataType::Decimal32(9, 2)))
-    });
-    c.bench_function("cast decimal64 to decimal64 512", |b| {
-        b.iter(|| cast_array(&decimal64_array, DataType::Decimal64(12, 4)))
-    });
-
     c.bench_function("cast decimal128 to decimal128 512", |b| {
         b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(30, 5)))
     });
@@ -359,6 +362,58 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast binary view to string view", |b| {
         b.iter(|| cast_array(&binary_view_array, DataType::Utf8View))
     });
+
+    macro_rules! benchmark_cast {
+        ($name: expr, $input_array: ident, $target_type: expr) => {
+            c.bench_function(stringify!($name), |b| {
+                b.iter(|| cast_array(&$input_array, $target_type))
+            });
+        };
+    }
+
+    // cast string with normal items to decimals
+    benchmark_cast!(
+        "cast string to decimal128(38, 3)",
+        string_float_array_normal,
+        DataType::Decimal128(38, 3)
+    );
+
+    // cast float64 to decimals
+    benchmark_cast!(
+        "cast float64 to decimal128(32, 3)",
+        float64_array_cast_to_decimal,
+        DataType::Decimal128(32, 3)
+    );
+
+    // cast invalid float64 to decimals
+    benchmark_cast!(
+        "cast invalid float64 to to decimal128(32, 3)",
+        invalid_float64_array_to_decimal,
+        DataType::Decimal128(32, 3)
+    );
+
+    // cast decimals to float/integers
+    benchmark_cast!(
+        "cast decimal128 to float64",
+        decimal128_array,
+        DataType::Float64
+    );
+    benchmark_cast!(
+        "cast decimal128 to int64",
+        decimal128_array,
+        DataType::Int64
+    );
+
+    benchmark_cast!(
+        "cast decimal256 to float64",
+        decimal256_array,
+        DataType::Float64
+    );
+    benchmark_cast!(
+        "cast decimal256 to int64",
+        decimal256_array,
+        DataType::Int64
+    );
 
     c.bench_function("cast string single run to ree<int32>", |b| {
         let source_array = StringArray::from(vec!["a"; 8192]);
