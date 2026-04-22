@@ -94,27 +94,31 @@ impl FixedSizeBinaryArray {
             ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
-        let len = if s == 0 {
-            if !values.is_empty() {
-                return Err(ArrowError::InvalidArgumentError(
-                    "Buffer cannot have non-zero length if the item size is zero".to_owned(),
-                ));
-            }
+        let len = match values.len().checked_div(s) {
+            Some(len) => {
+                if let Some(n) = nulls.as_ref() {
+                    if n.len() != len {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
+                            len,
+                            n.len(),
+                        )));
+                    }
+                }
 
-            // If the item size is zero, try to determine the length from the null buffer
-            nulls.as_ref().map(|n| n.len()).unwrap_or(0)
-        } else {
-            values.len() / s
-        };
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
-                    len,
-                    n.len(),
-                )));
+                len
             }
-        }
+            None => {
+                if !values.is_empty() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Buffer cannot have non-zero length if the item size is zero".to_owned(),
+                    ));
+                }
+
+                // If the item size is zero, try to determine the length from the null buffer
+                nulls.as_ref().map(|n| n.len()).unwrap_or(0)
+            }
+        };
 
         Ok(Self {
             data_type,
@@ -662,6 +666,14 @@ unsafe impl Array for FixedSizeBinaryArray {
     fn get_array_memory_size(&self) -> usize {
         std::mem::size_of::<Self>() + self.get_buffer_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.value_data.claim(pool);
+        if let Some(nulls) = &self.nulls {
+            nulls.claim(pool);
+        }
+    }
 }
 
 impl<'a> ArrayAccessor for &'a FixedSizeBinaryArray {
@@ -1024,10 +1036,14 @@ mod tests {
 
         let zero_sized = FixedSizeBinaryArray::new(0, Buffer::default(), None);
         assert_eq!(zero_sized.len(), 0);
+        assert_eq!(zero_sized.null_count(), 0);
+        assert_eq!(zero_sized.values().len(), 0);
 
         let nulls = NullBuffer::new_null(3);
         let zero_sized_with_nulls = FixedSizeBinaryArray::new(0, Buffer::default(), Some(nulls));
         assert_eq!(zero_sized_with_nulls.len(), 3);
+        assert_eq!(zero_sized_with_nulls.null_count(), 3);
+        assert_eq!(zero_sized_with_nulls.values().len(), 0);
 
         let zero_sized_with_non_empty_buffer_err =
             FixedSizeBinaryArray::try_new(0, buffer, None).unwrap_err();

@@ -26,7 +26,7 @@ use crate::{Buffer, MutableBuffer};
 /// that it is null.
 ///
 /// # See also
-/// * [`NullBufferBuilder`] for creating `NullBuffer`s  
+/// * [`NullBufferBuilder`] for creating `NullBuffer`s
 ///
 /// [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html#validity-bitmaps
 /// [`NullBufferBuilder`]: crate::NullBufferBuilder
@@ -82,6 +82,22 @@ impl NullBuffer {
             (Some(n), None) | (None, Some(n)) => Some(n.clone()),
             (None, None) => None,
         }
+    }
+
+    /// Computes the union of the nulls in multiple optional [`NullBuffer`]s
+    ///
+    /// See [`union`](Self::union)
+    pub fn union_many<'a>(
+        nulls: impl IntoIterator<Item = Option<&'a NullBuffer>>,
+    ) -> Option<NullBuffer> {
+        // Unwrap to BooleanBuffer because BitAndAssign is not implemented for NullBuffer
+        let mut buffers = nulls.into_iter().filter_map(|nb| nb.map(NullBuffer::inner));
+        let first = buffers.next()?;
+        let mut result = first.clone();
+        for buf in buffers {
+            result &= buf;
+        }
+        Some(Self::new(result))
     }
 
     /// Returns true if all nulls in `other` also exist in self
@@ -231,6 +247,13 @@ impl NullBuffer {
         let nb = NullBuffer::new(bb);
         (nb.null_count() > 0).then_some(nb)
     }
+
+    /// Claim memory used by this null buffer in the provided memory pool.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        // NullBuffer wraps a BooleanBuffer which wraps a Buffer
+        self.buffer.inner().claim(pool);
+    }
 }
 
 impl<'a> IntoIterator for &'a NullBuffer {
@@ -327,6 +350,53 @@ mod tests {
     fn test_from_unsliced_buffer_empty() {
         let buf = Buffer::from([]);
         let result = NullBuffer::from_unsliced_buffer(buf, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_union_many_all_none() {
+        let result = NullBuffer::union_many([None, None, None]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_union_many_single_some() {
+        let a = NullBuffer::from(&[true, false, true, true]);
+        let result = NullBuffer::union_many([Some(&a)]);
+        assert_eq!(result, Some(a));
+    }
+
+    #[test]
+    fn test_union_many_two_inputs() {
+        let a = NullBuffer::from(&[true, false, true, true]);
+        let b = NullBuffer::from(&[true, true, false, true]);
+        let result = NullBuffer::union_many([Some(&a), Some(&b)]);
+        let expected = NullBuffer::union(Some(&a), Some(&b));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_union_many_three_inputs() {
+        let a = NullBuffer::from(&[true, false, true, true]);
+        let b = NullBuffer::from(&[true, true, false, true]);
+        let c = NullBuffer::from(&[false, true, true, true]);
+        let result = NullBuffer::union_many([Some(&a), Some(&b), Some(&c)]);
+        let expected = NullBuffer::from(&[false, false, false, true]);
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn test_union_many_mixed_none() {
+        let a = NullBuffer::from(&[true, false, true, true]);
+        let b = NullBuffer::from(&[false, true, true, true]);
+        let result = NullBuffer::union_many([Some(&a), None, Some(&b)]);
+        let expected = NullBuffer::union(Some(&a), Some(&b));
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_union_many_empty_slice() {
+        let result = NullBuffer::union_many([] as [Option<&NullBuffer>; 0]);
         assert!(result.is_none());
     }
 }

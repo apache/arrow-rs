@@ -19,7 +19,7 @@
 
 use crate::codec::{
     AvroDataType, AvroLiteral, Codec, EnumMapping, Promotion, ResolutionInfo, ResolvedField,
-    ResolvedRecord, ResolvedUnion,
+    ResolvedRecord, ResolvedUnion, Tz,
 };
 use crate::errors::AvroError;
 use crate::reader::cursor::AvroCursor;
@@ -227,9 +227,9 @@ enum Decoder {
     Date32(Vec<i32>),
     TimeMillis(Vec<i32>),
     TimeMicros(Vec<i64>),
-    TimestampMillis(bool, Vec<i64>),
-    TimestampMicros(bool, Vec<i64>),
-    TimestampNanos(bool, Vec<i64>),
+    TimestampMillis(Option<Tz>, Vec<i64>),
+    TimestampMicros(Option<Tz>, Vec<i64>),
+    TimestampNanos(Option<Tz>, Vec<i64>),
     Int32ToInt64(Vec<i64>),
     Int32ToFloat32(Vec<f32>),
     Int32ToFloat64(Vec<f64>),
@@ -347,14 +347,14 @@ impl Decoder {
             (Codec::Date32, _) => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::TimeMillis, _) => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::TimeMicros, _) => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::TimestampMillis(is_utc), _) => {
-                Self::TimestampMillis(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            (Codec::TimestampMillis(tz), _) => {
+                Self::TimestampMillis(*tz, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            (Codec::TimestampMicros(is_utc), _) => {
-                Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            (Codec::TimestampMicros(tz), _) => {
+                Self::TimestampMicros(*tz, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            (Codec::TimestampNanos(is_utc), _) => {
-                Self::TimestampNanos(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            (Codec::TimestampNanos(tz), _) => {
+                Self::TimestampNanos(*tz, Vec::with_capacity(DEFAULT_CAPACITY))
             }
             #[cfg(feature = "avro_custom_types")]
             (Codec::DurationNanos, _) => {
@@ -1487,17 +1487,17 @@ impl Decoder {
             Self::TimeMicros(values) => {
                 Arc::new(flush_primitive::<Time64MicrosecondType>(values, nulls))
             }
-            Self::TimestampMillis(is_utc, values) => Arc::new(
+            Self::TimestampMillis(tz, values) => Arc::new(
                 flush_primitive::<TimestampMillisecondType>(values, nulls)
-                    .with_timezone_opt(is_utc.then(|| "+00:00")),
+                    .with_timezone_opt(tz.as_ref().map(|tz| tz.to_string())),
             ),
-            Self::TimestampMicros(is_utc, values) => Arc::new(
+            Self::TimestampMicros(tz, values) => Arc::new(
                 flush_primitive::<TimestampMicrosecondType>(values, nulls)
-                    .with_timezone_opt(is_utc.then(|| "+00:00")),
+                    .with_timezone_opt(tz.as_ref().map(|tz| tz.to_string())),
             ),
-            Self::TimestampNanos(is_utc, values) => Arc::new(
+            Self::TimestampNanos(tz, values) => Arc::new(
                 flush_primitive::<TimestampNanosecondType>(values, nulls)
-                    .with_timezone_opt(is_utc.then(|| "+00:00")),
+                    .with_timezone_opt(tz.as_ref().map(|tz| tz.to_string())),
             ),
             #[cfg(feature = "avro_custom_types")]
             Self::DurationSecond(values) => {
@@ -2458,7 +2458,7 @@ impl<'a> ProjectorBuilder<'a> {
             .writer_fields
             .iter()
             .map(|field| match field {
-                ResolvedField::ToReader(index) => Ok(FieldProjection::ToReader(*index)),
+                ResolvedField::ToReader(index, _) => Ok(FieldProjection::ToReader(*index)),
                 ResolvedField::Skip(datatype) => {
                     let skipper = Skipper::from_avro(datatype)?;
                     Ok(FieldProjection::Skip(skipper))
@@ -2568,12 +2568,27 @@ impl Skipper {
             Codec::Uuid => Self::UuidString, // encoded as string
             Codec::Enum(_) => Self::Enum,
             Codec::List(item) => Self::List(Box::new(Skipper::from_avro(item)?)),
-            Codec::Struct(fields) => Self::Struct(
-                fields
-                    .iter()
-                    .map(|f| Skipper::from_avro(f.data_type()))
-                    .collect::<Result<_, _>>()?,
-            ),
+            Codec::Struct(fields) => {
+                if let Some(ResolutionInfo::Record(rec)) = dt.resolution.as_ref() {
+                    Self::Struct(
+                        rec.writer_fields
+                            .iter()
+                            .map(|wf| match wf {
+                                ResolvedField::ToReader(_, wdt) | ResolvedField::Skip(wdt) => {
+                                    Skipper::from_avro(wdt)
+                                }
+                            })
+                            .collect::<Result<_, _>>()?,
+                    )
+                } else {
+                    Self::Struct(
+                        fields
+                            .iter()
+                            .map(|f| Skipper::from_avro(f.data_type()))
+                            .collect::<Result<_, _>>()?,
+                    )
+                }
+            }
             Codec::Map(values) => Self::Map(Box::new(Skipper::from_avro(values)?)),
             Codec::Interval => Self::DurationFixed12,
             Codec::Union(encodings, _, _) => {
@@ -5498,8 +5513,8 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_nanos_decoding_utc() {
-        let avro_type = avro_from_codec(Codec::TimestampNanos(true));
+    fn test_timestamp_nanos_decoding_offset_zero() {
+        let avro_type = avro_from_codec(Codec::TimestampNanos(Some(Tz::OffsetZero)));
         let mut decoder = Decoder::try_new(&avro_type).expect("create TimestampNanos decoder");
         let mut data = Vec::new();
         for v in [0_i64, 1_i64, -1_i64, 1_234_567_890_i64] {
@@ -5524,8 +5539,34 @@ mod tests {
     }
 
     #[test]
+    fn test_timestamp_nanos_decoding_utc() {
+        let avro_type = avro_from_codec(Codec::TimestampNanos(Some(Tz::Utc)));
+        let mut decoder = Decoder::try_new(&avro_type).expect("create TimestampNanos decoder");
+        let mut data = Vec::new();
+        for v in [0_i64, 1_i64, -1_i64, 1_234_567_890_i64] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cur = AvroCursor::new(&data);
+        for _ in 0..4 {
+            decoder.decode(&mut cur).expect("decode nanos ts");
+        }
+        let array = decoder.flush(None).expect("flush nanos ts");
+        let ts = array
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("TimestampNanosecondArray");
+        assert_eq!(ts.values(), &[0, 1, -1, 1_234_567_890]);
+        match ts.data_type() {
+            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, tz) => {
+                assert_eq!(tz.as_deref(), Some("UTC"));
+            }
+            other => panic!("expected Timestamp(Nanosecond, Some(\"UTC\")), got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_timestamp_nanos_decoding_local() {
-        let avro_type = avro_from_codec(Codec::TimestampNanos(false));
+        let avro_type = avro_from_codec(Codec::TimestampNanos(None));
         let mut decoder = Decoder::try_new(&avro_type).expect("create TimestampNanos decoder");
         let mut data = Vec::new();
         for v in [10_i64, 20_i64, -30_i64] {
@@ -5552,7 +5593,7 @@ mod tests {
     #[test]
     fn test_timestamp_nanos_decoding_with_nulls() {
         let avro_type = AvroDataType::new(
-            Codec::TimestampNanos(false),
+            Codec::TimestampNanos(None),
             Default::default(),
             Some(Nullability::NullFirst),
         );

@@ -173,6 +173,10 @@ impl ExtensionType for Json {
         json.supports_data_type(data_type)?;
         Ok(json)
     }
+
+    fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<(), ArrowError> {
+        Self::default().supports_data_type(data_type)
+    }
 }
 
 #[cfg(test)]

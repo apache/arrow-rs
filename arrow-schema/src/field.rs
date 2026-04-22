@@ -504,13 +504,39 @@ impl Field {
             .map(String::as_ref)
     }
 
+    /// Returns `true` if this [`Field`] has the given [`ExtensionType`] name
+    /// and can be successfully validated as that extension type.
+    ///
+    /// This first checks the extension type name and only calls
+    /// [`ExtensionType::validate`] when the name matches.
+    ///
+    /// This is useful when you only need a boolean validity check and do not
+    /// need to retrieve the extension type instance.
+    #[inline]
+    pub fn has_valid_extension_type<E: ExtensionType>(&self) -> bool {
+        if self.extension_type_name() != Some(E::NAME) {
+            return false;
+        }
+
+        let ext_metadata = self
+            .metadata()
+            .get(EXTENSION_TYPE_METADATA_KEY)
+            .map(|s| s.as_str());
+
+        E::deserialize_metadata(ext_metadata)
+            .and_then(|metadata| E::validate(self.data_type(), metadata))
+            .is_ok()
+    }
+
     /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
     /// if set in the [`Field::metadata`].
     ///
     /// Note that using `try_extension_type` with an extension type that does
     /// not match the name in the metadata will return an `ArrowError` which can
     /// be slow due to string allocations. If you only want to check if a
-    /// [`Field`] has a specific [`ExtensionType`], see the example below.
+    /// [`Field`] has a specific [`ExtensionType`], first check
+    /// [`Field::extension_type_name`], or use [`Field::has_valid_extension_type`]
+    /// to also validate metadata and data type.
     ///
     /// # Errors
     ///
@@ -524,7 +550,7 @@ impl Field {
     ///   fail (for example when the [`Field::data_type`] is not supported by
     ///   the extension type ([`ExtensionType::supports_data_type`]))
     ///
-    /// # Examples: Check and retrieve an extension type
+    /// # Example: Check and retrieve an extension type
     /// You can use this to check if a [`Field`] has a specific
     /// [`ExtensionType`] and retrieve it:
     /// ```
@@ -544,34 +570,6 @@ impl Field {
     /// let field = get_field();
     /// if let Ok(extension_type) = field.try_extension_type::<MyExtensionType>() {
     ///   // do something with extension_type
-    /// }
-    /// ```
-    ///
-    /// # Example: Checking if a field has a specific extension type first
-    ///
-    /// Since `try_extension_type` returns an error, it is more
-    /// efficient to first check if the name matches before calling
-    /// `try_extension_type`:
-    /// ```
-    /// # use arrow_schema::{DataType, Field, ArrowError};
-    /// # use arrow_schema::extension::ExtensionType;
-    /// # struct MyExtensionType;
-    /// # impl ExtensionType for MyExtensionType {
-    /// # const NAME: &'static str = "my_extension";
-    /// # type Metadata = String;
-    /// # fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> { Ok(()) }
-    /// # fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> { Ok(Self) }
-    /// # fn serialize_metadata(&self) -> Option<String> { unimplemented!() }
-    /// # fn deserialize_metadata(s: Option<&str>) -> Result<Self::Metadata, ArrowError> { unimplemented!() }
-    /// # fn metadata(&self) -> &<Self as ExtensionType>::Metadata { todo!() }
-    /// # }
-    /// # fn get_field() -> Field { Field::new("field", DataType::Null, false) }
-    /// let field = get_field();
-    /// // First check if the name matches before calling the potentially expensive `try_extension_type`
-    /// if field.extension_type_name() == Some(MyExtensionType::NAME) {
-    ///   if let Ok(extension_type) = field.try_extension_type::<MyExtensionType>() {
-    ///     // do something with extension_type
-    ///   }
     /// }
     /// ```
     pub fn try_extension_type<E: ExtensionType>(&self) -> Result<E, ArrowError> {
@@ -830,6 +828,9 @@ impl Field {
                         .try_for_each(|f| builder.try_merge(f))?;
                     *nested_fields = builder.finish().fields;
                 }
+                DataType::Null => {
+                    self.nullable = true;
+                }
                 _ => {
                     return Err(ArrowError::SchemaError(format!(
                         "Fail to merge schema field '{}' because the from data_type = {} is not DataType::Struct",
@@ -840,6 +841,9 @@ impl Field {
             DataType::Union(nested_fields, _) => match &from.data_type {
                 DataType::Union(from_nested_fields, _) => {
                     nested_fields.try_merge(from_nested_fields)?
+                }
+                DataType::Null => {
+                    self.nullable = true;
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(format!(
@@ -854,6 +858,9 @@ impl Field {
                     f.try_merge(from_field)?;
                     (*field) = Arc::new(f);
                 }
+                DataType::Null => {
+                    self.nullable = true;
+                }
                 _ => {
                     return Err(ArrowError::SchemaError(format!(
                         "Fail to merge schema field '{}' because the from data_type = {} is not DataType::List",
@@ -866,6 +873,9 @@ impl Field {
                     let mut f = (**field).clone();
                     f.try_merge(from_field)?;
                     (*field) = Arc::new(f);
+                }
+                DataType::Null => {
+                    self.nullable = true;
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(format!(
@@ -1000,6 +1010,80 @@ impl std::fmt::Display for Field {
 mod test {
     use super::*;
     use std::collections::hash_map::DefaultHasher;
+
+    #[derive(Debug, Clone, Copy)]
+    struct TestExtensionType;
+
+    impl ExtensionType for TestExtensionType {
+        const NAME: &'static str = "test.extension";
+        type Metadata = ();
+
+        fn metadata(&self) -> &Self::Metadata {
+            &()
+        }
+
+        fn serialize_metadata(&self) -> Option<String> {
+            None
+        }
+
+        fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
+            metadata.map_or(Ok(()), |_| {
+                Err(ArrowError::InvalidArgumentError(
+                    "TestExtensionType expects no metadata".to_owned(),
+                ))
+            })
+        }
+
+        fn supports_data_type(&self, _data_type: &DataType) -> Result<(), ArrowError> {
+            Ok(())
+        }
+
+        fn try_new(_data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
+            Ok(Self)
+        }
+    }
+
+    #[test]
+    fn test_has_valid_extension_type() {
+        let no_extension = Field::new("f", DataType::Null, false);
+        assert!(!no_extension.has_valid_extension_type::<TestExtensionType>());
+
+        let matching_name = Field::new("f", DataType::Null, false).with_metadata(
+            [(
+                EXTENSION_TYPE_NAME_KEY.to_owned(),
+                TestExtensionType::NAME.to_owned(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        assert!(matching_name.has_valid_extension_type::<TestExtensionType>());
+
+        let matching_name_with_invalid_metadata = Field::new("f", DataType::Null, false)
+            .with_metadata(
+                [
+                    (
+                        EXTENSION_TYPE_NAME_KEY.to_owned(),
+                        TestExtensionType::NAME.to_owned(),
+                    ),
+                    (EXTENSION_TYPE_METADATA_KEY.to_owned(), "invalid".to_owned()),
+                ]
+                .into_iter()
+                .collect(),
+            );
+        assert!(
+            !matching_name_with_invalid_metadata.has_valid_extension_type::<TestExtensionType>()
+        );
+
+        let different_name = Field::new("f", DataType::Null, false).with_metadata(
+            [(
+                EXTENSION_TYPE_NAME_KEY.to_owned(),
+                "some.other_extension".to_owned(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        assert!(!different_name.has_valid_extension_type::<TestExtensionType>());
+    }
 
     #[test]
     fn test_new_with_string() {
@@ -1460,5 +1544,59 @@ mod test {
         let field = Field::new("name", DataType::Boolean, false).with_metadata(metadata);
 
         assert_binary_serde_round_trip(field)
+    }
+
+    #[test]
+    fn test_merge_compound_with_null() {
+        // Struct + Null
+        let mut field = Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, false)])),
+            false,
+        );
+        field
+            .try_merge(&Field::new("s", DataType::Null, true))
+            .expect("Struct should merge with Null");
+        assert!(field.is_nullable());
+        assert!(matches!(field.data_type(), DataType::Struct(_)));
+
+        // List + Null
+        let mut field = Field::new(
+            "l",
+            DataType::List(Field::new("item", DataType::Utf8, false).into()),
+            false,
+        );
+        field
+            .try_merge(&Field::new("l", DataType::Null, true))
+            .expect("List should merge with Null");
+        assert!(field.is_nullable());
+        assert!(matches!(field.data_type(), DataType::List(_)));
+
+        // LargeList + Null
+        let mut field = Field::new(
+            "ll",
+            DataType::LargeList(Field::new("item", DataType::Utf8, false).into()),
+            false,
+        );
+        field
+            .try_merge(&Field::new("ll", DataType::Null, true))
+            .expect("LargeList should merge with Null");
+        assert!(field.is_nullable());
+        assert!(matches!(field.data_type(), DataType::LargeList(_)));
+
+        // Union + Null
+        let mut field = Field::new(
+            "u",
+            DataType::Union(
+                UnionFields::try_new(vec![0], vec![Field::new("f", DataType::Int32, false)])
+                    .unwrap(),
+                UnionMode::Dense,
+            ),
+            false,
+        );
+        field
+            .try_merge(&Field::new("u", DataType::Null, true))
+            .expect("Union should merge with Null");
+        assert!(matches!(field.data_type(), DataType::Union(_, _)));
     }
 }
