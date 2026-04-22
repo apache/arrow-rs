@@ -148,6 +148,44 @@ where
         }
     }
 
+    /// Scan up to `num_records` records, writing to the internal buffer only those
+    /// values from miniblock regions where `predicate(lo, hi)` returns `true`.
+    ///
+    /// Only supported for mandatory (non-nullable, non-repeated) columns.  For
+    /// optional/repeated columns this falls back to [`Self::read_records`], which
+    /// decodes everything and ignores the predicate.
+    ///
+    /// Returns `(records_consumed, values_emitted)`.
+    pub fn scan_filtered_records(
+        &mut self,
+        num_records: usize,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> Result<(usize, usize)> {
+        let Some(reader) = self.column_reader.as_mut() else {
+            return Ok((0, 0));
+        };
+
+        // Optional/repeated columns: def/rep levels are separate from values.
+        // Skipping miniblock values would desync them from the null bitmap.
+        // Fall back to full decode; predicate is handled by the caller.
+        if self.def_levels.is_some() || self.rep_levels.is_some() {
+            let read = self.read_records(num_records)?;
+            return Ok((read, read));
+        }
+
+        let capacity_hint = self.capacity_hint;
+        let values = self
+            .values
+            .get_or_insert_with(|| V::with_capacity(capacity_hint));
+
+        let (consumed, emitted) = reader.scan_filtered_records(num_records, values, predicate)?;
+
+        self.num_records += consumed;
+        self.num_values += emitted;
+
+        Ok((consumed, emitted))
+    }
+
     /// Returns number of records stored in buffer.
     #[allow(unused)]
     pub fn num_records(&self) -> usize {

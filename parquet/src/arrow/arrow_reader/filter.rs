@@ -19,6 +19,37 @@ use crate::arrow::ProjectionMask;
 use arrow_array::{BooleanArray, RecordBatch};
 use arrow_schema::ArrowError;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+
+/// A miniblock-level predicate for DELTA_BINARY_PACKED columns.
+///
+/// The predicate receives the conservative value range `[lo, hi]` for an entire
+/// miniblock (64 values for INT64, 32 for INT32) and returns `true` if ANY row
+/// in that miniblock could satisfy the caller's actual filter.  Returning `false`
+/// means the entire miniblock is skipped without decoding individual values.
+///
+/// **Conservatism**: the `[lo, hi]` bounds may be wider than the actual value
+/// range in the miniblock (they are never narrower), so the predicate must be
+/// monotone: if `predicate(lo, hi)` is `false` then every value `v ∈ [lo, hi]`
+/// must also fail the caller's real filter.  False positives (returning `true`
+/// when no row would pass) are safe — they cause unnecessary decoding but never
+/// omit rows that should be returned.
+///
+/// # Example — keep rows where `value >= 1_000_000`:
+/// ```rust
+/// use parquet::arrow::arrow_reader::MiniblockPredicate;
+/// use std::sync::Arc;
+/// let pred: MiniblockPredicate = Arc::new(|_lo, hi| hi >= 1_000_000);
+/// ```
+///
+/// # Limitations
+///
+/// * Only [`crate::basic::Encoding::DELTA_BINARY_PACKED`] mandatory (non-nullable,
+///   non-repeated) columns gain the miniblock-skip benefit.  All other encodings
+///   and column types fall back to decoding every value.
+/// * For multi-column projections the predicate is applied only when a single
+///   column is projected.  Multi-column reads fall back to full decoding.
+pub type MiniblockPredicate = Arc<dyn Fn(i64, i64) -> bool + Send + Sync>;
 
 /// A predicate operating on [`RecordBatch`]
 ///

@@ -381,6 +381,52 @@ where
         Ok(num_records - remaining_records)
     }
 
+    /// Scan up to `max_records` records, emitting to `values` only those from miniblock
+    /// regions where `predicate(lo, hi)` returns `true`.
+    ///
+    /// This is only supported for **mandatory** (non-nullable, non-repeated) columns.
+    /// Returns an error if the column has definition or repetition levels — the caller
+    /// should fall back to [`Self::read_records`] for optional/repeated columns.
+    ///
+    /// Returns `(records_consumed, values_emitted)`.  `records_consumed` equals the
+    /// number of rows advanced in the page; `values_emitted` is the subset written to
+    /// `values` (≤ `records_consumed`).
+    pub fn scan_filtered_records(
+        &mut self,
+        max_records: usize,
+        values: &mut V::Buffer,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> Result<(usize, usize)>
+    where
+        V: ColumnValueDecoder,
+    {
+        if self.def_level_decoder.is_some() || self.rep_level_decoder.is_some() {
+            return Err(general_err!(
+                "scan_filtered_records is only supported for mandatory (non-nullable, \
+                 non-repeated) columns; use read_records for optional/repeated columns"
+            ));
+        }
+
+        let mut total_consumed = 0;
+        let mut total_emitted = 0;
+
+        while total_consumed < max_records && self.has_next()? {
+            let remaining = max_records - total_consumed;
+            let available = self.num_buffered_values - self.num_decoded_values;
+            let to_scan = remaining.min(available);
+
+            let (emitted, consumed) = self
+                .values_decoder
+                .scan_filtered_values(to_scan, values, predicate)?;
+
+            self.num_decoded_values += consumed;
+            total_consumed += consumed;
+            total_emitted += emitted;
+        }
+
+        Ok((total_consumed, total_emitted))
+    }
+
     /// Read the next page as a dictionary page. If the next page is not a dictionary page,
     /// this will return an error.
     fn read_dictionary_page(&mut self) -> Result<()> {

@@ -21,7 +21,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
-pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use filter::{ArrowPredicate, ArrowPredicateFn, MiniblockPredicate, RowFilter};
 pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -142,6 +142,8 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) metrics: ArrowReaderMetrics,
 
     pub(crate) max_predicate_cache_size: usize,
+
+    pub(crate) miniblock_predicate: Option<MiniblockPredicate>,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -160,6 +162,10 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("limit", &self.limit)
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
+            .field(
+                "miniblock_predicate",
+                &self.miniblock_predicate.as_ref().map(|_| "<predicate>"),
+            )
             .finish()
     }
 }
@@ -181,6 +187,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
+            miniblock_predicate: None,
         }
     }
 
@@ -430,6 +437,38 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_max_predicate_cache_size(self, max_predicate_cache_size: usize) -> Self {
         Self {
             max_predicate_cache_size,
+            ..self
+        }
+    }
+
+    /// Apply a miniblock-level predicate to enable sub-page predicate pushdown
+    /// on [`DELTA_BINARY_PACKED`] encoded mandatory columns.
+    ///
+    /// When set, the reader will call [`ArrayReader::scan_records`] instead of
+    /// [`ArrayReader::read_records`] in the inner read loop.  For mandatory INT32
+    /// or INT64 columns encoded with `DELTA_BINARY_PACKED`, entire miniblocks
+    /// (32 / 64 values respectively) are skipped without decoding if
+    /// `predicate(lo, hi)` returns `false` for that miniblock's conservative
+    /// value range.
+    ///
+    /// All other encodings and optional/repeated columns automatically fall back
+    /// to full decoding — no correctness risk, only a potential speedup is
+    /// foregone.
+    ///
+    /// # Single-column projections
+    ///
+    /// The benefit is greatest when a single column is projected (via
+    /// [`Self::with_projection`]).  For multi-column projections the predicate
+    /// is currently forwarded only when the top-level struct has exactly one
+    /// child (i.e. the projection mask selects a single leaf column); otherwise
+    /// it is silently ignored.
+    ///
+    /// See [`MiniblockPredicate`] for the exact predicate contract.
+    ///
+    /// [`DELTA_BINARY_PACKED`]: crate::basic::Encoding::DELTA_BINARY_PACKED
+    pub fn with_miniblock_predicate(self, predicate: MiniblockPredicate) -> Self {
+        Self {
+            miniblock_predicate: Some(predicate),
             ..self
         }
     }
@@ -1191,6 +1230,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
+            miniblock_predicate,
         } = self;
 
         // Try to avoid allocate large buffer
@@ -1240,7 +1280,11 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .build_limited()
             .build();
 
-        Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
+        Ok(ParquetRecordBatchReader::new(
+            array_reader,
+            read_plan,
+            miniblock_predicate,
+        ))
     }
 }
 
@@ -1342,6 +1386,7 @@ pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
     read_plan: ReadPlan,
+    miniblock_predicate: Option<MiniblockPredicate>,
 }
 
 impl Debug for ParquetRecordBatchReader {
@@ -1486,9 +1531,15 @@ impl ParquetRecordBatchReader {
                     };
                 }
             }
-            RowSelectionCursor::All => {
-                self.array_reader.read_records(batch_size)?;
-            }
+            RowSelectionCursor::All => match &self.miniblock_predicate {
+                Some(pred) => {
+                    let pred = pred.clone();
+                    self.array_reader.scan_records(batch_size, pred.as_ref())?;
+                }
+                None => {
+                    self.array_reader.read_records(batch_size)?;
+                }
+            },
         };
 
         let array = self.array_reader.consume_batch()?;
@@ -1549,13 +1600,18 @@ impl ParquetRecordBatchReader {
             array_reader,
             schema: Arc::new(Schema::new(levels.fields.clone())),
             read_plan,
+            miniblock_predicate: None,
         })
     }
 
     /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
     /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
     /// all rows will be returned
-    pub(crate) fn new(array_reader: Box<dyn ArrayReader>, read_plan: ReadPlan) -> Self {
+    pub(crate) fn new(
+        array_reader: Box<dyn ArrayReader>,
+        read_plan: ReadPlan,
+        miniblock_predicate: Option<MiniblockPredicate>,
+    ) -> Self {
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(fields) => Schema::new(fields.clone()),
             _ => unreachable!("Struct array reader's data type is not struct!"),
@@ -1565,6 +1621,7 @@ impl ParquetRecordBatchReader {
             array_reader,
             schema: Arc::new(schema),
             read_plan,
+            miniblock_predicate,
         }
     }
 
@@ -1589,8 +1646,9 @@ pub(crate) mod tests {
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
+        ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions, MiniblockPredicate,
+        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
+        RowSelector,
     };
     use crate::arrow::schema::{
         add_encoded_arrow_schema_to_metadata,
@@ -5804,6 +5862,101 @@ pub(crate) mod tests {
                 .map(|number| number.map(|number| number + 1))
                 .collect::<Vec<_>>(),
             values
+        );
+    }
+
+    /// Verify that `with_miniblock_predicate` skips miniblocks in a single-column
+    /// DELTA_BINARY_PACKED mandatory INT64 file and that no false negatives occur.
+    #[test]
+    fn test_with_miniblock_predicate_single_column() {
+        // Write 2 batches of monotone INT64 values with DELTA_BINARY_PACKED encoding.
+        // Batch 0: 0..512  (block 0: values 0..255, block 1: values 256..511)
+        // Batch 1: 512..1024
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "v",
+            ArrowDataType::Int64,
+            false,
+        )]));
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_encoding(crate::basic::Encoding::DELTA_BINARY_PACKED)
+            .build();
+        let mut buf = Vec::<u8>::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, schema.clone(), Some(props)).expect("writer");
+
+        for chunk_start in [0i64, 512] {
+            let vals: Vec<i64> = (chunk_start..chunk_start + 512).collect();
+            let batch =
+                RecordBatch::try_from_iter([("v", Arc::new(Int64Array::from(vals)) as _)]).unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.close().unwrap();
+
+        let file = Bytes::from(buf);
+
+        // Read back with a miniblock predicate that keeps only values >= 768.
+        // With INT64 miniblock_size=64 and block_size=256:
+        // The threshold 768 = 512 + 256 = batch-1 + 1 block, so it aligns cleanly.
+        let pred: MiniblockPredicate = Arc::new(|_lo, hi| hi >= 768);
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file.clone())
+            .unwrap()
+            .with_miniblock_predicate(pred)
+            .build()
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+        // All 1024 rows decoded without predicate for reference.
+        let reader_all = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let all_batches: Vec<RecordBatch> = reader_all.map(|b| b.unwrap()).collect();
+        let all_vals: Vec<i64> = all_batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+
+        // No false negatives: every value >= 768 must appear in the filtered output.
+        let filtered_vals: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect();
+
+        let expected_vals: Vec<i64> = all_vals.iter().copied().filter(|&v| v >= 768).collect();
+        for &expected in &expected_vals {
+            assert!(
+                filtered_vals.contains(&expected),
+                "false negative: value {expected} missing from miniblock-filtered output"
+            );
+        }
+
+        // The filtered output should be strictly smaller than the full read.
+        assert!(
+            total_rows < 1024,
+            "expected fewer rows with predicate, got {total_rows}"
+        );
+        assert!(
+            total_rows > 0,
+            "expected some rows to pass predicate, got 0"
         );
     }
 

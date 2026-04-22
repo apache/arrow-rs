@@ -120,6 +120,26 @@ pub trait ArrayReader: Send {
     /// a filter to the resulting array.
     fn skip_records(&mut self, num_records: usize) -> Result<usize>;
 
+    /// Reads at most `batch_size` records, using `predicate` to skip miniblock regions
+    /// whose value range `[lo, hi]` does not satisfy `predicate(lo, hi)`.
+    ///
+    /// Returns the number of records consumed (rows advanced in the page).  The
+    /// number of values written into the internal buffer may be less — callers can
+    /// retrieve it via [`consume_batch`].
+    ///
+    /// The default implementation ignores the predicate and falls back to
+    /// [`read_records`], which is correct for all encodings.  Only
+    /// [`crate::basic::Encoding::DELTA_BINARY_PACKED`] on mandatory columns
+    /// gains the miniblock-skip benefit.
+    fn scan_records(
+        &mut self,
+        batch_size: usize,
+        predicate: &dyn Fn(i64, i64) -> bool,
+    ) -> Result<usize> {
+        let _ = predicate;
+        self.read_records(batch_size)
+    }
+
     /// If this array has a non-zero definition level, i.e. has a nullable parent
     /// array, returns the definition levels of data from the last call of `next_batch`
     ///
@@ -242,4 +262,40 @@ where
         }
     }
     Ok(records_skipped)
+}
+
+/// Uses `record_reader` to scan up to `batch_size` records from `pages`, emitting to
+/// the internal buffer only values from miniblock regions matching `predicate`.
+///
+/// Returns `(records_consumed, values_emitted)`.
+///
+/// For optional/repeated columns the predicate is ignored and all values are decoded
+/// (see [`GenericRecordReader::scan_filtered_records`]).
+pub(crate) fn scan_filtered_records<V, CV>(
+    record_reader: &mut GenericRecordReader<V, CV>,
+    pages: &mut dyn PageIterator,
+    batch_size: usize,
+    predicate: &dyn Fn(i64, i64) -> bool,
+) -> Result<(usize, usize)>
+where
+    V: ValuesBuffer,
+    CV: ColumnValueDecoder<Buffer = V>,
+{
+    let mut total_consumed = 0usize;
+    let mut total_emitted = 0usize;
+    while total_consumed < batch_size {
+        let to_scan = batch_size - total_consumed;
+        let (consumed, emitted) = record_reader.scan_filtered_records(to_scan, predicate)?;
+        total_consumed += consumed;
+        total_emitted += emitted;
+
+        if consumed < to_scan {
+            if let Some(page_reader) = pages.next() {
+                record_reader.set_page_reader(page_reader?)?;
+            } else {
+                break;
+            }
+        }
+    }
+    Ok((total_consumed, total_emitted))
 }
