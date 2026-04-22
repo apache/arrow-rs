@@ -37,9 +37,9 @@ use arrow_schema::*;
 /// [`SlicesIterator`] to copy ranges of values. Otherwise iterate
 /// over individual rows using [`IndexIterator`]
 ///
-/// Threshold of 0.8 chosen based on <https://dl.acm.org/doi/abs/10.1145/3465998.3466009>
+/// Threshold of 0.9 chosen based on benchmarking results
 ///
-const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
+const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.9;
 
 /// An iterator of `(usize, usize)` each representing an interval
 /// `[start, end)` whose slots of a bitmap [Buffer] are true.
@@ -80,13 +80,17 @@ impl Iterator for SlicesIterator<'_> {
 ///
 /// This provides the best performance on most predicates, apart from those which keep
 /// large runs and therefore favour [`SlicesIterator`]
-struct IndexIterator<'a> {
+pub struct IndexIterator<'a> {
     remaining: usize,
     iter: BitIndexIterator<'a>,
 }
 
 impl<'a> IndexIterator<'a> {
-    fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
+    /// Creates a new [`IndexIterator`] from a [`BooleanArray`]
+    ///
+    /// # Panics
+    /// Panics if `filter` has null values
+    pub fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
         let iter = filter.values().set_indices();
         Self { remaining, iter }
@@ -216,6 +220,21 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
     filter_array(values, &predicate)
 }
 
+/// Determines if calling [FilterBuilder::optimize] is beneficial for the
+/// given [`RecordBatch`].
+pub fn is_optimize_beneficial_record_batch(record_batch: &RecordBatch) -> bool {
+    let num_cols = record_batch.num_columns();
+    if num_cols > 1 {
+        return true;
+    }
+    if num_cols == 1 {
+        return FilterBuilder::is_optimize_beneficial(
+            record_batch.schema_ref().field(0).data_type(),
+        );
+    }
+    false
+}
+
 /// Returns a filtered [RecordBatch] where the corresponding elements of
 /// `predicate` are true.
 ///
@@ -231,13 +250,7 @@ pub fn filter_record_batch(
     predicate: &BooleanArray,
 ) -> Result<RecordBatch, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
-    let num_cols = record_batch.num_columns();
-    if num_cols > 1
-        || (num_cols > 0
-            && FilterBuilder::is_optimize_beneficial(
-                record_batch.schema_ref().field(0).data_type(),
-            ))
-    {
+    if is_optimize_beneficial_record_batch(record_batch) {
         // Only optimize if filtering more than one column or if the column contains multiple internal arrays
         // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
@@ -325,15 +338,22 @@ impl FilterBuilder {
 }
 
 /// The iteration strategy used to evaluate [`FilterPredicate`]
-#[derive(Debug)]
-enum IterationStrategy {
-    /// A lazily evaluated iterator of ranges
+///
+/// This determines how the filter will iterate over the selected rows.
+/// The strategy is chosen based on the selectivity of the filter.
+#[derive(Debug, Clone)]
+pub enum IterationStrategy {
+    /// A lazily evaluated iterator of ranges (slices)
+    ///
+    /// Best for low selectivity filters (which select a relatively large number of rows)
     SlicesIterator,
     /// A lazily evaluated iterator of indices
+    ///
+    /// Best for high selectivity filters (which select a relatively low number of rows)
     IndexIterator,
     /// A precomputed list of indices
     Indices(Vec<usize>),
-    /// A precomputed array of ranges
+    /// A precomputed array of ranges (start, end)
     Slices(Vec<(usize, usize)>),
     /// Select all rows
     All,
@@ -344,7 +364,13 @@ enum IterationStrategy {
 impl IterationStrategy {
     /// The default [`IterationStrategy`] for a filter of length `filter_length`
     /// and selecting `filter_count` rows
-    fn default_strategy(filter_length: usize, filter_count: usize) -> Self {
+    ///
+    /// Returns:
+    /// - [`IterationStrategy::None`] if `filter_count` is 0
+    /// - [`IterationStrategy::All`] if `filter_count == filter_length`
+    /// - [`IterationStrategy::SlicesIterator`] if selectivity > 80%
+    /// - [`IterationStrategy::IndexIterator`] otherwise
+    pub fn default_strategy(filter_length: usize, filter_count: usize) -> Self {
         if filter_length == 0 || filter_count == 0 {
             return IterationStrategy::None;
         }
@@ -362,6 +388,35 @@ impl IterationStrategy {
             return IterationStrategy::SlicesIterator;
         }
         IterationStrategy::IndexIterator
+    }
+
+    fn slice(&self, offset: usize, len: usize) -> Self {
+        match self {
+            IterationStrategy::SlicesIterator => IterationStrategy::SlicesIterator,
+            IterationStrategy::IndexIterator => IterationStrategy::IndexIterator,
+            IterationStrategy::Indices(indices) => {
+                let start = indices.partition_point(|&idx| idx < offset);
+                let end = indices.partition_point(|&idx| idx < offset + len);
+                let new_indices = indices[start..end]
+                    .iter()
+                    .map(|&idx| idx - offset)
+                    .collect();
+                IterationStrategy::Indices(new_indices)
+            }
+            IterationStrategy::Slices(slices) => {
+                let mut new_slices = Vec::new();
+                for &(start, end) in slices {
+                    let max_start = start.max(offset);
+                    let min_end = end.min(offset + len);
+                    if max_start < min_end {
+                        new_slices.push((max_start - offset, min_end - offset));
+                    }
+                }
+                IterationStrategy::Slices(new_slices)
+            }
+            IterationStrategy::All => IterationStrategy::All,
+            IterationStrategy::None => IterationStrategy::None,
+        }
     }
 }
 
@@ -407,6 +462,91 @@ impl FilterPredicate {
     /// Number of rows being selected based on this [`FilterPredicate`]
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    /// Number of rows in the filter predicate
+    pub fn len(&self) -> usize {
+        self.filter.len()
+    }
+
+    /// Slices this [`FilterPredicate`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len > self.len()`
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        let filter = self.filter.slice(offset, len);
+        let count = filter.true_count();
+        let strategy = self.strategy.slice(offset, len);
+        Self {
+            filter,
+            count,
+            strategy,
+        }
+    }
+
+    /// Slices this [`FilterPredicate`] with a precomputed count
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len > self.len()`
+    pub fn slice_with_count(&self, offset: usize, len: usize, count: usize) -> Self {
+        let filter = self.filter.slice(offset, len);
+        let strategy = self.strategy.slice(offset, len);
+        Self {
+            filter,
+            count,
+            strategy,
+        }
+    }
+
+    /// Returns the iteration strategy used by this [`FilterPredicate`]
+    pub fn strategy(&self) -> &IterationStrategy {
+        &self.strategy
+    }
+
+    /// Returns the underlying filter array
+    pub fn filter_array(&self) -> &BooleanArray {
+        &self.filter
+    }
+
+    /// Returns the bit position of the `n`-th set bit in the filter, starting the search at `start`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n` bits are not found.
+    pub fn find_nth_set_bit_position(&self, start: usize, n: usize) -> usize {
+        if n == 0 {
+            return start;
+        }
+
+        match &self.strategy {
+            IterationStrategy::Indices(indices) => {
+                // If we have precomputed indices, we can find the nth bit directly.
+                // Since this predicate might be a slice, the indices are relative to the start of this predicate.
+                // However, the `start` parameter is also relative to the start of this predicate.
+                let offset = indices.partition_point(|&idx| idx < start);
+                indices[offset + n - 1] + 1
+            }
+            IterationStrategy::Slices(slices) => {
+                let mut remaining = n;
+                for &(s_start, s_end) in slices {
+                    if s_end <= start {
+                        continue;
+                    }
+                    let effective_start = s_start.max(start);
+                    let len = s_end - effective_start;
+                    if len >= remaining {
+                        return effective_start + remaining;
+                    }
+                    remaining -= len;
+                }
+                panic!("n bits not found in slices")
+            }
+            IterationStrategy::All => start + n,
+            IterationStrategy::None => panic!("No bits in None strategy"),
+            _ => self.filter.values().find_nth_set_bit_position(start, n),
+        }
     }
 }
 
