@@ -25,7 +25,6 @@ use arrow::array::{
     LargeBinaryArray, LargeStringArray, ListLikeArray, PrimitiveArray, StringArray,
     StringViewArray, StructArray,
 };
-use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Decimal32Type, Decimal64Type, Decimal128Type,
     DecimalType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
@@ -68,7 +67,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     // emit `Variant::Null` when a required value is missing.
     let nulls = array.nulls();
     let mut row_builder = UnshredVariantRowBuilder::try_new_opt(array.shredding_state())?
-        .unwrap_or_else(|| UnshredVariantRowBuilder::null(nulls.cloned()));
+        .unwrap_or_else(UnshredVariantRowBuilder::null);
 
     let metadata = array.metadata_field();
     let mut value_builder = VariantValueArrayBuilder::new(array.len());
@@ -131,8 +130,8 @@ enum UnshredVariantRowBuilder {
 
 impl UnshredVariantRowBuilder {
     /// Creates an all-null row builder.
-    fn null(nulls: Option<NullBuffer>) -> Self {
-        Self::Null(NullUnshredVariantBuilder::new(nulls))
+    fn null() -> Self {
+        Self::Null(NullUnshredVariantBuilder)
     }
 
     /// Appends a single row at the given value index to the supplied builder.
@@ -312,30 +311,16 @@ impl UnshredVariantRowBuilder {
 }
 
 /// Builder for arrays with neither typed_value nor value (all NULL/Variant::Null)
-struct NullUnshredVariantBuilder {
-    nulls: Option<NullBuffer>,
-}
+struct NullUnshredVariantBuilder;
 
 impl NullUnshredVariantBuilder {
-    fn new(nulls: Option<NullBuffer>) -> Self {
-        Self { nulls }
-    }
-
     fn append_row(
         &mut self,
         builder: &mut impl VariantBuilderExt,
         _metadata: &VariantMetadata,
-        index: usize,
+        _index: usize,
     ) -> Result<()> {
-        if self
-            .nulls
-            .as_ref()
-            .is_some_and(|nulls| nulls.is_null(index))
-        {
-            builder.append_null();
-        } else {
-            builder.append_value(Variant::Null);
-        }
+        builder.append_value(Variant::Null);
         Ok(())
     }
 }
@@ -700,7 +685,7 @@ impl<L: ListLikeArray + Clone> ListUnshredVariantBuilder<L> {
         // requires us to emit `Variant::Null` when a required value is missing.
         let element_state = ShreddingState::try_from(element_values)?;
         let element_unshredder = UnshredVariantRowBuilder::try_new_opt(&element_state)?
-            .unwrap_or_else(|| UnshredVariantRowBuilder::null(None));
+            .unwrap_or_else(UnshredVariantRowBuilder::null);
 
         Ok(Self {
             value,
