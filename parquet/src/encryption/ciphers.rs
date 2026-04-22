@@ -41,15 +41,16 @@ pub(crate) struct RingGcmBlockDecryptor {
 
 impl RingGcmBlockDecryptor {
     /// Create a new `RingGcmBlockDecryptor` with a given key.
-    pub(crate) fn new(
-        key_bytes: &[u8],
-    ) -> Result<Self> {
+    pub(crate) fn new(key_bytes: &[u8]) -> Result<Self> {
         let algorithm = if key_bytes.len() == AES_128_GCM.key_len() {
             &AES_128_GCM
         } else if key_bytes.len() == AES_256_GCM.key_len() {
             &AES_256_GCM
         } else {
-            return Err(general_err!("Error creating RingGcmBlockDecryptor with unsupported key length: {}", key_bytes.len()));
+            return Err(general_err!(
+                "Error creating RingGcmBlockDecryptor with unsupported key length: {}",
+                key_bytes.len()
+            ));
         };
         let key = UnboundKey::new(algorithm, key_bytes)
             .map_err(|_| general_err!("Failed to create {:?} key", algorithm))?;
@@ -151,16 +152,17 @@ impl RingGcmBlockEncryptor {
     /// Create a new `RingGcmBlockEncryptor` with a given key and random nonce.
     /// The nonce will advance appropriately with each block encryption and
     /// return an error if it wraps around.
-    pub(crate) fn new(
-        key_bytes: &[u8],
-    ) -> Result<Self> {
+    pub(crate) fn new(key_bytes: &[u8]) -> Result<Self> {
         let rng = SystemRandom::new();
         let algorithm = if key_bytes.len() == AES_128_GCM.key_len() {
             &AES_128_GCM
         } else if key_bytes.len() == AES_256_GCM.key_len() {
             &AES_256_GCM
         } else {
-            return Err(general_err!("Error creating RingGcmBlockEncryptor with unsupported key length: {}", key_bytes.len()));
+            return Err(general_err!(
+                "Error creating RingGcmBlockEncryptor with unsupported key length: {}",
+                key_bytes.len()
+            ));
         };
 
         let key = UnboundKey::new(algorithm, key_bytes)
