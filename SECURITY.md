@@ -25,16 +25,34 @@ This document outlines the security model for the Rust implementation of Apache 
 
 The `arrow-rs` project follows the [Apache Arrow Security Model]. Key aspects include:
 - Reading data from untrusted sources (e.g., over a network or from a file) requires explicit validation.
-- Failure to validate untrusted data before use may lead to security issues. This implementation provides APIs to validate Arrow data. For example, [`ArrayData::validate_full`] can be used to ensure that data conforms to the Arrow specification.
+- Failure to validate untrusted data before use may lead to security issues. 
 
-## Rust Safety and Undefined Behavior
+This implementation provides APIs to validate Arrow data such as
+[`ArrayData::validate_full`] to ensure that data conforms to the Arrow
+specification.
 
-We strive to uphold the [Rust Soundness Pledge].
+Unexpected behavior (e.g., panics, crashes or infinite loops) triggered by
+malformed input is generally considered a **bug**, not a security
+vulnerability, unless it is **exploitable** by an attacker to
 
-- **Undefined Behavior (UB) is a bug:** Any instance of UB is a bug we are committed to fixing.
-- **UB as a Security Issue:** Any **exploitable** UB triggered via safe APIs is a security issue. Other UB instances are bugs, and we welcome help fixing them.
+* Execute arbitrary code (Remote Code Execution);
+* Exfiltrate sensitive information from process memory (Information Disclosure);
+
+Similarly, undefined behavior using `safe` APIs is considered a bug unless it
+can be exploited as above. 
+
+
+## Reporting Bugs
+
+We treat all bugs seriously, and welcome help fixing them. If you find a bug,
+that does not meet the criteria for a security vulnerability, please report it
+in the public issue tracker so we can fix it togther.
 
 ## Reporting a Vulnerability
+
+For security vulnerabilities, we ask that you follow the responsible disclosure
+process outlined below. This allows us to investigate and fix the issue before
+it can be exploited in the wild.
 
 **Do not file a public issue.** Follow the [ASF security reporting process] by emailing [security@apache.org](mailto:security@apache.org).
 

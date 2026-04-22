@@ -77,20 +77,47 @@ The `arrow` crate provides the following features which may be enabled in your `
 The [Apache Arrow Status](https://arrow.apache.org/docs/status.html) page lists which features of Arrow this crate supports.
 
 
-## Safety and Security
+## Security
 
-`arrow-rs` follows the [Apache Arrow Security Model]. Any **exploitable** instance of undefined behavior (UB) triggered via safe APIs is a security issue. See our [Security Policy] for reporting.
+`arrow-rs` follows the [Apache Arrow Security Model]. 
 
-We uphold the [Rust Soundness Pledge], aiming to be free of UB from safe APIs. While `unsafe` is used for performance or FFI, we mitigate risk through:
-- Strongly-typed `Array` and `ArrayBuilder` APIs.
-- Extensive `ArrayData` validation for untrusted sources.
-- [MIRI] verification in CI.
-- A `force_validate` feature for extra checks.
+Unexpected behavior (e.g., panics, crashes or infinite loops) triggered by
+malformed input, and instances of undefined behavior (UB) triggered via safe
+APIs are considered bugs rather than security issue unless they are exploitable
+by an attacker to
 
-[Rust Soundness Pledge]: https://raphlinus.github.io/rust/2020/01/18/soundness-pledge.html
-[MIRI]: https://github.com/rust-lang/miri
-[Apache Arrow Security Model]: https://arrow.apache.org/docs/dev/format/Security.html
-[Security Policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
+* Execute arbitrary code (Remote Code Execution);
+* Exfiltrate sensitive information from process memory (Information Disclosure);
+
+We would welcome your help in fixing such bugs and security issues. See our
+[Security Policy] for reporting.
+
+## Safety
+
+Arrow seeks to uphold the Rust Soundness Pledge as articulated eloquently [here](https://raphlinus.github.io/rust/2020/01/18/soundness-pledge.html). Specifically:
+
+> The intent of this crate is to be free of soundness bugs. The developers will do their best to avoid them, and welcome help in analyzing and fixing them
+
+Where soundness in turn is defined as:
+
+> Code is unable to trigger undefined behavior using safe APIs
+
+One way to ensure this would be to not use `unsafe`, however, as described in the opening chapter of the [Rustonomicon](https://doc.rust-lang.org/nomicon/meet-safe-and-unsafe.html) this is not a requirement, and flexibility in this regard is one of Rust's great strengths.
+
+In particular there are a number of scenarios where `unsafe` is largely unavoidable:
+
+- Invariants that cannot be statically verified by the compiler and unlock non-trivial performance wins, e.g. values in a StringArray are UTF-8, [TrustedLen](https://doc.rust-lang.org/std/iter/trait.TrustedLen.html) iterators, etc...
+- FFI
+
+Additionally, this crate exposes a number of `unsafe` APIs, allowing downstream crates to explicitly opt-out of potentially expensive invariant checking where appropriate.
+
+We have a number of strategies to help reduce this risk:
+
+- Provide strongly-typed `Array` and `ArrayBuilder` APIs to safely and efficiently interact with arrays
+- Extensive validation logic to safely construct `ArrayData` from untrusted sources
+- All commits are verified using [MIRI](https://github.com/rust-lang/miri) to detect undefined behaviour
+- Use a `force_validate` feature that enables additional validation checks for use in test/debug builds
+- There is ongoing work to reduce and better document the use of unsafe, and we welcome contributions in this space
 
 ## Building for WASM
 
