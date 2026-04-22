@@ -1013,7 +1013,12 @@ mod tests {
         let input_buffer_left = BooleanBuffer::from(&input_bools_left[..]);
         let input_buffer_right = BooleanBuffer::from(&input_bools_right[..]);
 
-        for left_offset in 0..200 {
+        #[cfg(miri)]
+        let left_offsets = [0, 1, 7, 8, 63, 64, 65];
+        #[cfg(not(miri))]
+        let left_offsets = 0..200;
+
+        for left_offset in left_offsets {
             for right_offset in [0, 4, 5, 17, 33, 24, 45, 64, 65, 100, 200] {
                 for len_offset in [0, 1, 44, 100, 256, 300, 512] {
                     let len = 1024 - len_offset - left_offset.max(right_offset); // ensure we don't go out of bounds

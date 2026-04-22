@@ -4892,6 +4892,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn fuzz_partition_validity() {
         let mut rng = StdRng::seed_from_u64(0xF00D_CAFE);
         for _ in 0..1_000 {
@@ -5100,6 +5101,7 @@ mod tests {
 
     // Fuzz testing: generate random UTF-8 strings and verify sort correctness
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_fuzz_random_strings() {
         let mut rng = StdRng::seed_from_u64(42); // Fixed seed for reproducibility
 
