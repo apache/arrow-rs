@@ -1467,6 +1467,7 @@ impl<W: Write> StreamWriter<W> {
         }
 
         write_continuation(&mut self.writer, &self.write_options, 0)?;
+        self.writer.flush()?;
 
         self.finished = true;
 
@@ -1618,7 +1619,6 @@ fn write_body_buffers<W: Write>(
         writer.write_all(&PADDING[..pad_len])?;
     }
 
-    writer.flush()?;
     Ok(total_len)
 }
 
@@ -1651,8 +1651,6 @@ fn write_continuation<W: Write>(
         }
         z => panic!("Unsupported crate::MetadataVersion {z:?}"),
     };
-
-    writer.flush()?;
 
     Ok(written)
 }
