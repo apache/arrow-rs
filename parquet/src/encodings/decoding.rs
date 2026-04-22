@@ -658,23 +658,6 @@ where
         Ok(())
     }
 
-    #[cold]
-    fn skip_terminal(&mut self, to_skip: usize, mut skip: usize) -> Result<usize> {
-        while skip < to_skip {
-            if self.mini_block_remaining == 0 {
-                self.next_mini_block()?;
-            }
-            let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
-            self.check_bit_width(bit_width)?;
-            let n = self.mini_block_remaining.min(to_skip - skip);
-            // bit_width=0 produces a no-op here (correct: 0-byte payloads)
-            self.bit_reader.skip(n, bit_width);
-            skip += n;
-            self.mini_block_remaining -= n;
-            self.values_left -= n;
-        }
-        Ok(to_skip)
-    }
 }
 
 impl<T: DataType> Decoder<T> for DeltaBitPackDecoder<T>
@@ -852,24 +835,27 @@ where
     }
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
-        let mut skip = 0;
         let to_skip = num_values.min(self.values_left);
         if to_skip == 0 {
             return Ok(0);
         }
 
+        // Terminal skip: caller is discarding all remaining values on this page.
+        // last_value will never be read again; the bit reader holds only this
+        // one page's data, so any subsequent work on this decoder will re-init
+        // via set_data() for the next page. We can zero values_left without
+        // walking the miniblock state machine at all.
+        if to_skip >= self.values_left {
+            self.values_left = 0;
+            return Ok(to_skip);
+        }
+
+        let mut skip = 0;
         // try to consume first value in header.
         if let Some(value) = self.first_value.take() {
             self.last_value = value;
             skip += 1;
             self.values_left -= 1;
-        }
-
-        // Terminal skip: caller is discarding all remaining values on this page.
-        // last_value will never be read again, so we can use O(1) arithmetic
-        // skips (BitReader::skip) instead of decoding through get_batch.
-        if to_skip >= self.values_left + skip {
-            return self.skip_terminal(to_skip, skip);
         }
 
         // Non-terminal skip: last_value must be exact so subsequent get() calls
@@ -2365,7 +2351,10 @@ mod tests {
 
         let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
         decoder.set_data(corrupted_buffer, 32).unwrap();
-        let err = decoder.skip(32).unwrap_err();
+        // skip(31), not skip(32): the terminal fast-path (to_skip >= values_left)
+        // returns without walking miniblocks, so we must exercise the
+        // non-terminal path to trigger the bit-width validation error.
+        let err = decoder.skip(31).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Invalid delta bit width 33 which is larger than expected 32"),
