@@ -83,13 +83,13 @@ The [Apache Arrow Status](https://arrow.apache.org/docs/status.html) page lists 
 
 Unexpected behavior (e.g., panics, crashes or infinite loops) triggered by
 malformed input, and instances of undefined behavior (UB) triggered via safe
-APIs are considered bugs rather than security issue unless they are exploitable
+APIs are considered bugs rather than security vulnerabilities unless they are exploitable
 by an attacker to
 
 * Execute arbitrary code (Remote Code Execution);
 * Exfiltrate sensitive information from process memory (Information Disclosure);
 
-We would welcome your help in fixing such bugs and security issues. See our
+We welcome your help in fixing such bugs and security issues. See our
 [Security Policy] for reporting.
 
 ## Safety
