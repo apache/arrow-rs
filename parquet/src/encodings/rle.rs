@@ -487,8 +487,6 @@ impl RleDecoder {
 
         let mut values_read = 0;
         while values_read < max_values {
-            let index_buf = self.index_buf.get_or_insert_with(|| Box::new([0; 1024]));
-
             if self.rle_left > 0 {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
@@ -511,6 +509,7 @@ impl RleDecoder {
                     .bit_reader
                     .as_mut()
                     .ok_or_else(|| general_err!("bit_reader should be set"))?;
+                let index_buf = self.index_buf.get_or_insert_with(|| Box::new([0; 1024]));
 
                 loop {
                     let to_read = index_buf
