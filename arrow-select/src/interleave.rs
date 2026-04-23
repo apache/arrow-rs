@@ -1643,11 +1643,14 @@ mod tests {
         let f1 = struct_arr.column(0).as_dictionary::<UInt8Type>();
         let f1keys = f1.keys();
         let f1vals = f1.values().as_primitive::<UInt16Type>();
-        assert_eq!(f1vals, &UInt16Array::from_iter_values(0u16..=255));
+        assert_eq!(
+            f1vals,
+            &UInt16Array::from_iter_values(vec![1, 2, 250, 251, 252, 253, 255])
+        );
         assert_eq!(
             f1keys,
             &UInt8Array::from_iter_values_with_nulls(
-                vec![2, 1, 255, 0, 251, 250, 253, 252],
+                vec![1, 0, 6, 0, 3, 2, 5, 4],
                 Some(NullBuffer::from_iter(vec![
                     true, true, true, false, true, true, true, true
                 ]))
@@ -1678,13 +1681,13 @@ mod tests {
         let f3vals = f3.values().as_primitive::<UInt16Type>();
         assert_eq!(
             f3vals,
-            &UInt16Array::from_iter_values((0u16..=255).chain(0u16..=255))
+            &UInt16Array::from_iter_values(vec![1, 2, 250, 251, 252, 253, 255])
         );
         assert_eq!(
             f3keys,
             &UInt16Array::from_iter_values_with_nulls(
                 // [2], [1] [255 null] [251 250] [253 252]
-                vec![2, 1, 511, 510, 507, 506, 509, 508],
+                vec![1, 0, 6, 0, 3, 2, 5, 4],
                 Some(NullBuffer::from_iter(vec![
                     true, true, true, false, true, true, true, true
                 ]))
@@ -1761,7 +1764,7 @@ mod tests {
         let dict_arr = child_list_arr.values().as_dictionary::<UInt8Type>();
         assert_eq!(
             dict_arr.values().as_primitive::<UInt16Type>(),
-            &UInt16Array::from_iter_values(0u16..=255),
+            &UInt16Array::from_iter_values(vec![0u16, 248, 249, 250, 251, 252, 253, 255]),
         );
 
         // result: [[255 null] [253 252]] [[0]] [ null [249 248]]
@@ -1775,7 +1778,7 @@ mod tests {
         );
         assert_eq!(
             keys.values(),
-            &ScalarBuffer::<u8>::from(vec![255u8, 0, 253, 252, 0, 251, 250, 249, 248]),
+            &ScalarBuffer::<u8>::from(vec![7u8, 0, 6, 5, 0, 4, 3, 2, 1]),
         );
     }
 
