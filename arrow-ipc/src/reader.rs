@@ -1795,29 +1795,29 @@ impl<R: Read> MessageReader<R> {
         let Some(meta_len) = meta_len else {
             return Ok(None);
         };
-    
+
         self.buf.resize(meta_len, 0);
         self.reader.read_exact(&mut self.buf)?;
-    
+
         let message = crate::root_as_message(self.buf.as_slice()).map_err(|err| {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
-    
+
         let body_len = message.bodyLength() as usize;
-    
+
         let mut vec = Vec::with_capacity(body_len);
         self.reader
             .by_ref()
             .take(body_len as u64)
             .read_to_end(&mut vec)?;
-    
+
         if vec.len() != body_len {
             return Err(ArrowError::IpcError(format!(
                 "Expected IPC message body of length {body_len}, got {}",
                 vec.len()
             )));
         }
-    
+
         Ok(Some((message, MutableBuffer::from(vec))))
     }
 
