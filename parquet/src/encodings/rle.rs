@@ -477,11 +477,11 @@ impl RleDecoder {
     pub fn get_batch_with_dict<T>(
         &mut self,
         dict: &[T],
-        buffer: &mut [T],
+        buffer: &mut [std::mem::MaybeUninit<T>],
         max_values: usize,
     ) -> Result<usize>
     where
-        T: Default + Clone,
+        T: Clone,
     {
         debug_assert!(buffer.len() >= max_values);
 
@@ -492,18 +492,17 @@ impl RleDecoder {
             if self.rle_left > 0 {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
-                let dict_value = dict
-                    .get(dict_idx)
-                    .ok_or_else(|| {
-                        general_err!(
-                            "dictionary index out of bounds: the len is {} but the index is {}",
-                            dict.len(),
-                            dict_idx
-                        )
-                    })?
-                    .clone();
+                let dict_value = dict.get(dict_idx).ok_or_else(|| {
+                    general_err!(
+                        "dictionary index out of bounds: the len is {} but the index is {}",
+                        dict.len(),
+                        dict_idx
+                    )
+                })?;
 
-                buffer[values_read..values_read + num_values].fill(dict_value);
+                for slot in &mut buffer[values_read..values_read + num_values] {
+                    slot.write(dict_value.clone());
+                }
 
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
@@ -557,7 +556,7 @@ impl RleDecoder {
                             }
                             for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
                                 // SAFETY: all indices checked above to be in bounds
-                                b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
+                                b.write(unsafe { dict.get_unchecked(*i as usize) }.clone());
                             }
                         }
                         for (b, i) in out_chunks
@@ -570,7 +569,7 @@ impl RleDecoder {
                                 return Err(oob(*i as u32, dict_len));
                             }
                             // SAFETY: bounds checked above
-                            b.clone_from(unsafe { dict.get_unchecked(dict_idx) });
+                            b.write(unsafe { dict.get_unchecked(dict_idx) }.clone());
                         }
                     }
                     self.bit_packed_left -= num_values as u32;
@@ -624,6 +623,16 @@ mod tests {
 
     use crate::util::bit_util::ceil;
     use rand::{self, Rng, SeedableRng, distr::StandardUniform, rng};
+    use std::mem::MaybeUninit;
+
+    /// Reinterpret an initialised slice as a `MaybeUninit` slice for calls to
+    /// `get_batch_with_dict`. Sound because every `T` is a valid `MaybeUninit<T>`
+    /// and the callee only writes.
+    fn as_uninit<T>(s: &mut [T]) -> &mut [MaybeUninit<T>] {
+        unsafe {
+            std::slice::from_raw_parts_mut(s.as_mut_ptr().cast::<MaybeUninit<T>>(), s.len())
+        }
+    }
 
     const MAX_WIDTH: usize = 32;
 
@@ -772,7 +781,7 @@ mod tests {
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![0; 12];
         let expected = vec![10, 10, 10, 20, 20, 20, 20, 30, 30, 30, 30, 30];
-        let result = decoder.get_batch_with_dict::<i32>(&dict, &mut buffer, 12);
+        let result = decoder.get_batch_with_dict::<i32>(&dict, as_uninit(&mut buffer), 12);
         assert!(result.is_ok());
         assert_eq!(buffer, expected);
 
@@ -788,7 +797,7 @@ mod tests {
             "ddd", "eee", "fff", "ddd", "eee", "fff", "ddd", "eee", "fff", "eee", "fff", "fff",
         ];
         let result =
-            decoder.get_batch_with_dict::<&str>(dict.as_slice(), buffer.as_mut_slice(), 12);
+            decoder.get_batch_with_dict::<&str>(dict.as_slice(), as_uninit(&mut buffer), 12);
         assert!(result.is_ok());
         assert_eq!(buffer, expected);
     }
@@ -806,7 +815,7 @@ mod tests {
         let skipped = decoder.skip(2).expect("skipping two values");
         assert_eq!(skipped, 2);
         let remainder = decoder
-            .get_batch_with_dict::<i32>(&dict, &mut buffer, 10)
+            .get_batch_with_dict::<i32>(&dict, as_uninit(&mut buffer), 10)
             .expect("getting remainder");
         assert_eq!(remainder, 10);
         assert_eq!(buffer, expected);
@@ -823,11 +832,7 @@ mod tests {
         let skipped = decoder.skip(4).expect("skipping four values");
         assert_eq!(skipped, 4);
         let remainder = decoder
-            .get_batch_with_dict::<&str>(
-                dict.as_slice(),
-                buffer.as_mut_slice(),
-                BIT_PACK_GROUP_SIZE,
-            )
+            .get_batch_with_dict::<&str>(dict.as_slice(), as_uninit(&mut buffer), BIT_PACK_GROUP_SIZE)
             .expect("getting remainder");
         assert_eq!(remainder, BIT_PACK_GROUP_SIZE);
         assert_eq!(buffer, expected);
@@ -986,7 +991,7 @@ mod tests {
         let dict: Vec<u16> = (0..256).collect();
         let mut output = vec![0_u16; 100];
         let read = decoder
-            .get_batch_with_dict(&dict, &mut output, 100)
+            .get_batch_with_dict(&dict, as_uninit(&mut output), 100)
             .unwrap();
 
         assert_eq!(read, 20);
@@ -1056,7 +1061,7 @@ mod tests {
 
         decoder.set_data(buffer).unwrap();
         let r = decoder
-            .get_batch_with_dict(&[0, 23], &mut decoded, num_values)
+            .get_batch_with_dict(&[0, 23], as_uninit(&mut decoded), num_values)
             .unwrap();
         assert_eq!(r, num_values);
         assert_eq!(vec![23; num_values], decoded);

@@ -529,6 +529,27 @@ impl ByteViewArrayDecoderDictionary {
 
         let dict_views: &[u128] = dict.views.as_slice();
         let dict_len = dict_views.len();
+
+        if base_buffer_idx == 0 {
+            // Fused path: RLE decode + view gather in one pass via
+            // `RleDecoder::get_batch_with_dict`, writing directly into spare
+            // capacity (no zero-init) and skipping the intermediate index
+            // buffer for RLE runs.
+            let base = output.views.len();
+            // SAFETY: `reserve(len)` above ensures the spare slice is at
+            // least `len` long.
+            let spare = unsafe {
+                output
+                    .views
+                    .spare_capacity_mut()
+                    .get_unchecked_mut(..len)
+            };
+            let read = self.decoder.read_with_dict(len, dict_views, spare)?;
+            // SAFETY: `read_with_dict` wrote exactly `read` views.
+            unsafe { output.views.set_len(base + read) };
+            return Ok(read);
+        }
+
         let mut out_offset = 0usize;
 
         let read = self.decoder.read(len, |keys| {
@@ -548,49 +569,26 @@ impl ByteViewArrayDecoderDictionary {
             // Cast to u32 so negative i32 (corrupt data) compares as a large value.
             let dict_len_u32 = dict_len as u32;
 
-            if base_buffer_idx == 0 {
-                for (out_chunk, key_chunk) in out_chunks.by_ref().zip(key_chunks.by_ref()) {
-                    let max_key = key_chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
-                    if max_key >= dict_len_u32 {
-                        return Err(invalid_dict_key(key_chunk, dict_len));
-                    }
-                    for (dst, &k) in out_chunk.iter_mut().zip(key_chunk.iter()) {
-                        // SAFETY: bounds checked above.
-                        dst.write(unsafe { *dict_views.get_unchecked(k as usize) });
-                    }
+            for (out_chunk, key_chunk) in out_chunks.by_ref().zip(key_chunks.by_ref()) {
+                let max_key = key_chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
+                if max_key >= dict_len_u32 {
+                    return Err(invalid_dict_key(key_chunk, dict_len));
                 }
-                for (dst, &k) in out_chunks
-                    .into_remainder()
-                    .iter_mut()
-                    .zip(key_chunks.remainder().iter())
-                {
-                    let view = *dict_views
-                        .get(k as usize)
-                        .ok_or_else(|| general_err!("invalid key={k} for dictionary"))?;
-                    dst.write(view);
-                }
-            } else {
-                for (out_chunk, key_chunk) in out_chunks.by_ref().zip(key_chunks.by_ref()) {
-                    let max_key = key_chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
-                    if max_key >= dict_len_u32 {
-                        return Err(invalid_dict_key(key_chunk, dict_len));
-                    }
-                    for (dst, &k) in out_chunk.iter_mut().zip(key_chunk.iter()) {
-                        // SAFETY: bounds checked above.
-                        let view = unsafe { *dict_views.get_unchecked(k as usize) };
-                        dst.write(adjust_buffer_index(view, base_buffer_idx));
-                    }
-                }
-                for (dst, &k) in out_chunks
-                    .into_remainder()
-                    .iter_mut()
-                    .zip(key_chunks.remainder().iter())
-                {
-                    let view = *dict_views
-                        .get(k as usize)
-                        .ok_or_else(|| general_err!("invalid key={k} for dictionary"))?;
+                for (dst, &k) in out_chunk.iter_mut().zip(key_chunk.iter()) {
+                    // SAFETY: bounds checked above.
+                    let view = unsafe { *dict_views.get_unchecked(k as usize) };
                     dst.write(adjust_buffer_index(view, base_buffer_idx));
                 }
+            }
+            for (dst, &k) in out_chunks
+                .into_remainder()
+                .iter_mut()
+                .zip(key_chunks.remainder().iter())
+            {
+                let view = *dict_views
+                    .get(k as usize)
+                    .ok_or_else(|| general_err!("invalid key={k} for dictionary"))?;
+                dst.write(adjust_buffer_index(view, base_buffer_idx));
             }
 
             Ok(())
