@@ -628,9 +628,7 @@ mod tests {
     /// `get_batch_with_dict`. Sound because every `T` is a valid `MaybeUninit<T>`
     /// and the callee only writes.
     fn as_uninit<T>(s: &mut [T]) -> &mut [MaybeUninit<T>] {
-        unsafe {
-            std::slice::from_raw_parts_mut(s.as_mut_ptr().cast::<MaybeUninit<T>>(), s.len())
-        }
+        unsafe { std::slice::from_raw_parts_mut(s.as_mut_ptr().cast::<MaybeUninit<T>>(), s.len()) }
     }
 
     const MAX_WIDTH: usize = 32;
@@ -831,7 +829,11 @@ mod tests {
         let skipped = decoder.skip(4).expect("skipping four values");
         assert_eq!(skipped, 4);
         let remainder = decoder
-            .get_batch_with_dict::<&str>(dict.as_slice(), as_uninit(&mut buffer), BIT_PACK_GROUP_SIZE)
+            .get_batch_with_dict::<&str>(
+                dict.as_slice(),
+                as_uninit(&mut buffer),
+                BIT_PACK_GROUP_SIZE,
+            )
             .expect("getting remainder");
         assert_eq!(remainder, BIT_PACK_GROUP_SIZE);
         assert_eq!(buffer, expected);

@@ -467,11 +467,7 @@ fn invalid_dict_key(chunk: &[i32], dict_len: usize) -> ParquetError {
         .copied()
         .find(|&k| (k as usize) >= dict_len)
         .unwrap_or(0);
-    general_err!(
-        "invalid key={} for dictionary of length {}",
-        bad,
-        dict_len
-    )
+    general_err!("invalid key={} for dictionary of length {}", bad, dict_len)
 }
 
 pub struct ByteViewArrayDecoderDictionary {
@@ -538,12 +534,7 @@ impl ByteViewArrayDecoderDictionary {
             let base = output.views.len();
             // SAFETY: `reserve(len)` above ensures the spare slice is at
             // least `len` long.
-            let spare = unsafe {
-                output
-                    .views
-                    .spare_capacity_mut()
-                    .get_unchecked_mut(..len)
-            };
+            let spare = unsafe { output.views.spare_capacity_mut().get_unchecked_mut(..len) };
             let read = self.decoder.read_with_dict(len, dict_views, spare)?;
             // SAFETY: `read_with_dict` wrote exactly `read` views.
             unsafe { output.views.set_len(base + read) };
