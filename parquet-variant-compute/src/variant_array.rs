@@ -64,7 +64,7 @@ pub(crate) fn variant_from_arrays_at<'m, 'v>(
 }
 
 /// Validates that an array has a binary-like data type.
-fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
+pub(crate) fn validate_binary_array(array: &dyn Array, field_name: &str) -> Result<()> {
     match array.data_type() {
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
         _ => Err(ArrowError::InvalidArgumentError(format!(
