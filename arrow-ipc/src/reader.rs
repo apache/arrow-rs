@@ -42,7 +42,7 @@ use arrow_buffer::{
 use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
-use crate::compression::CompressionCodec;
+use crate::compression::{CompressionCodec, DecompressionContext};
 use crate::r#gen::Message::{self};
 use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
 use DataType::*;
@@ -60,13 +60,16 @@ fn read_buffer(
     buf: &crate::Buffer,
     a_data: &Buffer,
     compression_codec: Option<CompressionCodec>,
+    decompression_context: &mut DecompressionContext,
 ) -> Result<Buffer, ArrowError> {
     let start_offset = buf.offset() as usize;
     let buf_data = a_data.slice_with_length(start_offset, buf.length() as usize);
     // corner case: empty buffer
     match (buf_data.is_empty(), compression_codec) {
         (true, _) | (_, None) => Ok(buf_data),
-        (false, Some(decompressor)) => decompressor.decompress_to_buffer(&buf_data),
+        (false, Some(decompressor)) => {
+            decompressor.decompress_to_buffer(&buf_data, decompression_context)
+        }
     }
 }
 impl RecordBatchDecoder<'_> {
@@ -122,6 +125,16 @@ impl RecordBatchDecoder<'_> {
                 let values = self.create_array(list_field, variadic_counts)?;
                 self.create_list_array(list_node, data_type, &list_buffers, values)
             }
+            ListView(list_field) | LargeListView(list_field) => {
+                let list_node = self.next_node(field)?;
+                let list_buffers = [
+                    self.next_buffer()?, // null buffer
+                    self.next_buffer()?, // offsets
+                    self.next_buffer()?, // sizes
+                ];
+                let values = self.create_array(list_field, variadic_counts)?;
+                self.create_list_view_array(list_node, data_type, &list_buffers, values)
+            }
             FixedSizeList(list_field, _) => {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?];
@@ -167,18 +180,21 @@ impl RecordBatchDecoder<'_> {
                     ArrowError::ParseError(format!("Field {field} does not have dict id"))
                 })?;
 
-                let value_array = self.dictionaries_by_id.get(&dict_id).ok_or_else(|| {
-                    ArrowError::ParseError(format!(
-                        "Cannot find a dictionary batch with dict id: {dict_id}"
-                    ))
-                })?;
+                let value_array = match self.dictionaries_by_id.get(&dict_id) {
+                    Some(array) => array.clone(),
+                    None => {
+                        // Per the IPC spec, dictionary batches may be omitted when all
+                        // values in the column are null. In that case we synthesize an
+                        // empty values array so decoding can proceed.
+                        if let Dictionary(_, value_type) = data_type {
+                            arrow_array::new_empty_array(value_type.as_ref())
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                };
 
-                self.create_dictionary_array(
-                    index_node,
-                    data_type,
-                    &index_buffers,
-                    value_array.clone(),
-                )
+                self.create_dictionary_array(index_node, data_type, &index_buffers, value_array)
             }
             Union(fields, mode) => {
                 let union_node = self.next_node(field)?;
@@ -322,6 +338,30 @@ impl RecordBatchDecoder<'_> {
         self.create_array_from_builder(builder)
     }
 
+    fn create_list_view_array(
+        &self,
+        field_node: &FieldNode,
+        data_type: &DataType,
+        buffers: &[Buffer],
+        child_array: ArrayRef,
+    ) -> Result<ArrayRef, ArrowError> {
+        assert!(matches!(data_type, ListView(_) | LargeListView(_)));
+
+        let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
+        let length = field_node.length() as usize;
+        let child_data = child_array.into_data();
+
+        self.create_array_from_builder(
+            ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(buffers[1].clone()) // offsets
+                .add_buffer(buffers[2].clone()) // sizes
+                .add_child_data(child_data)
+                .null_bit_buffer(null_buffer)
+                .null_count(field_node.null_count() as usize),
+        )
+    }
+
     fn create_struct_array(
         &self,
         struct_node: &FieldNode,
@@ -410,6 +450,8 @@ pub struct RecordBatchDecoder<'a> {
     dictionaries_by_id: &'a HashMap<i64, ArrayRef>,
     /// Optional compression codec
     compression: Option<CompressionCodec>,
+    /// Decompression context for reusing zstd decompressor state
+    decompression_context: DecompressionContext,
     /// The format version
     version: MetadataVersion,
     /// The raw data buffer
@@ -456,6 +498,7 @@ impl<'a> RecordBatchDecoder<'a> {
             schema,
             dictionaries_by_id,
             compression,
+            decompression_context: DecompressionContext::new(),
             version: *metadata,
             data: buf,
             nodes: field_nodes.iter(),
@@ -572,7 +615,12 @@ impl<'a> RecordBatchDecoder<'a> {
         let buffer = self.buffers.next().ok_or_else(|| {
             ArrowError::IpcError("Buffer count mismatched with metadata".to_string())
         })?;
-        read_buffer(buffer, self.data, self.compression)
+        read_buffer(
+            buffer,
+            self.data,
+            self.compression,
+            &mut self.decompression_context,
+        )
     }
 
     fn skip_buffer(&mut self) {
@@ -1835,13 +1883,10 @@ mod tests {
         let fixed_size_list_data_type =
             DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, false)), 3);
 
-        let union_fields = UnionFields::new(
-            vec![0, 1],
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Float64, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]);
 
         let union_data_type = DataType::Union(union_fields, UnionMode::Dense);
 
@@ -1923,7 +1968,7 @@ mod tests {
             .len(3)
             .build()
             .unwrap();
-        let array9: ArrayRef = Arc::new(StructArray::from(array9));
+        let array9 = StructArray::from(array9);
 
         let array10_input = vec![Some(1_i32), None, None];
         let mut array10_builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
@@ -2051,6 +2096,133 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    /// Test that the reader can read legacy files where empty list arrays were written with a 0-byte offsets buffer.
+    #[test]
+    fn test_read_legacy_empty_list_without_offsets_buffer() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new_list(
+            "items",
+            Field::new_list_field(DataType::Int32, true),
+            true,
+        )]));
+
+        // Legacy arrow-rs versions wrote empty offsets buffers for empty list arrays.
+        // Keep reader compatibility with such files by accepting a 0-byte offsets buffer.
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[
+            FieldNode::new(0, 0), // list node
+            FieldNode::new(0, 0), // child int32 node
+        ]);
+        let buffers = fbb.create_vector(&[
+            crate::Buffer::new(0, 0), // list validity
+            crate::Buffer::new(0, 0), // list offsets (legacy empty buffer)
+            crate::Buffer::new(0, 0), // child validity
+            crate::Buffer::new(0, 0), // child values
+        ]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 0,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: None,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let body = Buffer::from(Vec::<u8>::new());
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+        let metadata = MetadataVersion::V5;
+
+        let decoder =
+            RecordBatchDecoder::try_new(&body, batch, schema.clone(), &dictionaries, &metadata)
+                .unwrap();
+
+        let read_batch = decoder.read_record_batch().unwrap();
+        assert_eq!(read_batch.num_rows(), 0);
+
+        let list = read_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(list.len(), 0);
+        assert_eq!(list.values().len(), 0);
+    }
+
+    /// Test that the reader can read legacy files where empty Utf8/Binary arrays were written with a 0-byte offsets buffer.
+    #[test]
+    fn test_read_legacy_empty_utf8_and_binary_without_offsets_buffer() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("payload", DataType::Binary, true),
+        ]));
+
+        // Legacy arrow-rs versions wrote empty offsets buffers for empty Utf8/Binary arrays.
+        // Keep reader compatibility with such files by accepting 0-byte offsets buffers.
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[
+            FieldNode::new(0, 0), // utf8 node
+            FieldNode::new(0, 0), // binary node
+        ]);
+        let buffers = fbb.create_vector(&[
+            crate::Buffer::new(0, 0), // utf8 validity
+            crate::Buffer::new(0, 0), // utf8 offsets (legacy empty buffer)
+            crate::Buffer::new(0, 0), // utf8 values
+            crate::Buffer::new(0, 0), // binary validity
+            crate::Buffer::new(0, 0), // binary offsets (legacy empty buffer)
+            crate::Buffer::new(0, 0), // binary values
+        ]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 0,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: None,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let body = Buffer::from(Vec::<u8>::new());
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+        let metadata = MetadataVersion::V5;
+
+        let decoder =
+            RecordBatchDecoder::try_new(&body, batch, schema.clone(), &dictionaries, &metadata)
+                .unwrap();
+
+        let read_batch = decoder.read_record_batch().unwrap();
+        assert_eq!(read_batch.num_rows(), 0);
+
+        let utf8 = read_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(utf8.len(), 0);
+        assert_eq!(utf8.value_offsets(), [0]);
+
+        let binary = read_batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(binary.len(), 0);
+        assert_eq!(binary.value_offsets(), [0]);
     }
 
     #[test]
@@ -2964,7 +3136,7 @@ mod tests {
             )
         };
         expect_ipc_validation_error(
-            Arc::new(invalid_struct_arr),
+            invalid_struct_arr,
             "Invalid argument error: Invalid UTF8 sequence at string index 3 (3..18): invalid utf-8 sequence of 1 bytes from index 11",
         );
     }
@@ -3107,13 +3279,14 @@ mod tests {
     #[test]
     fn test_validation_of_invalid_union_array() {
         let array = unsafe {
-            let fields = UnionFields::new(
+            let fields = UnionFields::try_new(
                 vec![1, 3], // typeids : type id 2 is not valid
                 vec![
                     Field::new("a", DataType::Int32, false),
                     Field::new("b", DataType::Utf8, false),
                 ],
-            );
+            )
+            .unwrap();
             let type_ids = ScalarBuffer::from(vec![1i8, 2, 3]); // 2 is invalid
             let offsets = None;
             let children: Vec<ArrayRef> = vec![
@@ -3204,5 +3377,80 @@ mod tests {
 
         let reader = StreamReader::try_new(Cursor::new(buf), None);
         assert!(reader.is_err());
+    }
+
+    /// Per the IPC specification, dictionary batches may be omitted for
+    /// dictionary-encoded columns where all values are null.  The C++
+    /// implementation relies on this and does not emit a dictionary batch
+    /// in that case.  Verify that the Rust reader handles such streams
+    /// by synthesizing an empty dictionary instead of returning an error.
+    #[test]
+    fn test_read_null_dict_without_dictionary_batch() {
+        // Build an all-null dictionary-encoded column.
+        let keys = Int32Array::new_null(4);
+        let values: ArrayRef = new_empty_array(&DataType::Utf8);
+        let dict_array = DictionaryArray::new(keys, values);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            dict_array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict_array)]).unwrap();
+
+        // Write a normal IPC stream (which includes the dictionary batch).
+        let full_stream = write_stream(&batch);
+
+        // Parse the stream into individual messages and reconstruct it
+        // without the DictionaryBatch message, simulating what C++ emits
+        // for an all-null dictionary column.
+        let mut stripped = Vec::new();
+        let mut cursor = Cursor::new(&full_stream);
+        loop {
+            // Each message is: [continuation (4 bytes)] [meta_len (4 bytes)]
+            //                   [metadata (meta_len bytes)] [body (bodyLength bytes)]
+            let mut header = [0u8; 4];
+            if cursor.read_exact(&mut header).is_err() {
+                break;
+            }
+            if header == CONTINUATION_MARKER && cursor.read_exact(&mut header).is_err() {
+                break;
+            }
+            let meta_len = u32::from_le_bytes(header) as usize;
+            if meta_len == 0 {
+                // EOS marker — write it through.
+                stripped.extend_from_slice(&CONTINUATION_MARKER);
+                stripped.extend_from_slice(&0u32.to_le_bytes());
+                break;
+            }
+            let mut meta_buf = vec![0u8; meta_len];
+            cursor.read_exact(&mut meta_buf).unwrap();
+
+            let message = root_as_message(&meta_buf).unwrap();
+            let body_len = message.bodyLength() as usize;
+            let mut body_buf = vec![0u8; body_len];
+            cursor.read_exact(&mut body_buf).unwrap();
+
+            if message.header_type() == crate::MessageHeader::DictionaryBatch {
+                // Skip the dictionary batch — this is what C++ does for
+                // all-null dictionary columns.
+                continue;
+            }
+            stripped.extend_from_slice(&CONTINUATION_MARKER);
+            stripped.extend_from_slice(&(meta_len as u32).to_le_bytes());
+            stripped.extend_from_slice(&meta_buf);
+            stripped.extend_from_slice(&body_buf);
+        }
+
+        // Reading the stripped stream must succeed.
+        let result = read_stream(&stripped).unwrap();
+        assert_eq!(result.num_rows(), 4);
+        assert_eq!(result.num_columns(), 1);
+
+        let col = result.column(0);
+        assert_eq!(col.null_count(), 4);
+        assert_eq!(col.len(), 4);
+        // The result must be a dictionary-typed array.
+        assert!(matches!(col.data_type(), DataType::Dictionary(_, _)));
     }
 }

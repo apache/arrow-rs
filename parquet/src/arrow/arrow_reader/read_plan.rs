@@ -110,19 +110,22 @@ impl ReadPlanBuilder {
                     None => return RowSelectionStrategy::Selectors,
                 };
 
-                let trimmed = selection.clone().trim();
-                let selectors: Vec<RowSelector> = trimmed.into();
-                if selectors.is_empty() {
+                // total_rows: total number of rows selected / skipped
+                // effective_count: number of non-empty selectors
+                let (total_rows, effective_count) =
+                    selection.iter().fold((0usize, 0usize), |(rows, count), s| {
+                        if s.row_count > 0 {
+                            (rows + s.row_count, count + 1)
+                        } else {
+                            (rows, count)
+                        }
+                    });
+
+                if effective_count == 0 {
                     return RowSelectionStrategy::Mask;
                 }
 
-                let total_rows: usize = selectors.iter().map(|s| s.row_count).sum();
-                let selector_count = selectors.len();
-                if selector_count == 0 {
-                    return RowSelectionStrategy::Mask;
-                }
-
-                if total_rows < selector_count.saturating_mul(threshold) {
+                if total_rows < effective_count.saturating_mul(threshold) {
                     RowSelectionStrategy::Mask
                 } else {
                     RowSelectionStrategy::Selectors
@@ -164,6 +167,13 @@ impl ReadPlanBuilder {
             };
         }
 
+        // If the predicate selected all rows and there is no prior selection,
+        // skip creating a RowSelection entirely — this avoids the allocation
+        // and keeps selection as None which enables coalesced page fetches.
+        let all_selected = filters.iter().all(|f| f.true_count() == f.len());
+        if all_selected && self.selection.is_none() {
+            return Ok(self);
+        }
         let raw = RowSelection::from_filters(&filters);
         self.selection = match self.selection.take() {
             Some(selection) => Some(selection.and_then(&raw)),

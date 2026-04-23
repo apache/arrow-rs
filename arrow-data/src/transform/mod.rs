@@ -843,8 +843,8 @@ impl<'a> MutableArrayData<'a> {
         };
 
         let nulls = match data.data_type {
-            // RunEndEncoded and Null arrays cannot have top-level null bitmasks
-            DataType::RunEndEncoded(_, _) | DataType::Null => None,
+            // RunEndEncoded, Null, and Union arrays cannot have top-level null bitmasks
+            DataType::RunEndEncoded(_, _) | DataType::Null | DataType::Union(_, _) => None,
             _ => data
                 .null_buffer
                 .map(|nulls| {

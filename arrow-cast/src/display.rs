@@ -80,6 +80,8 @@ pub struct FormatOptions<'a> {
     duration_format: DurationFormat,
     /// Show types in visual representation batches
     types_info: bool,
+    /// Whether string values should be quoted
+    quoted_strings: bool,
     /// Formatter factory used to instantiate custom [`ArrayFormatter`]s. This allows users to
     /// provide custom formatters.
     formatter_factory: Option<&'a dyn ArrayFormatterFactory>,
@@ -102,6 +104,7 @@ impl PartialEq for FormatOptions<'_> {
             && self.time_format == other.time_format
             && self.duration_format == other.duration_format
             && self.types_info == other.types_info
+            && self.quoted_strings == other.quoted_strings
             && match (self.formatter_factory, other.formatter_factory) {
                 (Some(f1), Some(f2)) => std::ptr::eq(f1, f2),
                 (None, None) => true,
@@ -123,6 +126,7 @@ impl Hash for FormatOptions<'_> {
         self.time_format.hash(state);
         self.duration_format.hash(state);
         self.types_info.hash(state);
+        self.quoted_strings.hash(state);
         self.formatter_factory
             .map(|f| f as *const dyn ArrayFormatterFactory)
             .hash(state);
@@ -142,6 +146,7 @@ impl<'a> FormatOptions<'a> {
             time_format: None,
             duration_format: DurationFormat::ISO8601,
             types_info: false,
+            quoted_strings: false,
             formatter_factory: None,
         }
     }
@@ -217,6 +222,17 @@ impl<'a> FormatOptions<'a> {
         Self { types_info, ..self }
     }
 
+    /// Sets whether string values should be quoted
+    ///
+    /// When `true`, strings are formatted using [`Debug`]-style with double quotes and escaping.
+    /// Defaults to `false`
+    pub const fn with_quoted_strings(self, quoted_strings: bool) -> Self {
+        Self {
+            quoted_strings,
+            ..self
+        }
+    }
+
     /// Overrides the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
     ///
     /// Using [`None`] causes pretty-printers to use the default [`ArrayFormatter`]s.
@@ -274,6 +290,11 @@ impl<'a> FormatOptions<'a> {
     /// Returns true if type info should be included in a visual representation of batches.
     pub const fn types_info(&self) -> bool {
         self.types_info
+    }
+
+    /// Returns whether string values should be quoted.
+    pub const fn quoted_strings(&self) -> bool {
+        self.quoted_strings
     }
 
     /// Returns the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
@@ -531,6 +552,8 @@ fn make_default_display_index<'a>(
         }
         DataType::List(_) => array_format(as_generic_list_array::<i32>(array), options),
         DataType::LargeList(_) => array_format(as_generic_list_array::<i64>(array), options),
+        DataType::ListView(_) => array_format(array.as_list_view::<i32>(), options),
+        DataType::LargeListView(_) => array_format(array.as_list_view::<i64>(), options),
         DataType::FixedSizeList(_, _) => {
             let a = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
             array_format(a, options)
@@ -929,6 +952,12 @@ impl DisplayIndex for &PrimitiveArray<IntervalYearMonthType> {
 impl DisplayIndex for &PrimitiveArray<IntervalDayTimeType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
+
+        if value.is_zero() {
+            write!(f, "0 secs")?;
+            return Ok(());
+        }
+
         let mut prefix = "";
 
         if value.days != 0 {
@@ -952,6 +981,12 @@ impl DisplayIndex for &PrimitiveArray<IntervalDayTimeType> {
 impl DisplayIndex for &PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
+
+        if value.is_zero() {
+            write!(f, "0 secs")?;
+            return Ok(());
+        }
+
         let mut prefix = "";
 
         if value.months != 0 {
@@ -1067,16 +1102,38 @@ impl Display for MillisecondsFormatter<'_> {
     }
 }
 
-impl<O: OffsetSizeTrait> DisplayIndex for &GenericStringArray<O> {
-    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        write!(f, "{}", self.value(idx))?;
+impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericStringArray<O> {
+    type State = bool;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        Ok(options.quoted_strings())
+    }
+
+    fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let value = self.value(idx);
+        if *state {
+            write!(f, "{:?}", value)?;
+        } else {
+            write!(f, "{}", value)?;
+        }
         Ok(())
     }
 }
 
-impl DisplayIndex for &StringViewArray {
-    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        write!(f, "{}", self.value(idx))?;
+impl<'a> DisplayIndexState<'a> for &'a StringViewArray {
+    type State = bool;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        Ok(options.quoted_strings())
+    }
+
+    fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let value = self.value(idx);
+        if *state {
+            write!(f, "{:?}", value)?;
+        } else {
+            write!(f, "{}", value)?;
+        }
         Ok(())
     }
 }
@@ -1174,6 +1231,27 @@ impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListArray<O> {
         let offsets = self.value_offsets();
         let end = offsets[idx + 1].as_usize();
         let start = offsets[idx].as_usize();
+        write_list(f, start..end, s)
+    }
+}
+
+impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListViewArray<O> {
+    type State = ArrayFormatter<'a>;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        let field = match (*self).data_type() {
+            DataType::ListView(f) => f,
+            DataType::LargeListView(f) => f,
+            _ => unreachable!(),
+        };
+        make_array_formatter(self.values().as_ref(), options, Some(field.as_ref()))
+    }
+
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let offsets = self.value_offsets();
+        let sizes = self.value_sizes();
+        let start = offsets[idx].as_usize();
+        let end = start + sizes[idx].as_usize();
         write_list(f, start..end, s)
     }
 }
@@ -1503,5 +1581,35 @@ mod tests {
             "input_value1",
             array_value_to_string(&map_array, 3).unwrap()
         );
+    }
+
+    #[test]
+    fn test_list_view_to_string() {
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), None, Some(6)]),
+            Some(vec![]),
+        ]);
+
+        assert_eq!("[1, 2, 3]", array_value_to_string(&list_view, 0).unwrap());
+        assert_eq!("", array_value_to_string(&list_view, 1).unwrap());
+        assert_eq!("[4, , 6]", array_value_to_string(&list_view, 2).unwrap());
+        assert_eq!("[]", array_value_to_string(&list_view, 3).unwrap());
+    }
+
+    #[test]
+    fn test_large_list_view_to_string() {
+        let list_view = LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), None, Some(6)]),
+            Some(vec![]),
+        ]);
+
+        assert_eq!("[1, 2, 3]", array_value_to_string(&list_view, 0).unwrap());
+        assert_eq!("", array_value_to_string(&list_view, 1).unwrap());
+        assert_eq!("[4, , 6]", array_value_to_string(&list_view, 2).unwrap());
+        assert_eq!("[]", array_value_to_string(&list_view, 3).unwrap());
     }
 }

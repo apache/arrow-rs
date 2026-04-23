@@ -51,6 +51,31 @@ where
         .collect()
 }
 
+/// Creates an random (but fixed-seeded) array of a given size and null density,
+/// all the values located in the given range
+pub fn create_primitive_array_range<T>(
+    size: usize,
+    null_density: f32,
+    value_range: Range<T::Native>,
+) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+    T::Native: SampleUniform,
+{
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                Some(rng.random_range(value_range.clone()))
+            }
+        })
+        .collect()
+}
+
 /// Creates a [`PrimitiveArray`] of a given `size` and `null_density`
 /// filling it with random numbers generated using the provided `seed`.
 pub fn create_primitive_array_with_seed<T>(
@@ -105,6 +130,29 @@ where
     StandardUniform: Distribution<bool>,
 {
     let mut rng = seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let value = rng.random::<f32>() < true_density;
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+/// Creates a random array of a given size and null density based on the provided seed
+pub fn create_boolean_array_with_seed(
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+    seed: u64,
+) -> BooleanArray
+where
+    StandardUniform: Distribution<bool>,
+{
+    let mut rng = StdRng::seed_from_u64(seed);
     (0..size)
         .map(|_| {
             if rng.random::<f32>() < null_density {
@@ -203,6 +251,33 @@ pub fn create_string_array_with_len_range_and_prefix_and_seed<Offset: OffsetSize
                         .map(char::from),
                 );
 
+                Some(value)
+            }
+        })
+        .collect()
+}
+/// Creates a string view array of a given range, null density and length
+///
+/// Arguments:
+/// - `size`: number of  string view array
+/// - `null_density`: density of nulls in the string view array
+/// - `range`: range size of each string in the string view array
+/// - `seed`: seed for the random number generator
+pub fn create_string_view_array_with_len_range_and_seed(
+    size: usize,
+    null_density: f32,
+    range: Range<usize>,
+    seed: u64,
+) -> StringViewArray {
+    let rng = &mut StdRng::seed_from_u64(seed);
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let str_len = rng.random_range(range.clone());
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
                 Some(value)
             }
         })
@@ -441,6 +516,80 @@ where
     GenericListArray::<O>::from_iter_primitive::<T, _, _>(values)
 }
 
+/// Create a List/LargeList Array of primitive values using a fixed seed
+///
+/// See [`create_primitive_list_array_with_seed`] for details on arguments.
+pub fn create_primitive_list_array<O, T>(
+    size: usize,
+    null_density: f32,
+    list_null_density: f32,
+    max_list_size: usize,
+) -> GenericListArray<O>
+where
+    O: OffsetSizeTrait,
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = seedable_rng();
+
+    let values = (0..size).map(|_| {
+        if rng.random::<f32>() < null_density {
+            None
+        } else {
+            let list_size = rng.random_range(0..=max_list_size);
+            let list_values: Vec<Option<T::Native>> = (0..list_size)
+                .map(|_| {
+                    if rng.random::<f32>() < list_null_density {
+                        None
+                    } else {
+                        Some(rng.random())
+                    }
+                })
+                .collect();
+            Some(list_values)
+        }
+    });
+
+    GenericListArray::<O>::from_iter_primitive::<T, _, _>(values)
+}
+
+/// Create a ListViewArray of primitive values using a fixed seed
+///
+/// See [`create_primitive_list_array_with_seed`] for details on arguments.
+pub fn create_primitive_list_view_array<O, T>(
+    size: usize,
+    null_density: f32,
+    list_null_density: f32,
+    max_list_size: usize,
+) -> GenericListViewArray<O>
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+    O: OffsetSizeTrait,
+{
+    let mut rng = seedable_rng();
+
+    let values = (0..size).map(|_| {
+        if rng.random::<f32>() < null_density {
+            None
+        } else {
+            let list_size = rng.random_range(0..=max_list_size);
+            let list_values: Vec<Option<T::Native>> = (0..list_size)
+                .map(|_| {
+                    if rng.random::<f32>() < list_null_density {
+                        None
+                    } else {
+                        Some(rng.random())
+                    }
+                })
+                .collect();
+            Some(list_values)
+        }
+    });
+
+    GenericListViewArray::<O>::from_iter_primitive::<T, _, _>(values)
+}
+
 /// Create primitive run array for given logical and physical array lengths
 pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
     logical_array_len: usize,
@@ -672,7 +821,7 @@ pub fn create_f16_array(size: usize, nan_density: f32) -> Float16Array {
             if rng.random::<f32>() < nan_density {
                 Some(f16::NAN)
             } else {
-                Some(f16::from_f32(rng.random()))
+                Some(rng.random())
             }
         })
         .collect()
@@ -696,6 +845,21 @@ pub fn create_f32_array(size: usize, nan_density: f32) -> Float32Array {
 /// Creates a random (but fixed-seeded) f64 array of a given size and nan-value density
 pub fn create_f64_array(size: usize, nan_density: f32) -> Float64Array {
     let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < nan_density {
+                Some(f64::NAN)
+            } else {
+                Some(rng.random())
+            }
+        })
+        .collect()
+}
+
+/// Creates a random f64 array of a given size and nan-value density based on a given seed
+pub fn create_f64_array_with_seed(size: usize, nan_density: f32, seed: u64) -> Float64Array {
+    let mut rng = StdRng::seed_from_u64(seed);
 
     (0..size)
         .map(|_| {

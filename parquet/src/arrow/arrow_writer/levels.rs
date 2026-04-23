@@ -40,11 +40,12 @@
 //!
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
+use crate::column::chunker::CdcChunk;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::bit_iterator::BitIndexIterator;
-use arrow_buffer::{NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
 use std::sync::Arc;
@@ -131,6 +132,22 @@ enum LevelInfoBuilder {
         usize,                 // List Size
         Option<NullBuffer>,    // Nulls
     ),
+    /// A list view array
+    ListView(
+        Box<LevelInfoBuilder>, // Child Values
+        LevelContext,          // Context
+        ScalarBuffer<i32>,     // Offsets
+        ScalarBuffer<i32>,     // Sizes
+        Option<NullBuffer>,    // Nulls
+    ),
+    /// A large list view array
+    LargeListView(
+        Box<LevelInfoBuilder>, // Child Values
+        LevelContext,          // Context
+        ScalarBuffer<i64>,     // Offsets
+        ScalarBuffer<i64>,     // Sizes
+        Option<NullBuffer>,    // Nulls
+    ),
     /// A struct array
     Struct(Vec<LevelInfoBuilder>, LevelContext, Option<NullBuffer>),
 }
@@ -181,7 +198,9 @@ impl LevelInfoBuilder {
             DataType::List(child)
             | DataType::LargeList(child)
             | DataType::Map(child, _)
-            | DataType::FixedSizeList(child, _) => {
+            | DataType::FixedSizeList(child, _)
+            | DataType::ListView(child)
+            | DataType::LargeListView(child) => {
                 let def_level = match is_nullable {
                     true => parent_ctx.def_level + 2,
                     false => parent_ctx.def_level + 1,
@@ -219,6 +238,22 @@ impl LevelInfoBuilder {
                         let nulls = list.nulls().cloned();
                         Self::FixedSizeList(Box::new(child), ctx, *size as _, nulls)
                     }
+                    DataType::ListView(_) => {
+                        let list = array.as_list_view();
+                        let child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        let offsets = list.offsets().clone();
+                        let sizes = list.sizes().clone();
+                        let nulls = list.nulls().cloned();
+                        Self::ListView(Box::new(child), ctx, offsets, sizes, nulls)
+                    }
+                    DataType::LargeListView(_) => {
+                        let list = array.as_list_view();
+                        let child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        let offsets = list.offsets().clone();
+                        let sizes = list.sizes().clone();
+                        let nulls = list.nulls().cloned();
+                        Self::LargeListView(Box::new(child), ctx, offsets, sizes, nulls)
+                    }
                     _ => unreachable!(),
                 })
             }
@@ -233,7 +268,9 @@ impl LevelInfoBuilder {
             LevelInfoBuilder::Primitive(v) => vec![v],
             LevelInfoBuilder::List(v, _, _, _)
             | LevelInfoBuilder::LargeList(v, _, _, _)
-            | LevelInfoBuilder::FixedSizeList(v, _, _, _) => v.finish(),
+            | LevelInfoBuilder::FixedSizeList(v, _, _, _)
+            | LevelInfoBuilder::ListView(v, _, _, _, _)
+            | LevelInfoBuilder::LargeListView(v, _, _, _, _) => v.finish(),
             LevelInfoBuilder::Struct(v, _, _) => v.into_iter().flat_map(|l| l.finish()).collect(),
         }
     }
@@ -250,6 +287,12 @@ impl LevelInfoBuilder {
             }
             LevelInfoBuilder::FixedSizeList(child, ctx, size, nulls) => {
                 Self::write_fixed_size_list(child, ctx, *size, nulls.as_ref(), range)
+            }
+            LevelInfoBuilder::ListView(child, ctx, offsets, sizes, nulls) => {
+                Self::write_list_view(child, ctx, offsets, sizes, nulls.as_ref(), range)
+            }
+            LevelInfoBuilder::LargeListView(child, ctx, offsets, sizes, nulls) => {
+                Self::write_list_view(child, ctx, offsets, sizes, nulls.as_ref(), range)
             }
             LevelInfoBuilder::Struct(children, ctx, nulls) => {
                 Self::write_struct(children, ctx, nulls.as_ref(), range)
@@ -268,6 +311,121 @@ impl LevelInfoBuilder {
         range: Range<usize>,
     ) {
         let offsets = &offsets[range.start..range.end + 1];
+
+        let write_non_null_slice =
+            |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
+                child.write(start_idx..end_idx);
+                child.visit_leaves(|leaf| {
+                    let rep_levels = leaf.rep_levels.as_mut().unwrap();
+                    let mut rev = rep_levels.iter_mut().rev();
+                    let mut remaining = end_idx - start_idx;
+
+                    loop {
+                        let next = rev.next().unwrap();
+                        if *next > ctx.rep_level {
+                            // Nested element - ignore
+                            continue;
+                        }
+
+                        remaining -= 1;
+                        if remaining == 0 {
+                            *next = ctx.rep_level - 1;
+                            break;
+                        }
+                    }
+                })
+            };
+
+        let write_null_run = |child: &mut LevelInfoBuilder, count: usize| {
+            if count > 0 {
+                child.visit_leaves(|leaf| {
+                    leaf.rep_levels
+                        .as_mut()
+                        .unwrap()
+                        .extend(std::iter::repeat_n(ctx.rep_level - 1, count));
+                    leaf.def_levels
+                        .as_mut()
+                        .unwrap()
+                        .extend(std::iter::repeat_n(ctx.def_level - 2, count));
+                });
+            }
+        };
+
+        let write_empty_run = |child: &mut LevelInfoBuilder, count: usize| {
+            if count > 0 {
+                child.visit_leaves(|leaf| {
+                    leaf.rep_levels
+                        .as_mut()
+                        .unwrap()
+                        .extend(std::iter::repeat_n(ctx.rep_level - 1, count));
+                    leaf.def_levels
+                        .as_mut()
+                        .unwrap()
+                        .extend(std::iter::repeat_n(ctx.def_level - 1, count));
+                });
+            }
+        };
+
+        match nulls {
+            Some(nulls) => {
+                let null_offset = range.start;
+                let mut pending_nulls: usize = 0;
+                let mut pending_empties: usize = 0;
+
+                // TODO: Faster bitmask iteration (#1757)
+                for (idx, w) in offsets.windows(2).enumerate() {
+                    let is_valid = nulls.is_valid(idx + null_offset);
+                    let start_idx = w[0].as_usize();
+                    let end_idx = w[1].as_usize();
+
+                    if !is_valid {
+                        write_empty_run(child, pending_empties);
+                        pending_empties = 0;
+                        pending_nulls += 1;
+                    } else if start_idx == end_idx {
+                        write_null_run(child, pending_nulls);
+                        pending_nulls = 0;
+                        pending_empties += 1;
+                    } else {
+                        write_null_run(child, pending_nulls);
+                        pending_nulls = 0;
+                        write_empty_run(child, pending_empties);
+                        pending_empties = 0;
+                        write_non_null_slice(child, start_idx, end_idx);
+                    }
+                }
+                write_null_run(child, pending_nulls);
+                write_empty_run(child, pending_empties);
+            }
+            None => {
+                let mut pending_empties: usize = 0;
+                for w in offsets.windows(2) {
+                    let start_idx = w[0].as_usize();
+                    let end_idx = w[1].as_usize();
+                    if start_idx == end_idx {
+                        pending_empties += 1;
+                    } else {
+                        write_empty_run(child, pending_empties);
+                        pending_empties = 0;
+                        write_non_null_slice(child, start_idx, end_idx);
+                    }
+                }
+                write_empty_run(child, pending_empties);
+            }
+        }
+    }
+
+    /// Write `range` elements from ListViewArray `array`
+    fn write_list_view<O: OffsetSizeTrait>(
+        child: &mut LevelInfoBuilder,
+        ctx: &LevelContext,
+        offsets: &[O],
+        sizes: &[O],
+        nulls: Option<&NullBuffer>,
+        range: Range<usize>,
+    ) {
+        let offsets = &offsets[range.start..range.end];
+        let sizes = &sizes[range.start..range.end];
 
         let write_non_null_slice =
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
@@ -315,13 +473,14 @@ impl LevelInfoBuilder {
             Some(nulls) => {
                 let null_offset = range.start;
                 // TODO: Faster bitmask iteration (#1757)
-                for (idx, w) in offsets.windows(2).enumerate() {
+                for (idx, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
                     let is_valid = nulls.is_valid(idx + null_offset);
-                    let start_idx = w[0].as_usize();
-                    let end_idx = w[1].as_usize();
+                    let start_idx = offset.as_usize();
+                    let size = size.as_usize();
+                    let end_idx = start_idx + size;
                     if !is_valid {
                         write_null_slice(child)
-                    } else if start_idx == end_idx {
+                    } else if size == 0 {
                         write_empty_slice(child)
                     } else {
                         write_non_null_slice(child, start_idx, end_idx)
@@ -329,10 +488,11 @@ impl LevelInfoBuilder {
                 }
             }
             None => {
-                for w in offsets.windows(2) {
-                    let start_idx = w[0].as_usize();
-                    let end_idx = w[1].as_usize();
-                    if start_idx == end_idx {
+                for (offset, size) in offsets.iter().zip(sizes.iter()) {
+                    let start_idx = offset.as_usize();
+                    let size = size.as_usize();
+                    let end_idx = start_idx + size;
+                    if size == 0 {
                         write_empty_slice(child)
                     } else {
                         write_non_null_slice(child, start_idx, end_idx)
@@ -535,7 +695,9 @@ impl LevelInfoBuilder {
             LevelInfoBuilder::Primitive(info) => visit(info),
             LevelInfoBuilder::List(c, _, _, _)
             | LevelInfoBuilder::LargeList(c, _, _, _)
-            | LevelInfoBuilder::FixedSizeList(c, _, _, _) => c.visit_leaves(visit),
+            | LevelInfoBuilder::FixedSizeList(c, _, _, _)
+            | LevelInfoBuilder::ListView(c, _, _, _, _)
+            | LevelInfoBuilder::LargeListView(c, _, _, _, _) => c.visit_leaves(visit),
             LevelInfoBuilder::Struct(children, _, _) => {
                 for c in children {
                     c.visit_leaves(visit)
@@ -550,8 +712,8 @@ impl LevelInfoBuilder {
     /// and the other is a native array, the dictionary values must have the same type as the
     /// native array
     fn types_compatible(a: &DataType, b: &DataType) -> bool {
-        // if the Arrow data types are the same, the types are clearly compatible
-        if a == b {
+        // if the Arrow data types are equal, the types are deemed compatible
+        if a.equals_datatype(b) {
             return true;
         }
 
@@ -670,11 +832,50 @@ impl ArrayLevels {
     pub fn non_null_indices(&self) -> &[usize] {
         &self.non_null_indices
     }
+
+    /// Create a sliced view of this `ArrayLevels` for a CDC chunk.
+    ///
+    /// The chunk's `value_offset`/`num_values` select the relevant slice of
+    /// `non_null_indices`. The array is sliced to the range covered by
+    /// those indices, and they are shifted to be relative to the slice.
+    pub(crate) fn slice_for_chunk(&self, chunk: &CdcChunk) -> Self {
+        let def_levels = self.def_levels.as_ref().map(|levels| {
+            levels[chunk.level_offset..chunk.level_offset + chunk.num_levels].to_vec()
+        });
+        let rep_levels = self.rep_levels.as_ref().map(|levels| {
+            levels[chunk.level_offset..chunk.level_offset + chunk.num_levels].to_vec()
+        });
+
+        // Select the non-null indices for this chunk.
+        let nni = &self.non_null_indices[chunk.value_offset..chunk.value_offset + chunk.num_values];
+        // Compute the array range spanned by the non-null indices.
+        // When nni is empty (all-null chunk), start=0, end=0 → zero-length
+        // array slice; write_batch_internal will process only the def/rep
+        // levels and write no values.
+        let start = nni.first().copied().unwrap_or(0);
+        let end = nni.last().map_or(0, |&i| i + 1);
+        // Shift indices to be relative to the sliced array.
+        let non_null_indices = nni.iter().map(|&idx| idx - start).collect();
+        // Slice the array to the computed range.
+        let array = self.array.slice(start, end - start);
+        let logical_nulls = array.logical_nulls();
+
+        Self {
+            def_levels,
+            rep_levels,
+            non_null_indices,
+            max_def_level: self.max_def_level,
+            max_rep_level: self.max_rep_level,
+            array,
+            logical_nulls,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::column::chunker::CdcChunk;
 
     use arrow_array::builder::*;
     use arrow_array::types::Int32Type;
@@ -1964,5 +2165,168 @@ mod tests {
     fn levels<T: Array + 'static>(field: &Field, array: T) -> LevelInfoBuilder {
         let v = Arc::new(array) as ArrayRef;
         LevelInfoBuilder::try_new(field, Default::default(), &v).unwrap()
+    }
+
+    #[test]
+    fn test_slice_for_chunk_flat() {
+        // Case 1: required field (max_def_level=0, no def/rep levels stored).
+        // Array has 6 values; all are non-null so non_null_indices covers every position.
+        // value_offset=2, num_values=3 → non_null_indices[2..5] = [2,3,4].
+        // Array is sliced (no def_levels → write_batch_internal uses values.len()).
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
+        let logical_nulls = array.logical_nulls();
+        let levels = ArrayLevels {
+            def_levels: None,
+            rep_levels: None,
+            non_null_indices: vec![0, 1, 2, 3, 4, 5],
+            max_def_level: 0,
+            max_rep_level: 0,
+            array,
+            logical_nulls,
+        };
+        let sliced = levels.slice_for_chunk(&CdcChunk {
+            level_offset: 0,
+            num_levels: 0,
+            value_offset: 2,
+            num_values: 3,
+        });
+        assert!(sliced.def_levels.is_none());
+        assert!(sliced.rep_levels.is_none());
+        assert_eq!(sliced.non_null_indices, vec![0, 1, 2]);
+        assert_eq!(sliced.array.len(), 3);
+
+        // Case 2: optional field (max_def_level=1, def levels present, no rep levels).
+        // Array: [Some(1), None, Some(3), None, Some(5), Some(6)]
+        // non_null_indices: [0, 2, 4, 5]
+        // value_offset=1, num_values=1 → non_null_indices[1..2] = [2].
+        // Array is not sliced (def_levels present → num_levels from def_levels.len()).
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            None,
+            Some(5),
+            Some(6),
+        ]));
+        let logical_nulls = array.logical_nulls();
+        let levels = ArrayLevels {
+            def_levels: Some(vec![1, 0, 1, 0, 1, 1]),
+            rep_levels: None,
+            non_null_indices: vec![0, 2, 4, 5],
+            max_def_level: 1,
+            max_rep_level: 0,
+            array,
+            logical_nulls,
+        };
+        let sliced = levels.slice_for_chunk(&CdcChunk {
+            level_offset: 1,
+            num_levels: 3,
+            value_offset: 1,
+            num_values: 1,
+        });
+        assert_eq!(sliced.def_levels, Some(vec![0, 1, 0]));
+        assert!(sliced.rep_levels.is_none());
+        assert_eq!(sliced.non_null_indices, vec![0]); // [2] shifted by -2 (nni[0])
+        assert_eq!(sliced.array.len(), 1);
+    }
+
+    #[test]
+    fn test_slice_for_chunk_nested_with_nulls() {
+        // Regression test for https://github.com/apache/arrow-rs/issues/9637
+        //
+        // Simulates a List<Int32?> where null list entries have non-zero child
+        // ranges (valid per Arrow spec: "a null value may correspond to a
+        // non-empty segment in the child array"). This creates gaps in the
+        // leaf array that don't correspond to any levels.
+        //
+        // 5 rows with 2 null list entries owning non-empty child ranges:
+        //   row 0: [1]       → leaf[0]
+        //   row 1: null list → owns leaf[1..3] (gap of 2)
+        //   row 2: [2, null] → leaf[3], leaf[4]=null element
+        //   row 3: null list → owns leaf[5..8] (gap of 3)
+        //   row 4: [4, 5]   → leaf[8], leaf[9]
+        //
+        // def_levels: [3,  0,  3, 2,  0,  3, 3]
+        // rep_levels: [0,  0,  0, 1,  0,  0, 1]
+        // non_null_indices: [0, 3, 8, 9]
+        //   gaps in array: 0→3 (skip 1,2), 3→8 (skip 5,6,7)
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1), // 0: row 0
+            None,    // 1: gap (null list row 1)
+            None,    // 2: gap (null list row 1)
+            Some(2), // 3: row 2
+            None,    // 4: row 2, null element
+            None,    // 5: gap (null list row 3)
+            None,    // 6: gap (null list row 3)
+            None,    // 7: gap (null list row 3)
+            Some(4), // 8: row 4
+            Some(5), // 9: row 4
+        ]));
+        let logical_nulls = array.logical_nulls();
+        let levels = ArrayLevels {
+            def_levels: Some(vec![3, 0, 3, 2, 0, 3, 3]),
+            rep_levels: Some(vec![0, 0, 0, 1, 0, 0, 1]),
+            non_null_indices: vec![0, 3, 8, 9],
+            max_def_level: 3,
+            max_rep_level: 1,
+            array,
+            logical_nulls,
+        };
+
+        // Chunk 0: rows 0-1, nni=[0] → array sliced to [0..1]
+        let chunk0 = levels.slice_for_chunk(&CdcChunk {
+            level_offset: 0,
+            num_levels: 2,
+            value_offset: 0,
+            num_values: 1,
+        });
+        assert_eq!(chunk0.non_null_indices, vec![0]);
+        assert_eq!(chunk0.array.len(), 1);
+
+        // Chunk 1: rows 2-3, nni=[3] → array sliced to [3..4]
+        let chunk1 = levels.slice_for_chunk(&CdcChunk {
+            level_offset: 2,
+            num_levels: 3,
+            value_offset: 1,
+            num_values: 1,
+        });
+        assert_eq!(chunk1.non_null_indices, vec![0]);
+        assert_eq!(chunk1.array.len(), 1);
+
+        // Chunk 2: row 4, nni=[8, 9] → array sliced to [8..10]
+        let chunk2 = levels.slice_for_chunk(&CdcChunk {
+            level_offset: 5,
+            num_levels: 2,
+            value_offset: 2,
+            num_values: 2,
+        });
+        assert_eq!(chunk2.non_null_indices, vec![0, 1]);
+        assert_eq!(chunk2.array.len(), 2);
+    }
+
+    #[test]
+    fn test_slice_for_chunk_all_null() {
+        // All-null chunk: num_values=0 → empty nni slice → zero-length array.
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, None, Some(4)]));
+        let logical_nulls = array.logical_nulls();
+        let levels = ArrayLevels {
+            def_levels: Some(vec![1, 0, 0, 1]),
+            rep_levels: None,
+            non_null_indices: vec![0, 3],
+            max_def_level: 1,
+            max_rep_level: 0,
+            array,
+            logical_nulls,
+        };
+        // Chunk covering only the two null rows (levels 1..3), zero non-null values.
+        let sliced = levels.slice_for_chunk(&CdcChunk {
+            level_offset: 1,
+            num_levels: 2,
+            value_offset: 1,
+            num_values: 0,
+        });
+        assert_eq!(sliced.def_levels, Some(vec![0, 0]));
+        assert_eq!(sliced.non_null_indices, Vec::<usize>::new());
+        assert_eq!(sliced.array.len(), 0);
     }
 }

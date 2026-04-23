@@ -192,20 +192,19 @@ fn convert_stats(
     use crate::file::statistics::Statistics as FStatistics;
     Ok(match thrift_stats {
         Some(stats) => {
-            // Number of nulls recorded, when it is not available, we just mark it as 0.
-            // TODO this should be `None` if there is no information about NULLS.
-            // see https://github.com/apache/arrow-rs/pull/6216/files
-            let null_count = stats.null_count.unwrap_or(0);
-
-            if null_count < 0 {
-                return Err(general_err!(
-                    "Statistics null count is negative {}",
-                    null_count
-                ));
-            }
-
             // Generic null count.
-            let null_count = Some(null_count as u64);
+            let null_count = stats
+                .null_count
+                .map(|null_count| {
+                    if null_count < 0 {
+                        return Err(general_err!(
+                            "Statistics null count is negative {}",
+                            null_count
+                        ));
+                    }
+                    Ok(null_count as u64)
+                })
+                .transpose()?;
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
@@ -410,11 +409,15 @@ fn read_column_metadata<'a>(
     let mut seen_mask = 0u16;
 
     let mut skip_pes = false;
-    let mut pes_mask = false;
+    let mut pes_mask = true;
+    let mut skip_col_stats = false;
+    let mut skip_size_stats = false;
 
     if let Some(opts) = options {
         skip_pes = opts.skip_encoding_stats(col_index);
         pes_mask = opts.encoding_stats_as_mask();
+        skip_col_stats = opts.skip_column_stats(col_index);
+        skip_size_stats = opts.skip_size_stats(col_index);
     }
 
     // struct ColumnMetaData {
@@ -483,7 +486,7 @@ fn read_column_metadata<'a>(
             11 => {
                 column.dictionary_page_offset = Some(i64::read_thrift(&mut *prot)?);
             }
-            12 => {
+            12 if !skip_col_stats => {
                 column.statistics =
                     convert_stats(column_descr, Some(Statistics::read_thrift(&mut *prot)?))?;
             }
@@ -503,7 +506,7 @@ fn read_column_metadata<'a>(
             15 => {
                 column.bloom_filter_length = Some(i32::read_thrift(&mut *prot)?);
             }
-            16 => {
+            16 if !skip_size_stats => {
                 let val = SizeStatistics::read_thrift(&mut *prot)?;
                 column.unencoded_byte_array_data_bytes = val.unencoded_byte_array_data_bytes;
                 column.repetition_level_histogram =
@@ -1281,6 +1284,19 @@ impl PageHeader {
 /////////////////////////////////////////////////
 // helper functions for writing file meta data
 
+#[cfg(feature = "encryption")]
+fn should_write_column_stats(column_chunk: &ColumnChunkMetaData) -> bool {
+    // If there is encrypted column metadata present,
+    // the column is encrypted with a different key to the footer or a plaintext footer is used,
+    // so the statistics are sensitive and shouldn't be written.
+    column_chunk.encrypted_column_metadata.is_none()
+}
+
+#[cfg(not(feature = "encryption"))]
+fn should_write_column_stats(_column_chunk: &ColumnChunkMetaData) -> bool {
+    true
+}
+
 // serialize the bits of the column chunk needed for a thrift ColumnMetaData
 // struct ColumnMetaData {
 //   1: required Type type
@@ -1331,48 +1347,51 @@ pub(super) fn serialize_column_meta_data<W: Write>(
     if let Some(dictionary_page_offset) = column_chunk.dictionary_page_offset {
         last_field_id = dictionary_page_offset.write_thrift_field(w, 11, last_field_id)?;
     }
-    // PageStatistics is the same as thrift Statistics, but writable
-    let stats = page_stats_to_thrift(column_chunk.statistics());
-    if let Some(stats) = stats {
-        last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
-    }
-    if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
-        last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
-    }
-    if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
-        last_field_id = bloom_filter_offset.write_thrift_field(w, 14, last_field_id)?;
-    }
-    if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
-        last_field_id = bloom_filter_length.write_thrift_field(w, 15, last_field_id)?;
-    }
 
-    // SizeStatistics
-    let size_stats = if column_chunk.unencoded_byte_array_data_bytes.is_some()
-        || column_chunk.repetition_level_histogram.is_some()
-        || column_chunk.definition_level_histogram.is_some()
-    {
-        let repetition_level_histogram = column_chunk
-            .repetition_level_histogram()
-            .map(|hist| hist.clone().into_inner());
+    if should_write_column_stats(column_chunk) {
+        // PageStatistics is the same as thrift Statistics, but writable
+        let stats = page_stats_to_thrift(column_chunk.statistics());
+        if let Some(stats) = stats {
+            last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
+        }
+        if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
+            last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
+        }
+        if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
+            last_field_id = bloom_filter_offset.write_thrift_field(w, 14, last_field_id)?;
+        }
+        if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
+            last_field_id = bloom_filter_length.write_thrift_field(w, 15, last_field_id)?;
+        }
 
-        let definition_level_histogram = column_chunk
-            .definition_level_histogram()
-            .map(|hist| hist.clone().into_inner());
+        // SizeStatistics
+        let size_stats = if column_chunk.unencoded_byte_array_data_bytes.is_some()
+            || column_chunk.repetition_level_histogram.is_some()
+            || column_chunk.definition_level_histogram.is_some()
+        {
+            let repetition_level_histogram = column_chunk
+                .repetition_level_histogram()
+                .map(|hist| hist.clone().into_inner());
 
-        Some(SizeStatistics {
-            unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
-            repetition_level_histogram,
-            definition_level_histogram,
-        })
-    } else {
-        None
-    };
-    if let Some(size_stats) = size_stats {
-        last_field_id = size_stats.write_thrift_field(w, 16, last_field_id)?;
-    }
+            let definition_level_histogram = column_chunk
+                .definition_level_histogram()
+                .map(|hist| hist.clone().into_inner());
 
-    if let Some(geo_stats) = column_chunk.geo_statistics() {
-        geo_stats.write_thrift_field(w, 17, last_field_id)?;
+            Some(SizeStatistics {
+                unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
+                repetition_level_histogram,
+                definition_level_histogram,
+            })
+        } else {
+            None
+        };
+        if let Some(size_stats) = size_stats {
+            last_field_id = size_stats.write_thrift_field(w, 16, last_field_id)?;
+        }
+
+        if let Some(geo_stats) = column_chunk.geo_statistics() {
+            geo_stats.write_thrift_field(w, 17, last_field_id)?;
+        }
     }
 
     w.write_struct_end()
@@ -1592,17 +1611,17 @@ impl WriteThrift for ColumnChunkMetaData {
             .write_thrift_field(writer, 2, last_field_id)?;
 
         #[cfg(feature = "encryption")]
-        {
-            // only write the ColumnMetaData if we haven't already encrypted it
-            if self.encrypted_column_metadata.is_none() {
-                writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
-                serialize_column_meta_data(self, writer)?;
-                last_field_id = 3;
-            }
-        }
+        let write_meta_data =
+            self.encrypted_column_metadata.is_none() || self.plaintext_footer_mode;
         #[cfg(not(feature = "encryption"))]
-        {
-            // always write the ColumnMetaData
+        let write_meta_data = true;
+
+        // When the footer is encrypted and encrypted_column_metadata is present,
+        // skip writing the plaintext meta_data field to reduce footer size.
+        // When the footer is plaintext (plaintext_footer_mode=true), we still write
+        // meta_data for backward compatibility with readers that expect it, but with
+        // sensitive fields (statistics, bloom filter info, etc.) stripped out.
+        if write_meta_data {
             writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
             serialize_column_meta_data(self, writer)?;
             last_field_id = 3;
@@ -1702,15 +1721,17 @@ write_thrift_field!(RustBoundingBox, FieldType::Struct);
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::basic::Type as PhysicalType;
     use crate::errors::Result;
     use crate::file::metadata::thrift::{BoundingBox, SchemaElement, write_schema};
-    use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+    use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaDataOptions, RowGroupMetaData};
     use crate::parquet_thrift::tests::test_roundtrip;
     use crate::parquet_thrift::{
         ElementType, ThriftCompactOutputProtocol, ThriftSliceInputProtocol, read_thrift_vec,
     };
     use crate::schema::types::{
-        ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
+        ColumnDescriptor, ColumnPath, SchemaDescriptor, TypePtr, num_nodes,
+        parquet_schema_from_array,
     };
     use std::sync::Arc;
 
@@ -1727,8 +1748,16 @@ pub(crate) mod tests {
         buf: &mut [u8],
         column_descr: Arc<ColumnDescriptor>,
     ) -> Result<ColumnChunkMetaData> {
+        read_column_chunk_with_options(buf, column_descr, None)
+    }
+
+    pub(crate) fn read_column_chunk_with_options(
+        buf: &mut [u8],
+        column_descr: Arc<ColumnDescriptor>,
+        options: Option<&ParquetMetaDataOptions>,
+    ) -> Result<ColumnChunkMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr, 0, None)
+        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr, 0, options)
     }
 
     pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {
@@ -1799,5 +1828,49 @@ pub(crate) mod tests {
             mmin: Some(3.7.into()),
             mmax: Some(42.0.into()),
         });
+    }
+
+    #[test]
+    fn test_convert_stats_preserves_missing_null_count() {
+        let primitive =
+            crate::schema::types::Type::primitive_type_builder("col", PhysicalType::INT32)
+                .build()
+                .unwrap();
+        let column_descr = Arc::new(ColumnDescriptor::new(
+            Arc::new(primitive),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        ));
+
+        let none_null_count = super::Statistics {
+            max: None,
+            min: None,
+            null_count: None,
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+        let decoded_none = super::convert_stats(&column_descr, Some(none_null_count))
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded_none.null_count_opt(), None);
+
+        let zero_null_count = super::Statistics {
+            max: None,
+            min: None,
+            null_count: Some(0),
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+        let decoded_zero = super::convert_stats(&column_descr, Some(zero_null_count))
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded_zero.null_count_opt(), Some(0));
     }
 }

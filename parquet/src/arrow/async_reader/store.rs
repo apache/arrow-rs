@@ -23,17 +23,17 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use bytes::Bytes;
 use futures::{FutureExt, TryFutureExt, future::BoxFuture};
+use object_store::ObjectStoreExt;
 use object_store::{GetOptions, GetRange};
 use object_store::{ObjectStore, path::Path};
 use tokio::runtime::Handle;
-
 /// Reads Parquet files in object storage using [`ObjectStore`].
 ///
 /// ```no_run
 /// # use std::io::stdout;
 /// # use std::sync::Arc;
 /// # use object_store::azure::MicrosoftAzureBuilder;
-/// # use object_store::ObjectStore;
+/// # use object_store::{ObjectStore, ObjectStoreExt};
 /// # use object_store::path::Path;
 /// # use parquet::arrow::async_reader::ParquetObjectReader;
 /// # use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -93,7 +93,7 @@ impl ParquetObjectReader {
     /// Providing this size up front is an important optimization to avoid extra calls when the
     /// underlying store does not support suffix range requests.
     ///
-    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`].
+    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStoreExt::head`].
     pub fn with_file_size(self, file_size: u64) -> Self {
         Self {
             file_size: Some(file_size),
@@ -186,7 +186,7 @@ impl MetadataSuffixFetch for &mut ParquetObjectReader {
 
 impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        self.spawn(|store, path| store.get_range(path, range))
+        self.spawn(|store, path| store.get_range(path, range).boxed())
     }
 
     fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
@@ -226,8 +226,12 @@ impl AsyncFileReader for ParquetObjectReader {
             // When page_index_policy is Optional or Required, override the preload flags
             // to ensure the specified policy takes precedence.
             if let Some(options) = options {
-                if options.page_index_policy != PageIndexPolicy::Skip {
-                    metadata = metadata.with_page_index_policy(options.page_index_policy);
+                if options.column_index_policy() != PageIndexPolicy::Skip
+                    || options.offset_index_policy() != PageIndexPolicy::Skip
+                {
+                    metadata = metadata
+                        .with_column_index_policy(options.column_index_policy())
+                        .with_offset_index_policy(options.offset_index_policy());
                 }
             }
 
@@ -260,7 +264,7 @@ mod tests {
     use futures::FutureExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore};
+    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
     async fn get_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
         let res = parquet_test_data();
@@ -426,8 +430,7 @@ mod tests {
             .with_preload_offset_index(true);
 
         // Create options with page_index_policy set to Skip (default)
-        let mut options = ArrowReaderOptions::new();
-        options.page_index_policy = PageIndexPolicy::Skip;
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
 
         // Get metadata - Skip means use reader's preload flags (true)
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
@@ -447,8 +450,7 @@ mod tests {
             .with_preload_offset_index(false);
 
         // Create options with page_index_policy set to Optional
-        let mut options = ArrowReaderOptions::new();
-        options.page_index_policy = PageIndexPolicy::Optional;
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
 
         // Get metadata - Optional overrides preload flags and attempts to load indexes
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
@@ -468,8 +470,7 @@ mod tests {
             .with_preload_column_index(false)
             .with_preload_offset_index(false);
 
-        let mut options1 = ArrowReaderOptions::new();
-        options1.page_index_policy = PageIndexPolicy::Skip;
+        let options1 = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Skip);
         let metadata1 = reader1.get_metadata(Some(&options1)).await.unwrap();
 
         // Test 2: preload=false + Optional policy -> overrides to try loading
@@ -478,8 +479,7 @@ mod tests {
             .with_preload_column_index(false)
             .with_preload_offset_index(false);
 
-        let mut options2 = ArrowReaderOptions::new();
-        options2.page_index_policy = PageIndexPolicy::Optional;
+        let options2 = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
         let metadata2 = reader2.get_metadata(Some(&options2)).await.unwrap();
 
         // Both should succeed (no panic/error)

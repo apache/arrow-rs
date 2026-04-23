@@ -51,7 +51,7 @@ Disable defaults and pick only what you need (see **Feature Flags**):
 
 ```toml
 [dependencies]
-arrow-avro = { version = "57.0.0", default-features = false, features = ["deflate", "snappy"] }
+arrow-avro = { version = "58.0.0", default-features = false, features = ["deflate", "snappy"] }
 ```
 
 ---
@@ -105,6 +105,36 @@ fn main() -> anyhow::Result<()> {
 
 See the crate docs for runnable SOE and Confluent round‑trip examples.
 
+### Async reading from object stores (`object_store` feature)
+
+```rust,ignore
+use std::sync::Arc;
+use arrow_avro::reader::{AsyncAvroFileReader, AvroObjectReader};
+use futures::TryStreamExt;
+use object_store::ObjectStore;
+use object_store::local::LocalFileSystem;
+use object_store::path::Path;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+    let path = Path::from("data/example.avro");
+
+    let meta = store.head(&path).await?;
+    let reader = AvroObjectReader::new(store, path);
+
+    let stream = AsyncAvroFileReader::builder(reader, meta.size, 1024)
+        .try_build()
+        .await?;
+
+    let batches: Vec<_> = stream.try_collect().await?;
+    for batch in batches {
+        println!("rows: {}", batch.num_rows());
+    }
+    Ok(())
+}
+```
+
 ---
 
 ## Feature Flags (what they do and when to use them)
@@ -128,15 +158,22 @@ See the crate docs for runnable SOE and Confluent round‑trip examples.
 * Only **OCF** uses these codecs (they compress per‑block). They do **not** apply to raw Avro frames used by Confluent wire format or SOE. The crate’s `compression` module is specifically for **OCF blocks**.
 * `deflate` uses `flate2` with the `rust_backend` (no system zlib required).
 
+### Async & Object Store
+
+| Feature        | Default | What it enables                                                             | When to use                                                                   |
+|----------------|--------:|-----------------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| `async`        |       ⬜ | Async APIs for reading Avro via `futures` and `tokio`                       | Enable for non-blocking async Avro reading with `AsyncAvroFileReader`.        |
+| `object_store` |       ⬜ | Integration with `object_store` crate (implies `async`)                     | Enable for reading Avro from cloud storage (S3, GCS, Azure Blob, etc.).       |
+
 ### Schema fingerprints & custom logical type helpers
 
-| Feature                     | Default | What it enables                                                                  | When to use                                                                                                         |    
+| Feature                     | Default | What it enables                                                                  | When to use                                                                                                         |
 |-----------------------------|--------:|----------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
-| `md5`                       |       ⬜ | `md5` dep for optional **MD5** schema fingerprints                               | If you want to compute MD5 fingerprints of writer schemas (i.e. for custom prefixing/validation).                   |   
-| `sha256`                    |       ⬜ | `sha2` dep for optional **SHA‑256** schema fingerprints                          | If you prefer longer fingerprints; affects max prefix length (i.e. when framing).                                   |  
+| `md5`                       |       ⬜ | `md5` dep for optional **MD5** schema fingerprints                               | If you want to compute MD5 fingerprints of writer schemas (i.e. for custom prefixing/validation).                   |
+| `sha256`                    |       ⬜ | `sha2` dep for optional **SHA‑256** schema fingerprints                          | If you prefer longer fingerprints; affects max prefix length (i.e. when framing).                                   |
 | `small_decimals`            |       ⬜ | Extra handling for **small decimal** logical types (`Decimal32` and `Decimal64`) | If your Avro `decimal` values are small and you want more compact Arrow representations.                            |
-| `avro_custom_types`         |       ⬜ | Annotates Avro values using Arrow specific custom logical types                  | Enable when you need arrow-avro to reinterpret certain Avro fields as Arrow types that Avro doesn’t natively model. | 
-| `canonical_extension_types` |       ⬜ | Re‑exports Arrow’s canonical extension types support from `arrow-schema`         | Enable if your workflow uses Arrow [canonical extension types] and you want `arrow-avro` to respect them.           | 
+| `avro_custom_types`         |       ⬜ | Annotates Avro values using Arrow specific custom logical types                  | Enable when you need arrow-avro to reinterpret certain Avro fields as Arrow types that Avro doesn't natively model. |
+| `canonical_extension_types` |       ⬜ | Re‑exports Arrow's canonical extension types support from `arrow-schema`         | Enable if your workflow uses Arrow [canonical extension types] and you want `arrow-avro` to respect them.           | 
 
 [canonical extension types]: https://arrow.apache.org/docs/format/CanonicalExtensions.html
 
@@ -149,17 +186,22 @@ See the crate docs for runnable SOE and Confluent round‑trip examples.
 * Minimal, fast build (common pipelines):
 
   ```toml
-  arrow-avro = { version = "56", default-features = false, features = ["deflate", "snappy"] }
+  arrow-avro = { version = "58", default-features = false, features = ["deflate", "snappy"] }
   ```
 * Include Zstandard too (modern data lakes):
 
   ```toml
-  arrow-avro = { version = "56", default-features = false, features = ["deflate", "snappy", "zstd"] }
+  arrow-avro = { version = "58", default-features = false, features = ["deflate", "snappy", "zstd"] }
+  ```
+* Async reading from object stores (S3, GCS, etc.):
+
+  ```toml
+  arrow-avro = { version = "58", features = ["object_store"] }
   ```
 * Fingerprint helpers:
 
   ```toml
-  arrow-avro = { version = "56", features = ["md5", "sha256"] }
+  arrow-avro = { version = "58", features = ["md5", "sha256"] }
   ```
   
 ---

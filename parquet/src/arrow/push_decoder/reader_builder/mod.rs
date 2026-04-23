@@ -20,7 +20,7 @@ mod filter;
 
 use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
-use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
+use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
@@ -39,7 +39,7 @@ use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 /// The current row group being read and the read plan
 #[derive(Debug)]
@@ -212,6 +212,11 @@ impl RowGroupReaderBuilder {
         self.buffers.buffered_bytes()
     }
 
+    /// Clear any staged ranges currently buffered for future decode work.
+    pub fn clear_all_ranges(&mut self) {
+        self.buffers.clear_all_ranges();
+    }
+
     /// take the current state, leaving None in its place.
     ///
     /// Returns an error if there the state wasn't put back after the previous
@@ -329,7 +334,7 @@ impl RowGroupReaderBuilder {
 
                 let cache_info = CacheInfo::new(
                     cache_projection,
-                    Arc::new(Mutex::new(RowGroupCache::new(
+                    Arc::new(RwLock::new(RowGroupCache::new(
                         self.batch_size,
                         self.max_predicate_cache_size,
                     ))),
@@ -433,9 +438,27 @@ impl RowGroupReaderBuilder {
                 let cache_options = filter_info.cache_builder().producer();
 
                 let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_batch_size(self.batch_size)
                     .with_cache_options(Some(&cache_options))
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+
+                // Reset to original policy before each predicate so the override
+                // can detect page skipping for THIS predicate's columns.
+                // Without this reset, a prior predicate's override (e.g. Mask)
+                // carries forward and the check returns early, missing unfetched
+                // pages for subsequent predicates.
+                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+
+                // Prepare to evaluate the filter.
+                // Note: first update the selection strategy to properly handle any pages
+                // pruned during fetch
+                plan_builder = override_selector_strategy_if_needed(
+                    plan_builder,
+                    predicate.projection(),
+                    self.row_group_offset_index(row_group_idx),
+                );
+                // `with_predicate` actually evaluates the filter
 
                 plan_builder =
                     plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
@@ -592,9 +615,10 @@ impl RowGroupReaderBuilder {
 
                 // if we have any cached results, connect them up
                 let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_batch_size(self.batch_size)
                     .with_parquet_metadata(&self.metadata);
                 let array_reader = if let Some(cache_info) = cache_info.as_ref() {
-                    let cache_options = cache_info.builder().consumer();
+                    let cache_options: CacheOptions = cache_info.builder().consumer();
                     array_reader_builder
                         .with_cache_options(Some(&cache_options))
                         .build_array_reader(self.fields.as_deref(), &self.projection)

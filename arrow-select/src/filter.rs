@@ -91,6 +91,29 @@ impl<'a> IndexIterator<'a> {
         let iter = filter.values().set_indices();
         Self { remaining, iter }
     }
+
+    /// Collect this iterator as a [`Vec`]
+    /// This is more efficient than the standard `collect` as we can
+    /// pre-allocate the entire uninitialized buffer and then fill it (roughly 1.6x faster)
+    pub fn collect(mut self) -> Vec<usize> {
+        let len = self.remaining;
+        let mut result = Vec::with_capacity(len);
+        let ptr: *mut usize = result.as_mut_ptr();
+        for i in 0..len {
+            // SAFETY: we have allocated enough space in `result` and remaining
+            // correctly tracks the number of elements
+            let next = self.iter.next();
+            debug_assert!(next.is_some(), "IndexIterator exhausted early");
+            unsafe {
+                *ptr.add(i) = next.unwrap_unchecked();
+            }
+        }
+        // SAFETY: we have initialized `len` elements
+        unsafe {
+            result.set_len(len);
+        }
+        result
+    }
 }
 
 impl Iterator for IndexIterator<'_> {
@@ -118,7 +141,33 @@ fn filter_count(filter: &BooleanArray) -> usize {
     filter.values().count_set_bits()
 }
 
-/// Remove null values by do a bitmask AND operation with null bits and the boolean bits.
+/// Convert all null values in `BooleanArray` to `false`
+///
+/// This is useful for filter-like operations which select only `true`
+/// values, but not `false` or `NULL` values
+///
+/// Internally this is implemented as a bitwise `AND` operation with null bits
+/// and the boolean bits.
+///
+/// # Example
+/// ```
+/// # use arrow_array::{Array, BooleanArray};
+/// # use arrow_select::filter::prep_null_mask_filter;
+/// let filter = BooleanArray::from(vec![
+///   Some(true),
+///   Some(false),
+///   None
+/// ]);
+/// // convert Boolean array to a filter mask
+/// let null_mask = prep_null_mask_filter(&filter);
+/// // there are no nulls in the output mask
+/// assert!(null_mask.nulls().is_none());
+/// assert_eq!(null_mask, BooleanArray::from(vec![
+///  true,
+///  false,
+///  false, // Null is converted to false
+/// ]));
+/// ```
 pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     let nulls = filter.nulls().unwrap();
     let mask = filter.values() & nulls.inner();
@@ -461,7 +510,12 @@ where
     R::Native: AddAssign,
 {
     let run_ends: &RunEndBuffer<R::Native> = array.run_ends();
-    let mut new_run_ends = vec![R::default_value(); run_ends.len()];
+    let start_physical = run_ends.get_start_physical_index();
+    let end_physical = run_ends.get_end_physical_index();
+    let physical_len = end_physical - start_physical + 1;
+
+    let mut new_run_ends = vec![R::default_value(); physical_len];
+    let offset = run_ends.offset() as u64;
 
     let mut start = 0u64;
     let mut j = 0;
@@ -469,9 +523,9 @@ where
     let filter_values = predicate.filter.values();
     let run_ends = run_ends.inner();
 
-    let pred: BooleanArray = BooleanBuffer::collect_bool(run_ends.len(), |i| {
+    let pred: BooleanArray = BooleanBuffer::collect_bool(physical_len, |i| {
         let mut keep = false;
-        let mut end = run_ends[i].into() as u64;
+        let mut end = (run_ends[i + start_physical].into() as u64).saturating_sub(offset);
         let difference = end.saturating_sub(filter_values.len() as u64);
         end -= difference;
 
@@ -491,8 +545,8 @@ where
 
     new_run_ends.truncate(j);
 
-    let values = array.values();
-    let values = filter(&values, &pred)?;
+    let values = array.values_slice();
+    let values = filter(values.as_ref(), &pred)?;
 
     let run_ends = PrimitiveArray::<R>::try_new(new_run_ends.into(), None)?;
     RunArray::try_new(&run_ends, &values)
@@ -1326,6 +1380,23 @@ mod tests {
 
         assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
         assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_sliced() {
+        let run_ends = Int64Array::from(vec![2, 3, 8]);
+        let values = Int64Array::from(vec![7, -2, 9]);
+        let a = RunArray::try_new(&run_ends, &values).unwrap(); // [7, 7, -2, 9, 9, 9, 9, 9]
+        let a = a.slice(2, 3); // [-2, 9, 9]
+        let b = BooleanArray::from(vec![true, false, true]);
+        let result = filter(&a, &b).unwrap();
+
+        let result = result.as_run::<Int64Type>();
+        let result = result.downcast::<Int64Array>().unwrap();
+
+        let expected = vec![-2, 9];
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(expected, actual);
     }
 
     #[test]

@@ -43,8 +43,8 @@ pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 /// Default value for [`WriterProperties::write_page_header_statistics`]
 pub const DEFAULT_WRITE_PAGE_HEADER_STATISTICS: bool = false;
-/// Default value for [`WriterProperties::max_row_group_size`]
-pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
+/// Default value for [`WriterProperties::max_row_group_row_count`]
+pub const DEFAULT_MAX_ROW_GROUP_ROW_COUNT: usize = 1024 * 1024;
 /// Default value for [`WriterProperties::bloom_filter_position`]
 pub const DEFAULT_BLOOM_FILTER_POSITION: BloomFilterPosition = BloomFilterPosition::AfterRowGroup;
 /// Default value for [`WriterProperties::created_by`]
@@ -53,14 +53,78 @@ pub const DEFAULT_CREATED_BY: &str = concat!("parquet-rs version ", env!("CARGO_
 pub const DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`BloomFilterProperties::fpp`]
 pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
-/// Default value for [`BloomFilterProperties::ndv`]
-pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
+/// Default value for [`BloomFilterProperties::ndv`].
+///
+/// Note: this is only the fallback default used when constructing [`BloomFilterProperties`]
+/// directly. When using [`WriterPropertiesBuilder`], columns with bloom filters enabled
+/// but without an explicit NDV will have their NDV resolved at build time to
+/// [`WriterProperties::max_row_group_row_count`], which may differ from this constant
+/// if the user configured a custom row group size.
+pub const DEFAULT_BLOOM_FILTER_NDV: u64 = DEFAULT_MAX_ROW_GROUP_ROW_COUNT as u64;
 /// Default values for [`WriterProperties::statistics_truncate_length`]
 pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`WriterProperties::offset_index_disabled`]
 pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
 pub const DEFAULT_COERCE_TYPES: bool = false;
+/// Default minimum chunk size for content-defined chunking: 256 KiB.
+pub const DEFAULT_CDC_MIN_CHUNK_SIZE: usize = 256 * 1024;
+/// Default maximum chunk size for content-defined chunking: 1024 KiB.
+pub const DEFAULT_CDC_MAX_CHUNK_SIZE: usize = 1024 * 1024;
+/// Default normalization level for content-defined chunking.
+pub const DEFAULT_CDC_NORM_LEVEL: i32 = 0;
+
+/// EXPERIMENTAL: Options for content-defined chunking (CDC).
+///
+/// Content-defined chunking is an experimental feature that optimizes parquet
+/// files for content addressable storage (CAS) systems by writing data pages
+/// according to content-defined chunk boundaries. This allows for more
+/// efficient deduplication of data across files, hence more efficient network
+/// transfers and storage.
+///
+/// Each content-defined chunk is written as a separate parquet data page. The
+/// following options control the chunks' size and the chunking process. Note
+/// that the chunk size is calculated based on the logical value of the data,
+/// before any encoding or compression is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CdcOptions {
+    /// Minimum chunk size in bytes, default is 256 KiB.
+    /// The rolling hash will not be updated until this size is reached for each chunk.
+    /// Note that all data sent through the hash function is counted towards the chunk
+    /// size, including definition and repetition levels if present.
+    pub min_chunk_size: usize,
+    /// Maximum chunk size in bytes, default is 1024 KiB.
+    /// The chunker will create a new chunk whenever the chunk size exceeds this value.
+    /// Note that the parquet writer has a related [`data_page_size_limit`] property that
+    /// controls the maximum size of a parquet data page after encoding. While setting
+    /// `data_page_size_limit` to a smaller value than `max_chunk_size` doesn't affect
+    /// the chunking effectiveness, it results in more small parquet data pages.
+    ///
+    /// [`data_page_size_limit`]: WriterPropertiesBuilder::set_data_page_size_limit
+    pub max_chunk_size: usize,
+    /// Number of bit adjustment to the gearhash mask in order to center the chunk size
+    /// around the average size more aggressively, default is 0.
+    /// Increasing the normalization level increases the probability of finding a chunk,
+    /// improving the deduplication ratio, but also increasing the number of small chunks
+    /// resulting in many small parquet data pages. The default value provides a good
+    /// balance between deduplication ratio and fragmentation.
+    /// Use norm_level=1 or norm_level=2 to reach a higher deduplication ratio at the
+    /// expense of fragmentation. Negative values can also be used to reduce the
+    /// probability of finding a chunk, resulting in larger chunks and fewer data pages.
+    /// Note that values outside [-3, 3] are not recommended, prefer using the default
+    /// value of 0 for most use cases.
+    pub norm_level: i32,
+}
+
+impl Default for CdcOptions {
+    fn default() -> Self {
+        Self {
+            min_chunk_size: DEFAULT_CDC_MIN_CHUNK_SIZE,
+            max_chunk_size: DEFAULT_CDC_MAX_CHUNK_SIZE,
+            norm_level: DEFAULT_CDC_NORM_LEVEL,
+        }
+    }
+}
 
 /// Parquet writer version.
 ///
@@ -117,6 +181,23 @@ pub enum BloomFilterPosition {
 /// Reference counted writer properties.
 pub type WriterPropertiesPtr = Arc<WriterProperties>;
 
+/// Resolved state of [`WriterPropertiesBuilder::set_offset_index_disabled`].
+///
+/// When a user disables offset indexes but page-level statistics are enabled,
+/// the setting is overridden (offset indexes remain enabled). This enum
+/// preserves the user's original intent so that a round-trip through
+/// `WriterPropertiesBuilder` does not lose it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OffsetIndexSetting {
+    /// Offset indexes are enabled (the default).
+    Enabled,
+    /// User disabled offset indexes and no page-level statistics override it.
+    Disabled,
+    /// User disabled offset indexes, but page-level statistics require them,
+    /// so they remain enabled.
+    DisabledOverridden,
+}
+
 /// Configuration settings for writing parquet files.
 ///
 /// Use [`Self::builder`] to create a [`WriterPropertiesBuilder`] to change settings.
@@ -153,14 +234,14 @@ pub type WriterPropertiesPtr = Arc<WriterProperties>;
 /// ```
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
-    data_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
-    max_row_group_size: usize,
+    max_row_group_row_count: Option<usize>,
+    max_row_group_bytes: Option<usize>,
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
-    offset_index_disabled: bool,
+    offset_index_setting: OffsetIndexSetting,
     pub(crate) key_value_metadata: Option<Vec<KeyValue>>,
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
@@ -168,6 +249,7 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    content_defined_chunking: Option<CdcOptions>,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -204,7 +286,22 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_data_page_size_limit`]
     pub fn data_page_size_limit(&self) -> usize {
-        self.data_page_size_limit
+        self.default_column_properties
+            .data_page_size_limit()
+            .unwrap_or(DEFAULT_PAGE_SIZE)
+    }
+
+    /// Returns data page size limit for a specific column.
+    ///
+    /// Takes precedence over [`Self::data_page_size_limit`].
+    ///
+    /// Note: this is a best effort limit based on the write batch size.
+    pub fn column_data_page_size_limit(&self, col: &ColumnPath) -> usize {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.data_page_size_limit())
+            .or_else(|| self.default_column_properties.data_page_size_limit())
+            .unwrap_or(DEFAULT_PAGE_SIZE)
     }
 
     /// Returns dictionary page size limit.
@@ -247,11 +344,26 @@ impl WriterProperties {
         self.write_batch_size
     }
 
-    /// Returns maximum number of rows in a row group.
+    /// Returns maximum number of rows in a row group, or `usize::MAX` if unlimited.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_max_row_group_size`]
+    #[deprecated(since = "58.0.0", note = "Use `max_row_group_row_count` instead")]
     pub fn max_row_group_size(&self) -> usize {
-        self.max_row_group_size
+        self.max_row_group_row_count.unwrap_or(usize::MAX)
+    }
+
+    /// Returns maximum number of rows in a row group, or `None` if unlimited.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_row_count`]
+    pub fn max_row_group_row_count(&self) -> Option<usize> {
+        self.max_row_group_row_count
+    }
+
+    /// Returns maximum size of a row group in bytes, or `None` if unlimited.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_bytes`]
+    pub fn max_row_group_bytes(&self) -> Option<usize> {
+        self.max_row_group_bytes
     }
 
     /// Returns bloom filter position.
@@ -279,18 +391,7 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_offset_index_disabled`]
     pub fn offset_index_disabled(&self) -> bool {
-        // If page statistics are to be collected, then do not disable the offset indexes.
-        let default_page_stats_enabled =
-            self.default_column_properties.statistics_enabled() == Some(EnabledStatistics::Page);
-        let column_page_stats_enabled = self
-            .column_properties
-            .iter()
-            .any(|path_props| path_props.1.statistics_enabled() == Some(EnabledStatistics::Page));
-        if default_page_stats_enabled || column_page_stats_enabled {
-            return false;
-        }
-
-        self.offset_index_disabled
+        matches!(self.offset_index_setting, OffsetIndexSetting::Disabled)
     }
 
     /// Returns `key_value_metadata` KeyValue pairs.
@@ -332,6 +433,13 @@ impl WriterProperties {
     /// For more details see [`WriterPropertiesBuilder::set_coerce_types`]
     pub fn coerce_types(&self) -> bool {
         self.coerce_types
+    }
+
+    /// EXPERIMENTAL: Returns content-defined chunking options, or `None` if CDC is disabled.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_content_defined_chunking`]
+    pub fn content_defined_chunking(&self) -> Option<&CdcOptions> {
+        self.content_defined_chunking.as_ref()
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
@@ -442,10 +550,10 @@ impl WriterProperties {
 /// See example on [`WriterProperties`]
 #[derive(Debug, Clone)]
 pub struct WriterPropertiesBuilder {
-    data_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
-    max_row_group_size: usize,
+    max_row_group_row_count: Option<usize>,
+    max_row_group_bytes: Option<usize>,
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
@@ -457,6 +565,7 @@ pub struct WriterPropertiesBuilder {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    content_defined_chunking: Option<CdcOptions>,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -465,10 +574,10 @@ impl Default for WriterPropertiesBuilder {
     /// Returns default state of the builder.
     fn default() -> Self {
         Self {
-            data_page_size_limit: DEFAULT_PAGE_SIZE,
             data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
-            max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
+            max_row_group_row_count: Some(DEFAULT_MAX_ROW_GROUP_ROW_COUNT),
+            max_row_group_bytes: None,
             bloom_filter_position: DEFAULT_BLOOM_FILTER_POSITION,
             writer_version: DEFAULT_WRITER_VERSION,
             created_by: DEFAULT_CREATED_BY.to_string(),
@@ -480,6 +589,7 @@ impl Default for WriterPropertiesBuilder {
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
+            content_defined_chunking: None,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -489,22 +599,51 @@ impl Default for WriterPropertiesBuilder {
 impl WriterPropertiesBuilder {
     /// Finalizes the configuration and returns immutable writer properties struct.
     pub fn build(self) -> WriterProperties {
+        // Pre-compute offset_index_setting
+        let offset_index_setting = if self.offset_index_disabled {
+            let default_page_stats_enabled = self.default_column_properties.statistics_enabled()
+                == Some(EnabledStatistics::Page);
+            let column_page_stats_enabled = self.column_properties.iter().any(|path_props| {
+                path_props.1.statistics_enabled() == Some(EnabledStatistics::Page)
+            });
+            if default_page_stats_enabled || column_page_stats_enabled {
+                OffsetIndexSetting::DisabledOverridden
+            } else {
+                OffsetIndexSetting::Disabled
+            }
+        } else {
+            OffsetIndexSetting::Enabled
+        };
+
+        // Resolve bloom filter NDV for columns where it wasn't explicitly set:
+        // default to max_row_group_row_count so the filter is never undersized.
+        let default_ndv = self
+            .max_row_group_row_count
+            .unwrap_or(DEFAULT_MAX_ROW_GROUP_ROW_COUNT) as u64;
+        let mut default_column_properties = self.default_column_properties;
+        default_column_properties.resolve_bloom_filter_ndv(default_ndv);
+        let mut column_properties = self.column_properties;
+        for props in column_properties.values_mut() {
+            props.resolve_bloom_filter_ndv(default_ndv);
+        }
+
         WriterProperties {
-            data_page_size_limit: self.data_page_size_limit,
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
-            max_row_group_size: self.max_row_group_size,
+            max_row_group_row_count: self.max_row_group_row_count,
+            max_row_group_bytes: self.max_row_group_bytes,
             bloom_filter_position: self.bloom_filter_position,
             writer_version: self.writer_version,
             created_by: self.created_by,
-            offset_index_disabled: self.offset_index_disabled,
+            offset_index_setting,
             key_value_metadata: self.key_value_metadata,
-            default_column_properties: self.default_column_properties,
-            column_properties: self.column_properties,
+            default_column_properties,
+            column_properties,
             sorting_columns: self.sorting_columns,
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
+            content_defined_chunking: self.content_defined_chunking,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -521,21 +660,6 @@ impl WriterPropertiesBuilder {
     /// [`PARQUET_1_0`]: [WriterVersion::PARQUET_1_0]
     pub fn set_writer_version(mut self, value: WriterVersion) -> Self {
         self.writer_version = value;
-        self
-    }
-
-    /// Sets best effort maximum size of a data page in bytes (defaults to `1024 * 1024`
-    /// via [`DEFAULT_PAGE_SIZE`]).
-    ///
-    /// The parquet writer will attempt to limit the sizes of each
-    /// `DataPage` to this many bytes. Reducing this value will result
-    /// in larger parquet files, but may improve the effectiveness of
-    /// page index based predicate pushdown during reading.
-    ///
-    /// Note: this is a best effort limit based on value of
-    /// [`set_write_batch_size`](Self::set_write_batch_size).
-    pub fn set_data_page_size_limit(mut self, value: usize) -> Self {
-        self.data_page_size_limit = value;
         self
     }
 
@@ -569,13 +693,43 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets maximum number of rows in a row group (defaults to `1024 * 1024`
-    /// via [`DEFAULT_MAX_ROW_GROUP_SIZE`]).
+    /// via [`DEFAULT_MAX_ROW_GROUP_ROW_COUNT`]).
     ///
     /// # Panics
     /// If the value is set to 0.
+    #[deprecated(since = "58.0.0", note = "Use `set_max_row_group_row_count` instead")]
     pub fn set_max_row_group_size(mut self, value: usize) -> Self {
         assert!(value > 0, "Cannot have a 0 max row group size");
-        self.max_row_group_size = value;
+        self.max_row_group_row_count = Some(value);
+        self
+    }
+
+    /// Sets maximum number of rows in a row group, or `None` for unlimited.
+    ///
+    /// If both `max_row_group_row_count` and `max_row_group_bytes` are set,
+    /// the row group with the smaller limit will be produced.
+    ///
+    /// # Panics
+    /// If the value is `Some(0)`.
+    pub fn set_max_row_group_row_count(mut self, value: Option<usize>) -> Self {
+        assert_ne!(value, Some(0), "Cannot have a 0 max row group row count");
+        self.max_row_group_row_count = value;
+        self
+    }
+
+    /// Sets maximum size of a row group in bytes, or `None` for unlimited.
+    ///
+    /// Row groups are flushed when their estimated encoded size exceeds this threshold.
+    /// This is similar to the official Java implementation for `parquet.block.size`'s behavior.
+    ///
+    /// If both `max_row_group_row_count` and `max_row_group_bytes` are set,
+    /// the row group with the smaller limit will be produced.
+    ///
+    /// # Panics
+    /// If the value is `Some(0)`.
+    pub fn set_max_row_group_bytes(mut self, value: Option<usize>) -> Self {
+        assert_ne!(value, Some(0), "Cannot have a 0 max row group bytes");
+        self.max_row_group_bytes = value;
         self
     }
 
@@ -705,6 +859,37 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// EXPERIMENTAL: Sets content-defined chunking options, or disables CDC with `None`.
+    ///
+    /// When enabled, data page boundaries are determined by a rolling hash of the
+    /// column values, so unchanged data produces identical byte sequences across
+    /// file versions. This enables efficient deduplication on content-addressable
+    /// storage systems.
+    ///
+    /// Only supported through the Arrow writer interface ([`ArrowWriter`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `min_chunk_size == 0` or `max_chunk_size <= min_chunk_size`.
+    ///
+    /// [`ArrowWriter`]: crate::arrow::arrow_writer::ArrowWriter
+    pub fn set_content_defined_chunking(mut self, options: Option<CdcOptions>) -> Self {
+        if let Some(ref options) = options {
+            assert!(
+                options.min_chunk_size > 0,
+                "min_chunk_size must be positive"
+            );
+            assert!(
+                options.max_chunk_size > options.min_chunk_size,
+                "max_chunk_size ({}) must be greater than min_chunk_size ({})",
+                options.max_chunk_size,
+                options.min_chunk_size
+            );
+        }
+        self.content_defined_chunking = options;
+        self
+    }
+
     /// Sets FileEncryptionProperties (defaults to `None`)
     #[cfg(feature = "encryption")]
     pub fn with_file_encryption_properties(
@@ -766,6 +951,22 @@ impl WriterPropertiesBuilder {
     pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
         self.default_column_properties
             .set_dictionary_page_size_limit(value);
+        self
+    }
+
+    /// Sets best effort maximum size of a data page in bytes (defaults to `1024 * 1024`
+    /// via [`DEFAULT_PAGE_SIZE`]).
+    ///
+    /// The parquet writer will attempt to limit the sizes of each
+    /// `DataPage` to this many bytes. Reducing this value will result
+    /// in larger parquet files, but may improve the effectiveness of
+    /// page index based predicate pushdown during reading.
+    ///
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
+    pub fn set_data_page_size_limit(mut self, value: usize) -> Self {
+        self.default_column_properties
+            .set_data_page_size_limit(value);
         self
     }
 
@@ -835,8 +1036,13 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default number of distinct values (ndv) for bloom filter for all
-    /// columns (defaults to `1_000_000` via [`DEFAULT_BLOOM_FILTER_NDV`]).
+    /// Sets default maximum expected number of distinct values (ndv) for bloom filter
+    /// for all columns (defaults to [`DEFAULT_BLOOM_FILTER_NDV`]).
+    ///
+    /// The bloom filter is initially sized for this many distinct values at the
+    /// configured FPP, then folded down after all values are inserted to achieve
+    /// optimal size. A good heuristic is to set this to the expected number of rows
+    /// in the row group.
     ///
     /// Implicitly enables bloom writing, as if [`set_bloom_filter_enabled`] had
     /// been called.
@@ -898,6 +1104,14 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets data page size limit for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_data_page_size_limit`].
+    pub fn set_column_data_page_size_limit(mut self, col: ColumnPath, value: usize) -> Self {
+        self.get_mut_props(col).set_data_page_size_limit(value);
+        self
+    }
+
     /// Sets [`EnabledStatistics`] level for a specific column.
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
@@ -949,14 +1163,17 @@ impl WriterPropertiesBuilder {
 impl From<WriterProperties> for WriterPropertiesBuilder {
     fn from(props: WriterProperties) -> Self {
         WriterPropertiesBuilder {
-            data_page_size_limit: props.data_page_size_limit,
             data_page_row_count_limit: props.data_page_row_count_limit,
             write_batch_size: props.write_batch_size,
-            max_row_group_size: props.max_row_group_size,
+            max_row_group_row_count: props.max_row_group_row_count,
+            max_row_group_bytes: props.max_row_group_bytes,
             bloom_filter_position: props.bloom_filter_position,
             writer_version: props.writer_version,
             created_by: props.created_by,
-            offset_index_disabled: props.offset_index_disabled,
+            offset_index_disabled: !matches!(
+                props.offset_index_setting,
+                OffsetIndexSetting::Enabled
+            ),
             key_value_metadata: props.key_value_metadata,
             default_column_properties: props.default_column_properties,
             column_properties: props.column_properties,
@@ -964,6 +1181,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             column_index_truncate_length: props.column_index_truncate_length,
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
+            content_defined_chunking: props.content_defined_chunking,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }
@@ -1021,6 +1239,13 @@ impl Default for EnabledStatistics {
 }
 
 /// Controls the bloom filter to be computed by the writer.
+///
+/// The bloom filter is initially sized for `ndv` distinct values at the given `fpp`, then
+/// automatically folded down after all values are inserted to achieve optimal size while
+/// maintaining the target `fpp`. See [`Sbbf::fold_to_target_fpp`] for details on the
+/// folding algorithm.
+///
+/// [`Sbbf::fold_to_target_fpp`]: crate::bloom_filter::Sbbf::fold_to_target_fpp
 #[derive(Debug, Clone, PartialEq)]
 pub struct BloomFilterProperties {
     /// False positive probability. This should be always between 0 and 1 exclusive. Defaults to [`DEFAULT_BLOOM_FILTER_FPP`].
@@ -1031,20 +1256,30 @@ pub struct BloomFilterProperties {
     /// smaller the fpp, the more memory and disk space is required, thus setting it to a reasonable value
     /// e.g. 0.1, 0.05, or 0.001 is recommended.
     ///
-    /// Setting to a very small number diminishes the value of the filter itself, as the bitset size is
-    /// even larger than just storing the whole value. You are also expected to set `ndv` if it can
-    /// be known in advance to greatly reduce space usage.
+    /// This value also serves as the target FPP for bloom filter folding: after all values
+    /// are inserted, the filter is folded down to the smallest size that still meets this FPP.
     pub fpp: f64,
-    /// Number of distinct values, should be non-negative to be meaningful. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
+    /// Maximum expected number of distinct values. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
     ///
     /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_ndv`].
     ///
-    /// Usage of bloom filter is most beneficial for columns with large cardinality, so a good heuristic
-    /// is to set ndv to the number of rows. However, it can reduce disk size if you know in advance a smaller
-    /// number of distinct values. For very small ndv value it is probably not worth it to use bloom filter
-    /// anyway.
+    /// When not explicitly set via the builder, this defaults to
+    /// [`max_row_group_row_count`](WriterProperties::max_row_group_row_count) (resolved at
+    /// build time). The bloom filter is initially sized for this many distinct values at the
+    /// given `fpp`, then folded down after insertion to achieve optimal size. A good heuristic
+    /// is to set this to the expected number of rows in the row group. If fewer distinct values
+    /// are actually written, the filter will be automatically compacted via folding.
     ///
-    /// Increasing this value (without increasing fpp) will result in an increase in disk or memory size.
+    /// Thus the only negative side of overestimating this value is that the bloom filter
+    /// will use more memory during writing than necessary, but it will not affect the final
+    /// bloom filter size on disk.
+    ///
+    /// If you wish to reduce memory usage during writing and are able to make a reasonable estimate
+    /// of the number of distinct values in a row group, it is recommended to set this value explicitly
+    /// rather than relying on the default dynamic sizing based on `max_row_group_row_count`.
+    /// If you do set this value explicitly it is probably best to set it for each column
+    /// individually via [`WriterPropertiesBuilder::set_column_bloom_filter_ndv`] rather than globally,
+    /// since different columns may have different numbers of distinct values.
     pub ndv: u64,
 }
 
@@ -1065,12 +1300,15 @@ impl Default for BloomFilterProperties {
 struct ColumnProperties {
     encoding: Option<Encoding>,
     codec: Option<Compression>,
+    data_page_size_limit: Option<usize>,
     dictionary_page_size_limit: Option<usize>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
     write_page_header_statistics: Option<bool>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
+    /// Whether the bloom filter NDV was explicitly set by the user
+    bloom_filter_ndv_is_set: bool,
 }
 
 impl ColumnProperties {
@@ -1093,6 +1331,11 @@ impl ColumnProperties {
     /// Sets compression codec for this column.
     fn set_compression(&mut self, value: Compression) {
         self.codec = Some(value);
+    }
+
+    /// Sets data page size limit for this column.
+    fn set_data_page_size_limit(&mut self, value: usize) {
+        self.data_page_size_limit = Some(value);
     }
 
     /// Sets whether dictionary encoding is enabled for this column.
@@ -1143,12 +1386,13 @@ impl ColumnProperties {
             .fpp = value;
     }
 
-    /// Sets the number of distinct (unique) values for bloom filter for this column, and implicitly
-    /// enables bloom filter if not previously enabled.
+    /// Sets the maximum expected number of distinct (unique) values for bloom filter for this
+    /// column, and implicitly enables bloom filter if not previously enabled.
     fn set_bloom_filter_ndv(&mut self, value: u64) {
         self.bloom_filter_properties
             .get_or_insert_with(Default::default)
             .ndv = value;
+        self.bloom_filter_ndv_is_set = true;
     }
 
     /// Returns optional encoding for this column.
@@ -1173,6 +1417,11 @@ impl ColumnProperties {
         self.dictionary_page_size_limit
     }
 
+    /// Returns optional data page size limit for this column.
+    fn data_page_size_limit(&self) -> Option<usize> {
+        self.data_page_size_limit
+    }
+
     /// Returns optional statistics level requested for this column. If result is `None`,
     /// then no setting has been provided.
     fn statistics_enabled(&self) -> Option<EnabledStatistics> {
@@ -1190,6 +1439,16 @@ impl ColumnProperties {
     /// Returns the bloom filter properties, or `None` if not enabled
     fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
         self.bloom_filter_properties.as_ref()
+    }
+
+    /// If bloom filter is enabled and NDV was not explicitly set, resolve it to the
+    /// given `default_ndv` (typically derived from `max_row_group_row_count`).
+    fn resolve_bloom_filter_ndv(&mut self, default_ndv: u64) {
+        if !self.bloom_filter_ndv_is_set {
+            if let Some(ref mut bf) = self.bloom_filter_properties {
+                bf.ndv = default_ndv;
+            }
+        }
     }
 }
 
@@ -1333,7 +1592,11 @@ mod tests {
             DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT
         );
         assert_eq!(props.write_batch_size(), DEFAULT_WRITE_BATCH_SIZE);
-        assert_eq!(props.max_row_group_size(), DEFAULT_MAX_ROW_GROUP_SIZE);
+        assert_eq!(
+            props.max_row_group_row_count(),
+            Some(DEFAULT_MAX_ROW_GROUP_ROW_COUNT)
+        );
+        assert_eq!(props.max_row_group_bytes(), None);
         assert_eq!(props.bloom_filter_position(), DEFAULT_BLOOM_FILTER_POSITION);
         assert_eq!(props.writer_version(), DEFAULT_WRITER_VERSION);
         assert_eq!(props.created_by(), DEFAULT_CREATED_BY);
@@ -1418,7 +1681,7 @@ mod tests {
             .set_data_page_size_limit(10)
             .set_dictionary_page_size_limit(20)
             .set_write_batch_size(30)
-            .set_max_row_group_size(40)
+            .set_max_row_group_row_count(Some(40))
             .set_created_by("default".to_owned())
             .set_key_value_metadata(Some(vec![KeyValue::new(
                 "key".to_string(),
@@ -1444,7 +1707,7 @@ mod tests {
             assert_eq!(props.data_page_size_limit(), 10);
             assert_eq!(props.dictionary_page_size_limit(), 20);
             assert_eq!(props.write_batch_size(), 30);
-            assert_eq!(props.max_row_group_size(), 40);
+            assert_eq!(props.max_row_group_row_count(), Some(40));
             assert_eq!(props.created_by(), "default");
             assert_eq!(
                 props.key_value_metadata(),
@@ -1518,10 +1781,33 @@ mod tests {
         assert_eq!(
             props.bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
-                fpp: 0.05,
-                ndv: 1_000_000_u64
+                fpp: DEFAULT_BLOOM_FILTER_FPP,
+                ndv: DEFAULT_BLOOM_FILTER_NDV,
             })
         );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_writer_properties_deprecated_max_row_group_size_still_works() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(42)
+            .build();
+
+        assert_eq!(props.max_row_group_row_count(), Some(42));
+        assert_eq!(props.max_row_group_size(), 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 max row group row count")]
+    fn test_writer_properties_panic_on_zero_row_group_row_count() {
+        let _ = WriterProperties::builder().set_max_row_group_row_count(Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 max row group bytes")]
+    fn test_writer_properties_panic_on_zero_row_group_bytes() {
+        let _ = WriterProperties::builder().set_max_row_group_bytes(Some(0));
     }
 
     #[test]
@@ -1538,8 +1824,8 @@ mod tests {
                 .build()
                 .bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
-                fpp: 0.05,
-                ndv: 100
+                fpp: DEFAULT_BLOOM_FILTER_FPP,
+                ndv: 100,
             })
         );
         assert_eq!(
@@ -1549,7 +1835,7 @@ mod tests {
                 .bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
                 fpp: 0.1,
-                ndv: 1_000_000_u64
+                ndv: DEFAULT_BLOOM_FILTER_NDV,
             })
         );
     }
@@ -1568,6 +1854,24 @@ mod tests {
         );
         assert_eq!(
             props.column_dictionary_page_size_limit(&ColumnPath::from("other")),
+            100
+        );
+    }
+
+    #[test]
+    fn test_writer_properties_column_data_page_size_limit() {
+        let props = WriterProperties::builder()
+            .set_data_page_size_limit(100)
+            .set_column_data_page_size_limit(ColumnPath::from("col"), 10)
+            .build();
+
+        assert_eq!(props.data_page_size_limit(), 100);
+        assert_eq!(
+            props.column_data_page_size_limit(&ColumnPath::from("col")),
+            10
+        );
+        assert_eq!(
+            props.column_data_page_size_limit(&ColumnPath::from("other")),
             100
         );
     }
@@ -1637,5 +1941,19 @@ mod tests {
                 assert_eq!(e, "Invalid statistics arg: ChunkAndPage");
             }
         }
+    }
+
+    #[test]
+    fn test_cdc_options_equality() {
+        let opts = CdcOptions::default();
+        assert_eq!(opts, CdcOptions::default());
+
+        let custom = CdcOptions {
+            min_chunk_size: 1024,
+            max_chunk_size: 8192,
+            norm_level: 1,
+        };
+        assert_eq!(custom, custom);
+        assert_ne!(opts, custom);
     }
 }

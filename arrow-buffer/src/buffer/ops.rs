@@ -16,10 +16,16 @@
 // under the License.
 
 use super::{Buffer, MutableBuffer};
+use crate::BooleanBuffer;
 use crate::util::bit_util::ceil;
 
 /// Apply a bitwise operation `op` to four inputs and return the result as a Buffer.
-/// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// The inputs are treated as bitmaps, meaning that offsets and length are
+/// specified in number of bits.
+///
+/// NOTE: The operation `op` is applied to chunks of 64 bits (u64) and any bits
+/// outside the offsets and len are set to zero out before calling `op`.
 pub fn bitwise_quaternary_op_helper<F>(
     buffers: [&Buffer; 4],
     offsets: [usize; 4],
@@ -59,7 +65,12 @@ where
 }
 
 /// Apply a bitwise operation `op` to two inputs and return the result as a Buffer.
-/// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// The inputs are treated as bitmaps, meaning that offsets and length are
+/// specified in number of bits.
+///
+/// NOTE: The operation `op` is applied to chunks of 64 bits (u64) and any bits
+/// outside the offsets and len are set to zero out before calling `op`.
 pub fn bitwise_bin_op_helper<F>(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -92,7 +103,12 @@ where
 }
 
 /// Apply a bitwise operation `op` to one input and return the result as a Buffer.
-/// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
+///
+/// The input is treated as a bitmap, meaning that offset and length are
+/// specified in number of bits.
+///
+/// NOTE: The operation `op` is applied to chunks of 64 bits (u64) and any bits
+/// outside the offsets and len are set to zero out before calling `op`.
 pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
@@ -127,6 +143,9 @@ where
 
 /// Apply a bitwise and to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// # See Also
+/// * [`BooleanBuffer::from_bitwise_binary_op`] for creating `BooleanBuffer`s directly
 pub fn buffer_bin_and(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -134,18 +153,27 @@ pub fn buffer_bin_and(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
+    let result = BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
         len_in_bits,
         |a, b| a & b,
-    )
+    );
+    // Normalize non-zero BooleanBuffer offsets back to a zero-offset Buffer.
+    if result.offset() == 0 {
+        result.into_inner()
+    } else {
+        result.sliced()
+    }
 }
 
 /// Apply a bitwise or to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// # See Also
+/// * [`BooleanBuffer::from_bitwise_binary_op`] for creating `BooleanBuffer`s directly
 pub fn buffer_bin_or(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -153,18 +181,27 @@ pub fn buffer_bin_or(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
+    let result = BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
         len_in_bits,
         |a, b| a | b,
-    )
+    );
+    // Normalize non-zero BooleanBuffer offsets back to a zero-offset Buffer.
+    if result.offset() == 0 {
+        result.into_inner()
+    } else {
+        result.sliced()
+    }
 }
 
 /// Apply a bitwise xor to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// # See Also
+/// * [`BooleanBuffer::from_bitwise_binary_op`] for creating `BooleanBuffer`s directly
 pub fn buffer_bin_xor(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -172,18 +209,27 @@ pub fn buffer_bin_xor(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
+    let result = BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
         len_in_bits,
         |a, b| a ^ b,
-    )
+    );
+    // Normalize non-zero BooleanBuffer offsets back to a zero-offset Buffer.
+    if result.offset() == 0 {
+        result.into_inner()
+    } else {
+        result.sliced()
+    }
 }
 
 /// Apply a bitwise and_not to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// # See Also
+/// * [`BooleanBuffer::from_bitwise_binary_op`] for creating `BooleanBuffer`s directly
 pub fn buffer_bin_and_not(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -191,18 +237,70 @@ pub fn buffer_bin_and_not(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
+    let result = BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
         len_in_bits,
         |a, b| a & !b,
-    )
+    );
+    // Normalize non-zero BooleanBuffer offsets back to a zero-offset Buffer.
+    if result.offset() == 0 {
+        result.into_inner()
+    } else {
+        result.sliced()
+    }
 }
 
 /// Apply a bitwise not to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
+///
+/// # See Also
+/// * [`BooleanBuffer::from_bitwise_unary_op`] for creating `BooleanBuffer`s directly
 pub fn buffer_unary_not(left: &Buffer, offset_in_bits: usize, len_in_bits: usize) -> Buffer {
-    bitwise_unary_op_helper(left, offset_in_bits, len_in_bits, |a| !a)
+    BooleanBuffer::from_bitwise_unary_op(left, offset_in_bits, len_in_bits, |a| !a).into_inner()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buffer_bin_ops_return_zero_offset_buffers() {
+        let left = Buffer::from(vec![0b1010_1100, 0b0110_1001]);
+        let right = Buffer::from(vec![0, 0, 0, 0, 0, 0, 0, 0, 0b1110_0101, 0b0101_1000]);
+
+        let left_offset = 1;
+        let right_offset = 65; // same mod 64 as left_offset, so from_bitwise_binary_op returns non-zero offset
+        let len = 7;
+
+        // Reuse the same offset scenario for all four binary wrappers:
+        // each wrapper should return the logically equivalent offset-0 Buffer,
+        // even though the underlying BooleanBuffer result has offset 1.
+        for (op, wrapper) in [
+            (
+                (|a, b| a & b) as fn(u64, u64) -> u64,
+                buffer_bin_and as fn(&Buffer, usize, &Buffer, usize, usize) -> Buffer,
+            ),
+            (((|a, b| a | b) as fn(u64, u64) -> u64), buffer_bin_or),
+            (((|a, b| a ^ b) as fn(u64, u64) -> u64), buffer_bin_xor),
+            (((|a, b| a & !b) as fn(u64, u64) -> u64), buffer_bin_and_not),
+        ] {
+            let unsliced = BooleanBuffer::from_bitwise_binary_op(
+                &left,
+                left_offset,
+                &right,
+                right_offset,
+                len,
+                op,
+            );
+            assert_eq!(unsliced.offset(), 1);
+
+            let result = wrapper(&left, left_offset, &right, right_offset, len);
+
+            assert_eq!(result, unsliced.sliced());
+            assert_eq!(result.len(), 1);
+        }
+    }
 }

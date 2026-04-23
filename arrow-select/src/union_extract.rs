@@ -53,13 +53,13 @@ use std::sync::Arc;
 /// # use arrow_schema::{DataType, Field, UnionFields};
 /// # use arrow_array::{UnionArray, StringArray, Int32Array};
 /// # use arrow_select::union_extract::union_extract;
-/// let fields = UnionFields::new(
+/// let fields = UnionFields::try_new(
 ///     [1, 3],
 ///     [
 ///         Field::new("A", DataType::Int32, true),
 ///         Field::new("B", DataType::Utf8, true)
 ///     ]
-/// );
+/// ).unwrap();
 ///
 /// let union = UnionArray::try_new(
 ///     fields,
@@ -89,6 +89,40 @@ pub fn union_extract(union_array: &UnionArray, target: &str) -> Result<ArrayRef,
             ArrowError::InvalidArgumentError(format!("field {target} not found on union"))
         })?;
 
+    union_extract_impl(union_array, fields, target_type_id)
+}
+
+/// Like [`union_extract`], but selects the child by `type_id` rather than by
+/// field name.
+///
+/// This avoids ambiguity when the union contains duplicate field names.
+///
+/// # Errors
+///
+/// Returns error if `target_type_id` does not correspond to a field in the union.
+pub fn union_extract_by_id(
+    union_array: &UnionArray,
+    target_type_id: i8,
+) -> Result<ArrayRef, ArrowError> {
+    let fields = match union_array.data_type() {
+        DataType::Union(fields, _) => fields,
+        _ => unreachable!(),
+    };
+
+    if fields.iter().all(|(id, _)| id != target_type_id) {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "type_id {target_type_id} not found on union"
+        )));
+    }
+
+    union_extract_impl(union_array, fields, target_type_id)
+}
+
+fn union_extract_impl(
+    union_array: &UnionArray,
+    fields: &UnionFields,
+    target_type_id: i8,
+) -> Result<ArrayRef, ArrowError> {
     match union_array.offsets() {
         Some(_) => extract_dense(union_array, fields, target_type_id),
         None => extract_sparse(union_array, fields, target_type_id),
@@ -399,7 +433,9 @@ fn is_sequential_generic<const N: usize>(offsets: &[i32]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BoolValue, eq_scalar_inner, is_sequential_generic, union_extract};
+    use super::{
+        BoolValue, eq_scalar_inner, is_sequential_generic, union_extract, union_extract_by_id,
+    };
     use arrow_array::{Array, Int32Array, NullArray, StringArray, UnionArray, new_null_array};
     use arrow_buffer::{BooleanBuffer, ScalarBuffer};
     use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
@@ -543,17 +579,18 @@ mod tests {
     }
 
     fn str1() -> UnionFields {
-        UnionFields::new(vec![1], vec![Field::new("str", DataType::Utf8, true)])
+        UnionFields::try_new(vec![1], vec![Field::new("str", DataType::Utf8, true)]).unwrap()
     }
 
     fn str1_int3() -> UnionFields {
-        UnionFields::new(
+        UnionFields::try_new(
             vec![1, 3],
             vec![
                 Field::new("str", DataType::Utf8, true),
                 Field::new("int", DataType::Int32, true),
             ],
         )
+        .unwrap()
     }
 
     #[test]
@@ -599,13 +636,14 @@ mod tests {
     fn sparse_1_3a_null_target() {
         let union = UnionArray::try_new(
             // multiple fields
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![1, 3],
                 vec![
                     Field::new("str", DataType::Utf8, true),
                     Field::new("null", DataType::Null, true), // target type is Null
                 ],
-            ),
+            )
+            .unwrap(),
             ScalarBuffer::from(vec![1]), //not empty
             None,                        // sparse
             vec![
@@ -682,13 +720,14 @@ mod tests {
     }
 
     fn str1_union3(union3_datatype: DataType) -> UnionFields {
-        UnionFields::new(
+        UnionFields::try_new(
             vec![1, 3],
             vec![
                 Field::new("str", DataType::Utf8, true),
                 Field::new("union", union3_datatype, true),
             ],
         )
+        .unwrap()
     }
 
     #[test]
@@ -1231,6 +1270,108 @@ mod tests {
         assert_eq!(
             union_extract(&union, "a").unwrap_err().to_string(),
             ArrowError::InvalidArgumentError("field a not found on union".into()).to_string()
+        );
+    }
+
+    #[test]
+    fn extract_by_id_sparse_duplicate_names() {
+        // Two fields with the same name "val" but different type_ids and types
+        let fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("val", DataType::Int32, true),
+                Field::new("val", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let union = UnionArray::try_new(
+            fields,
+            vec![0_i8, 1, 0, 1].into(),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(42), None, Some(99), None])) as _,
+                Arc::new(StringArray::from(vec![
+                    None,
+                    Some("hello"),
+                    None,
+                    Some("world"),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        // union_extract by name always returns type_id 0 (first match)
+        let by_name = union_extract(&union, "val").unwrap();
+        assert_eq!(
+            *by_name,
+            Int32Array::from(vec![Some(42), None, Some(99), None])
+        );
+
+        // union_extract_by_id can select type_id 1 (the Utf8 child)
+        let by_id = union_extract_by_id(&union, 1).unwrap();
+        assert_eq!(
+            *by_id,
+            StringArray::from(vec![None, Some("hello"), None, Some("world")])
+        );
+    }
+
+    #[test]
+    fn extract_by_id_dense_duplicate_names() {
+        let fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("val", DataType::Int32, true),
+                Field::new("val", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let union = UnionArray::try_new(
+            fields,
+            vec![0_i8, 1, 0].into(),
+            Some(vec![0_i32, 0, 1].into()),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(42), Some(99)])) as _,
+                Arc::new(StringArray::from(vec![Some("hello")])),
+            ],
+        )
+        .unwrap();
+
+        // by type_id 0 → Int32 child
+        let by_id_0 = union_extract_by_id(&union, 0).unwrap();
+        assert_eq!(*by_id_0, Int32Array::from(vec![Some(42), None, Some(99)]));
+
+        // by type_id 1 → Utf8 child
+        let by_id_1 = union_extract_by_id(&union, 1).unwrap();
+        assert_eq!(*by_id_1, StringArray::from(vec![None, Some("hello"), None]));
+    }
+
+    #[test]
+    fn extract_by_id_not_found() {
+        let fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let union = UnionArray::try_new(
+            fields,
+            vec![0_i8, 1].into(),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])) as _,
+                Arc::new(StringArray::from(vec![None, Some("x")])),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            union_extract_by_id(&union, 5).unwrap_err().to_string(),
+            ArrowError::InvalidArgumentError("type_id 5 not found on union".into()).to_string()
         );
     }
 }

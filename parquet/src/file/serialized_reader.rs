@@ -182,6 +182,24 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Sets the decoding policy for [`statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L912
+    pub fn with_column_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_column_stats_policy(policy);
+        self
+    }
+
+    /// Sets the decoding policy for [`size_statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`size_statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L936
+    pub fn with_size_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_size_stats_policy(policy);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -1140,7 +1158,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
     fn at_record_boundary(&mut self) -> Result<bool> {
         match &mut self.state {
-            SerializedPageReaderState::Values { .. } => Ok(self.peek_next_page()?.is_none()),
+            SerializedPageReaderState::Values { .. } => match self.peek_next_page()? {
+                None => Ok(true),
+                // V2 data pages must start at record boundaries per the parquet
+                // spec, so the current page ends at one.
+                Some(metadata) => Ok(metadata.num_rows.is_some()),
+            },
             SerializedPageReaderState::Pages { .. } => Ok(true),
         }
     }
@@ -1855,7 +1878,10 @@ mod tests {
     fn test_file_reader_optional_metadata() {
         // file with optional metadata: bloom filters, encoding stats, column index and offset index.
         let file = get_test_file("data_index_bloom_encoding_stats.parquet");
-        let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(false)
+            .build();
+        let file_reader = Arc::new(SerializedFileReader::new_with_options(file, options).unwrap());
 
         let row_group_metadata = file_reader.metadata.row_group(0);
         let col0_metadata = row_group_metadata.column(0);
@@ -1909,6 +1935,7 @@ mod tests {
         // test skipping all
         let options = ReadOptionsBuilder::new()
             .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
             .build();
         let file_reader = Arc::new(
             SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
@@ -1918,12 +1945,14 @@ mod tests {
         for column in row_group_metadata.columns() {
             assert!(column.page_encoding_stats().is_none());
             assert!(column.page_encoding_stats_mask().is_none());
+            assert!(column.statistics().is_none());
         }
 
         // test skipping all but one column
         let options = ReadOptionsBuilder::new()
             .with_encoding_stats_as_mask(true)
             .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
+            .with_column_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
             .build();
         let file_reader = Arc::new(
             SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
@@ -1933,6 +1962,43 @@ mod tests {
         for (idx, column) in row_group_metadata.columns().iter().enumerate() {
             assert!(column.page_encoding_stats().is_none());
             assert_eq!(column.page_encoding_stats_mask().is_some(), idx == 0);
+            assert_eq!(column.statistics().is_some(), idx == 0);
+        }
+    }
+
+    #[test]
+    fn test_file_reader_size_stats_skipped() {
+        let file = get_test_file("repeated_primitive_no_list.parquet");
+
+        // test skipping all
+        let options = ReadOptionsBuilder::new()
+            .with_size_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for column in row_group_metadata.columns() {
+            assert!(column.repetition_level_histogram().is_none());
+            assert!(column.definition_level_histogram().is_none());
+            assert!(column.unencoded_byte_array_data_bytes().is_none());
+        }
+
+        // test skipping all but one column
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(true)
+            .with_size_stats_policy(ParquetStatisticsPolicy::skip_except(&[1]))
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for (idx, column) in row_group_metadata.columns().iter().enumerate() {
+            assert_eq!(column.repetition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.definition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.unencoded_byte_array_data_bytes().is_some(), idx == 1);
         }
     }
 

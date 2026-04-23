@@ -825,13 +825,14 @@ fn test_validate_union_different_types() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true), // data is int32
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         2,
@@ -858,13 +859,14 @@ fn test_validate_union_sparse_different_child_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         2,
@@ -887,13 +889,14 @@ fn test_validate_union_dense_without_offsets() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         2,
@@ -917,13 +920,14 @@ fn test_validate_union_dense_with_bad_len() {
 
     ArrayData::try_new(
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         2,

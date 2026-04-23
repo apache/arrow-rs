@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! CSV Writer
+//! CSV Writing: [`Writer`] and [`WriterBuilder`]
 //!
 //! This CSV writer allows Arrow data (in record batches) to be written as CSV files.
 //! The writer does not support writing `ListArray` and `StructArray`.
 //!
-//! Example:
-//!
+//! # Example
 //! ```
 //! # use arrow_array::*;
 //! # use arrow_array::types::*;
@@ -62,6 +61,117 @@
 //!     writer.write(batch).unwrap();
 //! }
 //! ```
+//!
+//! # Whitespace Handling
+//!
+//! The writer supports trimming leading and trailing whitespace from string values,
+//! compatible with Apache Spark's CSV options `ignoreLeadingWhiteSpace` and
+//! `ignoreTrailingWhiteSpace`. This is useful when working with data that may have
+//! unwanted padding.
+//!
+//! Whitespace trimming is applied to all string data types:
+//! - `DataType::Utf8`
+//! - `DataType::LargeUtf8`
+//! - `DataType::Utf8View`
+//!
+//! ## Example: Use [`WriterBuilder`] to control whitespace handling
+//!
+//! ```
+//! # use arrow_array::*;
+//! # use arrow_csv::WriterBuilder;
+//! # use arrow_schema::*;
+//! # use std::sync::Arc;
+//! let schema = Schema::new(vec![
+//!     Field::new("name", DataType::Utf8, false),
+//!     Field::new("comment", DataType::Utf8, false),
+//! ]);
+//!
+//! let name = StringArray::from(vec![
+//!     "  Alice  ",   // Leading and trailing spaces
+//!     "Bob",         // No spaces
+//!     "  Charlie",   // Leading spaces only
+//! ]);
+//! let comment = StringArray::from(vec![
+//!     "  Great job!  ",
+//!     "Well done",
+//!     "Excellent  ",
+//! ]);
+//!
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(schema),
+//!     vec![Arc::new(name), Arc::new(comment)],
+//! )
+//! .unwrap();
+//!
+//! // Trim both leading and trailing whitespace
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .with_ignore_leading_whitespace(true)
+//!     .with_ignore_trailing_whitespace(true)
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "\
+//! name,comment\n\
+//! Alice,Great job!\n\
+//! Bob,Well done\n\
+//! Charlie,Excellent\n"
+//! );
+//! ```
+//!
+//! # Quoting Styles
+//!
+//! The writer supports different quoting styles for fields, compatible with Apache Spark's
+//! CSV options like `quoteAll`. You can control when fields are quoted using the
+//! [`QuoteStyle`] enum.
+//!
+//! ## Example
+//!
+//! ```
+//! # use arrow_array::*;
+//! # use arrow_csv::{WriterBuilder, QuoteStyle};
+//! # use arrow_schema::*;
+//! # use std::sync::Arc;
+//!
+//! let schema = Schema::new(vec![
+//!     Field::new("product", DataType::Utf8, false),
+//!     Field::new("price", DataType::Float64, false),
+//! ]);
+//!
+//! let product = StringArray::from(vec!["apple", "banana,organic", "cherry"]);
+//! let price = Float64Array::from(vec![1.50, 2.25, 3.00]);
+//!
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(schema),
+//!     vec![Arc::new(product), Arc::new(price)],
+//! )
+//! .unwrap();
+//!
+//! // Default behavior (QuoteStyle::Necessary)
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "product,price\napple,1.5\n\"banana,organic\",2.25\ncherry,3.0\n"
+//! );
+//!
+//! // Quote all fields (Spark's quoteAll=true)
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .with_quote_style(QuoteStyle::Always)
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "\"product\",\"price\"\n\"apple\",\"1.5\"\n\"banana,organic\",\"2.25\"\n\"cherry\",\"3.0\"\n"
+//! );
+//! ```
 
 use arrow_array::*;
 use arrow_cast::display::*;
@@ -72,7 +182,25 @@ use std::io::Write;
 use crate::map_csv_error;
 const DEFAULT_NULL_VALUE: &str = "";
 
+/// The quoting style to use when writing CSV files.
+///
+/// This type is re-exported from the `csv` crate and supports different
+/// strategies for quoting fields. It is compatible with Apache Spark's
+/// CSV options like `quoteAll`.
+///
+/// # Example
+///
+/// ```
+/// use arrow_csv::{WriterBuilder, QuoteStyle};
+///
+/// let builder = WriterBuilder::new()
+///     .with_quote_style(QuoteStyle::Always); // Equivalent to Spark's quoteAll=true
+/// ```
+pub use csv::QuoteStyle;
+
 /// A CSV writer
+///
+/// See the [module documentation](crate::writer) for examples.
 #[derive(Debug)]
 pub struct Writer<W: Write> {
     /// The object to write to
@@ -93,16 +221,23 @@ pub struct Writer<W: Write> {
     beginning: bool,
     /// The value to represent null entries, defaults to [`DEFAULT_NULL_VALUE`]
     null_value: Option<String>,
+    /// Whether to ignore leading whitespace in string values
+    ignore_leading_whitespace: bool,
+    /// Whether to ignore trailing whitespace in string values
+    ignore_trailing_whitespace: bool,
 }
 
 impl<W: Write> Writer<W> {
     /// Create a new CsvWriter from a writable object, with default options
+    ///
+    /// See [`WriterBuilder`] for configure options, and the [module
+    /// documentation](crate::writer) for examples.
     pub fn new(writer: W) -> Self {
         let delimiter = b',';
         WriterBuilder::new().with_delimiter(delimiter).build(writer)
     }
 
-    /// Write a RecordBatch to a writable object
+    /// Write a RecordBatch to the underlying writer
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         let num_columns = batch.num_columns();
         if self.beginning {
@@ -157,7 +292,10 @@ impl<W: Write> Writer<W> {
                         col_idx + 1
                     ))
                 })?;
-                byte_record.push_field(buffer.as_bytes());
+
+                let field_bytes =
+                    self.get_trimmed_field_bytes(&buffer, batch.column(col_idx).data_type());
+                byte_record.push_field(field_bytes);
             }
 
             self.writer
@@ -167,6 +305,29 @@ impl<W: Write> Writer<W> {
         self.writer.flush()?;
 
         Ok(())
+    }
+
+    /// Returns the bytes for a field, applying whitespace trimming if configured and applicable
+    fn get_trimmed_field_bytes<'a>(&self, buffer: &'a str, data_type: &DataType) -> &'a [u8] {
+        // Only trim string types when trimming is enabled
+        let should_trim = (self.ignore_leading_whitespace || self.ignore_trailing_whitespace)
+            && matches!(
+                data_type,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            );
+
+        if !should_trim {
+            return buffer.as_bytes();
+        }
+
+        let mut trimmed = buffer;
+        if self.ignore_leading_whitespace {
+            trimmed = trimmed.trim_start();
+        }
+        if self.ignore_trailing_whitespace {
+            trimmed = trimmed.trim_end();
+        }
+        trimmed.as_bytes()
     }
 
     /// Unwraps this `Writer<W>`, returning the underlying writer.
@@ -197,6 +358,8 @@ pub struct WriterBuilder {
     quote: u8,
     /// Optional escape character. Defaults to `b'\\'`
     escape: u8,
+    /// Optional line terminator. Defaults to `LF` (`\n`)
+    terminator: Terminator,
     /// Enable double quote escapes. Defaults to `true`
     double_quote: bool,
     /// Optional date format for date arrays
@@ -211,6 +374,21 @@ pub struct WriterBuilder {
     time_format: Option<String>,
     /// Optional value to represent null
     null_value: Option<String>,
+    /// Whether to ignore leading whitespace in string values. Defaults to `false`
+    ignore_leading_whitespace: bool,
+    /// Whether to ignore trailing whitespace in string values. Defaults to `false`
+    ignore_trailing_whitespace: bool,
+    /// The quoting style to use. Defaults to `QuoteStyle::Necessary`
+    quote_style: QuoteStyle,
+}
+
+/// The line terminator to use when writing CSV files.
+#[derive(Clone, Debug)]
+pub enum Terminator {
+    /// Use CRLF (`\r\n`) as the line terminator
+    CRLF,
+    /// Use the specified byte character as the line terminator
+    Any(u8),
 }
 
 impl Default for WriterBuilder {
@@ -220,6 +398,7 @@ impl Default for WriterBuilder {
             has_header: true,
             quote: b'"',
             escape: b'\\',
+            terminator: Terminator::Any(b'\n'),
             double_quote: true,
             date_format: None,
             datetime_format: None,
@@ -227,14 +406,18 @@ impl Default for WriterBuilder {
             timestamp_tz_format: None,
             time_format: None,
             null_value: None,
+            ignore_leading_whitespace: false,
+            ignore_trailing_whitespace: false,
+            quote_style: QuoteStyle::default(),
         }
     }
 }
 
 impl WriterBuilder {
-    /// Create a new builder for configuring CSV writing options.
+    /// Create a new builder for configuring CSV [`Writer`] options.
     ///
-    /// To convert a builder into a writer, call `WriterBuilder::build`
+    /// To convert a builder into a writer, call [`WriterBuilder::build`]. See
+    /// the [module documentation](crate::writer) for more examples.
     ///
     /// # Example
     ///
@@ -389,14 +572,82 @@ impl WriterBuilder {
         self.null_value.as_deref().unwrap_or(DEFAULT_NULL_VALUE)
     }
 
+    /// Set whether to ignore leading whitespace in string values
+    /// For example, a string value such as "   foo" will be written as "foo"
+    pub fn with_ignore_leading_whitespace(mut self, ignore: bool) -> Self {
+        self.ignore_leading_whitespace = ignore;
+        self
+    }
+
+    /// Get whether to ignore leading whitespace in string values
+    pub fn ignore_leading_whitespace(&self) -> bool {
+        self.ignore_leading_whitespace
+    }
+
+    /// Set whether to ignore trailing whitespace in string values
+    /// For example, a string value such as "foo    " will be written as "foo"
+    pub fn with_ignore_trailing_whitespace(mut self, ignore: bool) -> Self {
+        self.ignore_trailing_whitespace = ignore;
+        self
+    }
+
+    /// Get whether to ignore trailing whitespace in string values
+    pub fn ignore_trailing_whitespace(&self) -> bool {
+        self.ignore_trailing_whitespace
+    }
+
+    /// Set the quoting style for writing CSV files
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow_csv::{WriterBuilder, QuoteStyle};
+    ///
+    /// // Quote all fields (equivalent to Spark's quoteAll=true)
+    /// let builder = WriterBuilder::new()
+    ///     .with_quote_style(QuoteStyle::Always);
+    ///
+    /// // Only quote when necessary (default)
+    /// let builder = WriterBuilder::new()
+    ///     .with_quote_style(QuoteStyle::Necessary);
+    /// ```
+    pub fn with_quote_style(mut self, quote_style: QuoteStyle) -> Self {
+        self.quote_style = quote_style;
+        self
+    }
+
+    /// Get the configured quoting style
+    pub fn quote_style(&self) -> QuoteStyle {
+        self.quote_style
+    }
+
+    /// Set the CSV file's line terminator
+    pub fn with_line_terminator(mut self, terminator: Terminator) -> Self {
+        self.terminator = terminator;
+        self
+    }
+
+    /// Get the CSV file's line terminator, defaults to `LF` (`\n`)
+    pub fn line_terminator(&self) -> &Terminator {
+        &self.terminator
+    }
+
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let mut builder = csv::WriterBuilder::new();
+
+        let terminator = match self.terminator {
+            Terminator::CRLF => csv::Terminator::CRLF,
+            Terminator::Any(byte) => csv::Terminator::Any(byte),
+        };
+
         let writer = builder
             .delimiter(self.delimiter)
             .quote(self.quote)
+            .quote_style(self.quote_style)
             .double_quote(self.double_quote)
             .escape(self.escape)
+            .terminator(terminator)
             .from_writer(writer);
         Writer {
             writer,
@@ -408,6 +659,8 @@ impl WriterBuilder {
             timestamp_format: self.timestamp_format,
             timestamp_tz_format: self.timestamp_tz_format,
             null_value: self.null_value,
+            ignore_leading_whitespace: self.ignore_leading_whitespace,
+            ignore_trailing_whitespace: self.ignore_trailing_whitespace,
         }
     }
 }
@@ -804,10 +1057,48 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
-        assert_eq!(
-            "c1,c2\n00:02,46:17\n00:02,\n",
-            String::from_utf8(buffer).unwrap()
-        );
+        let output = String::from_utf8(buffer).unwrap();
+        assert_eq!(output, "c1,c2\n00:02,46:17\n00:02,\n");
+    }
+
+    #[test]
+    fn test_write_csv_with_lf_terminator() {
+        let output = write_batch_with_terminator(Terminator::Any(b'\n'));
+        assert_eq!(output, "c1,c2\nhello,1\nworld,2\n");
+    }
+
+    #[test]
+    fn test_write_csv_with_crlf_terminator() {
+        let output = write_batch_with_terminator(Terminator::CRLF);
+        assert_eq!(output, "c1,c2\r\nhello,1\r\nworld,2\r\n");
+    }
+
+    #[test]
+    fn test_write_csv_with_any_terminator() {
+        let output = write_batch_with_terminator(Terminator::Any(b'|'));
+        assert_eq!(output, "c1,c2|hello,1|world,2|");
+    }
+
+    fn write_batch_with_terminator(terminator: Terminator) -> String {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]);
+
+        let c1 = StringArray::from(vec!["hello", "world"]);
+        let c2 = PrimitiveArray::<UInt32Type>::from(vec![1, 2]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_line_terminator(terminator)
+            .build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+
+        String::from_utf8(buf).unwrap()
     }
 
     #[test]
@@ -858,6 +1149,281 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             4e6564,466c616e64657273,\n\
             ",
             String::from_utf8(buf).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_write_csv_whitespace_handling() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Float64, true),
+            Field::new("c3", DataType::Utf8, true),
+        ]);
+
+        let c1 = StringArray::from(vec![
+            "  leading space",
+            "trailing space  ",
+            "  both spaces  ",
+            "no spaces",
+        ]);
+        let c2 = PrimitiveArray::<Float64Type>::from(vec![
+            Some(123.45),
+            Some(678.90),
+            None,
+            Some(111.22),
+        ]);
+        let c3 = StringArray::from(vec![
+            Some("  test  "),
+            Some("value  "),
+            None,
+            Some("  another"),
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(c1), Arc::new(c2), Arc::new(c3)],
+        )
+        .unwrap();
+
+        // Test with no whitespace handling (default)
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new();
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "c1,c2,c3\n  leading space,123.45,  test  \ntrailing space  ,678.9,value  \n  both spaces  ,,\nno spaces,111.22,  another\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with ignore leading whitespace only
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new().with_ignore_leading_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "c1,c2,c3\nleading space,123.45,test  \ntrailing space  ,678.9,value  \nboth spaces  ,,\nno spaces,111.22,another\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with ignore trailing whitespace only
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new().with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "c1,c2,c3\n  leading space,123.45,  test\ntrailing space,678.9,value\n  both spaces,,\nno spaces,111.22,  another\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with both ignore leading and trailing whitespace
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new()
+            .with_ignore_leading_whitespace(true)
+            .with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "c1,c2,c3\nleading space,123.45,test\ntrailing space,678.9,value\nboth spaces,,\nno spaces,111.22,another\n",
+            String::from_utf8(buf).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_write_csv_whitespace_with_special_chars() {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, false)]);
+
+        let c1 = StringArray::from(vec![
+            "  quoted \"value\"  ",
+            "  new\nline  ",
+            "  comma,value  ",
+            "\ttab\tvalue\t",
+        ]);
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1)]).unwrap();
+
+        // Test with both ignore leading and trailing whitespace
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new()
+            .with_ignore_leading_whitespace(true)
+            .with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+
+        // Note: tabs are trimmed as they are whitespace characters
+        assert_eq!(
+            "c1\n\"quoted \"\"value\"\"\"\n\"new\nline\"\n\"comma,value\"\ntab\tvalue\n",
+            String::from_utf8(buf).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_write_csv_whitespace_all_string_types() {
+        use arrow_array::{LargeStringArray, StringViewArray};
+
+        let schema = Schema::new(vec![
+            Field::new("utf8", DataType::Utf8, false),
+            Field::new("large_utf8", DataType::LargeUtf8, false),
+            Field::new("utf8_view", DataType::Utf8View, false),
+        ]);
+
+        let utf8 = StringArray::from(vec!["  leading", "trailing  ", "  both  ", "no_spaces"]);
+
+        let large_utf8 =
+            LargeStringArray::from(vec!["  leading", "trailing  ", "  both  ", "no_spaces"]);
+
+        let utf8_view =
+            StringViewArray::from(vec!["  leading", "trailing  ", "  both  ", "no_spaces"]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(utf8), Arc::new(large_utf8), Arc::new(utf8_view)],
+        )
+        .unwrap();
+
+        // Test with no whitespace handling (default)
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new();
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing  ,trailing  ,trailing  \n  both  ,  both  ,  both  \nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with both ignore leading and trailing whitespace
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new()
+            .with_ignore_leading_whitespace(true)
+            .with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing,trailing,trailing\nboth,both,both\nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with only leading whitespace trimming
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new().with_ignore_leading_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing  ,trailing  ,trailing  \nboth  ,both  ,both  \nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with only trailing whitespace trimming
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new().with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing,trailing,trailing\n  both,  both,  both\nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+    }
+
+    fn write_quote_style(batch: &RecordBatch, quote_style: QuoteStyle) -> String {
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_quote_style(quote_style)
+            .build(&mut buf);
+        writer.write(batch).unwrap();
+        drop(writer);
+        String::from_utf8(buf).unwrap()
+    }
+
+    fn write_quote_style_with_null(
+        batch: &RecordBatch,
+        quote_style: QuoteStyle,
+        null_value: &str,
+    ) -> String {
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_quote_style(quote_style)
+            .with_null(null_value.to_string())
+            .build(&mut buf);
+        writer.write(batch).unwrap();
+        drop(writer);
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn test_write_csv_quote_style() {
+        let schema = Schema::new(vec![
+            Field::new("text", DataType::Utf8, false),
+            Field::new("number", DataType::Int32, false),
+            Field::new("float", DataType::Float64, false),
+        ]);
+
+        let text = StringArray::from(vec!["hello", "world", "comma,value", "quote\"test"]);
+        let number = Int32Array::from(vec![1, 2, 3, 4]);
+        let float = Float64Array::from(vec![1.1, 2.2, 3.3, 4.4]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(text), Arc::new(number), Arc::new(float)],
+        )
+        .unwrap();
+
+        // Test with QuoteStyle::Necessary (default)
+        assert_eq!(
+            "text,number,float\nhello,1,1.1\nworld,2,2.2\n\"comma,value\",3,3.3\n\"quote\"\"test\",4,4.4\n",
+            write_quote_style(&batch, QuoteStyle::Necessary)
+        );
+
+        // Test with QuoteStyle::Always (equivalent to Spark's quoteAll=true)
+        assert_eq!(
+            "\"text\",\"number\",\"float\"\n\"hello\",\"1\",\"1.1\"\n\"world\",\"2\",\"2.2\"\n\"comma,value\",\"3\",\"3.3\"\n\"quote\"\"test\",\"4\",\"4.4\"\n",
+            write_quote_style(&batch, QuoteStyle::Always)
+        );
+
+        // Test with QuoteStyle::NonNumeric
+        assert_eq!(
+            "\"text\",\"number\",\"float\"\n\"hello\",1,1.1\n\"world\",2,2.2\n\"comma,value\",3,3.3\n\"quote\"\"test\",4,4.4\n",
+            write_quote_style(&batch, QuoteStyle::NonNumeric)
+        );
+
+        // Test with QuoteStyle::Never (warning: can produce invalid CSV)
+        // Note: This produces invalid CSV for fields with commas or quotes
+        assert_eq!(
+            "text,number,float\nhello,1,1.1\nworld,2,2.2\ncomma,value,3,3.3\nquote\"test,4,4.4\n",
+            write_quote_style(&batch, QuoteStyle::Never)
+        );
+    }
+
+    #[test]
+    fn test_write_csv_quote_style_with_nulls() {
+        let schema = Schema::new(vec![
+            Field::new("text", DataType::Utf8, true),
+            Field::new("number", DataType::Int32, true),
+        ]);
+
+        let text = StringArray::from(vec![Some("hello"), None, Some("world")]);
+        let number = Int32Array::from(vec![Some(1), Some(2), None]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(text), Arc::new(number)]).unwrap();
+
+        // Test with QuoteStyle::Always
+        assert_eq!(
+            "\"text\",\"number\"\n\"hello\",\"1\"\n\"\",\"2\"\n\"world\",\"\"\n",
+            write_quote_style(&batch, QuoteStyle::Always)
+        );
+
+        // Test with QuoteStyle::Always and custom null value
+        assert_eq!(
+            "\"text\",\"number\"\n\"hello\",\"1\"\n\"NULL\",\"2\"\n\"world\",\"NULL\"\n",
+            write_quote_style_with_null(&batch, QuoteStyle::Always, "NULL")
         );
     }
 }

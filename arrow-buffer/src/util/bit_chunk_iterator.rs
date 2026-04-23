@@ -202,11 +202,10 @@ fn compute_suffix_mask(len: usize, lead_padding: usize) -> (u64, usize) {
     (suffix_mask, trailing_padding)
 }
 
-/// Iterates over an arbitrarily aligned byte buffer
+/// Iterates over an arbitrarily aligned byte buffer 64 bits at a time
 ///
-/// Yields an iterator of u64, and a remainder. The first byte in the buffer
+/// [`Self::iter`] yields iterator of `u64`, and a remainder. The first byte in the buffer
 /// will be the least significant byte in output u64
-///
 #[derive(Debug)]
 pub struct BitChunks<'a> {
     buffer: &'a [u8],
@@ -259,7 +258,7 @@ impl<'a> BitChunks<'a> {
         self.remainder_len
     }
 
-    /// Returns the number of chunks
+    /// Returns the number of `u64` chunks
     #[inline]
     pub const fn chunk_len(&self) -> usize {
         self.chunk_len
@@ -293,7 +292,28 @@ impl<'a> BitChunks<'a> {
         }
     }
 
-    /// Returns an iterator over chunks of 64 bits represented as an u64
+    /// Return the number of `u64` that are needed to represent all bits
+    /// (including remainder).
+    ///
+    /// This is equal to `chunk_len + 1` if there is a remainder,
+    /// otherwise it is equal to `chunk_len`.
+    #[inline]
+    pub fn num_u64s(&self) -> usize {
+        if self.remainder_len == 0 {
+            self.chunk_len
+        } else {
+            self.chunk_len + 1
+        }
+    }
+
+    /// Return the number of *bytes* that are needed to represent all bits
+    /// (including remainder).
+    #[inline]
+    pub fn num_bytes(&self) -> usize {
+        ceil(self.chunk_len * 64 + self.remainder_len, 8)
+    }
+
+    /// Returns an iterator over chunks of 64 bits represented as an `u64`
     #[inline]
     pub const fn iter(&self) -> BitChunkIterator<'a> {
         BitChunkIterator::<'a> {

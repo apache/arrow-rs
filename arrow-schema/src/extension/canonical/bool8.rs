@@ -68,6 +68,10 @@ impl ExtensionType for Bool8 {
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
         Self.supports_data_type(data_type).map(|_| Self)
     }
+
+    fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<(), ArrowError> {
+        Self.supports_data_type(data_type)
+    }
 }
 
 #[cfg(test)]
@@ -96,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
+    #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
         let field = Field::new("", DataType::Int8, false).with_metadata(
             [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]

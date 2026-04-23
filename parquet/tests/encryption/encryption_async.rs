@@ -35,6 +35,7 @@ use parquet::arrow::{
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
@@ -296,9 +297,9 @@ async fn get_encrypted_meta_store() -> (
     object_store::ObjectMeta,
     std::sync::Arc<dyn object_store::ObjectStore>,
 ) {
-    use object_store::ObjectStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt};
 
     use std::sync::Arc;
     let test_data = arrow::util::test_util::parquet_test_data();
@@ -439,7 +440,7 @@ async fn test_decrypt_page_index(
 
     let options = ArrowReaderOptions::new()
         .with_file_decryption_properties(decryption_properties)
-        .with_page_index(true);
+        .with_page_index_policy(PageIndexPolicy::from(true));
 
     let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await?;
 

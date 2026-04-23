@@ -16,8 +16,9 @@
 // under the License.
 
 use crate::arrow_to_variant::make_arrow_to_variant_row_builder;
-use crate::{CastOptions, VariantArray, VariantArrayBuilder};
+use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::Array;
+use arrow::compute::CastOptions;
 use arrow_schema::ArrowError;
 
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
@@ -57,6 +58,13 @@ pub fn cast_to_variant_with_options(
     input: &dyn Array,
     options: &CastOptions,
 ) -> Result<VariantArray, ArrowError> {
+    // Fast path: any all-null input maps to an all-null VariantArray.
+    if input.null_count() == input.len() {
+        let mut array_builder = VariantArrayBuilder::new(input.len());
+        array_builder.append_nulls(input.len());
+        return Ok(array_builder.build());
+    }
+
     // Create row builder for the input array type
     let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
 
@@ -75,9 +83,15 @@ pub fn cast_to_variant_with_options(
 /// failures).
 ///
 /// This function provides backward compatibility. For non-strict behavior,
-/// use [`cast_to_variant_with_options`] with `CastOptions { strict: false }`.
+/// use [`cast_to_variant_with_options`] with `CastOptions { safe: true, ..Default::default() }`.
 pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
-    cast_to_variant_with_options(input, &CastOptions::default())
+    cast_to_variant_with_options(
+        input,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )
 }
 
 #[cfg(test)]
@@ -2065,14 +2079,11 @@ mod tests {
         let string_array = StringArray::from(vec![None, None, Some("hello"), None, None, None]);
         let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),
@@ -2112,14 +2123,11 @@ mod tests {
             .into_iter()
             .collect::<ScalarBuffer<i32>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),
@@ -2261,14 +2269,17 @@ mod tests {
     }
 
     fn run_test(values: ArrayRef, expected: Vec<Option<Variant>>) {
-        run_test_with_options(values, expected, CastOptions { strict: false });
+        run_test_with_options(values, expected, CastOptions::default());
     }
 
     fn run_test_in_strict_mode(
         values: ArrayRef,
         expected: Result<Vec<Option<Variant>>, ArrowError>,
     ) {
-        let options = CastOptions { strict: true };
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         match expected {
             Ok(expected) => run_test_with_options(values, expected, options),
             Err(_) => {

@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
-use arrow_array::{ArrayRef, builder::make_view, make_array};
-use arrow_buffer::Buffer;
-use arrow_data::ArrayDataBuilder;
+use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray};
+use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
+use std::sync::Arc;
 
 /// A buffer of view type byte arrays that can be converted into
 /// `GenericByteViewArray`
@@ -33,6 +33,14 @@ pub struct ViewBuffer {
 }
 
 impl ViewBuffer {
+    /// Create a new ViewBuffer with capacity for the specified number of views
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            views: Vec::with_capacity(capacity),
+            buffers: Vec::new(),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.views.is_empty()
     }
@@ -43,53 +51,19 @@ impl ViewBuffer {
         block_id
     }
 
-    /// # Safety
-    /// This method is only safe when:
-    /// - `block` is a valid index, i.e., the return value of `append_block`
-    /// - `offset` and `offset + len` are valid indices into the buffer
-    /// - The `(offset, offset + len)` is valid value for the native type.
-    pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
-        let b = unsafe { self.buffers.get_unchecked(block as usize) };
-        let end = offset.saturating_add(len);
-        let b = unsafe { b.get_unchecked(offset as usize..end as usize) };
-
-        let view = make_view(b, block, offset);
-
-        self.views.push(view);
-    }
-
-    /// Directly append a view to the view array.
-    /// This is used when we create a StringViewArray from a dictionary whose values are StringViewArray.
-    ///
-    /// # Safety
-    /// The `view` must be a valid view as per the ByteView spec.
-    pub unsafe fn append_raw_view_unchecked(&mut self, view: &u128) {
-        self.views.push(*view);
-    }
-
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: &ArrowType) -> ArrayRef {
         let len = self.views.len();
-        let views = Buffer::from_vec(self.views);
+        let views = ScalarBuffer::from(self.views);
+        let nulls = null_buffer.and_then(|b| NullBuffer::from_unsliced_buffer(b, len));
         match data_type {
             ArrowType::Utf8View => {
-                let builder = ArrayDataBuilder::new(ArrowType::Utf8View)
-                    .len(len)
-                    .add_buffer(views)
-                    .add_buffers(self.buffers)
-                    .null_bit_buffer(null_buffer);
-                // We have checked that the data is utf8 when building the buffer, so it is safe
-                let array = unsafe { builder.build_unchecked() };
-                make_array(array)
+                // Safety: views were created correctly, and checked that the data is utf8 when building the buffer
+                unsafe { Arc::new(StringViewArray::new_unchecked(views, self.buffers, nulls)) }
             }
             ArrowType::BinaryView => {
-                let builder = ArrayDataBuilder::new(ArrowType::BinaryView)
-                    .len(len)
-                    .add_buffer(views)
-                    .add_buffers(self.buffers)
-                    .null_bit_buffer(null_buffer);
-                let array = unsafe { builder.build_unchecked() };
-                make_array(array)
+                // Safety: views were created correctly
+                unsafe { Arc::new(BinaryViewArray::new_unchecked(views, self.buffers, nulls)) }
             }
             _ => panic!("Unsupported data type: {data_type}"),
         }
@@ -97,6 +71,10 @@ impl ViewBuffer {
 }
 
 impl ValuesBuffer for ViewBuffer {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -112,13 +90,14 @@ impl ValuesBuffer for ViewBuffer {
 #[cfg(test)]
 mod tests {
 
+    use arrow::array::make_view;
     use arrow_array::Array;
 
     use super::*;
 
     #[test]
     fn test_view_buffer_empty() {
-        let buffer = ViewBuffer::default();
+        let buffer = ViewBuffer::with_capacity(0);
         let array = buffer.into_array(None, &ArrowType::Utf8View);
         let strings = array
             .as_any()
@@ -129,15 +108,14 @@ mod tests {
 
     #[test]
     fn test_view_buffer_append_view() {
-        let mut buffer = ViewBuffer::default();
-        let string_buffer = Buffer::from(b"0123456789long string to test string view");
+        let mut buffer = ViewBuffer::with_capacity(0);
+        let data = b"0123456789long string to test string view";
+        let string_buffer = Buffer::from(data);
         let block_id = buffer.append_block(string_buffer);
 
-        unsafe {
-            buffer.append_view_unchecked(block_id, 0, 1);
-            buffer.append_view_unchecked(block_id, 1, 9);
-            buffer.append_view_unchecked(block_id, 10, 31);
-        }
+        buffer.views.push(make_view(&data[0..1], block_id, 0));
+        buffer.views.push(make_view(&data[1..10], block_id, 1));
+        buffer.views.push(make_view(&data[10..41], block_id, 10));
 
         let array = buffer.into_array(None, &ArrowType::Utf8View);
         let string_array = array
@@ -156,15 +134,14 @@ mod tests {
 
     #[test]
     fn test_view_buffer_pad_null() {
-        let mut buffer = ViewBuffer::default();
-        let string_buffer = Buffer::from(b"0123456789long string to test string view");
+        let mut buffer = ViewBuffer::with_capacity(0);
+        let data = b"0123456789long string to test string view";
+        let string_buffer = Buffer::from(data);
         let block_id = buffer.append_block(string_buffer);
 
-        unsafe {
-            buffer.append_view_unchecked(block_id, 0, 1);
-            buffer.append_view_unchecked(block_id, 1, 9);
-            buffer.append_view_unchecked(block_id, 10, 31);
-        }
+        buffer.views.push(make_view(&data[0..1], block_id, 0));
+        buffer.views.push(make_view(&data[1..10], block_id, 1));
+        buffer.views.push(make_view(&data[10..41], block_id, 10));
 
         let valid = [true, false, false, true, false, false, true];
         let valid_mask = Buffer::from_iter(valid.iter().copied());

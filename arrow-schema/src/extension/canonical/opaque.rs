@@ -257,6 +257,10 @@ impl ExtensionType for Opaque {
     fn try_new(_data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> {
         Ok(Self::from(metadata))
     }
+
+    fn validate(_data_type: &DataType, _metadata: Self::Metadata) -> Result<(), ArrowError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -285,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Field extension type name missing")]
+    #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
         let field = Field::new("", DataType::Null, false).with_metadata(
             [(

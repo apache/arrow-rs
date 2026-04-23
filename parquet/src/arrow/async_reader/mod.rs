@@ -45,7 +45,7 @@ use crate::bloom_filter::{
     SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
 };
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
 mod metadata;
 pub use metadata::*;
@@ -165,11 +165,14 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         async move {
             let metadata_opts = options.map(|o| o.metadata_options().clone());
-            let metadata_reader = ParquetMetaDataReader::new()
-                .with_page_index_policy(PageIndexPolicy::from(
-                    options.is_some_and(|o| o.page_index()),
-                ))
-                .with_metadata_options(metadata_opts);
+            let mut metadata_reader =
+                ParquetMetaDataReader::new().with_metadata_options(metadata_opts);
+
+            if let Some(opts) = options {
+                metadata_reader = metadata_reader
+                    .with_column_index_policy(opts.column_index_policy())
+                    .with_offset_index_policy(opts.offset_index_policy());
+            }
 
             #[cfg(feature = "encryption")]
             let metadata_reader = metadata_reader.with_decryption_properties(
@@ -212,7 +215,14 @@ pub struct AsyncReader<T>(T);
 /// to use this information to select what specific columns, row groups, etc.
 /// they wish to be read by the resulting stream.
 ///
-/// See examples on [`ParquetRecordBatchStreamBuilder::new`]
+/// See examples on [`ParquetRecordBatchStreamBuilder::new`], including how to
+/// issue multiple I/O requests in parallel using multiple streams.
+///
+/// # See also:
+/// * [`ParquetPushDecoderBuilder`] for lower level control over buffering and
+///   decoding.
+/// * [`ParquetRecordBatchStream::next_row_group`] for I/O prefetching
+///
 ///
 /// See [`ArrowReaderBuilder`] for additional member functions
 pub type ParquetRecordBatchStreamBuilder<T> = ArrowReaderBuilder<AsyncReader<T>>;
@@ -220,6 +230,11 @@ pub type ParquetRecordBatchStreamBuilder<T> = ArrowReaderBuilder<AsyncReader<T>>
 impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// Create a new [`ParquetRecordBatchStreamBuilder`] for reading from the
     /// specified source.
+    ///
+    /// # Examples:
+    /// * [Basic example reading from an async source](#example)
+    /// * [Configuring options and reading metadata](#example-configuring-options-and-reading-metadata)
+    /// * [Reading Row Groups in Parallel](#example-reading-row-groups-in-parallel)
     ///
     /// # Example
     /// ```
@@ -279,7 +294,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// # }
     /// ```
     ///
-    /// # Example configuring options and reading metadata
+    /// # Example Configuring Options and Reading Metadata
     ///
     /// There are many options that control the behavior of the reader, such as
     /// `with_batch_size`, `with_projection`, `with_filter`, etc...
@@ -346,6 +361,86 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// // The results has 8 rows, so since we set the batch size to 3, we expect
     /// // 3 batches, two with 3 rows each and the last batch with 2 rows.
     /// assert_eq!(results.len(), 3);
+    /// # }
+    /// ```
+    ///
+    /// # Example reading Row Groups in Parallel
+    ///
+    /// Each [`ParquetRecordBatchStream`] is independent and can be used to read
+    /// from the same underlying source in parallel. Use
+    /// [`ParquetRecordBatchStream::next_row_group`] with a single stream to
+    /// begin prefetching the next Row Group. To read a file in parallel, create
+    /// a stream for each subset of the file. For example, you can read each
+    /// row group in parallel by creating a stream for each row group using the
+    /// [`ParquetRecordBatchStreamBuilder::with_row_groups`] API as shown below
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// # use arrow::util::pretty::pretty_format_batches;
+    /// # use futures::{StreamExt, TryStreamExt};
+    /// # use tempfile::NamedTempFile;
+    /// # use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+    /// # use parquet::file::metadata::ParquetMetaDataReader;
+    /// # use parquet::file::properties::{WriterProperties};
+    /// # // write to a temporary file with 10 RowGroups and read back with async API
+    /// # fn write_file() -> parquet::errors::Result<NamedTempFile> {
+    /// #   let mut file = NamedTempFile::new().unwrap();
+    /// #   let small_batch = RecordBatch::try_from_iter([
+    /// #      ("id", Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4])) as ArrayRef),
+    /// #   ]).unwrap();
+    /// #   let props = WriterProperties::builder()
+    /// #     .set_max_row_group_row_count(Some(5))
+    /// #     .set_write_batch_size(5)
+    /// #     .build();
+    /// #   let mut writer = ArrowWriter::try_new(&mut file, small_batch.schema(), Some(props))?;
+    /// #   for i in 0..10 {
+    /// #     writer.write(&small_batch)?
+    /// #   };
+    /// #   writer.close()?;
+    /// #   Ok(file)
+    /// # }
+    /// # #[tokio::main(flavor="current_thread")]
+    /// # async fn main() -> parquet::errors::Result<()> {
+    /// # let t = write_file()?;
+    /// # let path = t.path();
+    /// // This example uses a tokio::fs::File as the async source, but it
+    /// // could be any async source such as an object store reader)
+    /// let mut file = tokio::fs::File::open(path).await?;
+    /// // To read Row Groups in parallel, create a separate stream builder for each Row Group.
+    /// // First get the metadata to find the row group information
+    /// let file_size = file.metadata().await?.len();
+    /// let metadata = ParquetMetaDataReader::new().load_and_finish(&mut file, file_size).await?;
+    /// assert_eq!(metadata.num_row_groups(), 10); // file has 10 row groups with 5 rows each
+    /// // Create a stream reader for each row group
+    /// let reader_metadata = ArrowReaderMetadata::try_new(
+    ///   Arc::new(metadata),
+    ///   ArrowReaderOptions::new()
+    /// )?;
+    /// let mut streams = vec![];
+    ///  for row_group_index in 0..10 {
+    ///   // Each stream needs its own source instance to issue
+    ///   // parallel IO requests, so clone the file for each stream
+    ///   let this_file = file.try_clone().await?;
+    ///   let stream = ParquetRecordBatchStreamBuilder::new_with_metadata(
+    ///        this_file,
+    ///        reader_metadata.clone()
+    ///      )
+    ///      .with_row_groups(vec![row_group_index]) // read only this row group
+    ///      .build()?;
+    ///     streams.push(stream);
+    /// }
+    /// // Each reader can now be polled independently and in parallel, for
+    /// // example using StreamExt::buffered to read from 3 at a time
+    /// let results = futures::stream::iter(streams)
+    ///  .map(|stream| async move { stream })
+    ///  .buffered(3)
+    ///  .flatten()
+    ///  .try_collect::<Vec<_>>().await?;
+    /// // read all 50 rows (10 row groups x 5 rows per group)
+    /// assert_eq!(50, results.iter().map(|s| s.num_rows()).sum::<usize>());
+    /// # Ok(())
     /// # }
     /// ```
     pub async fn new(input: T) -> Result<Self> {
@@ -767,7 +862,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::RowSelectionPolicy;
     use crate::arrow::arrow_reader::tests::test_row_numbers_with_multiple_row_groups_helper;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
@@ -775,20 +869,19 @@ mod tests {
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
     use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
+    use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
-    use arrow::compute::or;
     use arrow::error::Result as ArrowResult;
     use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Int8Array, Int32Array, Int64Array, RecordBatchReader,
-        Scalar, StringArray, StructArray, UInt64Array,
+        Array, ArrayRef, BooleanArray, Int32Array, RecordBatchReader, Scalar, StringArray,
+        StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
-    use arrow_select::concat::concat_batches;
     use futures::{StreamExt, TryStreamExt};
     use rand::{Rng, rng};
     use std::collections::HashMap;
@@ -829,9 +922,12 @@ mod tests {
             &'a mut self,
             options: Option<&'a ArrowReaderOptions>,
         ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-            let metadata_reader = ParquetMetaDataReader::new().with_page_index_policy(
-                PageIndexPolicy::from(options.is_some_and(|o| o.page_index())),
-            );
+            let mut metadata_reader = ParquetMetaDataReader::new();
+            if let Some(opts) = options {
+                metadata_reader = metadata_reader
+                    .with_column_index_policy(opts.column_index_policy())
+                    .with_offset_index_policy(opts.offset_index_policy());
+            }
             self.metadata = Some(Arc::new(
                 metadata_reader.parse_and_finish(&self.data).unwrap(),
             ));
@@ -953,7 +1049,7 @@ mod tests {
 
         let async_reader = TestReader::new(data.clone());
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
             .await
             .unwrap();
@@ -1055,7 +1151,7 @@ mod tests {
 
         let async_reader = TestReader::new(data.clone());
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
             .await
             .unwrap();
@@ -1129,7 +1225,8 @@ mod tests {
 
             let async_reader = TestReader::new(data.clone());
 
-            let options = ArrowReaderOptions::new().with_page_index(true);
+            let options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
             let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
                 .await
                 .unwrap();
@@ -1191,7 +1288,7 @@ mod tests {
 
         let async_reader = TestReader::new(data.clone());
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
             .await
             .unwrap();
@@ -1215,218 +1312,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_row_filter_full_page_skip_is_handled_async() {
-        let first_value: i64 = 1111;
-        let last_value: i64 = 9999;
-        let num_rows: usize = 12;
-
-        // build data with row selection average length 4
-        // The result would be (1111 XXXX) ... (4 page in the middle)... (XXXX 9999)
-        // The Row Selection would be [1111, (skip 10), 9999]
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int64, false),
-            Field::new("value", DataType::Int64, false),
-        ]));
-
-        let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
-        int_values[0] = first_value;
-        int_values[num_rows - 1] = last_value;
-        let keys = Int64Array::from(int_values.clone());
-        let values = Int64Array::from(int_values.clone());
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
-        )
-        .unwrap();
-
-        let props = WriterProperties::builder()
-            .set_write_batch_size(2)
-            .set_data_page_row_count_limit(2)
-            .build();
-
-        let mut buffer = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        let data = Bytes::from(buffer);
-
-        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index(true),
-        )
-        .await
-        .unwrap();
-        let schema = builder.parquet_schema().clone();
-        let filter_mask = ProjectionMask::leaves(&schema, [0]);
-
-        let make_predicate = |mask: ProjectionMask| {
-            ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
-                let column = batch.column(0);
-                let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
-                let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
-                or(&match_first, &match_second)
-            })
-        };
-
-        let predicate = make_predicate(filter_mask.clone());
-
-        // The batch size is set to 12 to read all rows in one go after filtering
-        // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
-        let stream = ParquetRecordBatchStreamBuilder::new_with_options(
-            TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index(true),
-        )
-        .await
-        .unwrap()
-        .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
-        .with_batch_size(12)
-        .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
-        .build()
-        .unwrap();
-
-        let schema = stream.schema().clone();
-        let batches: Vec<_> = stream.try_collect().await.unwrap();
-        let result = concat_batches(&schema, &batches).unwrap();
-        assert_eq!(result.num_rows(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_row_filter() {
-        let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
-        let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
-        let data = RecordBatch::try_from_iter([
-            ("a", Arc::new(a) as ArrayRef),
-            ("b", Arc::new(b) as ArrayRef),
-        ])
-        .unwrap();
-
-        let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), None).unwrap();
-        writer.write(&data).unwrap();
-        writer.close().unwrap();
-
-        let data: Bytes = buf.into();
-        let metadata = ParquetMetaDataReader::new()
-            .parse_and_finish(&data)
-            .unwrap();
-        let parquet_schema = metadata.file_metadata().schema_descr_ptr();
-
-        let test = TestReader::new(data);
-        let requests = test.requests.clone();
-
-        let a_scalar = StringArray::from_iter_values(["b"]);
-        let a_filter = ArrowPredicateFn::new(
-            ProjectionMask::leaves(&parquet_schema, vec![0]),
-            move |batch| eq(batch.column(0), &Scalar::new(&a_scalar)),
-        );
-
-        let filter = RowFilter::new(vec![Box::new(a_filter)]);
-
-        let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 1]);
-        let stream = ParquetRecordBatchStreamBuilder::new(test)
-            .await
-            .unwrap()
-            .with_projection(mask.clone())
-            .with_batch_size(1024)
-            .with_row_filter(filter)
-            .build()
-            .unwrap();
-
-        let batches: Vec<_> = stream.try_collect().await.unwrap();
-        assert_eq!(batches.len(), 1);
-
-        let batch = &batches[0];
-        assert_eq!(batch.num_columns(), 2);
-
-        // Filter should have kept only rows with "b" in column 0
-        assert_eq!(
-            batch.column(0).as_ref(),
-            &StringArray::from_iter_values(["b", "b", "b"])
-        );
-        assert_eq!(
-            batch.column(1).as_ref(),
-            &StringArray::from_iter_values(["2", "3", "4"])
-        );
-
-        // Should only have made 2 requests:
-        // * First request fetches data for evaluating the predicate
-        // * Second request fetches data for evaluating the projection
-        assert_eq!(requests.lock().unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_two_row_filters() {
-        let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
-        let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
-        let c = Int32Array::from_iter(0..6);
-        let data = RecordBatch::try_from_iter([
-            ("a", Arc::new(a) as ArrayRef),
-            ("b", Arc::new(b) as ArrayRef),
-            ("c", Arc::new(c) as ArrayRef),
-        ])
-        .unwrap();
-
-        let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), None).unwrap();
-        writer.write(&data).unwrap();
-        writer.close().unwrap();
-
-        let data: Bytes = buf.into();
-        let metadata = ParquetMetaDataReader::new()
-            .parse_and_finish(&data)
-            .unwrap();
-        let parquet_schema = metadata.file_metadata().schema_descr_ptr();
-
-        let test = TestReader::new(data);
-        let requests = test.requests.clone();
-
-        let a_scalar = StringArray::from_iter_values(["b"]);
-        let a_filter = ArrowPredicateFn::new(
-            ProjectionMask::leaves(&parquet_schema, vec![0]),
-            move |batch| eq(batch.column(0), &Scalar::new(&a_scalar)),
-        );
-
-        let b_scalar = StringArray::from_iter_values(["4"]);
-        let b_filter = ArrowPredicateFn::new(
-            ProjectionMask::leaves(&parquet_schema, vec![1]),
-            move |batch| eq(batch.column(0), &Scalar::new(&b_scalar)),
-        );
-
-        let filter = RowFilter::new(vec![Box::new(a_filter), Box::new(b_filter)]);
-
-        let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 2]);
-        let stream = ParquetRecordBatchStreamBuilder::new(test)
-            .await
-            .unwrap()
-            .with_projection(mask.clone())
-            .with_batch_size(1024)
-            .with_row_filter(filter)
-            .build()
-            .unwrap();
-
-        let batches: Vec<_> = stream.try_collect().await.unwrap();
-        assert_eq!(batches.len(), 1);
-
-        let batch = &batches[0];
-        assert_eq!(batch.num_rows(), 1);
-        assert_eq!(batch.num_columns(), 2);
-
-        let col = batch.column(0);
-        let val = col.as_any().downcast_ref::<StringArray>().unwrap().value(0);
-        assert_eq!(val, "b");
-
-        let col = batch.column(1);
-        let val = col.as_any().downcast_ref::<Int32Array>().unwrap().value(0);
-        assert_eq!(val, 3);
-
-        // Should only have made 3 requests
-        // * First request fetches data for evaluating the first predicate
-        // * Second request fetches data for evaluating the second predicate
-        // * Third request fetches data for evaluating the projection
-        assert_eq!(requests.lock().unwrap().len(), 3);
-    }
-
-    #[tokio::test]
     async fn test_limit_multiple_row_groups() {
         let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
         let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
@@ -1440,7 +1325,7 @@ mod tests {
 
         let mut buf = Vec::with_capacity(1024);
         let props = WriterProperties::builder()
-            .set_max_row_group_size(3)
+            .set_max_row_group_row_count(Some(3))
             .build();
         let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), Some(props)).unwrap();
         writer.write(&data).unwrap();
@@ -1528,53 +1413,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_row_filter_with_index() {
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
-        let data = Bytes::from(std::fs::read(path).unwrap());
-
-        let metadata = ParquetMetaDataReader::new()
-            .parse_and_finish(&data)
-            .unwrap();
-        let parquet_schema = metadata.file_metadata().schema_descr_ptr();
-
-        assert_eq!(metadata.num_row_groups(), 1);
-
-        let async_reader = TestReader::new(data.clone());
-
-        let a_filter =
-            ArrowPredicateFn::new(ProjectionMask::leaves(&parquet_schema, vec![1]), |batch| {
-                Ok(batch.column(0).as_boolean().clone())
-            });
-
-        let b_scalar = Int8Array::from(vec![2]);
-        let b_filter = ArrowPredicateFn::new(
-            ProjectionMask::leaves(&parquet_schema, vec![2]),
-            move |batch| eq(batch.column(0), &Scalar::new(&b_scalar)),
-        );
-
-        let filter = RowFilter::new(vec![Box::new(a_filter), Box::new(b_filter)]);
-
-        let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 2]);
-
-        let options = ArrowReaderOptions::new().with_page_index(true);
-        let stream = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
-            .await
-            .unwrap()
-            .with_projection(mask.clone())
-            .with_batch_size(1024)
-            .with_row_filter(filter)
-            .build()
-            .unwrap();
-
-        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
-
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-
-        assert_eq!(total_rows, 730);
-    }
-
-    #[tokio::test]
     async fn test_batch_size_overallocate() {
         let testdata = arrow::util::test_util::parquet_test_data();
         // `alltypes_plain.parquet` only have 8 rows
@@ -1599,14 +1437,6 @@ mod tests {
         assert_eq!(builder.batch_size, file_rows);
 
         let _stream = builder.build().unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_get_row_group_column_bloom_filter_without_length() {
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
-        let data = Bytes::from(std::fs::read(path).unwrap());
-        test_get_row_group_column_bloom_filter(data, false).await;
     }
 
     #[tokio::test]
@@ -1718,56 +1548,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_row_group_column_bloom_filter_with_length() {
-        // convert to new parquet file with bloom_filter_length
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
-        let data = Bytes::from(std::fs::read(path).unwrap());
-        let async_reader = TestReader::new(data.clone());
-        let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
-            .await
-            .unwrap();
-        let schema = builder.schema().clone();
-        let stream = builder.build().unwrap();
-        let batches = stream.try_collect::<Vec<_>>().await.unwrap();
-
-        let mut parquet_data = Vec::new();
-        let props = WriterProperties::builder()
-            .set_bloom_filter_enabled(true)
-            .build();
-        let mut writer = ArrowWriter::try_new(&mut parquet_data, schema, Some(props)).unwrap();
-        for batch in batches {
-            writer.write(&batch).unwrap();
-        }
-        writer.close().unwrap();
-
-        // test the new parquet file
-        test_get_row_group_column_bloom_filter(parquet_data.into(), true).await;
-    }
-
-    async fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
-        let async_reader = TestReader::new(data.clone());
-
-        let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
-            .await
-            .unwrap();
-
-        let metadata = builder.metadata();
-        assert_eq!(metadata.num_row_groups(), 1);
-        let row_group = metadata.row_group(0);
-        let column = row_group.column(0);
-        assert_eq!(column.bloom_filter_length().is_some(), with_length);
-
-        let sbbf = builder
-            .get_row_group_column_bloom_filter(0, 0)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(sbbf.check(&"Hello"));
-        assert!(!sbbf.check(&"Hello_Not_Exists"));
-    }
-
-    #[tokio::test]
     async fn test_nested_skip() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("col_1", DataType::UInt64, false),
@@ -1778,7 +1558,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_data_page_row_count_limit(256)
             .set_write_batch_size(256)
-            .set_max_row_group_size(1024);
+            .set_max_row_group_row_count(Some(1024));
 
         // Write data
         let mut file = tempfile().unwrap();
@@ -1835,7 +1615,7 @@ mod tests {
             // Read data
             let mut reader = ParquetRecordBatchStreamBuilder::new_with_options(
                 tokio::fs::File::from_std(file.try_clone().unwrap()),
-                ArrowReaderOptions::new().with_page_index(true),
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .await
             .unwrap();
@@ -1854,95 +1634,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_row_filter_nested() {
-        let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
-        let b = StructArray::from(vec![
-            (
-                Arc::new(Field::new("aa", DataType::Utf8, true)),
-                Arc::new(StringArray::from(vec!["a", "b", "b", "b", "c", "c"])) as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("bb", DataType::Utf8, true)),
-                Arc::new(StringArray::from(vec!["1", "2", "3", "4", "5", "6"])) as ArrayRef,
-            ),
-        ]);
-        let c = Int32Array::from_iter(0..6);
-        let data = RecordBatch::try_from_iter([
-            ("a", Arc::new(a) as ArrayRef),
-            ("b", Arc::new(b) as ArrayRef),
-            ("c", Arc::new(c) as ArrayRef),
-        ])
-        .unwrap();
-
-        let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), None).unwrap();
-        writer.write(&data).unwrap();
-        writer.close().unwrap();
-
-        let data: Bytes = buf.into();
-        let metadata = ParquetMetaDataReader::new()
-            .parse_and_finish(&data)
-            .unwrap();
-        let parquet_schema = metadata.file_metadata().schema_descr_ptr();
-
-        let test = TestReader::new(data);
-        let requests = test.requests.clone();
-
-        let a_scalar = StringArray::from_iter_values(["b"]);
-        let a_filter = ArrowPredicateFn::new(
-            ProjectionMask::leaves(&parquet_schema, vec![0]),
-            move |batch| eq(batch.column(0), &Scalar::new(&a_scalar)),
-        );
-
-        let b_scalar = StringArray::from_iter_values(["4"]);
-        let b_filter = ArrowPredicateFn::new(
-            ProjectionMask::leaves(&parquet_schema, vec![2]),
-            move |batch| {
-                // Filter on the second element of the struct.
-                let struct_array = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<StructArray>()
-                    .unwrap();
-                eq(struct_array.column(0), &Scalar::new(&b_scalar))
-            },
-        );
-
-        let filter = RowFilter::new(vec![Box::new(a_filter), Box::new(b_filter)]);
-
-        let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 3]);
-        let stream = ParquetRecordBatchStreamBuilder::new(test)
-            .await
-            .unwrap()
-            .with_projection(mask.clone())
-            .with_batch_size(1024)
-            .with_row_filter(filter)
-            .build()
-            .unwrap();
-
-        let batches: Vec<_> = stream.try_collect().await.unwrap();
-        assert_eq!(batches.len(), 1);
-
-        let batch = &batches[0];
-        assert_eq!(batch.num_rows(), 1);
-        assert_eq!(batch.num_columns(), 2);
-
-        let col = batch.column(0);
-        let val = col.as_any().downcast_ref::<StringArray>().unwrap().value(0);
-        assert_eq!(val, "b");
-
-        let col = batch.column(1);
-        let val = col.as_any().downcast_ref::<Int32Array>().unwrap().value(0);
-        assert_eq!(val, 3);
-
-        // Should only have made 3 requests
-        // * First request fetches data for evaluating the first predicate
-        // * Second request fetches data for evaluating the second predicate
-        // * Third request fetches data for evaluating the projection
-        assert_eq!(requests.lock().unwrap().len(), 3);
-    }
-
-    #[tokio::test]
     #[allow(deprecated)]
     async fn empty_offset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
@@ -1957,7 +1648,7 @@ mod tests {
             .unwrap();
 
         metadata.set_offset_index(Some(vec![]));
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =
             ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
@@ -1982,7 +1673,7 @@ mod tests {
             .await
             .unwrap();
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =
             ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
@@ -2034,7 +1725,7 @@ mod tests {
         write_metadata_to_local_file(metadata, &metadata_path);
         let metadata = read_metadata_from_local_file(&metadata_path);
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =
             ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
@@ -2060,7 +1751,7 @@ mod tests {
         let async_reader = TestReader::new(data);
 
         // Enable page index so the fetch logic loads only required pages
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
             .await
             .unwrap();
@@ -2105,7 +1796,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_data_page_row_count_limit(1)
             .set_write_batch_size(1)
-            .set_max_row_group_size(10)
+            .set_max_row_group_row_count(Some(10))
             .set_write_page_header_statistics(true)
             .build();
         let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), Some(props)).unwrap();

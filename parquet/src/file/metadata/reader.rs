@@ -123,9 +123,7 @@ impl ParquetMetaDataReader {
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     #[deprecated(since = "56.1.0", note = "Use `with_page_index_policy` instead")]
     pub fn with_page_indexes(self, val: bool) -> Self {
-        let policy = PageIndexPolicy::from(val);
-        self.with_column_index_policy(policy)
-            .with_offset_index_policy(policy)
+        self.with_page_index_policy(PageIndexPolicy::from(val))
     }
 
     /// Enable or disable reading the Parquet [ColumnIndex] structure.
@@ -532,7 +530,13 @@ impl ParquetMetaDataReader {
                 let remainder_start = *remainder_start as u64;
                 let offset = usize::try_from(range.start - remainder_start)?;
                 let end = usize::try_from(range.end - remainder_start)?;
-                assert!(end <= remainder.len());
+                if end > remainder.len() {
+                    return Err(general_err!(
+                        "Corrupted parquet file: index data range ({:?}) exceeds remainder length ({})",
+                        range,
+                        remainder.len()
+                    ));
+                }
                 remainder.slice(offset..end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
@@ -540,7 +544,13 @@ impl ParquetMetaDataReader {
         };
 
         // Sanity check
-        assert_eq!(bytes.len() as u64, range.end - range.start);
+        if bytes.len() as u64 != range.end - range.start {
+            return Err(general_err!(
+                "Corrupted parquet file: index data length mismatch, expected {}, got {}",
+                range.end - range.start,
+                bytes.len()
+            ));
+        }
         push_decoder.push_range(range.clone(), bytes)?;
         let metadata = parse_index_data(&mut push_decoder)?;
         self.metadata = Some(metadata);

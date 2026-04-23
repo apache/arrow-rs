@@ -21,6 +21,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::hint;
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -130,6 +131,35 @@ where
                 seed,
             ))
         }
+    }
+}
+
+struct GenerateStringView {
+    range: Range<usize>,
+    description: String,
+    _marker: std::marker::PhantomData<StringViewType>,
+}
+
+impl InputGenerator for GenerateStringView {
+    fn name(&self) -> &str {
+        self.description.as_str()
+    }
+    fn generate_scalar_with_null_value(&self) -> ArrayRef {
+        new_null_array(&DataType::Utf8View, 1)
+    }
+
+    fn generate_non_null_scalars(&self, seed: u64, number_of_scalars: usize) -> Vec<ArrayRef> {
+        let array = self.generate_array(seed, number_of_scalars, 0.0);
+        (0..number_of_scalars).map(|i| array.slice(i, 1)).collect()
+    }
+
+    fn generate_array(&self, seed: u64, array_length: usize, null_percentage: f32) -> ArrayRef {
+        Arc::new(create_string_view_array_with_len_range_and_seed(
+            array_length,
+            null_percentage,
+            self.range.clone(),
+            seed,
+        ))
     }
 }
 
@@ -270,6 +300,24 @@ fn add_benchmark(c: &mut Criterion) {
         &GenerateBytes::<GenericBinaryType<i32>> {
             description: "long bytes (100..400)".to_string(),
             range_length: 100..400,
+            _marker: std::marker::PhantomData,
+        },
+    );
+
+    bench_zip_on_input_generator(
+        c,
+        &GenerateStringView {
+            description: "string_views size (3..10)".to_string(),
+            range: 3..10,
+            _marker: std::marker::PhantomData,
+        },
+    );
+
+    bench_zip_on_input_generator(
+        c,
+        &GenerateStringView {
+            description: "string_views size (10..100)".to_string(),
+            range: 10..100,
             _marker: std::marker::PhantomData,
         },
     );

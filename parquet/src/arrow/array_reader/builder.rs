@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use arrow_schema::{DataType, Fields, SchemaBuilder};
 
@@ -26,12 +26,14 @@ use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::row_group_cache::RowGroupCache;
+use crate::arrow::array_reader::row_group_index::RowGroupIndexReader;
 use crate::arrow::array_reader::row_number::RowNumberReader;
 use crate::arrow::array_reader::{
-    ArrayReader, FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
-    PrimitiveArrayReader, RowGroups, StructArrayReader, make_byte_array_dictionary_reader,
-    make_byte_array_reader,
+    ArrayReader, FixedSizeListArrayReader, ListArrayReader, ListViewArrayReader, MapArrayReader,
+    NullArrayReader, PrimitiveArrayReader, RowGroups, StructArrayReader,
+    make_byte_array_dictionary_reader, make_byte_array_reader,
 };
+use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::schema::{ParquetField, ParquetFieldType, VirtualColumnType};
 use crate::basic::Type as PhysicalType;
@@ -46,12 +48,12 @@ pub struct CacheOptionsBuilder<'a> {
     /// Projection mask to apply to the cache
     pub projection_mask: &'a ProjectionMask,
     /// Cache to use for storing row groups
-    pub cache: &'a Arc<Mutex<RowGroupCache>>,
+    pub cache: &'a Arc<RwLock<RowGroupCache>>,
 }
 
 impl<'a> CacheOptionsBuilder<'a> {
     /// create a new cache options builder
-    pub fn new(projection_mask: &'a ProjectionMask, cache: &'a Arc<Mutex<RowGroupCache>>) -> Self {
+    pub fn new(projection_mask: &'a ProjectionMask, cache: &'a Arc<RwLock<RowGroupCache>>) -> Self {
         Self {
             projection_mask,
             cache,
@@ -81,7 +83,7 @@ impl<'a> CacheOptionsBuilder<'a> {
 #[derive(Clone)]
 pub struct CacheOptions<'a> {
     pub projection_mask: &'a ProjectionMask,
-    pub cache: &'a Arc<Mutex<RowGroupCache>>,
+    pub cache: &'a Arc<RwLock<RowGroupCache>>,
     pub role: CacheRole,
 }
 
@@ -95,16 +97,28 @@ pub struct ArrayReaderBuilder<'a> {
     parquet_metadata: Option<&'a ParquetMetaData>,
     /// metrics
     metrics: &'a ArrowReaderMetrics,
+    /// Batch size for pre-allocating internal buffers
+    batch_size: usize,
 }
 
 impl<'a> ArrayReaderBuilder<'a> {
+    /// Create a new `ArrayReaderBuilder`
     pub fn new(row_groups: &'a dyn RowGroups, metrics: &'a ArrowReaderMetrics) -> Self {
         Self {
             row_groups,
             cache_options: None,
             parquet_metadata: None,
             metrics,
+            batch_size: DEFAULT_BATCH_SIZE,
         }
+    }
+
+    /// Set the batch size used to pre-allocate internal buffers.
+    ///
+    /// This avoids reallocations when reading the first batch of data.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
     }
 
     /// Add cache options to the builder
@@ -169,13 +183,18 @@ impl<'a> ArrayReaderBuilder<'a> {
                 // They need to be built by specialized readers
                 match virtual_type {
                     VirtualColumnType::RowNumber => Ok(Some(self.build_row_number_reader()?)),
+                    VirtualColumnType::RowGroupIndex => {
+                        Ok(Some(self.build_row_group_index_reader()?))
+                    }
                 }
             }
             ParquetFieldType::Group { .. } => match &field.arrow_type {
                 DataType::Map(_, _) => self.build_map_reader(field, mask),
                 DataType::Struct(_) => self.build_struct_reader(field, mask),
-                DataType::List(_) => self.build_list_reader(field, mask, false),
-                DataType::LargeList(_) => self.build_list_reader(field, mask, true),
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_) => self.build_list_reader(field, mask),
                 DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(field, mask),
                 d => unimplemented!("reading group type {} not implemented", d),
             },
@@ -189,6 +208,18 @@ impl<'a> ArrayReaderBuilder<'a> {
             )
         })?;
         Ok(Box::new(RowNumberReader::try_new(
+            parquet_metadata,
+            self.row_groups.row_groups(),
+        )?))
+    }
+
+    fn build_row_group_index_reader(&self) -> Result<Box<dyn ArrayReader>> {
+        let parquet_metadata = self.parquet_metadata.ok_or_else(|| {
+            ParquetError::General(
+                "ParquetMetaData is required to read virtual row group index columns.".to_string(),
+            )
+        })?;
+        Ok(Box::new(RowGroupIndexReader::try_new(
             parquet_metadata,
             self.row_groups.row_groups(),
         )?))
@@ -250,7 +281,6 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
-        is_large: bool,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
@@ -259,31 +289,55 @@ impl<'a> ArrayReaderBuilder<'a> {
             Some(item_reader) => {
                 // Need to retrieve underlying data type to handle projection
                 let item_type = item_reader.get_data_type().clone();
-                let data_type = match &field.arrow_type {
+                let reader: Box<dyn ArrayReader> = match &field.arrow_type {
                     DataType::List(f) => {
-                        DataType::List(Arc::new(f.as_ref().clone().with_data_type(item_type)))
+                        let data_type =
+                            DataType::List(Arc::new(f.as_ref().clone().with_data_type(item_type)));
+                        Box::new(ListArrayReader::<i32>::new(
+                            item_reader,
+                            data_type,
+                            field.def_level,
+                            field.rep_level,
+                            field.nullable,
+                        ))
                     }
                     DataType::LargeList(f) => {
-                        DataType::LargeList(Arc::new(f.as_ref().clone().with_data_type(item_type)))
+                        let data_type = DataType::LargeList(Arc::new(
+                            f.as_ref().clone().with_data_type(item_type),
+                        ));
+                        Box::new(ListArrayReader::<i64>::new(
+                            item_reader,
+                            data_type,
+                            field.def_level,
+                            field.rep_level,
+                            field.nullable,
+                        ))
+                    }
+                    DataType::ListView(f) => {
+                        let data_type = DataType::ListView(Arc::new(
+                            f.as_ref().clone().with_data_type(item_type),
+                        ));
+                        Box::new(ListViewArrayReader::<i32>::new(
+                            item_reader,
+                            data_type,
+                            field.def_level,
+                            field.rep_level,
+                            field.nullable,
+                        ))
+                    }
+                    DataType::LargeListView(f) => {
+                        let data_type = DataType::LargeListView(Arc::new(
+                            f.as_ref().clone().with_data_type(item_type),
+                        ));
+                        Box::new(ListViewArrayReader::<i64>::new(
+                            item_reader,
+                            data_type,
+                            field.def_level,
+                            field.rep_level,
+                            field.nullable,
+                        ))
                     }
                     _ => unreachable!(),
-                };
-
-                let reader = match is_large {
-                    false => Box::new(ListArrayReader::<i32>::new(
-                        item_reader,
-                        data_type,
-                        field.def_level,
-                        field.rep_level,
-                        field.nullable,
-                    )) as _,
-                    true => Box::new(ListArrayReader::<i64>::new(
-                        item_reader,
-                        data_type,
-                        field.def_level,
-                        field.rep_level,
-                        field.nullable,
-                    )) as _,
                 };
                 Some(reader)
             }
@@ -373,18 +427,21 @@ impl<'a> ArrayReaderBuilder<'a> {
                 page_iterator,
                 column_desc,
                 arrow_type,
+                self.batch_size,
             )?) as _,
             PhysicalType::INT32 => {
                 if let Some(DataType::Null) = arrow_type {
                     Box::new(NullArrayReader::<Int32Type>::new(
                         page_iterator,
                         column_desc,
+                        self.batch_size,
                     )?) as _
                 } else {
                     Box::new(PrimitiveArrayReader::<Int32Type>::new(
                         page_iterator,
                         column_desc,
                         arrow_type,
+                        self.batch_size,
                     )?) as _
                 }
             }
@@ -392,36 +449,56 @@ impl<'a> ArrayReaderBuilder<'a> {
                 page_iterator,
                 column_desc,
                 arrow_type,
+                self.batch_size,
             )?) as _,
             PhysicalType::INT96 => Box::new(PrimitiveArrayReader::<Int96Type>::new(
                 page_iterator,
                 column_desc,
                 arrow_type,
+                self.batch_size,
             )?) as _,
             PhysicalType::FLOAT => Box::new(PrimitiveArrayReader::<FloatType>::new(
                 page_iterator,
                 column_desc,
                 arrow_type,
+                self.batch_size,
             )?) as _,
             PhysicalType::DOUBLE => Box::new(PrimitiveArrayReader::<DoubleType>::new(
                 page_iterator,
                 column_desc,
                 arrow_type,
+                self.batch_size,
             )?) as _,
             PhysicalType::BYTE_ARRAY => match arrow_type {
-                Some(DataType::Dictionary(_, _)) => {
-                    make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type)?
+                Some(DataType::Dictionary(_, _)) => make_byte_array_dictionary_reader(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    self.batch_size,
+                )?,
+                Some(DataType::Utf8View | DataType::BinaryView) => make_byte_view_array_reader(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    self.batch_size,
+                )?,
+                _ => {
+                    make_byte_array_reader(page_iterator, column_desc, arrow_type, self.batch_size)?
                 }
-                Some(DataType::Utf8View | DataType::BinaryView) => {
-                    make_byte_view_array_reader(page_iterator, column_desc, arrow_type)?
-                }
-                _ => make_byte_array_reader(page_iterator, column_desc, arrow_type)?,
             },
             PhysicalType::FIXED_LEN_BYTE_ARRAY => match arrow_type {
-                Some(DataType::Dictionary(_, _)) => {
-                    make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type)?
-                }
-                _ => make_fixed_len_byte_array_reader(page_iterator, column_desc, arrow_type)?,
+                Some(DataType::Dictionary(_, _)) => make_byte_array_dictionary_reader(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    self.batch_size,
+                )?,
+                _ => make_fixed_len_byte_array_reader(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    self.batch_size,
+                )?,
             },
         };
         Ok(Some(reader))
@@ -492,6 +569,7 @@ mod tests {
 
         let metrics = ArrowReaderMetrics::disabled();
         let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
+            .with_batch_size(DEFAULT_BATCH_SIZE)
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 
@@ -525,6 +603,7 @@ mod tests {
 
         let metrics = ArrowReaderMetrics::disabled();
         let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
+            .with_batch_size(DEFAULT_BATCH_SIZE)
             .with_parquet_metadata(file_reader.metadata())
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();

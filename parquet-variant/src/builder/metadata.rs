@@ -206,7 +206,7 @@ impl WritableMetadataBuilder {
 
         // Determine appropriate offset size based on the larger of dict size or total string size
         let max_offset = std::cmp::max(total_dict_size, nkeys);
-        let offset_size = int_size(max_offset);
+        let offset_size = int_size(max_offset) as u8;
 
         let offset_start = 1 + offset_size as usize;
         let string_start = offset_start + (nkeys + 1) * offset_size as usize;
