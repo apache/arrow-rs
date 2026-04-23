@@ -843,7 +843,7 @@ impl<'m, 'v> Variant<'m, 'v> {
 
         let div = base.pow_checked(<u32 as From<u8>>::from(scale)).ok()?;
         match T::KIND {
-            NumericKind::Integer => cast_single_decimal_to_integer_opt::<D, T>(raw, div, false),
+            NumericKind::Integer => cast_single_decimal_to_integer_opt::<false, D, T>(raw, div),
             NumericKind::Float => T::from(single_decimal_to_float_lossy::<D, _>(
                 &as_float,
                 raw,

@@ -844,10 +844,9 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = cast_single_decimal_to_integer_opt::<D, T::Native>(
+                        let v = cast_single_decimal_to_integer_opt::<true, D, T::Native>(
                             array.value(i),
                             div,
-                            true,
                         );
                         value_builder.append_option(v);
                     }
@@ -876,10 +875,9 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = cast_single_decimal_to_integer_opt::<D, T::Native>(
+                        let v = cast_single_decimal_to_integer_opt::<false, D, T::Native>(
                             array.value(i),
                             div,
-                            false,
                         );
                         value_builder.append_option(v);
                     }
@@ -910,22 +908,21 @@ where
 /// The value is scaled by multiplying or dividing with the div based on the scale sign.
 /// Returns `None` if the value is overflow or cannot be represented with the requested precision.
 #[inline]
-pub fn cast_single_decimal_to_integer_opt<D, T>(
+pub fn cast_single_decimal_to_integer_opt<const NEGATIVE_SCALE: bool, D, T>(
     value: D::Native,
     div: D::Native,
-    negative: bool,
 ) -> Option<T>
 where
     T: NumCast + ToPrimitive,
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: ToPrimitive,
 {
-    let v = if negative {
+    let v = if NEGATIVE_SCALE {
         value.mul_checked(div).ok()?
     } else {
         value.div_checked(div).ok()?
     };
-    T::from::<D::Native>(v)
+    <T as NumCast>::from::<D::Native>(v)
 }
 
 #[inline]
