@@ -1134,14 +1134,13 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                     let suffix = v[0].data();
 
                     // Extract current prefix length, can be 0
-                    let prefix_len_i32 = self.prefix_lengths[self.current_idx];
-                    if prefix_len_i32 < 0 {
-                        return Err(general_err!(
-                            "Invalid DELTA_BYTE_ARRAY prefix length {}",
-                            prefix_len_i32
-                        ));
-                    }
-                    let prefix_len = prefix_len_i32 as usize;
+                    let prefix_len = usize::try_from(self.prefix_lengths[self.current_idx])
+                        .map_err(|_| {
+                            general_err!(
+                                "Invalid DELTA_BYTE_ARRAY prefix length {}",
+                                self.prefix_lengths[self.current_idx]
+                            )
+                        })?;
 
                     if prefix_len > self.previous_value.len() {
                         return Err(general_err!(
@@ -1241,6 +1240,32 @@ mod tests {
             .set_data(Bytes::from(corrupted), input.len())
             .unwrap();
 
+        let mut out = vec![ByteArray::new(); input.len()];
+
+        let err = decoder.get(&mut out).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid DELTA_BYTE_ARRAY prefix length"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_delta_byte_array_negative_prefix_len_returns_error() {
+        let col_descr = create_test_col_desc_ptr(-1, Type::BYTE_ARRAY);
+
+        let mut encoder =
+            get_encoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, &col_descr).unwrap();
+        let input = vec![ByteArray::from("a"), ByteArray::from("ab")];
+        encoder.put(&input).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+
+        let mut decoder = DeltaByteArrayDecoder::<ByteArrayType>::new();
+        decoder.set_data(encoded, input.len()).unwrap();
+
+        // Force a negative prefix length after decoder initialization
+        decoder.prefix_lengths[0] = -1;
         let mut out = vec![ByteArray::new(); input.len()];
 
         let err = decoder.get(&mut out).unwrap_err();
