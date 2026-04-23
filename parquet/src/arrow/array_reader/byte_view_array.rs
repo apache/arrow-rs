@@ -450,20 +450,15 @@ impl ByteViewArrayDecoderPlain {
     }
 }
 
-/// Rewrite `view`'s buffer index by `base` when the dictionary buffers were
-/// appended later than position 0 in the output buffer list. Inlined views
-/// (length ≤ 12) carry their data in the high 96 bits and must be copied
-/// verbatim. Written branchlessly so LLVM emits `csel`/`cmov` inside the
-/// hot chunked gather loop instead of a per-view conditional branch.
+/// Branchlessly add `base` to the buffer-index field of a long view
+/// (inline views with length ≤ 12 carry data in the high bits and are
+/// left untouched).
 #[inline(always)]
 fn adjust_buffer_index(view: u128, base: u32) -> u128 {
-    // View layout: bits [0..32] = len, [64..96] = buffer_index (long-view only).
     let is_long = ((view as u32) > 12) as u128;
     view.wrapping_add((is_long * base as u128) << 64)
 }
 
-/// Slow-path error constructor for a chunk whose validity check failed. Kept
-/// out of the hot loop so the fast path stays small.
 #[cold]
 #[inline(never)]
 fn invalid_dict_key(chunk: &[i32], dict_len: usize) -> ParquetError {
@@ -529,91 +524,80 @@ impl ByteViewArrayDecoderDictionary {
         // then the base_buffer_idx is 5 - 2 = 3
         let base_buffer_idx = output.buffers.len() as u32 - dict.buffers.len() as u32;
 
-        // Pre-reserve output capacity so the gather loop can write through a raw
-        // pointer without `Vec::extend`'s per-element capacity checks.
+        // Pre-reserve output capacity to avoid per-chunk reallocation in extend
         output.views.reserve(len);
 
         let dict_views: &[u128] = dict.views.as_slice();
         let dict_len = dict_views.len();
+        let mut out_offset = 0usize;
 
         let read = self.decoder.read(len, |keys| {
-            // SAFETY: `output.views.reserve(len)` was called above and the
-            // outer loop ensures we never write more than `len` views.
-            let out_ptr = unsafe { output.views.as_mut_ptr().add(output.views.len()) };
+            // SAFETY: `reserve(len)` above + callbacks summing to `len` means
+            // spare capacity is always at least `keys.len()` from `out_offset`.
+            let out: &mut [std::mem::MaybeUninit<u128>] = unsafe {
+                output
+                    .views
+                    .spare_capacity_mut()
+                    .get_unchecked_mut(out_offset..out_offset + keys.len())
+            };
+            out_offset += keys.len();
 
-            // Process 8-key chunks with a bulk validity check that the compiler
-            // can autovectorise, then use `get_unchecked` in the gather loop.
-            // Mirrors the pattern in `RleDecoder::get_batch_with_dict`.
-            const CHUNK: usize = 8;
-            let mut chunks = keys.chunks_exact(CHUNK);
-            let mut written = 0usize;
-            // Cast to u32 so that any negative i32 (corrupt data) compares as a
-            // very large value and fails the check.
+            const CHUNK: usize = 16;
+            let mut out_chunks = out.chunks_exact_mut(CHUNK);
+            let mut key_chunks = keys.chunks_exact(CHUNK);
+            // Cast to u32 so negative i32 (corrupt data) compares as a large value.
             let dict_len_u32 = dict_len as u32;
 
             if base_buffer_idx == 0 {
-                for chunk in chunks.by_ref() {
-                    // Branchless max-reduction over 8 keys: LLVM emits a SIMD
-                    // umax sequence on aarch64/x86_64 instead of the short-
-                    // circuited `.all()` form which compiles to a chain of
-                    // per-key `cmp + b.ls`.
-                    let max_key = chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
+                for (out_chunk, key_chunk) in out_chunks.by_ref().zip(key_chunks.by_ref()) {
+                    let max_key = key_chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
                     if max_key >= dict_len_u32 {
-                        return Err(invalid_dict_key(chunk, dict_len));
+                        return Err(invalid_dict_key(key_chunk, dict_len));
                     }
-                    for (i, &k) in chunk.iter().enumerate() {
+                    for (dst, &k) in out_chunk.iter_mut().zip(key_chunk.iter()) {
                         // SAFETY: bounds checked above.
-                        unsafe {
-                            let view = *dict_views.get_unchecked(k as usize);
-                            out_ptr.add(written + i).write(view);
-                        }
+                        dst.write(unsafe { *dict_views.get_unchecked(k as usize) });
                     }
-                    written += CHUNK;
                 }
-                for &k in chunks.remainder() {
+                for (dst, &k) in out_chunks
+                    .into_remainder()
+                    .iter_mut()
+                    .zip(key_chunks.remainder().iter())
+                {
                     let view = *dict_views
                         .get(k as usize)
                         .ok_or_else(|| general_err!("invalid key={k} for dictionary"))?;
-                    // SAFETY: remainder writes stay within the reserved range.
-                    unsafe { out_ptr.add(written).write(view) };
-                    written += 1;
+                    dst.write(view);
                 }
             } else {
-                for chunk in chunks.by_ref() {
-                    let max_key = chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
+                for (out_chunk, key_chunk) in out_chunks.by_ref().zip(key_chunks.by_ref()) {
+                    let max_key = key_chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
                     if max_key >= dict_len_u32 {
-                        return Err(invalid_dict_key(chunk, dict_len));
+                        return Err(invalid_dict_key(key_chunk, dict_len));
                     }
-                    for (i, &k) in chunk.iter().enumerate() {
+                    for (dst, &k) in out_chunk.iter_mut().zip(key_chunk.iter()) {
                         // SAFETY: bounds checked above.
-                        unsafe {
-                            let view = *dict_views.get_unchecked(k as usize);
-                            out_ptr
-                                .add(written + i)
-                                .write(adjust_buffer_index(view, base_buffer_idx));
-                        }
+                        let view = unsafe { *dict_views.get_unchecked(k as usize) };
+                        dst.write(adjust_buffer_index(view, base_buffer_idx));
                     }
-                    written += CHUNK;
                 }
-                for &k in chunks.remainder() {
+                for (dst, &k) in out_chunks
+                    .into_remainder()
+                    .iter_mut()
+                    .zip(key_chunks.remainder().iter())
+                {
                     let view = *dict_views
                         .get(k as usize)
                         .ok_or_else(|| general_err!("invalid key={k} for dictionary"))?;
-                    // SAFETY: remainder writes stay within the reserved range.
-                    unsafe {
-                        out_ptr
-                            .add(written)
-                            .write(adjust_buffer_index(view, base_buffer_idx))
-                    };
-                    written += 1;
+                    dst.write(adjust_buffer_index(view, base_buffer_idx));
                 }
             }
 
-            // SAFETY: we wrote exactly `written == keys.len()` new views.
-            debug_assert_eq!(written, keys.len());
-            unsafe { output.views.set_len(output.views.len() + written) };
             Ok(())
         })?;
+        // SAFETY: decoder.read wrote exactly `read` views via dst.write.
+        debug_assert_eq!(out_offset, read);
+        unsafe { output.views.set_len(output.views.len() + read) };
         Ok(read)
     }
 
