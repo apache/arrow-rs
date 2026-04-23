@@ -151,9 +151,7 @@ fn binary_dict_to_string_view<K: ArrowDictionaryKeyType>(
         }
         Err(e) => {
             if !cast_options.safe {
-                return Err(ArrowError::CastError(format!(
-                    "Cannot cast binary dictionary to Utf8View: {e}"
-                )));
+                return Err(e);
             }
             // safe=true: validate each dictionary value individually so we can nullify
             // only the rows whose key points to an invalid UTF-8 value.

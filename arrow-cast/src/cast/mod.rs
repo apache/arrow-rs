@@ -7377,8 +7377,8 @@ mod tests {
         };
         let err = cast_with_options(&dict_array, &DataType::Utf8View, &strict).unwrap_err();
         assert!(
-            matches!(err, ArrowError::CastError(_)),
-            "expected CastError, got {err:?}"
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "expected InvalidArgumentError, got {err:?}"
         );
     }
 
