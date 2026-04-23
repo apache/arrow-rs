@@ -16,12 +16,11 @@
 // under the License.
 
 use bytes::Bytes;
-use half::f16;
 
-use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
+use crate::basic::{ConvertedType, Encoding};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
-    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
+    compare_greater, fallback_encoding, has_dictionary_support, update_max, update_min,
 };
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
@@ -331,19 +330,11 @@ where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
 {
-    let first = loop {
-        let next = iter.next()?;
-        if !is_nan(descr, next) {
-            break next;
-        }
-    };
+    let first = iter.next()?;
 
     let mut min = first;
     let mut max = first;
     for val in iter {
-        if is_nan(descr, val) {
-            continue;
-        }
         if compare_greater(descr, min, val) {
             min = val;
         }
@@ -352,37 +343,7 @@ where
         }
     }
 
-    // Float/Double statistics have special case for zero.
-    //
-    // If computed min is zero, whether negative or positive,
-    // the spec states that the min should be written as -0.0
-    // (negative zero)
-    //
-    // For max, it has similar logic but will be written as 0.0
-    // (positive zero)
-    let min = replace_zero(min, descr, -0.0);
-    let max = replace_zero(max, descr, 0.0);
-
-    Some((min, max))
-}
-
-#[inline]
-fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace: f32) -> T {
-    match T::PHYSICAL_TYPE {
-        Type::FLOAT if f32::from_le_bytes(val.as_bytes().try_into().unwrap()) == 0.0 => {
-            T::try_from_le_slice(&f32::to_le_bytes(replace)).unwrap()
-        }
-        Type::DOUBLE if f64::from_le_bytes(val.as_bytes().try_into().unwrap()) == 0.0 => {
-            T::try_from_le_slice(&f64::to_le_bytes(replace as f64)).unwrap()
-        }
-        Type::FIXED_LEN_BYTE_ARRAY
-            if descr.logical_type_ref() == Some(LogicalType::Float16).as_ref()
-                && f16::from_le_bytes(val.as_bytes().try_into().unwrap()) == f16::NEG_ZERO =>
-        {
-            T::try_from_le_slice(&f16::to_le_bytes(f16::from_f32(replace))).unwrap()
-        }
-        _ => val.clone(),
-    }
+    Some((min.clone(), max.clone()))
 }
 
 /// Creates a bloom filter sized for the column's configured NDV, returning the filter

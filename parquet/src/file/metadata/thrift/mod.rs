@@ -873,6 +873,7 @@ pub(crate) fn parquet_metadata_from_bytes(
                     column.logical_type_ref(),
                     column.converted_type(),
                     column.physical_type(),
+                    true,
                 );
                 cos[i] = ColumnOrder::TYPE_DEFINED_ORDER(sort_order);
             }

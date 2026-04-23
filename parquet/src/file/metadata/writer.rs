@@ -203,22 +203,16 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let column_indexes = self.finalize_column_indexes()?;
         let offset_indexes = self.finalize_offset_indexes()?;
 
-        // We only include ColumnOrder for leaf nodes.
-        // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
-        // for all leaf nodes.
-        // Even if the column has an undefined sort order, such as INTERVAL, this
-        // is still technically the defined TYPEORDER so it should still be set.
         let column_orders = self
             .schema_descr
             .columns()
             .iter()
             .map(|col| {
-                let sort_order = ColumnOrder::sort_order_for_type(
+                ColumnOrder::column_order_for_type(
                     col.logical_type_ref(),
                     col.converted_type(),
                     col.physical_type(),
-                );
-                ColumnOrder::TYPE_DEFINED_ORDER(sort_order)
+                )
             })
             .collect();
 
