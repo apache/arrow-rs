@@ -64,7 +64,7 @@ use num_traits::Zero;
 ///
 /// # Safety
 ///
-/// When `options` is not set to check bounds, taking indexes after `len` will panic.
+/// When `options` is not set to check bounds, taking indexes after `len` is *undefined behavior*.
 ///
 /// # See also
 /// * [`BatchCoalescer`]: to filter multiple [`RecordBatch`] and coalesce
@@ -133,7 +133,7 @@ pub fn take(
 ///
 /// # Safety
 ///
-/// When `options` is not set to check bounds, taking indexes after `len` will panic.
+/// When `options` is not set to check bounds, taking indexes after `len` is *undefined behavior*.
 ///
 /// # Examples
 /// ```
@@ -1072,6 +1072,9 @@ to_indices_reinterpret!(Int64Type, UInt64Type);
 /// Take rows by index from [`RecordBatch`] and returns a new [`RecordBatch`] from those indexes.
 ///
 /// This function will call [`take`] on each array of the [`RecordBatch`] and assemble a new [`RecordBatch`].
+///
+/// # Safety
+/// taking indexes after `len` is *undefined behavior*.
 ///
 /// # Example
 /// ```
