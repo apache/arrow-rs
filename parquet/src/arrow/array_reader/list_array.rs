@@ -249,6 +249,7 @@ mod tests {
     use crate::arrow::array_reader::ArrayReaderBuilder;
     use crate::arrow::array_reader::list_array::ListArrayReader;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
+    use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
     use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::{ArrowWriter, ProjectionMask, parquet_to_arrow_schema};
@@ -567,6 +568,7 @@ mod tests {
 
         let metrics = ArrowReaderMetrics::disabled();
         let mut array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
+            .with_batch_size(DEFAULT_BATCH_SIZE)
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 
