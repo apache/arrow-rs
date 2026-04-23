@@ -1136,12 +1136,19 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                     // Extract current prefix length, can be 0
                     let prefix_len_i32 = self.prefix_lengths[self.current_idx];
                     if prefix_len_i32 < 0 {
-                        return Err(general_err!("Invalid DELTA_BYTE_ARRAY prefix length {}", prefix_len_i32));
+                        return Err(general_err!(
+                            "Invalid DELTA_BYTE_ARRAY prefix length {}",
+                            prefix_len_i32
+                        ));
                     }
                     let prefix_len = prefix_len_i32 as usize;
 
                     if prefix_len > self.previous_value.len() {
-                        return Err(general_err!("Invalid DELTA_BYTE_ARRAY prefix length {} exceeds previous value length {}", prefix_len, self.previous_value.len()));
+                        return Err(general_err!(
+                            "Invalid DELTA_BYTE_ARRAY prefix length {} exceeds previous value length {}",
+                            prefix_len,
+                            self.previous_value.len()
+                        ));
                     }
 
                     // Concatenate prefix with suffix
@@ -1194,14 +1201,17 @@ mod tests {
     fn test_delta_byte_array_invalid_prefix_len_returns_error() {
         let col_descr = create_test_col_desc_ptr(-1, Type::BYTE_ARRAY);
 
-        let mut encoder = get_encoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, &col_descr).unwrap();
+        let mut encoder =
+            get_encoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, &col_descr).unwrap();
         let input = vec![ByteArray::from("a"), ByteArray::from("ab")];
         encoder.put(&input).unwrap();
         let encoded = encoder.flush_buffer().unwrap();
 
         // First, decode just the prefix-length stream so we know where the suffix stream starts.
         let mut prefix_len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
-        prefix_len_decoder.set_data(encoded.clone(), input.len()).unwrap();
+        prefix_len_decoder
+            .set_data(encoded.clone(), input.len())
+            .unwrap();
         let num_prefixes = prefix_len_decoder.values_left();
         let mut prefix_lengths = vec![0; num_prefixes];
         prefix_len_decoder.get(&mut prefix_lengths).unwrap();
@@ -1214,7 +1224,11 @@ mod tests {
         // Corrupt the prefix-length stream itself:
         // replace it with a valid DELTA_BINARY_PACKED stream for [1, 1],
         // so the first decoded prefix length becomes impossible because previous_value is empty.
-        let mut prefix_encoder = get_encoder::<Int32Type>(Encoding::DELTA_BINARY_PACKED, &create_test_col_desc_ptr(-1, Type::INT32)).unwrap();
+        let mut prefix_encoder = get_encoder::<Int32Type>(
+            Encoding::DELTA_BINARY_PACKED,
+            &create_test_col_desc_ptr(-1, Type::INT32),
+        )
+        .unwrap();
         prefix_encoder.put(&[1i32, 1i32]).unwrap();
         let corrupted_prefix = prefix_encoder.flush_buffer().unwrap();
 
@@ -1223,12 +1237,19 @@ mod tests {
         corrupted.extend_from_slice(&encoded[prefix_stream_end..]);
 
         let mut decoder = DeltaByteArrayDecoder::<ByteArrayType>::new();
-        decoder.set_data(Bytes::from(corrupted), input.len()).unwrap();
+        decoder
+            .set_data(Bytes::from(corrupted), input.len())
+            .unwrap();
 
         let mut out = vec![ByteArray::new(); input.len()];
 
         let err = decoder.get(&mut out).unwrap_err();
-        assert!(err.to_string().contains("Invalid DELTA_BYTE_ARRAY prefix length"), "{}", err);
+        assert!(
+            err.to_string()
+                .contains("Invalid DELTA_BYTE_ARRAY prefix length"),
+            "{}",
+            err
+        );
     }
 
     #[test]
