@@ -564,7 +564,19 @@ mod tests {
         GenericListBuilder, Int64Builder, ListViewBuilder, StringDictionaryBuilder,
     };
     use arrow_schema::{Field, Schema};
-    use std::fmt::Debug;
+    use std::{fmt::Debug, iter::repeat};
+
+    fn create_dict_arr<K: ArrowDictionaryKeyType, V: ArrowDictionaryKeyType>(
+        keys: Vec<K::Native>,
+        null_keys: Option<Vec<bool>>,
+        values: Vec<V::Native>,
+    ) -> ArrayRef {
+        let input_keys =
+            PrimitiveArray::<K>::from_iter_values_with_nulls(keys, null_keys.map(NullBuffer::from));
+        let input_values = PrimitiveArray::<V>::from_iter_values(values);
+        let input = DictionaryArray::new(input_keys, Arc::new(input_values));
+        Arc::new(input) as ArrayRef
+    }
 
     #[test]
     fn test_concat_empty_vec() {
@@ -1899,5 +1911,78 @@ mod tests {
         let values = result_run_array.values().as_primitive::<Int32Type>();
         assert_eq!(values.values(), &[10, 20, 30]);
         assert_eq!(&[2, 3, 5], run_ends);
+    }
+
+    #[test]
+    fn test_nested_dictionary_lists() {
+        let fields = Fields::from(vec![Field::new(
+            "dict_col",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt8)),
+            false,
+        )]);
+        let struct_arr = {
+            let input_1_keys = UInt8Array::from_iter_values(0..=255);
+            let input_1_values = UInt8Array::from_iter_values(0..=255);
+            let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
+
+            StructArray::try_new(fields.clone(), vec![Arc::new(input_1)], None).unwrap()
+        };
+
+        let offset_buffer = OffsetBuffer::<i32>::from_lengths(repeat(1).take(256));
+        let struct_fields = struct_arr.fields();
+        let struct_list_arr = GenericListArray::new(
+            Arc::new(Field::new_struct("element", struct_fields.clone(), false)),
+            offset_buffer,
+            Arc::new(struct_arr) as ArrayRef,
+            None,
+        );
+        let arr1 = Arc::new(struct_list_arr) as ArrayRef;
+        let arr2 = arr1.clone();
+
+        let result = concat(&[&arr1, &arr2]).unwrap();
+
+        // 2. Downcast to the expected type
+        let list_res = result.as_list::<i32>();
+        assert_eq!(list_res.len(), 512);
+
+        // 3. Verify offsets (each row had length 1, so offsets should be 0, 1, 2, ..., 512)
+        let expected_offsets: Vec<i32> = (0..=512).collect();
+        assert_eq!(list_res.value_offsets(), &expected_offsets);
+
+        // 4. Verify the nested Dictionary inside the Struct
+        let struct_res = list_res.values().as_struct();
+        let dict_res = struct_res.column(0).as_dictionary::<UInt8Type>();
+
+        assert_eq!(dict_res.values().len(), 256);
+        // Since the input dictionaries were identical (0..255),
+        // the merged dictionary values should still be 0..255 (not 512 entries)
+        let vals = dict_res.values().as_primitive::<UInt8Type>();
+        assert_eq!(vals, &UInt8Array::from_iter_values(0..=255));
+        // The concanated keys should be 0..255..0..255
+        let keys = dict_res.keys();
+        assert_eq!(
+            keys,
+            &UInt8Array::from_iter_values((0..=255).chain(0..=255))
+        );
+    }
+
+    // FIXME: This should not return dictionary overflow error
+    #[test]
+    fn test_concat_dict_with_same_value_arr() {
+        let arr1 = create_dict_arr::<UInt16Type, UInt32Type>(
+            (0..=65535).collect(),
+            None,
+            (0..=65535).collect(),
+        );
+        let arr2 = create_dict_arr::<UInt16Type, UInt32Type>(
+            (0..=65535).collect(),
+            None,
+            (0..=65535).collect(),
+        );
+        let result = concat(&[&arr1, &arr2]);
+        assert!(matches!(
+            result,
+            Err(ArrowError::DictionaryKeyOverflowError)
+        ))
     }
 }
