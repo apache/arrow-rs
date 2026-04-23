@@ -219,6 +219,9 @@ where
 
     /// Try to read one batch of data returning the number of records read
     fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
+        if batch_size == 0 {
+            return Ok(0);
+        }
         // Update capacity hint to the largest batch size seen
         if batch_size > self.capacity_hint {
             self.capacity_hint = batch_size;

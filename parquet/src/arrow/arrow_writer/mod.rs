@@ -765,6 +765,26 @@ impl std::fmt::Debug for ArrowColumnChunk {
 }
 
 impl ArrowColumnChunk {
+    /// Returns the [`ColumnCloseResult`] produced when the chunk was closed.
+    ///
+    /// Exposes encoding information, collected statistics, and the optional
+    /// [`ColumnIndexMetaData`](crate::file::page_index::column_index::ColumnIndexMetaData)
+    /// / [`OffsetIndexMetaData`](crate::file::page_index::offset_index::OffsetIndexMetaData)
+    /// gathered for the column chunk.
+    pub fn close(&self) -> &ColumnCloseResult {
+        &self.close
+    }
+
+    /// Returns a mutable reference to the [`ColumnCloseResult`].
+    ///
+    /// This allows callers to mutate the close result before the chunk is
+    /// appended to a row group — for example, clearing `column_index` or
+    /// `bloom_filter` based on a dynamic rule that inspects the encodings and
+    /// collected page statistics.
+    pub fn close_mut(&mut self) -> &mut ColumnCloseResult {
+        &mut self.close
+    }
+
     /// Calls [`SerializedRowGroupWriter::append_column`] with this column's data
     pub fn append_to_row_group<W: Write + Send>(
         self,
@@ -5065,5 +5085,55 @@ mod tests {
 
         let total_rows: i64 = sizes.iter().sum();
         assert_eq!(total_rows, 100, "Total rows should be preserved");
+    }
+
+    #[test]
+    fn arrow_column_chunk_close_mut_drops_column_index() {
+        use crate::arrow::ArrowSchemaConverter;
+        use crate::file::writer::SerializedFileWriter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let parquet_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(props.coerce_types())
+            .convert(&schema)
+            .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer =
+            SerializedFileWriter::new(&mut buf, parquet_schema.root_schema_ptr(), props.clone())
+                .unwrap();
+
+        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+        let mut col_writers = factory.create_column_writers(0).unwrap();
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..64));
+        for leaves in compute_leaves(schema.field(0), &arr).unwrap() {
+            col_writers[0].write(&leaves).unwrap();
+        }
+        let mut chunk = col_writers.pop().unwrap().close().unwrap();
+
+        // Immutable accessor exposes the close result produced at close time.
+        assert!(
+            chunk.close().column_index.is_some(),
+            "EnabledStatistics::Page should produce a column_index"
+        );
+
+        // Mutable accessor lets callers drop the page-level index before append.
+        chunk.close_mut().column_index = None;
+        assert!(chunk.close().column_index.is_none());
+
+        let mut rg = writer.next_row_group().unwrap();
+        chunk.append_to_row_group(&mut rg).unwrap();
+        rg.close().unwrap();
+        let file_meta = writer.close().unwrap();
+
+        // After dropping column_index, the resulting file records no column
+        // index offset/length for this chunk.
+        let cc = file_meta.row_group(0).column(0);
+        assert!(cc.column_index_range().is_none());
     }
 }

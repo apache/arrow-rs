@@ -862,52 +862,50 @@ where
             let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
             self.check_bit_width(bit_width)?;
             let mini_block_to_skip = self.mini_block_remaining.min(to_skip - skip);
-            let mini_block_should_skip = mini_block_to_skip;
 
-            let skip_count = self
-                .bit_reader
-                .get_batch(&mut skip_buffer[0..mini_block_to_skip], bit_width);
-
-            if skip_count != mini_block_to_skip {
-                return Err(general_err!(
-                    "Expected to skip {} values from mini block got {}.",
-                    mini_block_batch_size,
-                    skip_count
-                ));
-            }
-
-            // see commentary in self.get() above regarding optimizations
             let min_delta = self.min_delta.as_i64()?;
             if bit_width == 0 {
-                // if min_delta == 0, there's nothing to do. self.last_value is unchanged
+                // All remainders are zero: every delta equals min_delta exactly.
+                // Advance last_value by n * min_delta with no bit reads.
                 if min_delta != 0 {
-                    let mut delta = self.min_delta;
-                    for v in &mut skip_buffer[0..skip_count] {
-                        *v = self.last_value.wrapping_add(&delta);
-                        delta = delta.wrapping_add(&self.min_delta);
-                    }
-
-                    self.last_value = skip_buffer[skip_count - 1];
+                    let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
+                    let step = T::T::from_i64(total)
+                        .ok_or_else(|| general_err!("delta*n overflow in skip"))?;
+                    self.last_value = self.last_value.wrapping_add(&step);
                 }
-            } else if min_delta == 0 {
-                for v in &mut skip_buffer[0..skip_count] {
-                    *v = v.wrapping_add(&self.last_value);
-
-                    self.last_value = *v;
-                }
+                // bit_width=0 payloads occupy zero bytes; no bit_reader advancement needed.
             } else {
-                for v in &mut skip_buffer[0..skip_count] {
-                    *v = v
-                        .wrapping_add(&self.min_delta)
-                        .wrapping_add(&self.last_value);
+                // bw>0: must decode to track last_value for subsequent get() calls.
+                let skip_count = self
+                    .bit_reader
+                    .get_batch(&mut skip_buffer[0..mini_block_to_skip], bit_width);
 
-                    self.last_value = *v;
+                if skip_count != mini_block_to_skip {
+                    return Err(general_err!(
+                        "Expected to skip {} values from mini block got {}.",
+                        mini_block_to_skip,
+                        skip_count
+                    ));
+                }
+
+                if min_delta == 0 {
+                    for v in &mut skip_buffer[0..skip_count] {
+                        *v = v.wrapping_add(&self.last_value);
+                        self.last_value = *v;
+                    }
+                } else {
+                    for v in &mut skip_buffer[0..skip_count] {
+                        *v = v
+                            .wrapping_add(&self.min_delta)
+                            .wrapping_add(&self.last_value);
+                        self.last_value = *v;
+                    }
                 }
             }
 
-            skip += mini_block_should_skip;
-            self.mini_block_remaining -= mini_block_should_skip;
-            self.values_left -= mini_block_should_skip;
+            skip += mini_block_to_skip;
+            self.mini_block_remaining -= mini_block_to_skip;
+            self.values_left -= mini_block_to_skip;
         }
 
         Ok(to_skip)
@@ -1688,6 +1686,23 @@ mod tests {
         ];
         test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 5);
         test_skip::<Int32Type>(block_data, Encoding::DELTA_BINARY_PACKED, 100);
+    }
+
+    #[test]
+    fn test_skip_delta_bit_packed_bw0_uniform_step_i32() {
+        // Uniform-step column: every delta equals min_delta, so bw=0 miniblocks.
+        // Partial skip must advance last_value by n * min_delta (min_delta != 0 path).
+        let data: Vec<i32> = (0..128).map(|i| i * 7).collect();
+        test_skip::<Int32Type>(data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
+        test_skip::<Int32Type>(data, Encoding::DELTA_BINARY_PACKED, 200);
+    }
+
+    #[test]
+    fn test_skip_delta_bit_packed_bw0_uniform_step_i64() {
+        // Same as above for i64.
+        let data: Vec<i64> = (0..128).map(|i| i * 100).collect();
+        test_skip::<Int64Type>(data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
+        test_skip::<Int64Type>(data, Encoding::DELTA_BINARY_PACKED, 200);
     }
 
     #[test]
