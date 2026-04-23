@@ -44,6 +44,7 @@ use arrow_schema::*;
 use crate::CONTINUATION_MARKER;
 use crate::compression::CompressionCodec;
 pub use crate::compression::CompressionContext;
+pub use crate::compression::{IpcCompression, ZstdLevel};
 use crate::convert::IpcSchemaEncoder;
 
 /// IPC write options used to control the behaviour of the [`IpcDataGenerator`]
@@ -65,7 +66,7 @@ pub struct IpcWriteOptions {
     metadata_version: crate::MetadataVersion,
     /// Compression, if desired. Will result in a runtime error
     /// if the corresponding feature is not enabled
-    batch_compression_type: Option<crate::CompressionType>,
+    batch_compression: Option<IpcCompression>,
     /// How to handle updating dictionaries in IPC messages
     dictionary_handling: DictionaryHandling,
 }
@@ -77,19 +78,18 @@ impl IpcWriteOptions {
     /// is not enabled
     pub fn try_with_compression(
         mut self,
-        batch_compression_type: Option<crate::CompressionType>,
+        batch_compression: Option<IpcCompression>,
     ) -> Result<Self, ArrowError> {
-        self.batch_compression_type = batch_compression_type;
+        self.batch_compression = batch_compression;
 
-        if self.batch_compression_type.is_some()
-            && self.metadata_version < crate::MetadataVersion::V5
-        {
+        if self.batch_compression.is_some() && self.metadata_version < crate::MetadataVersion::V5 {
             return Err(ArrowError::InvalidArgumentError(
                 "Compression only supported in metadata v5 and above".to_string(),
             ));
         }
         Ok(self)
     }
+
     /// Try to create IpcWriteOptions, checking for incompatible settings
     pub fn try_new(
         alignment: usize,
@@ -115,7 +115,7 @@ impl IpcWriteOptions {
                 alignment,
                 write_legacy_ipc_format,
                 metadata_version,
-                batch_compression_type: None,
+                batch_compression: None,
                 dictionary_handling: DictionaryHandling::default(),
             }),
             crate::MetadataVersion::V5 => {
@@ -128,7 +128,7 @@ impl IpcWriteOptions {
                         alignment,
                         write_legacy_ipc_format,
                         metadata_version,
-                        batch_compression_type: None,
+                        batch_compression: None,
                         dictionary_handling: DictionaryHandling::default(),
                     })
                 }
@@ -144,6 +144,21 @@ impl IpcWriteOptions {
         self.dictionary_handling = dictionary_handling;
         self
     }
+
+    /// The on-wire [`crate::CompressionType`] selected for batch bodies, if any.
+    fn batch_compression_type(&self) -> Option<crate::CompressionType> {
+        self.batch_compression.map(IpcCompression::codec)
+    }
+
+    /// Build a [`CompressionContext`] configured according to `self`. Only
+    /// zstd currently has tunable parameters; other codecs fall through to
+    /// [`CompressionContext::default`].
+    fn compression_context(&self) -> CompressionContext {
+        match self.batch_compression {
+            Some(IpcCompression::Zstd(level)) => CompressionContext::with_zstd_level(level),
+            Some(IpcCompression::Lz4Frame) | None => CompressionContext::default(),
+        }
+    }
 }
 
 impl Default for IpcWriteOptions {
@@ -152,7 +167,7 @@ impl Default for IpcWriteOptions {
             alignment: 64,
             write_legacy_ipc_format: false,
             metadata_version: crate::MetadataVersion::V5,
-            batch_compression_type: None,
+            batch_compression: None,
             dictionary_handling: DictionaryHandling::default(),
         }
     }
@@ -531,7 +546,7 @@ impl IpcDataGenerator {
         let mut offset = 0;
 
         // get the type of compression
-        let batch_compression_type = write_options.batch_compression_type;
+        let batch_compression_type = write_options.batch_compression_type();
 
         let compression = batch_compression_type.map(|batch_compression_type| {
             let mut c = crate::BodyCompressionBuilder::new(&mut fbb);
@@ -624,7 +639,7 @@ impl IpcDataGenerator {
         let mut arrow_data: Vec<u8> = vec![];
 
         // get the type of compression
-        let batch_compression_type = write_options.batch_compression_type;
+        let batch_compression_type = write_options.batch_compression_type();
 
         let compression = batch_compression_type.map(|batch_compression_type| {
             let mut c = crate::BodyCompressionBuilder::new(&mut fbb);
@@ -1137,6 +1152,7 @@ impl<W: Write> FileWriter<W> {
             &write_options,
         );
         let (meta, data) = write_message(&mut writer, encoded_message, &write_options)?;
+        let compression_context = write_options.compression_context();
         Ok(Self {
             writer,
             write_options,
@@ -1148,7 +1164,7 @@ impl<W: Write> FileWriter<W> {
             dictionary_tracker,
             custom_metadata: HashMap::new(),
             data_gen,
-            compression_context: CompressionContext::default(),
+            compression_context,
         })
     }
 
@@ -1422,13 +1438,14 @@ impl<W: Write> StreamWriter<W> {
             &write_options,
         );
         write_message(&mut writer, encoded_message, &write_options)?;
+        let compression_context = write_options.compression_context();
         Ok(Self {
             writer,
             write_options,
             finished: false,
             dictionary_tracker,
             data_gen,
-            compression_context: CompressionContext::default(),
+            compression_context,
         })
     }
 
@@ -2226,7 +2243,7 @@ mod tests {
         {
             let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                 .unwrap()
-                .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
+                .try_with_compression(Some(IpcCompression::Lz4Frame))
                 .unwrap();
 
             let mut writer =
@@ -2266,7 +2283,7 @@ mod tests {
         {
             let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                 .unwrap()
-                .try_with_compression(Some(crate::CompressionType::LZ4_FRAME))
+                .try_with_compression(Some(IpcCompression::Lz4Frame))
                 .unwrap();
 
             let mut writer =
@@ -2305,7 +2322,7 @@ mod tests {
         {
             let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
                 .unwrap()
-                .try_with_compression(Some(crate::CompressionType::ZSTD))
+                .try_with_compression(Some(IpcCompression::zstd_default()))
                 .unwrap();
 
             let mut writer =
@@ -2328,6 +2345,54 @@ mod tests {
                         assert_eq!(a.len(), b.len());
                         assert_eq!(a.null_count(), b.null_count());
                     });
+            }
+        }
+    }
+
+    // Round-trips a batch written with a non-default zstd level through a
+    // stock reader, confirming the level is a writer-side tuning knob only.
+    #[test]
+    #[cfg(feature = "zstd")]
+    fn test_write_file_with_zstd_non_default_level() {
+        use crate::reader::FileReader;
+
+        let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
+        // Use a batch big enough for zstd to actually compress so we see
+        // different byte counts at different levels.
+        let values: Vec<Option<i32>> = (0..4096).map(|i| Some(i % 17)).collect();
+        let array = Int32Array::from(values);
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)]).unwrap();
+
+        let write_at = |level: ZstdLevel| -> Vec<u8> {
+            let mut buf: Vec<u8> = Vec::new();
+            let write_option = IpcWriteOptions::try_new(8, false, crate::MetadataVersion::V5)
+                .unwrap()
+                .try_with_compression(Some(IpcCompression::Zstd(level)))
+                .unwrap();
+            let mut writer =
+                FileWriter::try_new_with_options(&mut buf, &schema, write_option).unwrap();
+            writer.write(&record_batch).unwrap();
+            writer.finish().unwrap();
+            buf
+        };
+
+        let lo_level = ZstdLevel::try_new(1).unwrap();
+        let hi_level = ZstdLevel::try_new(19).unwrap();
+        let lo_bytes = write_at(lo_level);
+        let hi_bytes = write_at(hi_level);
+
+        // Both outputs must roundtrip to the original record batch via a
+        // stock reader (which has no knowledge of the writer-side level).
+        for bytes in [&lo_bytes, &hi_bytes] {
+            let reader = FileReader::try_new(std::io::Cursor::new(bytes.clone()), None).unwrap();
+            for read_batch in reader {
+                let read_batch = read_batch.unwrap();
+                assert_eq!(read_batch.num_rows(), record_batch.num_rows());
+                assert_eq!(read_batch.schema(), record_batch.schema());
+                for (a, b) in read_batch.columns().iter().zip(record_batch.columns()) {
+                    assert_eq!(a.as_ref(), b.as_ref());
+                }
             }
         }
     }

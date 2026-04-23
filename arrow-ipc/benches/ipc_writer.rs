@@ -17,8 +17,7 @@
 
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
 use arrow_array::{RecordBatch, builder::StringBuilder};
-use arrow_ipc::CompressionType;
-use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
+use arrow_ipc::writer::{FileWriter, IpcCompression, IpcWriteOptions, StreamWriter};
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::sync::Arc;
@@ -45,7 +44,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(move || {
             buffer.clear();
             let options = IpcWriteOptions::default()
-                .try_with_compression(Some(CompressionType::ZSTD))
+                .try_with_compression(Some(IpcCompression::zstd_default()))
                 .unwrap();
             let mut writer =
                 StreamWriter::try_new_with_options(&mut buffer, batch.schema().as_ref(), options)

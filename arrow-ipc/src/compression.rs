@@ -22,6 +22,44 @@ use arrow_schema::ArrowError;
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 
+/// Represents a valid zstd compression level.
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+pub struct ZstdLevel(i32);
+
+impl ZstdLevel {
+    // zstd binds to C, and hence zstd::compression_level_range() is not const as this calls the
+    // underlying C library.
+    const MINIMUM_LEVEL: i32 = 1;
+    const MAXIMUM_LEVEL: i32 = 22;
+
+    /// Attempts to create a zstd compression level from a given compression level.
+    ///
+    /// Compression levels must be valid (i.e. be acceptable for [`zstd::compression_level_range`]).
+    pub fn try_new(level: i32) -> Result<Self, ArrowError> {
+        let range = Self::MINIMUM_LEVEL..=Self::MAXIMUM_LEVEL;
+        if range.contains(&level) {
+            Ok(Self(level))
+        } else {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "valid compression range {}..={} exceeded.",
+                range.start(),
+                range.end(),
+            )))
+        }
+    }
+
+    /// Returns the compression level.
+    pub fn compression_level(&self) -> i32 {
+        self.0
+    }
+}
+
+impl Default for ZstdLevel {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
 /// Additional context that may be needed for compression.
 ///
 /// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
@@ -42,6 +80,30 @@ impl Default for CompressionContext {
             #[cfg(feature = "zstd")]
             compressor: zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL)
                 .expect("can use default compression level"),
+        }
+    }
+}
+
+impl CompressionContext {
+    /// Create a [`CompressionContext`] that uses `level` when compressing with
+    /// [`CompressionCodec::Zstd`]. Other codecs ignore the level.
+    ///
+    /// Without the `zstd` feature the level is ignored; attempting to use
+    /// [`CompressionCodec::Zstd`] still returns the same "feature not
+    /// enabled" error as [`CompressionContext::default`].
+    pub fn with_zstd_level(level: ZstdLevel) -> Self {
+        #[cfg(feature = "zstd")]
+        {
+            Self {
+                // `ZstdLevel` is pre-validated, so `new` cannot fail here.
+                compressor: zstd::bulk::Compressor::new(level.compression_level())
+                    .expect("zstd level was validated by ZstdLevel::try_new"),
+            }
+        }
+        #[cfg(not(feature = "zstd"))]
+        {
+            let _ = level;
+            Self::default()
         }
     }
 }
@@ -111,6 +173,33 @@ impl TryFrom<CompressionType> for CompressionCodec {
             other_type => Err(ArrowError::NotYetImplemented(format!(
                 "compression type {other_type:?} not supported "
             ))),
+        }
+    }
+}
+
+/// Codec (and any codec-specific parameters) for record-batch bodies in an
+/// Arrow IPC stream or file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IpcCompression {
+    /// lz4 frame compression. Requires the `lz4` cargo feature.
+    Lz4Frame,
+    /// zstd compression at the given [`ZstdLevel`]. Requires the `zstd` cargo feature.
+    Zstd(ZstdLevel),
+}
+
+impl IpcCompression {
+    /// zstd with [`ZstdLevel::default`]. Equivalent to
+    /// `Zstd(ZstdLevel::default())` and preserves the behaviour previously
+    /// reached via `try_with_compression(Some(CompressionType::ZSTD))`.
+    pub fn zstd_default() -> Self {
+        Self::Zstd(ZstdLevel::default())
+    }
+
+    /// The on-wire [`crate::CompressionType`] for this codec selection.
+    pub fn codec(self) -> CompressionType {
+        match self {
+            Self::Lz4Frame => CompressionType::LZ4_FRAME,
+            Self::Zstd(_) => CompressionType::ZSTD,
         }
     }
 }
@@ -357,4 +446,5 @@ mod tests {
             .unwrap();
         assert_eq!(input_bytes, result.as_slice());
     }
+
 }
