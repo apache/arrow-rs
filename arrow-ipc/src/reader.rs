@@ -869,25 +869,11 @@ fn get_dictionary_values(
 }
 
 /// Reads the full data block (metadata + body) from the underlying reader.
-///
-/// Uses a zero-initialized buffer for small blocks. For larger blocks, reads
-/// into a temporary `Vec<u8>` and reuses the allocation when it is 64-byte
-/// aligned, matching Arrow's `ALIGNMENT` for `MutableBuffer`. Otherwise, it
-/// falls back to copying into an Arrow-aligned buffer.
-///
-/// This reduces redundant zero-initialization on large reads while preserving
-/// the alignment expected by Arrow buffers.
 fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, ArrowError> {
     reader.seek(SeekFrom::Start(block.offset() as u64))?;
     let body_len = block.bodyLength().to_usize().unwrap();
     let metadata_len = block.metaDataLength().to_usize().unwrap();
     let total_len = body_len.checked_add(metadata_len).unwrap();
-
-    if total_len < 8 * 1024 {
-        let mut buf = MutableBuffer::from_len_zeroed(total_len);
-        reader.read_exact(&mut buf)?;
-        return Ok(buf.into());
-    }
 
     let mut vec = Vec::with_capacity(total_len);
     reader
@@ -902,13 +888,7 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
         )));
     }
 
-    if ((vec.as_ptr() as usize) & 63) == 0 {
-        Ok(Buffer::from_vec(vec))
-    } else {
-        let mut buf = MutableBuffer::from_len_zeroed(total_len);
-        buf.copy_from_slice(&vec);
-        Ok(buf.into())
-    }
+    Ok(Buffer::from_vec(vec))
 }
 
 /// Parse an encapsulated message
@@ -1806,17 +1786,6 @@ impl<R: Read> MessageReader<R> {
         }
     }
 
-    /// Reads the entire next message from the underlying reader which includes
-    /// the metadata length, the metadata, and the body.
-    ///
-    /// Small message bodies use the zero-initialized buffer path. Larger bodies are
-    /// read into a temporary `Vec<u8>` and reused directly when the allocation is
-    /// 64-byte aligned, matching Arrow's `ALIGNMENT` for `MutableBuffer`. Otherwise,
-    /// the body is copied into an Arrow-aligned buffer.
-    ///
-    /// This avoids an extra initialization pass on large reads while preserving the
-    /// alignment expected by Arrow buffers.
-    ///
     /// # Returns
     /// - `Ok(None)` if the reader signals end-of-stream on the initial read
     /// - `Err(_)` if an error occurs or metadata is invalid
@@ -1826,44 +1795,30 @@ impl<R: Read> MessageReader<R> {
         let Some(meta_len) = meta_len else {
             return Ok(None);
         };
-
+    
         self.buf.resize(meta_len, 0);
         self.reader.read_exact(&mut self.buf)?;
-
+    
         let message = crate::root_as_message(self.buf.as_slice()).map_err(|err| {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
-
+    
         let body_len = message.bodyLength() as usize;
-
-        if body_len < 8 * 1024 {
-            let mut buf = MutableBuffer::from_len_zeroed(body_len);
-            self.reader.read_exact(&mut buf)?;
-            return Ok(Some((message, buf)));
-        }
-
+    
         let mut vec = Vec::with_capacity(body_len);
         self.reader
             .by_ref()
             .take(body_len as u64)
             .read_to_end(&mut vec)?;
-
+    
         if vec.len() != body_len {
             return Err(ArrowError::IpcError(format!(
                 "Expected IPC message body of length {body_len}, got {}",
                 vec.len()
             )));
         }
-
-        let buf = if ((vec.as_ptr() as usize) & 63) == 0 {
-            MutableBuffer::from(vec)
-        } else {
-            let mut buf = MutableBuffer::from_len_zeroed(body_len);
-            buf.copy_from_slice(&vec);
-            buf
-        };
-
-        Ok(Some((message, buf)))
+    
+        Ok(Some((message, MutableBuffer::from(vec))))
     }
 
     /// Get a mutable reference to the underlying reader.
