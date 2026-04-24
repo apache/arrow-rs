@@ -930,7 +930,7 @@ impl LevelHistogram {
     /// # Panics
     /// if any of the levels is greater than the length of the histogram (
     /// the argument supplied to [`Self::try_new`])
-    #[deprecated(since = "61.0.0", note = "Use `increment_by` instead")]
+    #[deprecated(since = "58.2.0", note = "Use `increment_by` instead")]
     pub fn update_from_levels(&mut self, levels: &[i16]) {
         for &level in levels {
             self.increment_by(level, 1);
