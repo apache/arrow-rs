@@ -398,4 +398,72 @@ mod tests {
             "memory size {size} should include indices ({indices_size} bytes)"
         );
     }
+
+    #[test]
+    fn test_estimated_memory_size_includes_interner_dedup_table() {
+        // The dedup `HashTable` in `Interner` is preallocated with
+        // `DEFAULT_DEDUP_CAPACITY` slots at construction, independent of any
+        // values pushed.
+        let encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+
+        let size = encoder.estimated_memory_size();
+
+        assert!(
+            size > 0,
+            "memory size should include the preallocated dedup hash table"
+        );
+    }
+
+    #[test]
+    fn test_estimated_memory_size_accounts_for_indices_capacity() {
+        // Exercises the `indices.capacity()` (not `.len()`) accounting.
+        // After a flush, `indices` is cleared but its capacity is retained; pushing a
+        // smaller batch afterwards leaves capacity strictly greater than length.
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+
+        let big: Vec<i32> = vec![0; 64];
+        encoder.put(&big).unwrap();
+        let _ = encoder.flush_buffer().unwrap();
+
+        let flushed_size = encoder.estimated_memory_size();
+
+        // Push a single value — indices.len() == 1 but indices.capacity() >= 64.
+        // No change on the key storage since the value is already interned.
+        encoder.put(&[0]).unwrap();
+
+        let size = encoder.estimated_memory_size();
+
+        assert_eq!(
+            size, flushed_size,
+            "memory size should include retained indices capacity",
+        );
+    }
+
+    #[test]
+    fn test_estimated_memory_size_accounts_for_uniques_capacity() {
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+
+        let values: Vec<i32> = (0..64).collect();
+        encoder.put(&values).unwrap();
+        // Flush indices so they don't mask the uniques accounting in the lower bound.
+        let _ = encoder.flush_buffer().unwrap();
+
+        let size1 = encoder.estimated_memory_size();
+
+        // Push more values to trigger uniques capacity growth.
+        // The pre-allocated dedup hash table is unlikely to be resized.
+        let values: Vec<i32> = (64..128).collect();
+        encoder.put(&values).unwrap();
+        // Flush indices so they don't mask the uniques accounting in the lower bound.
+        let _ = encoder.flush_buffer().unwrap();
+
+        let size2 = encoder.estimated_memory_size();
+
+        let min_uniques_bytes = 64 * std::mem::size_of::<i32>();
+        assert!(
+            size2 >= size1 + min_uniques_bytes,
+            "memory size {size2} should grow from {size1} by allocated uniques capacity \
+             (at least {min_uniques_bytes} bytes)"
+        );
+    }
 }
