@@ -518,6 +518,8 @@ where
 pub struct DeltaBitPackDecoder<T: DataType> {
     bit_reader: BitReader,
     initialized: bool,
+    // buffer used when skipping records
+    skip_buffer: Vec<T::T>,
 
     // Header info
     /// The number of values in each block
@@ -565,6 +567,7 @@ where
         Self {
             bit_reader: BitReader::from(vec![]),
             initialized: false,
+            skip_buffer: vec![],
             block_size: 0,
             values_left: 0,
             mini_blocks_per_block: 0,
@@ -847,7 +850,6 @@ where
             self.values_left -= 1;
         }
 
-        let mut skip_buffer = vec![T::T::default(); self.values_per_mini_block];
         while skip < to_skip {
             if self.mini_block_remaining == 0 {
                 self.next_mini_block()?;
@@ -857,10 +859,13 @@ where
             self.check_bit_width(bit_width)?;
             let mini_block_to_skip = self.mini_block_remaining.min(to_skip - skip);
 
+            // see commentary in self.get() above regarding optimizations
             let min_delta = self.min_delta.as_i64()?;
             if bit_width == 0 {
                 // All remainders are zero: every delta equals min_delta exactly.
                 // Advance last_value by n * min_delta with no bit reads.
+                // When min_delta == 0 there is nothing to do: last_value is
+                // unchanged and no bytes are consumed from the bit reader.
                 if min_delta != 0 {
                     let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
                     let step = T::T::from_i64(total)
@@ -869,10 +874,22 @@ where
                 }
                 // bit_width=0 payloads occupy zero bytes; no bit_reader advancement needed.
             } else {
+                // lazy initialization of skip_buffer
+                if self.skip_buffer.len() < self.values_per_mini_block {
+                    let to_add = self.values_per_mini_block - self.skip_buffer.len();
+                    if self.skip_buffer.try_reserve_exact(to_add).is_err() {
+                        return Err(general_err!(
+                            "Cannot extend skip buffer to {} elements",
+                            self.values_per_mini_block
+                        ));
+                    }
+                    self.skip_buffer
+                        .resize(self.values_per_mini_block, T::T::default());
+                }
                 // bw>0: must decode to track last_value for subsequent get() calls.
                 let skip_count = self
                     .bit_reader
-                    .get_batch(&mut skip_buffer[0..mini_block_to_skip], bit_width);
+                    .get_batch(&mut self.skip_buffer[0..mini_block_to_skip], bit_width);
 
                 if skip_count != mini_block_to_skip {
                     return Err(general_err!(
@@ -883,12 +900,12 @@ where
                 }
 
                 if min_delta == 0 {
-                    for v in &mut skip_buffer[0..skip_count] {
+                    for v in &mut self.skip_buffer[0..skip_count] {
                         *v = v.wrapping_add(&self.last_value);
                         self.last_value = *v;
                     }
                 } else {
-                    for v in &mut skip_buffer[0..skip_count] {
+                    for v in &mut self.skip_buffer[0..skip_count] {
                         *v = v
                             .wrapping_add(&self.min_delta)
                             .wrapping_add(&self.last_value);
