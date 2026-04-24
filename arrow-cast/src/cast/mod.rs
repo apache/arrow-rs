@@ -73,7 +73,7 @@ use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
 pub use decimal::{
-    DecimalCast, cast_single_decimal_to_integer_opt, parse_string_to_decimal_native,
+    DecimalCast, cast_single_decimal_to_integer_div_opt, parse_string_to_decimal_native,
     rescale_decimal, single_float_to_decimal,
 };
 pub use string::cast_single_string_to_boolean_default;

@@ -31,7 +31,7 @@ use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
 use arrow::array::ArrowNativeTypeOp;
 use arrow::compute::{
-    DecimalCast, cast_num_to_bool, cast_single_decimal_to_integer_opt,
+    DecimalCast, cast_num_to_bool, cast_single_decimal_to_integer_div_opt,
     cast_single_string_to_boolean_default, num_cast, parse_string_to_decimal_native,
     single_bool_to_numeric, single_decimal_to_float_lossy, single_float_to_decimal,
 };
@@ -843,7 +843,7 @@ impl<'m, 'v> Variant<'m, 'v> {
 
         let div = base.pow_checked(<u32 as From<u8>>::from(scale)).ok()?;
         match T::KIND {
-            NumericKind::Integer => cast_single_decimal_to_integer_opt::<false, D, T>(raw, div),
+            NumericKind::Integer => cast_single_decimal_to_integer_div_opt::<D, T>(raw, div),
             NumericKind::Float => T::from(single_decimal_to_float_lossy::<D, _>(
                 &as_float,
                 raw,

@@ -844,11 +844,10 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array
-                            .value(i)
-                            .mul_checked(div)
-                            .ok()
-                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        let v = cast_single_decimal_to_integer_mul_opt::<D, T::Native>(
+                            array.value(i),
+                            div,
+                        );
                         value_builder.append_option(v);
                     }
                 }
@@ -881,11 +880,10 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array
-                            .value(i)
-                            .div_checked(div)
-                            .ok()
-                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        let v = cast_single_decimal_to_integer_div_opt::<D, T::Native>(
+                            array.value(i),
+                            div,
+                        );
                         value_builder.append_option(v);
                     }
                 }
@@ -915,24 +913,29 @@ where
     Ok(Arc::new(value_builder.finish()))
 }
 
-/// Casting a given decimal to an integer based on given div and scale.
-/// The value is scaled by multiplying or dividing with the div based on the scale sign.
-/// Returns `None` if the value is overflow or cannot be represented with the requested precision.
+/// Casting a given decimal to an integer by multiplying with the given factor.
+/// Returns `None` if checked multiplication overflows or the target cast fails.
 #[inline(always)]
-pub fn cast_single_decimal_to_integer_opt<const NEGATIVE_SCALE: bool, D, T>(
-    value: D::Native,
-    div: D::Native,
-) -> Option<T>
+pub fn cast_single_decimal_to_integer_mul_opt<D, T>(value: D::Native, mul: D::Native) -> Option<T>
 where
     T: NumCast + ToPrimitive,
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: ToPrimitive,
 {
-    let v = if NEGATIVE_SCALE {
-        value.mul_checked(div).ok()?
-    } else {
-        value.div_checked(div).ok()?
-    };
+    let v = value.mul_checked(mul).ok()?;
+    <T as NumCast>::from::<D::Native>(v)
+}
+
+/// Casting a given decimal to an integer by dividing with the given divisor.
+/// Returns `None` if checked division fails or the target cast fails.
+#[inline(always)]
+pub fn cast_single_decimal_to_integer_div_opt<D, T>(value: D::Native, div: D::Native) -> Option<T>
+where
+    T: NumCast + ToPrimitive,
+    D: DecimalType + ArrowPrimitiveType,
+    <D as ArrowPrimitiveType>::Native: ToPrimitive,
+{
+    let v = value.div_checked(div).ok()?;
     <T as NumCast>::from::<D::Native>(v)
 }
 
