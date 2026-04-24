@@ -160,6 +160,9 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Strategy for materialising row selections
     row_selection_policy: RowSelectionPolicy,
 
+    /// Scatter threshold for filter deferral
+    scatter_threshold: Option<f64>,
+
     /// Current state of the decoder.
     ///
     /// It is taken when processing, and must be put back before returning
@@ -185,6 +188,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        scatter_threshold: Option<f64>,
     ) -> Self {
         Self {
             batch_size,
@@ -197,6 +201,7 @@ impl RowGroupReaderBuilder {
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
+            scatter_threshold,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -247,7 +252,8 @@ impl RowGroupReaderBuilder {
         }
         let plan_builder = ReadPlanBuilder::new(self.batch_size)
             .with_selection(selection)
-            .with_row_selection_policy(self.row_selection_policy);
+            .with_row_selection_policy(self.row_selection_policy)
+            .with_scatter_threshold(self.scatter_threshold);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
@@ -460,8 +466,11 @@ impl RowGroupReaderBuilder {
                 );
                 // `with_predicate` actually evaluates the filter
 
-                plan_builder =
-                    plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
+                plan_builder = plan_builder.with_predicate(
+                    array_reader,
+                    filter_info.current_mut(),
+                    row_count,
+                )?;
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
@@ -736,6 +745,6 @@ mod tests {
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 240);
     }
 }
