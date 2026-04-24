@@ -88,6 +88,60 @@ enum RowGroupDecoderState {
     Finished,
 }
 
+/// Running offset/limit budget shared across row groups.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct RowBudget {
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+impl RowBudget {
+    fn new(offset: Option<usize>, limit: Option<usize>) -> Self {
+        Self { offset, limit }
+    }
+
+    fn apply_to_plan(self, plan_builder: ReadPlanBuilder, row_count: usize) -> BudgetedReadPlan {
+        let rows_before_budget = plan_builder.num_rows_selected().unwrap_or(row_count);
+        let plan_builder = plan_builder
+            .limited(row_count)
+            .with_offset(self.offset)
+            .with_limit(self.limit)
+            .build_limited();
+        let rows_after_budget = plan_builder.num_rows_selected().unwrap_or(row_count);
+
+        BudgetedReadPlan {
+            plan_builder,
+            rows_before_budget,
+            rows_after_budget,
+            remaining_budget: self.advance(rows_before_budget, rows_after_budget),
+        }
+    }
+
+    fn advance(mut self, rows_before_budget: usize, rows_after_budget: usize) -> Self {
+        if let Some(offset) = &mut self.offset {
+            // Reduction is either because of offset or limit, as limit is applied
+            // after offset has been "exhausted" can just use saturating sub here.
+            *offset = offset.saturating_sub(rows_before_budget - rows_after_budget);
+        }
+
+        if rows_after_budget != 0 {
+            if let Some(limit) = &mut self.limit {
+                *limit -= rows_after_budget;
+            }
+        }
+
+        self
+    }
+}
+
+#[derive(Debug)]
+struct BudgetedReadPlan {
+    plan_builder: ReadPlanBuilder,
+    rows_before_budget: usize,
+    rows_after_budget: usize,
+    remaining_budget: RowBudget,
+}
+
 /// Result of a state transition
 #[derive(Debug)]
 struct NextState {
@@ -533,10 +587,16 @@ impl RowGroupReaderBuilder {
                     plan_builder,
                 } = row_group_info;
 
-                // Compute the number of rows in the selection before applying limit and offset
-                let rows_before = plan_builder.num_rows_selected().unwrap_or(row_count);
+                let BudgetedReadPlan {
+                    mut plan_builder,
+                    rows_before_budget,
+                    rows_after_budget,
+                    remaining_budget,
+                } = RowBudget::new(self.offset, self.limit).apply_to_plan(plan_builder, row_count);
+                self.offset = remaining_budget.offset;
+                self.limit = remaining_budget.limit;
 
-                if rows_before == 0 {
+                if rows_before_budget == 0 {
                     // ruled out entire row group
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
@@ -544,32 +604,12 @@ impl RowGroupReaderBuilder {
                     ));
                 }
 
-                // Apply any limit and offset
-                let mut plan_builder = plan_builder
-                    .limited(row_count)
-                    .with_offset(self.offset)
-                    .with_limit(self.limit)
-                    .build_limited();
-
-                let rows_after = plan_builder.num_rows_selected().unwrap_or(row_count);
-
-                // Update running offset and limit for after the current row group is read
-                if let Some(offset) = &mut self.offset {
-                    // Reduction is either because of offset or limit, as limit is applied
-                    // after offset has been "exhausted" can just use saturating sub here
-                    *offset = offset.saturating_sub(rows_before - rows_after)
-                }
-
-                if rows_after == 0 {
+                if rows_after_budget == 0 {
                     // no rows left after applying limit/offset
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
                         DecodeResult::Finished,
                     ));
-                }
-
-                if let Some(limit) = &mut self.limit {
-                    *limit -= rows_after;
                 }
 
                 let data_request = DataRequestBuilder::new(
@@ -760,10 +800,55 @@ fn override_selector_strategy_if_needed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::{RowSelection, RowSelector};
 
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
         assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
+    }
+
+    #[test]
+    fn test_row_budget_offset_limit_across_row_groups() {
+        let first =
+            RowBudget::new(Some(225), Some(20)).apply_to_plan(ReadPlanBuilder::new(1024), 200);
+        assert_eq!(first.rows_before_budget, 200);
+        assert_eq!(first.rows_after_budget, 0);
+        assert_eq!(first.remaining_budget, RowBudget::new(Some(25), Some(20)));
+        assert_eq!(first.plan_builder.num_rows_selected(), Some(0));
+
+        let second = first
+            .remaining_budget
+            .apply_to_plan(ReadPlanBuilder::new(1024), 200);
+        assert_eq!(second.rows_before_budget, 200);
+        assert_eq!(second.rows_after_budget, 20);
+        assert_eq!(second.remaining_budget, RowBudget::new(Some(0), Some(0)));
+        assert_eq!(second.plan_builder.num_rows_selected(), Some(20));
+    }
+
+    #[test]
+    fn test_row_budget_limit_only() {
+        let budgeted =
+            RowBudget::new(None, Some(20)).apply_to_plan(ReadPlanBuilder::new(1024), 200);
+        assert_eq!(budgeted.rows_before_budget, 200);
+        assert_eq!(budgeted.rows_after_budget, 20);
+        assert_eq!(budgeted.remaining_budget, RowBudget::new(None, Some(0)));
+        assert_eq!(budgeted.plan_builder.num_rows_selected(), Some(20));
+    }
+
+    #[test]
+    fn test_row_budget_empty_selection() {
+        let empty_selection = RowSelection::from(vec![RowSelector::skip(200)]);
+        let budgeted = RowBudget::new(Some(10), Some(20)).apply_to_plan(
+            ReadPlanBuilder::new(1024).with_selection(Some(empty_selection)),
+            200,
+        );
+        assert_eq!(budgeted.rows_before_budget, 0);
+        assert_eq!(budgeted.rows_after_budget, 0);
+        assert_eq!(
+            budgeted.remaining_budget,
+            RowBudget::new(Some(10), Some(20))
+        );
+        assert_eq!(budgeted.plan_builder.num_rows_selected(), Some(0));
     }
 }
