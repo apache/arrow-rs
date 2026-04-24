@@ -844,10 +844,11 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = cast_single_decimal_to_integer_opt::<true, D, T::Native>(
-                            array.value(i),
-                            div,
-                        );
+                        let v = array
+                            .value(i)
+                            .mul_checked(div)
+                            .ok()
+                            .and_then(<T::Native as NumCast>::from::<D::Native>);
                         value_builder.append_option(v);
                     }
                 }
@@ -857,11 +858,17 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let value = cast_single_decimal_to_integer_result::<true, D, T::Native>(
-                            array.value(i),
-                            div,
-                            T::DATA_TYPE,
-                        )?;
+                        let v = array.value(i).mul_checked(div)?;
+
+                        let value =
+                            <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
+                                ArrowError::CastError(format!(
+                                    "value of {:?} is out of range {}",
+                                    v,
+                                    T::DATA_TYPE
+                                ))
+                            })?;
+
                         value_builder.append_value(value);
                     }
                 }
@@ -874,10 +881,11 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = cast_single_decimal_to_integer_opt::<false, D, T::Native>(
-                            array.value(i),
-                            div,
-                        );
+                        let v = array
+                            .value(i)
+                            .div_checked(div)
+                            .ok()
+                            .and_then(<T::Native as NumCast>::from::<D::Native>);
                         value_builder.append_option(v);
                     }
                 }
@@ -887,18 +895,23 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let value = cast_single_decimal_to_integer_result::<false, D, T::Native>(
-                            array.value(i),
-                            div,
-                            T::DATA_TYPE,
-                        )?;
+                        let v = array.value(i).div_checked(div)?;
+
+                        let value =
+                            <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
+                                ArrowError::CastError(format!(
+                                    "value of {:?} is out of range {}",
+                                    v,
+                                    T::DATA_TYPE
+                                ))
+                            })?;
+
                         value_builder.append_value(value);
                     }
                 }
             }
         }
     }
-
     Ok(Arc::new(value_builder.finish()))
 }
 
@@ -921,27 +934,6 @@ where
         value.div_checked(div).ok()?
     };
     <T as NumCast>::from::<D::Native>(v)
-}
-
-#[inline(always)]
-fn cast_single_decimal_to_integer_result<const NEGATIVE_SCALE: bool, D, T>(
-    value: D::Native,
-    div: D::Native,
-    type_name: DataType,
-) -> Result<T, ArrowError>
-where
-    T: NumCast + ToPrimitive,
-    D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ToPrimitive,
-{
-    let v = if NEGATIVE_SCALE {
-        value.mul_checked(div)?
-    } else {
-        value.div_checked(div)?
-    };
-    T::from::<D::Native>(v).ok_or_else(|| {
-        ArrowError::CastError(format!("value of {:?} is out of range {:?}", v, type_name))
-    })
 }
 
 /// Cast a decimal array to a floating point array.
