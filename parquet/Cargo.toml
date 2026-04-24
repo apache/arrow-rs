@@ -35,6 +35,7 @@ ring = { version = "0.17", default-features = false, features = ["wasm32_unknown
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+snappy_src = { version = "0.2", default-features = false, optional = true }
 
 [dependencies]
 arrow-array = { workspace = true, optional = true }
@@ -81,7 +82,6 @@ ring = { version = "0.17", default-features = false, features = ["std"], optiona
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
-snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = { workspace = true, default-features = true }
 brotli = { version = "8.0", default-features = false, features = ["std"] }
@@ -101,6 +101,10 @@ all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
+# Enable snappy compression using the pure-Rust snap crate
+snap = ["dep:snap"]
+# Use C++ snappy library instead of the pure-Rust snap crate (requires C++ compiler, not available on wasm32)
+snappy_cpp = ["snap", "snappy_src"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
