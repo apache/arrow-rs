@@ -777,7 +777,7 @@ where
     if cast_options.safe {
         array
             .unary_opt::<_, D>(|v| {
-                single_float_to_decimal::<D>(v.as_(), mul)
+                D::Native::from_f64((mul * v.as_()).round())
                     .filter(|v| D::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
@@ -785,7 +785,7 @@ where
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                single_float_to_decimal::<D>(v.as_(), mul)
+                D::Native::from_f64((mul * v.as_()).round())
                     .ok_or_else(|| {
                         ArrowError::CastError(format!(
                             "Cannot cast to {}({}, {}). Overflowing on {:?}",
@@ -844,10 +844,11 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = cast_single_decimal_to_integer_mul_opt::<D, T::Native>(
-                            array.value(i),
-                            div,
-                        );
+                        let v = array
+                            .value(i)
+                            .mul_checked(div)
+                            .ok()
+                            .and_then(<T::Native as NumCast>::from::<D::Native>);
                         value_builder.append_option(v);
                     }
                 }
@@ -911,19 +912,6 @@ where
         }
     }
     Ok(Arc::new(value_builder.finish()))
-}
-
-/// Casting a given decimal to an integer by multiplying with the given factor.
-/// Returns `None` if checked multiplication overflows or the target cast fails.
-#[inline(always)]
-pub fn cast_single_decimal_to_integer_mul_opt<D, T>(value: D::Native, mul: D::Native) -> Option<T>
-where
-    T: NumCast + ToPrimitive,
-    D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ToPrimitive,
-{
-    let v = value.mul_checked(mul).ok()?;
-    <T as NumCast>::from::<D::Native>(v)
 }
 
 /// Casting a given decimal to an integer by dividing with the given divisor.
