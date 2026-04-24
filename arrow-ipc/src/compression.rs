@@ -27,19 +27,10 @@ const LENGTH_OF_PREFIX_DATA: i64 = 8;
 /// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
 /// compression calls to avoid the performance overhead of initialising a new context for every
 /// compression.
+#[derive(Default)]
 pub struct CompressionContext {
     #[cfg(feature = "zstd")]
     compressor: Option<zstd::bulk::Compressor<'static>>,
-}
-
-#[allow(clippy::derivable_impls)]
-impl Default for CompressionContext {
-    fn default() -> Self {
-        CompressionContext {
-            #[cfg(feature = "zstd")]
-            compressor: None,
-        }
-    }
 }
 
 impl CompressionContext {
