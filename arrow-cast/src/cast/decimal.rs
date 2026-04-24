@@ -777,7 +777,7 @@ where
     if cast_options.safe {
         array
             .unary_opt::<_, D>(|v| {
-                D::Native::from_f64((mul * v.as_()).round())
+                single_float_to_decimal::<D>(v.as_(), mul)
                     .filter(|v| D::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
@@ -785,7 +785,7 @@ where
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                D::Native::from_f64((mul * v.as_()).round())
+                single_float_to_decimal::<D>(v.as_(), mul)
                     .ok_or_else(|| {
                         ArrowError::CastError(format!(
                             "Cannot cast to {}({}, {}). Overflowing on {:?}",
