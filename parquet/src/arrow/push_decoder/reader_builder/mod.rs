@@ -24,7 +24,8 @@ use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
+    ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
+    RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -480,13 +481,15 @@ impl RowGroupReaderBuilder {
                     .filter(|_| filter_info.is_last())
                     .map(|l| l.saturating_add(self.offset.unwrap_or(0)));
 
-                // `with_predicate_limited` actually evaluates the filter.
-                plan_builder = plan_builder.with_predicate_limited(
-                    array_reader,
-                    filter_info.current_mut(),
-                    predicate_limit,
-                    row_count,
-                )?;
+                // Evaluate the filter via `with_predicate_options`, opting into
+                // early termination when this is the final predicate and an
+                // output limit was set.
+                let mut predicate_options =
+                    PredicateOptions::new(array_reader, filter_info.current_mut());
+                if let Some(limit) = predicate_limit {
+                    predicate_options = predicate_options.with_limit(limit, row_count);
+                }
+                plan_builder = plan_builder.with_predicate_options(predicate_options)?;
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
