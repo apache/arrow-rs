@@ -163,8 +163,17 @@ fn non_standard_delta_blocks() {
         .unwrap();
 
     for maybe_batch in reader {
-        let batch = maybe_batch.expect("skip should succeed");
-        assert_eq!(batch.num_rows(), 5);
+        // TODO: uncomment if we ever allow skipping miniblocks > 64 elements
+        //let batch = maybe_batch.expect("skip should succeed");
+        //assert_eq!(batch.num_rows(), 5);
+        assert!(maybe_batch.is_err());
+        assert!(
+            maybe_batch
+                .unwrap_err()
+                .to_string()
+                .contains("cannot skip miniblock of size 128")
+        );
+        break;
     }
 }
 
