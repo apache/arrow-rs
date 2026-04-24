@@ -804,7 +804,7 @@ where
 
 /// Cast a single floating point value to a decimal native with the given multiple.
 /// Returns `None` if the value cannot be represented with the requested precision.
-#[inline]
+#[inline(always)]
 pub fn single_float_to_decimal<D>(input: f64, mul: f64) -> Option<D::Native>
 where
     D: DecimalType + ArrowPrimitiveType,
@@ -857,10 +857,9 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let value = cast_single_decimal_to_integer_result::<D, T::Native>(
+                        let value = cast_single_decimal_to_integer_result::<true, D, T::Native>(
                             array.value(i),
                             div,
-                            true,
                             T::DATA_TYPE,
                         )?;
                         value_builder.append_value(value);
@@ -888,10 +887,9 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let value = cast_single_decimal_to_integer_result::<D, T::Native>(
+                        let value = cast_single_decimal_to_integer_result::<false, D, T::Native>(
                             array.value(i),
                             div,
-                            false,
                             T::DATA_TYPE,
                         )?;
                         value_builder.append_value(value);
@@ -907,7 +905,7 @@ where
 /// Casting a given decimal to an integer based on given div and scale.
 /// The value is scaled by multiplying or dividing with the div based on the scale sign.
 /// Returns `None` if the value is overflow or cannot be represented with the requested precision.
-#[inline]
+#[inline(always)]
 pub fn cast_single_decimal_to_integer_opt<const NEGATIVE_SCALE: bool, D, T>(
     value: D::Native,
     div: D::Native,
@@ -925,11 +923,10 @@ where
     <T as NumCast>::from::<D::Native>(v)
 }
 
-#[inline]
-fn cast_single_decimal_to_integer_result<D, T>(
+#[inline(always)]
+fn cast_single_decimal_to_integer_result<const NEGATIVE_SCALE: bool, D, T>(
     value: D::Native,
     div: D::Native,
-    negative: bool,
     type_name: DataType,
 ) -> Result<T, ArrowError>
 where
@@ -937,7 +934,7 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: ToPrimitive,
 {
-    let v = if negative {
+    let v = if NEGATIVE_SCALE {
         value.mul_checked(div)?
     } else {
         value.div_checked(div)?

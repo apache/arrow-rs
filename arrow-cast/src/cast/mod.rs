@@ -83,7 +83,7 @@ pub use string::cast_single_string_to_boolean_default;
 /// Conversion is lossy and follows standard floating point semantics. Values
 /// that exceed the representable range become `INFINITY` or `-INFINITY` without
 /// returning an error.
-#[inline]
+#[inline(always)]
 pub fn single_decimal_to_float_lossy<D, F>(f: &F, x: D::Native, scale: i32) -> f64
 where
     D: DecimalType,
