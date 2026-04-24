@@ -2369,6 +2369,32 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_list_zero_size_non_nullable() {
+        let buf = r#"
+        {"a": []}
+        {"a": []}
+        {"a": []}
+        "#;
+
+        let field = Field::new_list_field(DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::FixedSizeList(Arc::new(field), 0),
+            false,
+        )]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0).as_fixed_size_list();
+        assert_eq!(col.len(), 3);
+        assert_eq!(col.value_length(), 0);
+
+        let values = col.values().as_primitive::<Int32Type>();
+        assert!(values.values().is_empty());
+    }
+
+    #[test]
     fn test_fixed_size_list_wrong_size() {
         let buf = r#"{"a": [1, 2, 3]}"#;
 
