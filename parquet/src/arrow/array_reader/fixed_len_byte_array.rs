@@ -265,6 +265,9 @@ struct FixedLenByteArrayBuffer {
     buffer: Vec<u8>,
     /// The length of each element in bytes
     byte_length: Option<usize>,
+    /// Preserved value-count hint used to allocate `buffer` once `byte_length`
+    /// becomes known on the first decode.
+    values_capacity: Option<usize>,
 }
 
 #[inline]
@@ -291,12 +294,13 @@ fn move_values<F>(
 }
 
 impl ValuesBuffer for FixedLenByteArrayBuffer {
-    fn with_capacity(_capacity: usize) -> Self {
-        // byte_length is not known at trait level, so we return a default buffer
-        // The decoder will pre-allocate when it knows both capacity and byte_length
+    fn with_capacity(capacity: usize) -> Self {
+        // `byte_length` is not known initially, so preserve the value-count
+        // hint so the first decode can allocate the exact byte capacity.
         Self {
             buffer: Vec::new(),
             byte_length: None,
+            values_capacity: Some(capacity),
         }
     }
 
@@ -419,7 +423,19 @@ impl ColumnValueDecoder for ValueDecoder {
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
         match out.byte_length {
             Some(x) => assert_eq!(x, self.byte_length),
-            None => out.byte_length = Some(self.byte_length),
+            None => {
+                out.byte_length = Some(self.byte_length);
+                // TODO: collapse to a let-chain once MSRV ≥ 1.88
+                // (`if out.buffer.is_empty() && let Some(cap) = out.values_capacity.take()`)
+                if out.buffer.is_empty() {
+                    if let Some(values_capacity) = out.values_capacity.take() {
+                        // now that the byte length per output element is known,
+                        // allocate the actual needed space.
+                        let byte_capacity = values_capacity.saturating_mul(self.byte_length);
+                        out.buffer = Vec::with_capacity(byte_capacity);
+                    }
+                }
+            }
         }
 
         match self.decoder.as_mut().unwrap() {

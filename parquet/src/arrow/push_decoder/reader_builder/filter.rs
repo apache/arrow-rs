@@ -126,6 +126,13 @@ impl FilterInfo {
             .as_ref()
     }
 
+    /// Returns `true` if the current predicate is the last one in the chain
+    /// (i.e. the next call to [`Self::advance`] will return
+    /// [`AdvanceResult::Done`]).
+    pub(super) fn is_last(&self) -> bool {
+        self.next_predicate.get() == self.filter.predicates.len()
+    }
+
     /// Return a reference to the cache projection
     pub(super) fn cache_projection(&self) -> &ProjectionMask {
         &self.cache_info.cache_projection
