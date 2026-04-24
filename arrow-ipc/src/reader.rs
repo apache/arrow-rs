@@ -72,6 +72,21 @@ fn read_buffer(
         }
     }
 }
+
+/// Ensure the buffer is aligned for the element type `T`; otherwise copy into an aligned buffer.
+/// Needed for paths (e.g. Union) that convert directly to `ScalarBuffer<T>`.
+#[inline]
+fn ensure_aligned_for<T: ArrowNativeType>(buffer: Buffer) -> Buffer {
+    let align = std::mem::align_of::<T>();
+    if (buffer.as_ptr() as usize) & (align - 1) == 0 {
+        buffer
+    } else {
+        let mut aligned = MutableBuffer::from_len_zeroed(buffer.len());
+        aligned.copy_from_slice(buffer.as_slice());
+        aligned.into()
+    }
+}
+
 impl RecordBatchDecoder<'_> {
     /// Coordinates reading arrays based on data types.
     ///
@@ -211,8 +226,10 @@ impl RecordBatchDecoder<'_> {
 
                 let value_offsets = match mode {
                     UnionMode::Dense => {
-                        let offsets: ScalarBuffer<i32> =
-                            self.next_buffer()?.slice_with_length(0, len * 4).into();
+                        let offsets_buffer = ensure_aligned_for::<i32>(
+                            self.next_buffer()?.slice_with_length(0, len * 4),
+                        );
+                        let offsets: ScalarBuffer<i32> = offsets_buffer.into();
                         Some(offsets)
                     }
                     UnionMode::Sparse => None,
