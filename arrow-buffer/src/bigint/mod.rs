@@ -20,8 +20,8 @@ use crate::bigint::div::div_rem;
 use num_bigint::BigInt;
 use num_traits::{
     Bounded, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
-    Num, One, Signed, ToPrimitive, WrappingAdd, WrappingMul, WrappingNeg, WrappingSub, Zero,
-    cast::AsPrimitive,
+    Num, One, Signed, ToPrimitive, WrappingAdd, WrappingMul, WrappingNeg, WrappingShl, WrappingShr,
+    WrappingSub, Zero, cast::AsPrimitive,
 };
 use std::cmp::Ordering;
 use std::num::ParseIntError;
@@ -807,6 +807,55 @@ impl Shr<u8> for i256 {
     }
 }
 
+impl WrappingShl for i256 {
+    #[inline]
+    fn wrapping_shl(&self, rhs: u32) -> i256 {
+        // Mask the higher-order bits
+        (*self).shl(rhs as u8)
+    }
+}
+
+impl WrappingShr for i256 {
+    #[inline]
+    fn wrapping_shr(&self, rhs: u32) -> i256 {
+        // Masks the higher-order bits
+        (*self).shr(rhs as u8)
+    }
+}
+
+// Define Shl<T> and Shr<T> for specified integer types using
+// an existing Shl<u8> and Shr<u8> implementation
+macro_rules! define_standard_shift {
+    // Handle multiple types
+    ($trait_name:ident, $method:ident, [$($t:ty),+]) => {
+        $(define_standard_shift!($trait_name, $method, $t);)+
+    };
+    // Handle single type
+    ($trait_name:ident, $method:ident, $t:ty) => {
+        impl $trait_name<$t> for i256 {
+            type Output = i256;
+
+            #[inline]
+            fn $method(self, rhs: $t) -> Self::Output {
+                let rhs = u8::try_from(rhs).expect("rhs overflow for shift {rhs}");
+                // Other possible overflows are handled by Shl<u8> implementation
+                self.$method(rhs as u8)
+            }
+        }
+    };
+}
+
+define_standard_shift!(
+    Shl,
+    shl,
+    [u16, u32, u64, u128, usize, i16, i32, i64, i128, isize]
+);
+define_standard_shift!(
+    Shr,
+    shr,
+    [u16, u32, u64, u128, usize, i16, i32, i64, i128, isize]
+);
+
 macro_rules! define_as_primitive {
     ($native_ty:ty) => {
         impl AsPrimitive<i256> for $native_ty {
@@ -1190,9 +1239,19 @@ mod tests {
             let (expected, _) = i256::from_bigint_with_overflow(bl.clone() << shift);
             assert_eq!(actual.to_string(), expected.to_string());
 
+            let wrapping_actual = <i256 as WrappingShl>::wrapping_shl(&il, shift as u32);
+            assert_eq!(wrapping_actual.to_string(), expected.to_string());
+
             let actual = il >> shift;
             let (expected, _) = i256::from_bigint_with_overflow(bl.clone() >> shift);
             assert_eq!(actual.to_string(), expected.to_string());
+
+            let wrapping_actual = <i256 as WrappingShr>::wrapping_shr(&il, shift as u32);
+            assert_eq!(wrapping_actual.to_string(), expected.to_string());
+
+            // Check wrapping of the shift argument
+            let wrapping_actual = <i256 as WrappingShr>::wrapping_shr(&il, 512 + shift as u32);
+            assert_eq!(wrapping_actual.to_string(), expected.to_string());
         }
     }
 
@@ -1533,6 +1592,14 @@ mod tests {
 
         assert_eq!(<i256 as Bounded>::min_value(), i256::MIN);
         assert_eq!(<i256 as Bounded>::max_value(), i256::MAX);
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_shl_panic_on_arg_overflow() {
+        let value = i256::from(123);
+        let rhs = std::hint::black_box(500);
+        let _ = value << rhs;
     }
 
     #[test]
