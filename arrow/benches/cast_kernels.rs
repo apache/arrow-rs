@@ -398,6 +398,7 @@ fn add_benchmark(c: &mut Criterion) {
         decimal128_array,
         DataType::Float64
     );
+    benchmark_cast!("cast decimal128 to int8", decimal128_array, DataType::Int8);
     benchmark_cast!(
         "cast decimal128 to int64",
         decimal128_array,
