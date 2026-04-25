@@ -42,7 +42,7 @@ This is a great place to meet other contributors and get guidance on where to co
 However, all technical designs should also be recorded and formalized in GitHub issues, so that they are accessible to everyone.
 In Slack, find us in the `#arrow-rust` channel and feel free to ask for an invite via Discord, GitHub issues, or other means.
 
-There is more information in the [contributing] guide.
+There is more information in the [contributing] guide and the [security] policy.
 
 ## Repository Structure
 
@@ -186,3 +186,4 @@ You can find more details about each crate in their respective READMEs.
 [issues]: https://github.com/apache/arrow-rs/issues
 [pull requests]: https://github.com/apache/arrow-rs/pulls
 [discussions]: https://github.com/apache/arrow-rs/discussions
+[security]: SECURITY.md

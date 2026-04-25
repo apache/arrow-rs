@@ -27,22 +27,19 @@ const LENGTH_OF_PREFIX_DATA: i64 = 8;
 /// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
 /// compression calls to avoid the performance overhead of initialising a new context for every
 /// compression.
+#[derive(Default)]
 pub struct CompressionContext {
     #[cfg(feature = "zstd")]
-    compressor: zstd::bulk::Compressor<'static>,
+    compressor: Option<zstd::bulk::Compressor<'static>>,
 }
 
-// the reason we allow derivable_impls here is because when zstd feature is not enabled, this
-// becomes derivable. however with zstd feature want to be explicit about the compression level.
-#[allow(clippy::derivable_impls)]
-impl Default for CompressionContext {
-    fn default() -> Self {
-        CompressionContext {
-            // safety: `new` here will only return error here if using an invalid compression level
-            #[cfg(feature = "zstd")]
-            compressor: zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL)
-                .expect("can use default compression level"),
-        }
+impl CompressionContext {
+    #[cfg(feature = "zstd")]
+    fn zstd_compressor(&mut self) -> &mut zstd::bulk::Compressor<'static> {
+        self.compressor.get_or_insert_with(|| {
+            zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL)
+                .expect("can use default compression level")
+        })
     }
 }
 
@@ -51,7 +48,10 @@ impl std::fmt::Debug for CompressionContext {
         let mut ds = f.debug_struct("CompressionContext");
 
         #[cfg(feature = "zstd")]
-        ds.field("compressor", &"zstd::bulk::Compressor");
+        ds.field(
+            "compressor",
+            &self.compressor.as_ref().map(|_| "zstd::bulk::Compressor"),
+        );
 
         ds.finish()
     }
@@ -64,12 +64,19 @@ impl std::fmt::Debug for CompressionContext {
 /// context for every decompression.
 pub struct DecompressionContext {
     #[cfg(feature = "zstd")]
-    decompressor: zstd::bulk::Decompressor<'static>,
+    decompressor: Option<zstd::bulk::Decompressor<'static>>,
 }
 
 impl DecompressionContext {
     pub(crate) fn new() -> Self {
         Default::default()
+    }
+
+    #[cfg(feature = "zstd")]
+    fn zstd_decompressor(&mut self) -> &mut zstd::bulk::Decompressor<'static> {
+        self.decompressor.get_or_insert_with(|| {
+            zstd::bulk::Decompressor::new().expect("can create zstd decompressor")
+        })
     }
 }
 
@@ -78,7 +85,7 @@ impl Default for DecompressionContext {
     fn default() -> Self {
         DecompressionContext {
             #[cfg(feature = "zstd")]
-            decompressor: zstd::bulk::Decompressor::new().expect("can create zstd decompressor"),
+            decompressor: None,
         }
     }
 }
@@ -88,7 +95,13 @@ impl std::fmt::Debug for DecompressionContext {
         let mut ds = f.debug_struct("DecompressionContext");
 
         #[cfg(feature = "zstd")]
-        ds.field("decompressor", &"zstd::bulk::Decompressor");
+        ds.field(
+            "decompressor",
+            &self
+                .decompressor
+                .as_ref()
+                .map(|_| "zstd::bulk::Decompressor"),
+        );
 
         ds.finish()
     }
@@ -267,7 +280,7 @@ fn compress_zstd(
     output: &mut Vec<u8>,
     context: &mut CompressionContext,
 ) -> Result<(), ArrowError> {
-    let result = context.compressor.compress(input)?;
+    let result = context.zstd_compressor().compress(input)?;
     output.extend_from_slice(&result);
     Ok(())
 }
@@ -290,7 +303,9 @@ fn decompress_zstd(
     decompressed_size: usize,
     context: &mut DecompressionContext,
 ) -> Result<Vec<u8>, ArrowError> {
-    let output = context.decompressor.decompress(input, decompressed_size)?;
+    let output = context
+        .zstd_decompressor()
+        .decompress(input, decompressed_size)?;
     Ok(output)
 }
 
