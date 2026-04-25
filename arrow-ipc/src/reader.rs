@@ -72,6 +72,21 @@ fn read_buffer(
         }
     }
 }
+
+/// Ensure the buffer is aligned for the element type `T`; otherwise copy into an aligned buffer.
+/// Needed for paths (e.g. Union) that convert directly to `ScalarBuffer<T>`.
+#[inline]
+fn ensure_aligned_for<T: ArrowNativeType>(buffer: Buffer) -> Buffer {
+    let align = std::mem::align_of::<T>();
+    if (buffer.as_ptr() as usize) & (align - 1) == 0 {
+        buffer
+    } else {
+        let mut aligned = MutableBuffer::from_len_zeroed(buffer.len());
+        aligned.copy_from_slice(buffer.as_slice());
+        aligned.into()
+    }
+}
+
 impl RecordBatchDecoder<'_> {
     /// Coordinates reading arrays based on data types.
     ///
@@ -211,8 +226,10 @@ impl RecordBatchDecoder<'_> {
 
                 let value_offsets = match mode {
                     UnionMode::Dense => {
-                        let offsets: ScalarBuffer<i32> =
-                            self.next_buffer()?.slice_with_length(0, len * 4).into();
+                        let offsets_buffer = ensure_aligned_for::<i32>(
+                            self.next_buffer()?.slice_with_length(0, len * 4),
+                        );
+                        let offsets: ScalarBuffer<i32> = offsets_buffer.into();
                         Some(offsets)
                     }
                     UnionMode::Sparse => None,
@@ -874,16 +891,27 @@ fn get_dictionary_values(
     Ok(dictionary_values)
 }
 
-/// Read the data for a given block
+/// Reads the full data block (metadata + body) from the underlying reader.
 fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, ArrowError> {
     reader.seek(SeekFrom::Start(block.offset() as u64))?;
     let body_len = block.bodyLength().to_usize().unwrap();
     let metadata_len = block.metaDataLength().to_usize().unwrap();
     let total_len = body_len.checked_add(metadata_len).unwrap();
 
-    let mut buf = MutableBuffer::from_len_zeroed(total_len);
-    reader.read_exact(&mut buf)?;
-    Ok(buf.into())
+    let mut vec = Vec::with_capacity(total_len);
+    reader
+        .by_ref()
+        .take(total_len as u64)
+        .read_to_end(&mut vec)?;
+
+    if vec.len() != total_len {
+        return Err(ArrowError::IpcError(format!(
+            "Expected IPC block of length {total_len}, got {}",
+            vec.len()
+        )));
+    }
+
+    Ok(Buffer::from_vec(vec))
 }
 
 /// Parse an encapsulated message
@@ -1781,16 +1809,10 @@ impl<R: Read> MessageReader<R> {
         }
     }
 
-    /// Reads the entire next message from the underlying reader which includes
-    /// the metadata length, the metadata, and the body.
-    ///
     /// # Returns
-    /// - `Ok(None)` if the the reader signals the end of stream with EOF on
-    ///   the first read
-    /// - `Err(_)` if the reader returns an error other than on the first
-    ///   read, or if the metadata length is invalid
-    /// - `Ok(Some(_))` with the Message and buffer containiner the
-    ///   body bytes otherwise.
+    /// - `Ok(None)` if the reader signals end-of-stream on the initial read
+    /// - `Err(_)` if an error occurs or metadata is invalid
+    /// - `Ok(Some(_))` containing the parsed message and its body buffer
     fn maybe_next(&mut self) -> Result<Option<(Message::Message<'_>, MutableBuffer)>, ArrowError> {
         let meta_len = self.read_meta_len()?;
         let Some(meta_len) = meta_len else {
@@ -1804,10 +1826,22 @@ impl<R: Read> MessageReader<R> {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
 
-        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-        self.reader.read_exact(&mut buf)?;
+        let body_len = message.bodyLength() as usize;
 
-        Ok(Some((message, buf)))
+        let mut vec = Vec::with_capacity(body_len);
+        self.reader
+            .by_ref()
+            .take(body_len as u64)
+            .read_to_end(&mut vec)?;
+
+        if vec.len() != body_len {
+            return Err(ArrowError::IpcError(format!(
+                "Expected IPC message body of length {body_len}, got {}",
+                vec.len()
+            )));
+        }
+
+        Ok(Some((message, MutableBuffer::from(vec))))
     }
 
     /// Get a mutable reference to the underlying reader.
