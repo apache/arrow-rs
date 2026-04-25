@@ -23,7 +23,6 @@ use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::{MetadataParser, parse_column_index, parse_offset_index};
 use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions};
 use crate::file::page_index::index_reader::acc_range;
-use crate::file::reader::ChunkReader;
 use bytes::Bytes;
 use std::ops::Range;
 use std::sync::Arc;
@@ -358,11 +357,6 @@ impl ParquetMetaDataPushDecoder {
         Ok(())
     }
 
-    /// Clear any staged byte ranges currently buffered for future decode work.
-    pub fn clear_all_ranges(&mut self) {
-        self.buffers.clear_all_ranges();
-    }
-
     /// Try to decode the metadata from the pushed data, returning the
     /// decoded metadata or an error if not enough data is available.
     pub fn try_decode(&mut self) -> Result<DecodeResult<ParquetMetaData>> {
@@ -397,10 +391,10 @@ impl ParquetMetaDataPushDecoder {
                         return Ok(needs_range(metadata_range));
                     }
 
-                    let metadata = self.metadata_parser.decode_metadata(
-                        &self.get_bytes(&metadata_range)?,
-                        footer_tail.is_encrypted_footer(),
-                    )?;
+                    let metadata_bytes = self.get_bytes(&metadata_range)?;
+                    let metadata = self
+                        .metadata_parser
+                        .decode_metadata(&metadata_bytes, footer_tail.is_encrypted_footer())?;
                     // Note: ReadingPageIndex first checks if page indexes are needed
                     // and is a no-op if not
                     self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
@@ -445,7 +439,7 @@ impl ParquetMetaDataPushDecoder {
     }
 
     /// Returns the bytes for the given range from the internal buffer
-    fn get_bytes(&self, range: &Range<u64>) -> Result<Bytes> {
+    fn get_bytes(&mut self, range: &Range<u64>) -> Result<Bytes> {
         let start = range.start;
         let raw_len = range.end - range.start;
         let len: usize = raw_len.try_into().map_err(|_| {
@@ -579,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_decoder_clear_all_ranges() {
+    fn test_metadata_decoder_release_all() {
         let file_len = test_file_len();
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(file_len).unwrap();
 
@@ -588,7 +582,7 @@ mod tests {
             .unwrap();
         assert_eq!(metadata_decoder.buffers.buffered_bytes(), test_file_len());
 
-        metadata_decoder.clear_all_ranges();
+        metadata_decoder.buffers.release_all();
         assert_eq!(metadata_decoder.buffers.buffered_bytes(), 0);
 
         let ranges = expect_needs_data(metadata_decoder.try_decode());
