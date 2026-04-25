@@ -49,7 +49,7 @@ mod row_number;
 mod struct_array;
 
 #[cfg(test)]
-mod test_util;
+pub(crate) mod test_util;
 
 // Note that this crate is public under the `experimental` feature flag.
 use crate::file::metadata::RowGroupMetaData;
