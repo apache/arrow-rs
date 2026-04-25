@@ -21,7 +21,6 @@ use arrow::{
     datatypes::Field,
     error::Result,
 };
-use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
@@ -104,11 +103,6 @@ pub(crate) fn follow_shredded_path_element<'a>(
     }
 }
 
-fn is_variant_extension(field: &Field) -> bool {
-    field.extension_type_name() == Some(VariantType::NAME)
-        && field.try_extension_type::<VariantType>().is_ok()
-}
-
 /// Follows the given path as far as possible through shredded variant fields. If the path ends on a
 /// shredded field, return it directly. Otherwise, use a row shredder to follow the rest of the path
 /// and extract the requested value on a per-row basis.
@@ -131,7 +125,8 @@ fn shredded_get_path(
     // Helper that shreds a VariantArray to a specific type.
     let shred_basic_variant =
         |target: VariantArray, path: VariantPath<'_>, as_field: Option<&Field>| {
-            let requested_variant = as_field.is_some_and(is_variant_extension);
+            let requested_variant =
+                as_field.is_some_and(Field::has_valid_extension_type::<VariantType>);
             let target = if requested_variant {
                 unshred_variant(&target)?
             } else {
@@ -192,7 +187,7 @@ fn shredded_get_path(
             }
             ShreddedPathStep::Missing => {
                 let num_rows = input.len();
-                if as_field.is_some_and(is_variant_extension) {
+                if as_field.is_some_and(Field::has_valid_extension_type::<VariantType>) {
                     let all_nulls = Some(arrow::buffer::NullBuffer::from(vec![false; num_rows]));
                     let arr = VariantArray::from_parts(
                         input.metadata_field().clone(),
@@ -245,7 +240,7 @@ fn shredded_get_path(
     //
     // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
     // separately to take advantage of deeper shredding in child fields.
-    if !is_variant_extension(as_field)
+    if !as_field.has_valid_extension_type::<VariantType>()
         && let DataType::Struct(fields) = as_field.data_type()
     {
         if target.typed_value_field().is_none() {
