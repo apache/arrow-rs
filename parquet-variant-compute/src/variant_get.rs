@@ -240,32 +240,32 @@ fn shredded_get_path(
     //
     // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
     // separately to take advantage of deeper shredding in child fields.
-    if !as_field.has_valid_extension_type::<VariantType>()
-        && let DataType::Struct(fields) = as_field.data_type()
-    {
-        if target.typed_value_field().is_none() {
-            return shred_basic_variant(target, VariantPath::default(), Some(as_field));
+    if !as_field.has_valid_extension_type::<VariantType>() {
+        if let DataType::Struct(fields) = as_field.data_type() {
+            if target.typed_value_field().is_none() {
+                return shred_basic_variant(target, VariantPath::default(), Some(as_field));
+            }
+
+            let children = fields
+                .iter()
+                .map(|field| {
+                    shredded_get_path(
+                        &target,
+                        &[VariantPathElement::from(field.name().as_str())],
+                        Some(field),
+                        cast_options,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let struct_nulls = target.nulls().cloned();
+
+            return Ok(Arc::new(StructArray::try_new(
+                fields.clone(),
+                children,
+                struct_nulls,
+            )?));
         }
-
-        let children = fields
-            .iter()
-            .map(|field| {
-                shredded_get_path(
-                    &target,
-                    &[VariantPathElement::from(field.name().as_str())],
-                    Some(field),
-                    cast_options,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let struct_nulls = target.nulls().cloned();
-
-        return Ok(Arc::new(StructArray::try_new(
-            fields.clone(),
-            children,
-            struct_nulls,
-        )?));
     }
 
     // Not a struct, so directly shred the variant as the requested type
