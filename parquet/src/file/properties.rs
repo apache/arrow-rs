@@ -67,6 +67,8 @@ pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
 pub const DEFAULT_COERCE_TYPES: bool = false;
+/// Default value for [`WriterProperties::data_page_v2_compression_ratio_threshold`]
+pub const DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD: f64 = 1.0;
 /// Default minimum chunk size for content-defined chunking: 256 KiB.
 pub const DEFAULT_CDC_MIN_CHUNK_SIZE: usize = 256 * 1024;
 /// Default maximum chunk size for content-defined chunking: 1024 KiB.
@@ -250,6 +252,7 @@ pub struct WriterProperties {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
+    data_page_v2_compression_ratio_threshold: f64,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -442,6 +445,14 @@ impl WriterProperties {
         self.content_defined_chunking.as_ref()
     }
 
+    /// Returns the compression ratio threshold above which a Data Page v2's
+    /// compressed values are discarded in favor of writing the values uncompressed.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_data_page_v2_compression_ratio_threshold`]
+    pub fn data_page_v2_compression_ratio_threshold(&self) -> f64 {
+        self.data_page_v2_compression_ratio_threshold
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     ///
     /// This is not configurable.
@@ -566,6 +577,7 @@ pub struct WriterPropertiesBuilder {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
+    data_page_v2_compression_ratio_threshold: f64,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -590,6 +602,8 @@ impl Default for WriterPropertiesBuilder {
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
             content_defined_chunking: None,
+            data_page_v2_compression_ratio_threshold:
+                DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -644,6 +658,7 @@ impl WriterPropertiesBuilder {
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
             content_defined_chunking: self.content_defined_chunking,
+            data_page_v2_compression_ratio_threshold: self.data_page_v2_compression_ratio_threshold,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -887,6 +902,37 @@ impl WriterPropertiesBuilder {
             );
         }
         self.content_defined_chunking = options;
+        self
+    }
+
+    /// Sets the compression ratio threshold at or above which a Data Page v2's
+    /// compressed values are discarded in favor of writing the values uncompressed
+    /// (defaults to `1.0` via [`DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD`]).
+    ///
+    /// When writing a Data Page v2 with a configured compression codec, the writer
+    /// first compresses the values and then compares the compressed size to the
+    /// uncompressed size. If `compressed_size >= uncompressed_size * threshold`, the
+    /// compressed buffer is discarded and the values are written uncompressed for
+    /// that page (the page's `is_compressed` flag is set to `false`).
+    ///
+    /// The default of `1.0` preserves the historical behavior of only keeping
+    /// compression when it strictly reduces the size. Setting a value below `1.0`
+    /// requires a minimum amount of size reduction to keep the compressed page —
+    /// for example `0.9` requires at least a 10% reduction. Setting a value above
+    /// `1.0` keeps the compressed buffer even if it's somewhat larger than the
+    /// uncompressed values.
+    ///
+    /// This setting only affects Data Page v2; Data Page v1 always stores the
+    /// compressor's output regardless of the resulting size.
+    ///
+    /// # Panics
+    /// If `value` is not finite or is not strictly positive.
+    pub fn set_data_page_v2_compression_ratio_threshold(mut self, value: f64) -> Self {
+        assert!(
+            value.is_finite() && value > 0.0,
+            "data_page_v2_compression_ratio_threshold must be a positive finite number, got {value}"
+        );
+        self.data_page_v2_compression_ratio_threshold = value;
         self
     }
 
@@ -1182,6 +1228,8 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
             content_defined_chunking: props.content_defined_chunking,
+            data_page_v2_compression_ratio_threshold: props
+                .data_page_v2_compression_ratio_threshold,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }
