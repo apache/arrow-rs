@@ -1107,11 +1107,7 @@ mod tests {
     #[test]
     fn write_nested_list() {
         let field_b = Arc::new(Field::new("b", DataType::Int32, false));
-        let field_a = Arc::new(Field::new(
-            "a",
-            DataType::List(field_b.clone()),
-            false,
-        ));
+        let field_a = Arc::new(Field::new("a", DataType::List(field_b.clone()), false));
         let field_c1 = Field::new("c1", DataType::List(field_a.clone()), false);
         let field_c2 = Field::new("c2", DataType::Utf8, true);
         let schema = Schema::new(vec![field_c1.clone(), field_c2]);
