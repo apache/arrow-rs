@@ -108,6 +108,43 @@ jobs:
       - name: Run non-archery based integration-tests
         run: cargo test -p arrow-integration-testing
 
+  # test the crate in release mode (in Rust overflows panic in debug mode but
+  # not release mode)
+  linux-release-test:
+    name: Test Release Mode
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      # Note only run the low level crates in release mode
+      # which are the most likely to have overflow tests
+      - name: Test arrow-buffer
+        run: cargo test --lib --tests --release -p arrow-buffer
+      - name: Test arrow-data
+        run: cargo test --lib --tests --release -p arrow-data
+      - name: Test arrow-schema
+        run: cargo test --lib --tests --release -p arrow-schema
+      - name: Test arrow-array
+        run: cargo test --lib --tests --release -p arrow-array
+      - name: Test arrow-select
+        run: cargo test --lib --tests --release -p arrow-select
+      - name: Test arrow-cast
+        run: cargo test --lib --tests --release -p arrow-cast
+      - name: Test arrow-ipc
+        run: cargo test --lib --tests --release -p arrow-ipc
+      - name: Test arrow-ord
+        run: cargo test --lib --tests --release -p arrow-ord
+      - name: Test arrow-arith
+        run: cargo test --lib --tests --release -p arrow-arith
+      - name: Test arrow-row
+        run: cargo test --lib --tests --release -p arrow-row
+
+
   # test compilation features
   linux-features:
     name: Check Compilation
