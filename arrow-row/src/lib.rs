@@ -1132,14 +1132,20 @@ impl Rows {
 
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> Row<'_> {
-        assert!(row + 1 < self.offsets.len());
+        self.checked_row_end(row);
         unsafe { self.row_unchecked(row) }
+    }
+
+    fn checked_row_end(&self, row: usize) -> usize {
+        row.checked_add(1)
+            .filter(|end| *end < self.offsets.len())
+            .expect("row index out of bounds")
     }
 
     /// Returns the row at `index` without bounds checking
     ///
     /// # Safety
-    /// Caller must ensure that `index` is less than the number of offsets (#rows + 1)
+    /// Caller must ensure that `index + 1` is less than the number of offsets (#rows + 1)
     pub unsafe fn row_unchecked(&self, index: usize) -> Row<'_> {
         let end = unsafe { self.offsets.get_unchecked(index + 1) };
         let start = unsafe { self.offsets.get_unchecked(index) };
@@ -4282,5 +4288,14 @@ mod tests {
             empty_rows_size_with_preallocate_data > empty_rows_size_without_preallocate,
             "{empty_rows_size_with_preallocate_data} should be larger than {empty_rows_size_without_preallocate}"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "row index out of bounds")]
+    fn row_should_panic_on_overflowing_index() {
+        let rows = RowConverter::new(vec![SortField::new(DataType::Int32)])
+            .unwrap()
+            .empty_rows(0, 0);
+        rows.row(usize::MAX);
     }
 }
