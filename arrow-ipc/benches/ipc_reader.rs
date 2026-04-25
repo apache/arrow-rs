@@ -142,7 +142,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             // Convert the mmap region to an Arrow `Buffer` to back the arrow arrays.
             let bytes = bytes::Bytes::from_owner(mmap);
             let buffer = Buffer::from(bytes);
-            let decoder = IPCBufferDecoder::new(buffer);
+            let mut decoder = IPCBufferDecoder::new(buffer);
             assert_eq!(decoder.num_batches(), 10);
 
             for i in 0..decoder.num_batches() {
@@ -160,8 +160,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             // Convert the mmap region to an Arrow `Buffer` to back the arrow arrays.
             let bytes = bytes::Bytes::from_owner(mmap);
             let buffer = Buffer::from(bytes);
-            let decoder = IPCBufferDecoder::new(buffer);
-            let decoder = unsafe { decoder.with_skip_validation(true) };
+            let mut decoder = unsafe { IPCBufferDecoder::new(buffer).with_skip_validation(true) };
             assert_eq!(decoder.num_batches(), 10);
 
             for i in 0..decoder.num_batches() {
@@ -248,7 +247,7 @@ impl IPCBufferDecoder {
         self.batches.len()
     }
 
-    fn get_batch(&self, i: usize) -> RecordBatch {
+    fn get_batch(&mut self, i: usize) -> RecordBatch {
         let block = &self.batches[i];
         let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
         let data = self

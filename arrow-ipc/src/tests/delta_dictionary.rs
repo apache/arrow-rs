@@ -224,6 +224,61 @@ fn test_multi_same_value_sequence() {
     );
 }
 
+#[test]
+fn test_multiple_deltas_before_record_batch() {
+    let schema = Arc::new(Schema::new(vec![Field::new_dictionary(
+        "dict_col",
+        DataType::Int32,
+        DataType::Utf8,
+        false,
+    )]));
+
+    let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+
+    let batch1 = build_batch(&["A"], &mut builder);
+    let batch2 = build_batch(&["A", "B"], &mut builder);
+    let batch3 = build_batch(&["A", "B", "C"], &mut builder);
+
+    let mut buf = Vec::new();
+    let opts = IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+    let mut writer = StreamWriter::try_new_with_options(&mut buf, &schema, opts).unwrap();
+    writer.write(&batch1).unwrap();
+    writer.write(&batch2).unwrap();
+    writer.write(&batch3).unwrap();
+    writer.finish().unwrap();
+
+    let mut reader = StreamReader::try_new(Cursor::new(buf), None).unwrap();
+
+    let mut seen = Vec::new();
+    while let Some(message) = reader.next_ipc_message().unwrap() {
+        seen.push(message);
+    }
+
+    // Existing tests already validate message semantics generally.
+    // This specifically guards the "delta burst before use" case.
+    let batches: Vec<_> = seen
+        .into_iter()
+        .filter_map(|m| match m {
+            IpcMessage::RecordBatch(b) => Some(b),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(batches.len(), 3);
+    assert_eq!(
+        dict_to_vec(extract_dictionary(batches[0].clone())),
+        vec!["A"]
+    );
+    assert_eq!(
+        dict_to_vec(extract_dictionary(batches[1].clone())),
+        vec!["A", "B"]
+    );
+    assert_eq!(
+        dict_to_vec(extract_dictionary(batches[2].clone())),
+        vec!["A", "B", "C"]
+    );
+}
+
 #[derive(Debug, PartialEq)]
 enum MessageType {
     Schema,
