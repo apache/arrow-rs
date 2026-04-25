@@ -696,10 +696,13 @@ impl<'a> RecordBatchDecoder<'a> {
                 self.skip_buffer(); // Indices
             }
             Union(fields, mode) => {
-                self.skip_buffer(); // Nulls
+                if self.version < MetadataVersion::V5 {
+                    self.skip_buffer(); // Null buffer
+                }
+                self.skip_buffer(); // Type ids
 
                 match mode {
-                    UnionMode::Dense => self.skip_buffer(),
+                    UnionMode::Dense => self.skip_buffer(), // Offsets
                     UnionMode::Sparse => {}
                 };
 
@@ -3539,6 +3542,60 @@ mod tests {
         let read_batch = reader.next().unwrap().unwrap();
 
         // Verify that the projected column is read correctly
+        assert_eq!(read_batch.num_columns(), 1);
+        assert_eq!(read_batch.column(0).as_ref(), &values);
+    }
+
+    // Tests reading a column when a preceding V4 Union column is skipped.
+    // V4 Union columns include a null buffer and type ids (and offsets for dense unions).
+    #[test]
+    fn test_projection_skip_union_v4() {
+        use crate::MetadataVersion;
+        use crate::reader::FileReader;
+        use crate::writer::{FileWriter, IpcWriteOptions};
+        use arrow_array::{
+            ArrayRef, Int32Array, RecordBatch, builder::UnionBuilder, types::Int32Type,
+        };
+        use arrow_schema::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        // Build a dense Union column with simple Int32 values
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("a", 2).unwrap();
+        builder.append::<Int32Type>("a", 3).unwrap();
+        let union = builder.build().unwrap();
+
+        // Second column with known values to verify correctness after projection
+        let values = Int32Array::from(vec![10, 20, 30]);
+
+        // Schema: first column is Union (to be skipped), second is Int32 (to be read)
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("union", union.data_type().clone(), false),
+            Field::new("values", DataType::Int32, false),
+        ]));
+
+        // Create a batch containing both columns
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(union) as ArrayRef, Arc::new(values.clone())],
+        )
+        .unwrap();
+
+        // Write IPC using V4 metadata to trigger Union null buffer behavior
+        let mut buf = Vec::new();
+        {
+            let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap();
+            let mut writer =
+                FileWriter::try_new_with_options(&mut buf, &batch.schema(), options).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        // Read only the second column (skip the Union column)
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), Some(vec![1])).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+
+        // Verify that the projected column is read correctly after skipping Union
         assert_eq!(read_batch.num_columns(), 1);
         assert_eq!(read_batch.column(0).as_ref(), &values);
     }
