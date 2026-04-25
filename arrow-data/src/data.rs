@@ -576,9 +576,12 @@ impl ArrayData {
     ///
     /// # Panics
     ///
-    /// Panics if `offset + length > self.len()`.
+    /// Panics if `offset + length` overflows or is greater than `self.len()`.
     pub fn slice(&self, offset: usize, length: usize) -> ArrayData {
-        assert!((offset + length) <= self.len());
+        let end = offset
+            .checked_add(length)
+            .expect("offset + length overflow");
+        assert!(end <= self.len());
 
         if let DataType::Struct(_) = self.data_type() {
             // Slice into children
@@ -2370,6 +2373,19 @@ mod tests {
         assert_eq!(data.len() - 2, new_data.len());
         assert_eq!(2, new_data.offset());
         assert_eq!(data.null_count() - 1, new_data.null_count());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + length overflow")]
+    fn test_slice_panics_on_offset_length_overflow() {
+        let data = ArrayData::builder(DataType::Int32)
+            .len(4)
+            .add_buffer(make_i32_buffer(4))
+            .build()
+            .unwrap();
+        let sliced = data.slice(1, 3);
+
+        sliced.slice(1, usize::MAX);
     }
 
     #[test]
