@@ -245,20 +245,6 @@ impl PageMetrics {
             .as_mut()
             .map(LevelHistogram::reset);
     }
-
-    /// Updates histogram values using provided repetition levels
-    fn update_repetition_level_histogram(&mut self, levels: &[i16]) {
-        if let Some(ref mut rep_hist) = self.repetition_level_histogram {
-            rep_hist.update_from_levels(levels);
-        }
-    }
-
-    /// Updates histogram values using provided definition levels
-    fn update_definition_level_histogram(&mut self, levels: &[i16]) {
-        if let Some(ref mut def_hist) = self.definition_level_histogram {
-            def_hist.update_from_levels(levels);
-        }
-    }
 }
 
 // Metrics per column writer
@@ -351,9 +337,9 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     /// but we use a BTreeSet so that the output is deterministic
     encodings: BTreeSet<Encoding>,
     encoding_stats: Vec<PageEncodingStats>,
-    // Reused buffers
-    def_levels_sink: Vec<i16>,
-    rep_levels_sink: Vec<i16>,
+    // Streaming level encoders for definition/repetition levels.
+    def_levels_encoder: LevelEncoder,
+    rep_levels_encoder: LevelEncoder,
     data_pages: VecDeque<CompressedPage>,
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
@@ -411,6 +397,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         Self {
+            def_levels_encoder: Self::create_level_encoder(descr.max_def_level(), &props),
+            rep_levels_encoder: Self::create_level_encoder(descr.max_rep_level(), &props),
             descr,
             props,
             statistics_enabled,
@@ -418,8 +406,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             codec,
             compressor,
             encoder,
-            def_levels_sink: vec![],
-            rep_levels_sink: vec![],
             data_pages: VecDeque::new(),
             page_metrics,
             column_metrics,
@@ -647,6 +633,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         })
     }
 
+    /// Creates a new streaming level encoder appropriate for the writer version.
+    fn create_level_encoder(max_level: i16, props: &WriterProperties) -> LevelEncoder {
+        match props.writer_version() {
+            WriterVersion::PARQUET_1_0 => LevelEncoder::v1_streaming(max_level),
+            WriterVersion::PARQUET_2_0 => LevelEncoder::v2_streaming(max_level),
+        }
+    }
+
     /// Writes mini batch of values, definition and repetition levels.
     /// This allows fine-grained processing of values and maintaining a reasonable
     /// page size.
@@ -668,16 +662,19 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 )
             })?;
 
-            let values_to_write = levels
-                .iter()
-                .map(|level| (*level == self.descr.max_def_level()) as usize)
-                .sum();
+            let mut values_to_write = 0usize;
+            let max_def = self.descr.max_def_level();
+            let encoder = &mut self.def_levels_encoder;
+            match self.page_metrics.definition_level_histogram.as_mut() {
+                Some(histogram) => encoder.put_with_observer(levels, |level, count| {
+                    values_to_write += count * (level == max_def) as usize;
+                    histogram.increment_by(level, count as i64);
+                }),
+                None => encoder.put_with_observer(levels, |level, count| {
+                    values_to_write += count * (level == max_def) as usize;
+                }),
+            };
             self.page_metrics.num_page_nulls += (levels.len() - values_to_write) as u64;
-
-            // Update histogram
-            self.page_metrics.update_definition_level_histogram(levels);
-
-            self.def_levels_sink.extend_from_slice(levels);
             values_to_write
         } else {
             num_levels
@@ -700,15 +697,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 ));
             }
 
-            // Count the occasions where we start a new row
-            for &level in levels {
-                self.page_metrics.num_buffered_rows += (level == 0) as u32
-            }
-
-            // Update histogram
-            self.page_metrics.update_repetition_level_histogram(levels);
-
-            self.rep_levels_sink.extend_from_slice(levels);
+            let mut new_rows = 0u32;
+            let encoder = &mut self.rep_levels_encoder;
+            match self.page_metrics.repetition_level_histogram.as_mut() {
+                Some(histogram) => encoder.put_with_observer(levels, |level, count| {
+                    new_rows += (count as u32) * (level == 0) as u32;
+                    histogram.increment_by(level, count as i64);
+                }),
+                None => encoder.put_with_observer(levels, |level, count| {
+                    new_rows += (count as u32) * (level == 0) as u32;
+                }),
+            };
+            self.page_metrics.num_buffered_rows += new_rows;
         } else {
             // Each value is exactly one row.
             // Equals to the number of values, we count nulls as well.
@@ -1060,23 +1060,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 let mut buffer = vec![];
 
                 if max_rep_level > 0 {
-                    buffer.extend_from_slice(
-                        &self.encode_levels_v1(
-                            Encoding::RLE,
-                            &self.rep_levels_sink[..],
-                            max_rep_level,
-                        )[..],
-                    );
+                    self.rep_levels_encoder
+                        .flush_to(|data| buffer.extend_from_slice(data));
                 }
 
                 if max_def_level > 0 {
-                    buffer.extend_from_slice(
-                        &self.encode_levels_v1(
-                            Encoding::RLE,
-                            &self.def_levels_sink[..],
-                            max_def_level,
-                        )[..],
-                    );
+                    self.def_levels_encoder
+                        .flush_to(|data| buffer.extend_from_slice(data));
                 }
 
                 buffer.extend_from_slice(&values_data.buf);
@@ -1106,15 +1096,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 let mut buffer = vec![];
 
                 if max_rep_level > 0 {
-                    let levels = self.encode_levels_v2(&self.rep_levels_sink[..], max_rep_level);
-                    rep_levels_byte_len = levels.len();
-                    buffer.extend_from_slice(&levels[..]);
+                    self.rep_levels_encoder
+                        .flush_to(|data| buffer.extend_from_slice(data));
+                    rep_levels_byte_len = buffer.len();
                 }
 
                 if max_def_level > 0 {
-                    let levels = self.encode_levels_v2(&self.def_levels_sink[..], max_def_level);
-                    def_levels_byte_len = levels.len();
-                    buffer.extend_from_slice(&levels[..]);
+                    self.def_levels_encoder
+                        .flush_to(|data| buffer.extend_from_slice(data));
+                    def_levels_byte_len = buffer.len() - rep_levels_byte_len;
                 }
 
                 let uncompressed_size =
@@ -1164,10 +1154,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         // Update total number of rows.
         self.column_metrics.total_rows_written += self.page_metrics.num_buffered_rows as u64;
-
-        // Reset state.
-        self.rep_levels_sink.clear();
-        self.def_levels_sink.clear();
         self.page_metrics.new_page();
 
         Ok(())
@@ -1242,23 +1228,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let metadata = builder.build()?;
         Ok(metadata)
-    }
-
-    /// Encodes definition or repetition levels for Data Page v1.
-    #[inline]
-    fn encode_levels_v1(&self, encoding: Encoding, levels: &[i16], max_level: i16) -> Vec<u8> {
-        let mut encoder = LevelEncoder::v1(encoding, max_level, levels.len());
-        encoder.put(levels);
-        encoder.consume()
-    }
-
-    /// Encodes definition or repetition levels for Data Page v2.
-    /// Encoding is always RLE.
-    #[inline]
-    fn encode_levels_v2(&self, levels: &[i16], max_level: i16) -> Vec<u8> {
-        let mut encoder = LevelEncoder::v2(max_level, levels.len());
-        encoder.put(levels);
-        encoder.consume()
     }
 
     /// Writes compressed data page into underlying sink and updates global metrics.

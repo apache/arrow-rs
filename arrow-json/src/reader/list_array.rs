@@ -19,7 +19,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_array::{ArrayRef, GenericListArray, GenericListViewArray, OffsetSizeTrait};
+use arrow_array::{
+    ArrayRef, FixedSizeListArray, GenericListArray, GenericListViewArray, OffsetSizeTrait,
+};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{OffsetBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, FieldRef};
@@ -34,6 +36,7 @@ pub struct ListLikeArrayDecoder<O, const IS_VIEW: bool> {
     field: FieldRef,
     decoder: Box<dyn ArrayDecoder>,
     phantom: PhantomData<O>,
+    ignore_type_conflicts: bool,
     is_nullable: bool,
 }
 
@@ -56,6 +59,7 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ListLikeArrayDecoder<O, IS_VIEW> {
             field: field.clone(),
             decoder,
             phantom: Default::default(),
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             is_nullable,
         })
     }
@@ -79,6 +83,10 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
                     end_idx
                 }
                 (TapeElement::Null, Some(nulls)) => {
+                    nulls.append(false);
+                    *p + 1
+                }
+                (_, Some(nulls)) if self.ignore_type_conflicts => {
                     nulls.append(false);
                     *p + 1
                 }
@@ -108,13 +116,16 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
                 sizes.push(offsets[i] - offsets[i - 1]);
             }
             offsets.pop();
-            let array = GenericListViewArray::<O>::try_new(
-                self.field.clone(),
-                ScalarBuffer::from(offsets),
-                ScalarBuffer::from(sizes),
-                values,
-                nulls,
-            )?;
+            // SAFETY: offsets and sizes are constructed correctly from the tape
+            let array = unsafe {
+                GenericListViewArray::<O>::new_unchecked(
+                    self.field.clone(),
+                    ScalarBuffer::from(offsets),
+                    ScalarBuffer::from(sizes),
+                    values,
+                    nulls,
+                )
+            };
             Ok(Arc::new(array))
         } else {
             // SAFETY: offsets are built monotonically starting from 0
@@ -123,5 +134,88 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
             let array = GenericListArray::<O>::try_new(self.field.clone(), offsets, values, nulls)?;
             Ok(Arc::new(array))
         }
+    }
+}
+
+pub struct FixedSizeListArrayDecoder {
+    field: FieldRef,
+    size: i32,
+    decoder: Box<dyn ArrayDecoder>,
+    ignore_type_conflicts: bool,
+    is_nullable: bool,
+}
+
+impl FixedSizeListArrayDecoder {
+    pub fn new(
+        ctx: &DecoderContext,
+        data_type: &DataType,
+        is_nullable: bool,
+    ) -> Result<Self, ArrowError> {
+        let (field, size) = match data_type {
+            DataType::FixedSizeList(f, s) => (f, *s),
+            _ => unreachable!(),
+        };
+        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
+
+        Ok(Self {
+            field: field.clone(),
+            size,
+            decoder,
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
+            is_nullable,
+        })
+    }
+}
+
+impl ArrayDecoder for FixedSizeListArrayDecoder {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+        let expected = self.size as usize;
+        let mut child_pos = Vec::with_capacity(pos.len() * expected);
+
+        let mut nulls = self
+            .is_nullable
+            .then(|| BooleanBufferBuilder::new(pos.len()));
+
+        for p in pos {
+            let end_idx = match (tape.get(*p), nulls.as_mut()) {
+                (TapeElement::StartList(end_idx), None) => end_idx,
+                (TapeElement::StartList(end_idx), Some(nulls)) => {
+                    nulls.append(true);
+                    end_idx
+                }
+                (TapeElement::Null, Some(nulls)) => {
+                    nulls.append(false);
+                    child_pos.resize(child_pos.len() + expected, 0);
+                    continue;
+                }
+                (_, Some(nulls)) if self.ignore_type_conflicts => {
+                    nulls.append(false);
+                    child_pos.resize(child_pos.len() + expected, 0);
+                    continue;
+                }
+                _ => return Err(tape.error(*p, "[")),
+            };
+
+            let child_start = child_pos.len();
+            let mut cur_idx = *p + 1;
+            while cur_idx < end_idx {
+                child_pos.push(cur_idx);
+                cur_idx = tape.next(cur_idx, "fixed-size list value")?;
+            }
+
+            let actual = child_pos.len() - child_start;
+            if actual != expected {
+                return Err(ArrowError::JsonError(format!(
+                    "Incorrect number of elements for FixedSizeList, \
+                     expected {expected} but got {actual}"
+                )));
+            }
+        }
+
+        let values = self.decoder.decode(tape, &child_pos)?;
+        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
+
+        let array = FixedSizeListArray::try_new(self.field.clone(), self.size, values, nulls)?;
+        Ok(Arc::new(array))
     }
 }

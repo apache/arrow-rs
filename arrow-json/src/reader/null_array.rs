@@ -20,17 +20,28 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, NullArray};
 use arrow_schema::ArrowError;
 
-use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{ArrayDecoder, DecoderContext};
 
 #[derive(Default)]
-pub struct NullArrayDecoder {}
+pub struct NullArrayDecoder {
+    ignore_type_conflicts: bool,
+}
+impl NullArrayDecoder {
+    pub fn new(ctx: &DecoderContext) -> Self {
+        Self {
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
+        }
+    }
+}
 
 impl ArrayDecoder for NullArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
-        for p in pos {
-            if !matches!(tape.get(*p), TapeElement::Null) {
-                return Err(tape.error(*p, "null"));
+        if !self.ignore_type_conflicts {
+            for p in pos {
+                if !matches!(tape.get(*p), TapeElement::Null) {
+                    return Err(tape.error(*p, "null"));
+                }
             }
         }
         Ok(Arc::new(NullArray::new(pos.len())))

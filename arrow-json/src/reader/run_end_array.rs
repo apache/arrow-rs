@@ -71,7 +71,7 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
         let partitions = partition(from_ref(&flat_array))?;
         let size = partitions.len();
         let mut run_ends = Vec::with_capacity(size);
-        let mut value_indices = Vec::with_capacity(size);
+        let mut indices = Vec::with_capacity(size);
 
         for Range { start, end } in partitions.ranges() {
             let run_end = R::Native::from_usize(end).ok_or_else(|| {
@@ -81,10 +81,10 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
                 ))
             })?;
             run_ends.push(run_end);
-            value_indices.push(start);
+            indices.push(start);
         }
 
-        let indices = UInt32Array::from_iter_values(value_indices.into_iter().map(|i| i as u32));
+        let indices = UInt32Array::from_iter_values(indices.into_iter().map(|i| i as u32));
         let values = take(flat_array.as_ref(), &indices, None)?;
 
         // SAFETY: run_ends are strictly increasing with the last value equal to len
