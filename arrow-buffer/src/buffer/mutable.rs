@@ -254,7 +254,10 @@ impl MutableBuffer {
     // exits.
     #[inline(always)]
     pub fn reserve(&mut self, additional: usize) {
-        let required_cap = self.len + additional;
+        let required_cap = self
+            .len
+            .checked_add(additional)
+            .expect("buffer length overflow");
         if required_cap > self.layout.size() {
             let new_capacity = bit_util::round_upto_multiple_of_64(required_cap);
             let new_capacity = std::cmp::max(new_capacity, self.layout.size() * 2);
@@ -583,7 +586,11 @@ impl MutableBuffer {
     /// Extends the buffer by `additional` bytes equal to `0u8`, incrementing its capacity if needed.
     #[inline]
     pub fn extend_zeros(&mut self, additional: usize) {
-        self.resize(self.len + additional, 0);
+        let new_len = self
+            .len
+            .checked_add(additional)
+            .expect("buffer length overflow");
+        self.resize(new_len, 0);
     }
 
     /// # Safety
