@@ -39,6 +39,7 @@ use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
+use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
@@ -161,6 +162,10 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Strategy for materialising row selections
     row_selection_policy: RowSelectionPolicy,
 
+    /// Row groups where ALL rows are known to match the filter predicate.
+    /// For these row groups, filter evaluation is skipped entirely.
+    fully_matched_row_groups: HashSet<usize>,
+
     /// Current state of the decoder.
     ///
     /// It is taken when processing, and must be put back before returning
@@ -186,6 +191,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        fully_matched_row_groups: Option<Vec<usize>>,
     ) -> Self {
         Self {
             batch_size,
@@ -198,6 +204,9 @@ impl RowGroupReaderBuilder {
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
+            fully_matched_row_groups: fully_matched_row_groups
+                .map(|v| v.into_iter().collect())
+                .unwrap_or_default(),
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -341,6 +350,22 @@ impl RowGroupReaderBuilder {
                         cache_info: None,
                     }));
                 };
+
+                // Skip filter for fully matched row groups: all rows are known
+                // to satisfy the predicate based on row group statistics, so
+                // evaluating the filter would be wasted work.
+                if self
+                    .fully_matched_row_groups
+                    .contains(&row_group_info.row_group_idx)
+                {
+                    // Put the filter back for subsequent non-fully-matched row groups
+                    self.filter = Some(filter);
+                    return Ok(NextState::again(RowGroupDecoderState::StartData {
+                        row_group_info,
+                        column_chunks,
+                        cache_info: None,
+                    }));
+                }
 
                 // we have predicates to evaluate
                 let cache_projection =

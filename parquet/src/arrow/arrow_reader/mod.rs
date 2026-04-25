@@ -142,6 +142,12 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) metrics: ArrowReaderMetrics,
 
     pub(crate) max_predicate_cache_size: usize,
+
+    /// Row groups where ALL rows are known to match the filter predicate.
+    ///
+    /// For these row groups, the [`RowFilter`] evaluation is skipped entirely
+    /// since the predicate is guaranteed to be true for every row.
+    pub(crate) fully_matched_row_groups: Option<Vec<usize>>,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -181,6 +187,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
+            fully_matched_row_groups: None,
         }
     }
 
@@ -343,6 +350,28 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_row_filter(self, filter: RowFilter) -> Self {
         Self {
             filter: Some(filter),
+            ..self
+        }
+    }
+
+    /// Specify row groups where ALL rows are known to match the filter predicate.
+    ///
+    /// For these row groups, the [`RowFilter`] evaluation (set via
+    /// [`Self::with_row_filter`]) is skipped entirely since the predicate is
+    /// guaranteed to be `true` for every row. This avoids the cost of decoding
+    /// filter columns and evaluating the predicate expression for those row
+    /// groups.
+    ///
+    /// This is typically determined by evaluating row group statistics: if the
+    /// statistics prove that all rows satisfy the predicate, the row group is
+    /// "fully matched."
+    ///
+    /// The provided indices must be a subset of the row groups specified via
+    /// [`Self::with_row_groups`] (or all row groups if none were specified).
+    /// Indices not present in the row group list are ignored.
+    pub fn with_fully_matched_row_groups(self, row_groups: Vec<usize>) -> Self {
+        Self {
+            fully_matched_row_groups: Some(row_groups),
             ..self
         }
     }
@@ -1191,6 +1220,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
+            // Not used for the sync reader (single row group per reader)
+            fully_matched_row_groups: _,
         } = self;
 
         // Try to avoid allocate large buffer
