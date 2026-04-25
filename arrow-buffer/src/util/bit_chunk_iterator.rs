@@ -221,7 +221,8 @@ pub struct BitChunks<'a> {
 impl<'a> BitChunks<'a> {
     /// Create a new [`BitChunks`] from a byte array, and an offset and length in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
-        assert!(ceil(offset + len, 8) <= buffer.len() * 8);
+        let end = offset.checked_add(len).expect("offset + len out of bounds");
+        assert!(ceil(end, 8) <= buffer.len() * 8);
 
         let byte_offset = offset / 8;
         let bit_offset = offset % 8;
@@ -474,6 +475,13 @@ mod tests {
 
         assert_eq!(u64::MAX, bitchunks.iter().last().unwrap());
         assert_eq!(0x7F, bitchunks.remainder_bits());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_out_of_bound_should_panic_when_offset_and_length_overflow() {
+        let buffer = Buffer::from(vec![0xFF_u8; 8]);
+        buffer.bit_chunks(1, usize::MAX);
     }
 
     #[test]
