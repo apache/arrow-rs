@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["interleave","interleave_bytes","interleave_dictionaries","interleave_fallback","interleave_fallback_dictionary","interleave_list","interleave_primitive","interleave_record_batch","interleave_struct","interleave_views"],"macro":["dict_helper","primitive_helper"],"struct":["Interleave"]};

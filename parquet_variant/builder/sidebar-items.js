@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["BASIC_TYPE_BITS","UNIX_EPOCH_DATE"],"fn":["int_size","primitive_header","short_string_header"],"macro":["variant_append_value"],"mod":["list","metadata","object"],"struct":["ParentState","ValueBuilder","VariantBuilder"],"trait":["BuilderSpecificState","VariantBuilderExt"]};

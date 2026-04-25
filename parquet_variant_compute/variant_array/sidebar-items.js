@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["binary_array_value","canonicalize_and_verify_data_type","canonicalize_and_verify_field","canonicalize_shredded_types","typed_value_to_variant","validate_binary_array","variant_from_arrays_at"],"struct":["BorrowedShreddingState","ShreddedVariantFieldArray","ShreddingState","StructArrayBuilder","VariantArray","VariantArrayIter","VariantType"]};
