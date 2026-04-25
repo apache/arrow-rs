@@ -614,6 +614,101 @@ impl i256 {
         let n = (n.high >> 64) as i64; // throw away the lower 192 bits
         (n as f64) * f64::powi(2.0, 192 - (k as i32)) // convert to f64 and scale it, as we left-shift k bit previous, so we need to scale it by 2^(192-k)
     }
+
+    /// Computes the `base` logarithm of the number `self`
+    /// Returns `None` if `self` is less than or equal to zero, or if `base` is less than 2.
+    #[inline]
+    pub fn checked_ilog(self, base: i256) -> Option<u32> {
+        if base == Self::from(10) {
+            // Faster implementation for base 10
+            return self.checked_ilog10();
+        }
+
+        if self <= Self::ZERO {
+            return None;
+        }
+        if base <= Self::ONE {
+            return None;
+        }
+        if self <= base {
+            return Some(0);
+        }
+
+        let mut val = 1;
+        let mut base_exp = base;
+
+        let boundary = self.checked_div(base)?;
+        while base_exp <= boundary {
+            val += 1;
+            base_exp = base_exp.checked_mul(base)?;
+        }
+        Some(val)
+    }
+
+    /// Computes the `base` logarithm of the number `self`
+    /// Panic if `self` is less than or equal to zero, or if `base` is less than 2.
+    #[inline]
+    pub fn ilog(self, base: i256) -> u32 {
+        self.checked_ilog(base)
+            .unwrap_or_else(|| panic!("ilog overflow with {self} and base {base}"))
+    }
+
+    /// Computes the decimal logarithm of the number `self`
+    /// Returns `None` if `self` is less than or equal to zero.
+    #[inline]
+    pub fn checked_ilog10(self) -> Option<u32> {
+        if self <= Self::ZERO {
+            return None;
+        }
+        if self < Self::from(10) {
+            return Some(0);
+        }
+
+        // Layered approach to calculate logarithm using i128 log operations only
+        // Consult int_log10.rs stdlib implementiation for u128
+        let pow_64: i256 = i256::from(10).checked_pow(64).unwrap();
+        let pow_32: i256 = i256::from(10).checked_pow(32).unwrap();
+        if self >= pow_64 {
+            let value = self.checked_div(pow_64)?;
+            // self is between 10^64 and 10^77 (~i256::MAX).
+            // `value` is 14 digits max (10^77 / 10^64 = 10^13),
+            // so it fits to `low` u128
+            debug_assert!(value.high == 0);
+            Some(64 + value.low.checked_ilog10()?)
+        } else if self >= pow_32 {
+            let value = self.checked_div(pow_32)?;
+            // self is between 10^32 and 10^64.
+            // `value` is 33 digits max (10^64/10^32=10^32)
+            // so it fits to `low` 128-bit value
+            debug_assert!(value.high == 0);
+            Some(32 + value.low.checked_ilog10()?)
+        } else {
+            // self fits within u128 (high == 0 and self > 0).
+            self.low.checked_ilog10()
+        }
+    }
+
+    /// Computes the decimal logarithm of the number `self`
+    /// Panics if `self` is less than or equal to zero.
+    #[inline]
+    pub fn ilog10(self) -> u32 {
+        self.checked_ilog10()
+            .unwrap_or_else(|| panic!("ilog10 overflow with {self}"))
+    }
+
+    /// Computes the binary logarithm of the number `self`
+    /// Returns `None` if `self` is less than or equal to zero.
+    #[inline]
+    pub fn checked_ilog2(self) -> Option<u32> {
+        self.checked_ilog(i256::from(2))
+    }
+
+    /// Computes the base 2 logarithm of the number, rounded down.
+    #[inline]
+    pub fn ilog2(self) -> u32 {
+        self.checked_ilog2()
+            .unwrap_or_else(|| panic!("ilog2 overflow with {self}"))
+    }
 }
 
 /// Temporary workaround due to lack of stable const array slicing
@@ -1579,5 +1674,108 @@ mod tests {
 
         assert_eq!(i256::MAX.trailing_zeros(), 0);
         assert_eq!(i256::from(-1).trailing_zeros(), 0);
+    }
+
+    #[test]
+    fn test_ilog() {
+        let value = i256::from(128);
+
+        // log2
+        assert_eq!(value.ilog(i256::from(2)), 7);
+        assert_eq!(value.ilog2(), 7);
+
+        // log10
+        assert_eq!(value.ilog(i256::from(10)), 2);
+        assert_eq!(value.ilog10(), 2);
+
+        // negative base
+        assert_eq!(value.checked_ilog(i256::from(-2)), None);
+        assert_eq!(value.checked_ilog(i256::from(-10)), None);
+        assert_eq!(value.checked_ilog(i256::from(0)), None);
+        assert_eq!(value.checked_ilog(i256::from(1)), None);
+
+        // negative self
+        let neg_value = i256::from(-128);
+        assert_eq!(neg_value.checked_ilog(i256::from(2)), None);
+        assert_eq!(neg_value.checked_ilog(i256::from(10)), None);
+        assert_eq!(neg_value.checked_ilog10(), None);
+        assert_eq!(neg_value.checked_ilog2(), None);
+
+        // zero self
+        assert_eq!(i256::ZERO.checked_ilog(i256::from(2)), None);
+        assert_eq!(i256::ZERO.checked_ilog(i256::from(10)), None);
+        assert_eq!(i256::ZERO.checked_ilog10(), None);
+        assert_eq!(i256::ZERO.checked_ilog2(), None);
+
+        let value = i256::from_parts(100000000, 1234);
+        assert_eq!(value.checked_ilog(i256::from(10)), Some(41));
+        assert_eq!(value.checked_ilog10(), Some(41));
+
+        // Large i256 values
+        let large = i256::from_parts(100000000, i128::MAX);
+        // log2 of 2 powered to approximately 255 should be 254
+        assert_eq!(large.checked_ilog(i256::from(2)), Some(254));
+
+        // log10(large)=76
+        assert_eq!(large.checked_ilog(i256::from(10)), Some(76));
+        assert_eq!(large.checked_ilog10(), Some(76));
+
+        // log5(large)
+        assert_eq!(large.checked_ilog(i256::from(5)), Some(109));
+
+        // Maximum representable value is 2^254
+        assert!(i256::from(2).checked_pow(255).is_none());
+        let value = i256::from(2).checked_pow(254).expect("construct");
+        assert_eq!(value.checked_ilog(i256::from(2)), Some(254));
+
+        // Logarithm of a maximum representable value is 254
+        assert_eq!(i256::MAX.checked_ilog(i256::from(2)), Some(254));
+    }
+
+    #[test]
+    fn test_ilog10() {
+        // Edge cases
+        assert_eq!(i256::ZERO.checked_ilog10(), None);
+        assert_eq!(i256::MINUS_ONE.checked_ilog10(), None);
+        assert_eq!(i256::MAX.checked_ilog10(), Some(76));
+        assert_eq!(i256::from(10).checked_ilog10(), Some(1));
+
+        // small values
+        assert_eq!(i256::from(1).checked_ilog10(), Some(0));
+        assert_eq!(i256::from(9).checked_ilog10(), Some(0));
+
+        // case with high == 0
+        assert_eq!(i256::from(100).checked_ilog10(), Some(2));
+        // case with high == 0 and full low
+        assert_eq!(i256::from_parts(u128::MAX, 0).checked_ilog10(), Some(38));
+
+        // case with high > 0
+        assert_eq!(i256::from_parts(0, 1).checked_ilog10(), Some(38));
+
+        // case with non-null high and low, slow branch
+        let pow50 = i256::from(10).checked_pow(50).unwrap();
+        assert_eq!(pow50.checked_ilog10(), Some(50));
+
+        // case with non-null high and low, fast branch
+        let pow64 = i256::from(10).checked_pow(64).unwrap();
+        assert_eq!(pow64.checked_ilog10(), Some(64));
+    }
+
+    #[test]
+    #[should_panic(expected = "ilog10 overflow")]
+    fn test_ilog10_zero_panics() {
+        let _ = i256::ZERO.ilog10();
+    }
+
+    #[test]
+    #[should_panic(expected = "ilog overflow")]
+    fn test_ilog_zero_panics() {
+        let _ = i256::ZERO.ilog(i256::from(5));
+    }
+
+    #[test]
+    #[should_panic(expected = "ilog2 overflow")]
+    fn test_ilog2_zero_panics() {
+        let _ = i256::ZERO.ilog2();
     }
 }
