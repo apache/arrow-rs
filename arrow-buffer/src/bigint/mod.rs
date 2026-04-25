@@ -17,7 +17,6 @@
 
 use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
-use ::i256::I256 as ExtI256;
 use num_bigint::BigInt;
 use num_traits::{
     Bounded, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
@@ -620,7 +619,30 @@ impl i256 {
     /// Returns `None` if `self` is less than or equal to zero, or if `base` is less than 2.
     #[inline]
     pub fn checked_ilog(self, base: i256) -> Option<u32> {
-        self.to_ext_i256().checked_ilog(base.to_ext_i256())
+        if base == Self::from(10) {
+            // Faster implementation for base 10
+            return self.checked_ilog10();
+        }
+
+        if self <= Self::ZERO {
+            return None;
+        }
+        if base <= Self::ONE {
+            return None;
+        }
+        if self <= base {
+            return Some(0);
+        }
+
+        let mut val = 1;
+        let mut base_exp = base;
+
+        let boundary = self.checked_div(base)?;
+        while base_exp <= boundary {
+            val += 1;
+            base_exp = base_exp.checked_mul(base)?;
+        }
+        Some(val)
     }
 
     /// Computes the `base` logarithm of the number `self`
@@ -635,8 +657,35 @@ impl i256 {
     /// Returns `None` if `self` is less than or equal to zero.
     #[inline]
     pub fn checked_ilog10(self) -> Option<u32> {
-        // Switch to I256::checked_ilog10 when I256 switches MSRV
-        self.checked_ilog(i256::from(10))
+        if self <= Self::ZERO {
+            return None;
+        }
+        if self < Self::from(10) {
+            return Some(0);
+        }
+
+        // Layered approach to calculate logarithm using i128 log operations only
+        // Consult int_log10.rs stdlib implementiation for u128
+        let pow_64: i256 = i256::from(10).checked_pow(64).unwrap();
+        let pow_32: i256 = i256::from(10).checked_pow(32).unwrap();
+        if self >= pow_64 {
+            let value = self.checked_div(pow_64)?;
+            // self is between 10^64 and 10^77 (~i256::MAX).
+            // `value` is 14 digits max (10^77 / 10^64 = 10^13),
+            // so it fits to `low` u128
+            debug_assert!(value.high == 0);
+            Some(64 + value.low.checked_ilog10()?)
+        } else if self >= pow_32 {
+            let value = self.checked_div(pow_32)?;
+            // self is between 10^32 and 10^64.
+            // `value` is 33 digits max (10^64/10^32=10^32)
+            // so it fits to `low` 128-bit value
+            debug_assert!(value.high == 0);
+            Some(32 + value.low.checked_ilog10()?)
+        } else {
+            // self fits within u128 (high == 0 and self > 0).
+            self.low.checked_ilog10()
+        }
     }
 
     /// Computes the decimal logarithm of the number `self`
@@ -651,7 +700,7 @@ impl i256 {
     /// Returns `None` if `self` is less than or equal to zero.
     #[inline]
     pub fn checked_ilog2(self) -> Option<u32> {
-        self.to_ext_i256().checked_ilog2()
+        self.checked_ilog(i256::from(2))
     }
 
     /// Computes the base 2 logarithm of the number, rounded down.
@@ -659,11 +708,6 @@ impl i256 {
     pub fn ilog2(self) -> u32 {
         self.checked_ilog2()
             .unwrap_or_else(|| panic!("ilog2 overflow with {self}"))
-    }
-
-    /// Converts self into an `i256::I256`
-    fn to_ext_i256(self) -> ExtI256 {
-        ExtI256::from_le_bytes(self.to_le_bytes())
     }
 }
 
@@ -1663,18 +1707,58 @@ mod tests {
         assert_eq!(i256::ZERO.checked_ilog10(), None);
         assert_eq!(i256::ZERO.checked_ilog2(), None);
 
+        let value = i256::from_parts(100000000, 1234);
+        assert_eq!(value.checked_ilog(i256::from(10)), Some(41));
+        assert_eq!(value.checked_ilog10(), Some(41));
+
         // Large i256 values
         let large = i256::from_parts(100000000, i128::MAX);
         // log2 of 2 powered to approximately 255 should be 254
         assert_eq!(large.checked_ilog(i256::from(2)), Some(254));
 
-        // log10 should be 76 or 77
-        let result = large.checked_ilog(i256::from(10));
-        assert_eq!(result.unwrap(), 76);
+        // log10(large)=76
+        assert_eq!(large.checked_ilog(i256::from(10)), Some(76));
+        assert_eq!(large.checked_ilog10(), Some(76));
 
-        // log5
-        let result = large.checked_ilog(i256::from(5));
-        assert_eq!(result.unwrap(), 109);
+        // log5(large)
+        assert_eq!(large.checked_ilog(i256::from(5)), Some(109));
+
+        // Maximum representable value is 2^254
+        assert!(i256::from(2).checked_pow(255).is_none());
+        let value = i256::from(2).checked_pow(254).expect("construct");
+        assert_eq!(value.checked_ilog(i256::from(2)), Some(254));
+
+        // Logarithm of a maximum representable value is 254
+        assert_eq!(i256::MAX.checked_ilog(i256::from(2)), Some(254));
+    }
+
+    #[test]
+    fn test_ilog10() {
+        // Edge cases
+        assert_eq!(i256::ZERO.checked_ilog10(), None);
+        assert_eq!(i256::MINUS_ONE.checked_ilog10(), None);
+        assert_eq!(i256::MAX.checked_ilog10(), Some(76));
+        assert_eq!(i256::from(10).checked_ilog10(), Some(1));
+
+        // small values
+        assert_eq!(i256::from(1).checked_ilog10(), Some(0));
+        assert_eq!(i256::from(9).checked_ilog10(), Some(0));
+
+        // case with high == 0
+        assert_eq!(i256::from(100).checked_ilog10(), Some(2));
+        // case with high == 0 and full low
+        assert_eq!(i256::from_parts(u128::MAX, 0).checked_ilog10(), Some(38));
+
+        // case with high > 0
+        assert_eq!(i256::from_parts(0, 1).checked_ilog10(), Some(38));
+
+        // case with non-null high and low, slow branch
+        let pow50 = i256::from(10).checked_pow(50).unwrap();
+        assert_eq!(pow50.checked_ilog10(), Some(50));
+
+        // case with non-null high and low, fast branch
+        let pow64 = i256::from(10).checked_pow(64).unwrap();
+        assert_eq!(pow64.checked_ilog10(), Some(64));
     }
 
     #[test]
