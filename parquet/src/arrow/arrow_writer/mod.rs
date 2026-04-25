@@ -920,8 +920,11 @@ impl ArrowColumnWriter {
         chunker: &mut ContentDefinedChunker,
     ) -> Result<()> {
         let levels = &col.0;
-        let chunks =
-            chunker.get_arrow_chunks(levels.def_levels(), levels.rep_levels(), levels.array())?;
+        let chunks = chunker.get_arrow_chunks(
+            levels.def_level_data().as_ref(),
+            levels.rep_level_data().as_ref(),
+            levels.array(),
+        )?;
 
         let num_chunks = chunks.len();
         for (i, chunk) in chunks.iter().enumerate() {
@@ -1384,10 +1387,15 @@ fn write_leaf(
         }
         ColumnWriter::BoolColumnWriter(typed) => {
             let array = column.as_boolean();
-            typed.write_batch(
-                get_bool_array_slice(array, indices).as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
+            let values = get_bool_array_slice(array, indices);
+            typed.write_batch_internal(
+                values.as_slice(),
+                None,
+                levels.def_level_data().as_ref(),
+                levels.rep_level_data().as_ref(),
+                None,
+                None,
+                None,
             )
         }
         ColumnWriter::Int64ColumnWriter(typed) => {
@@ -1538,7 +1546,15 @@ fn write_leaf(
                     ));
                 }
             };
-            typed.write_batch(bytes.as_slice(), levels.def_levels(), levels.rep_levels())
+            typed.write_batch_internal(
+                bytes.as_slice(),
+                None,
+                levels.def_level_data().as_ref(),
+                levels.rep_level_data().as_ref(),
+                None,
+                None,
+                None,
+            )
         }
     }
 }
@@ -1551,8 +1567,8 @@ fn write_primitive<E: ColumnValueEncoder>(
     writer.write_batch_internal(
         values,
         Some(levels.non_null_indices()),
-        levels.def_levels(),
-        levels.rep_levels(),
+        levels.def_level_data().as_ref(),
+        levels.rep_level_data().as_ref(),
         None,
         None,
         None,

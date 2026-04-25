@@ -314,6 +314,54 @@ impl<T: Default> ColumnMetrics<T> {
     }
 }
 
+/// Borrowed view of level data, analogous to `&str` for `LevelData`'s `String`.
+///
+/// This type exists so that [`GenericColumnWriter::write_batch_internal`] can accept
+/// level data from two callers without allocating: the public [`GenericColumnWriter::write_batch`]
+/// API wraps caller-provided `&[i16]` slices directly as `Materialized`, while the Arrow
+/// writer path converts owned `LevelData` via `.as_ref()` (which may also produce `Uniform`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LevelDataRef<'a> {
+    Absent,
+    Materialized(&'a [i16]),
+    Uniform { value: i16, count: usize },
+}
+
+impl<'a> LevelDataRef<'a> {
+    pub(crate) fn len(self) -> usize {
+        match self {
+            Self::Absent => 0,
+            Self::Materialized(values) => values.len(),
+            Self::Uniform { count, .. } => count,
+        }
+    }
+
+    pub(crate) fn first(self) -> Option<i16> {
+        match self {
+            Self::Absent => None,
+            Self::Materialized(values) => values.first().copied(),
+            Self::Uniform { value, count } => (count > 0).then_some(value),
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    pub(crate) fn value_at(self, idx: usize) -> Option<i16> {
+        match self {
+            Self::Absent => None,
+            Self::Materialized(values) => values.get(idx).copied(),
+            Self::Uniform { value, count } => (idx < count).then_some(value),
+        }
+    }
+
+    pub(crate) fn slice(self, offset: usize, len: usize) -> Self {
+        match self {
+            Self::Absent => Self::Absent,
+            Self::Materialized(values) => Self::Materialized(&values[offset..offset + len]),
+            Self::Uniform { value, .. } => Self::Uniform { value, count: len },
+        }
+    }
+}
+
 /// Typed column writer for a primitive column.
 pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, ColumnValueEncoderImpl<T>>;
 
@@ -424,21 +472,19 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         &mut self,
         values: &E::Values,
         value_indices: Option<&[usize]>,
-        def_levels: Option<&[i16]>,
-        rep_levels: Option<&[i16]>,
+        def_levels: LevelDataRef<'_>,
+        rep_levels: LevelDataRef<'_>,
         min: Option<&E::T>,
         max: Option<&E::T>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
         // Check if number of definition levels is the same as number of repetition levels.
-        if let (Some(def), Some(rep)) = (def_levels, rep_levels) {
-            if def.len() != rep.len() {
-                return Err(general_err!(
-                    "Inconsistent length of definition and repetition levels: {} != {}",
-                    def.len(),
-                    rep.len()
-                ));
-            }
+        if def_levels.len() != 0 && rep_levels.len() != 0 && def_levels.len() != rep_levels.len() {
+            return Err(general_err!(
+                "Inconsistent length of definition and repetition levels: {} != {}",
+                def_levels.len(),
+                rep_levels.len()
+            ));
         }
 
         // We check for DataPage limits only after we have inserted the values. If a user
@@ -450,10 +496,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         // TODO: find out why we don't account for size of levels when we estimate page
         // size.
-
-        let num_levels = match def_levels {
-            Some(def_levels) => def_levels.len(),
-            None => values.len(),
+        let num_levels = def_levels.len().max(rep_levels.len());
+        let num_levels = if num_levels > 0 {
+            num_levels
+        } else {
+            value_indices.map_or(values.len(), |i| i.len())
         };
 
         if let Some(min) = min {
@@ -472,13 +519,24 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let mut values_offset = 0;
         let mut levels_offset = 0;
-        let base_batch_size = self.props.write_batch_size();
+        let both_levels_compact = !matches!(def_levels, LevelDataRef::Materialized(_))
+            && !matches!(rep_levels, LevelDataRef::Materialized(_));
+        let has_levels = !matches!(def_levels, LevelDataRef::Absent)
+            || !matches!(rep_levels, LevelDataRef::Absent);
+        // When both level vectors are compact (Uniform or Absent), there is no
+        // materialized slice to split and the per-mini-batch work is O(1), so we
+        // can safely use a much larger batch size.
+        let base_batch_size = if both_levels_compact && has_levels {
+            self.props.data_page_row_count_limit()
+        } else {
+            self.props.write_batch_size()
+        };
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);
 
             // Split at record boundary
-            if let Some(r) = rep_levels {
-                while end_offset < r.len() && r[end_offset] != 0 {
+            if let LevelDataRef::Materialized(levels) = rep_levels {
+                while end_offset < levels.len() && levels[end_offset] != 0 {
                     end_offset += 1;
                 }
             }
@@ -488,8 +546,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 values_offset,
                 value_indices,
                 end_offset - levels_offset,
-                def_levels.map(|lv| &lv[levels_offset..end_offset]),
-                rep_levels.map(|lv| &lv[levels_offset..end_offset]),
+                def_levels.slice(levels_offset, end_offset - levels_offset),
+                rep_levels.slice(levels_offset, end_offset - levels_offset),
             )?;
             levels_offset = end_offset;
         }
@@ -516,7 +574,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) -> Result<usize> {
-        self.write_batch_internal(values, None, def_levels, rep_levels, None, None, None)
+        self.write_batch_internal(
+            values,
+            None,
+            def_levels.map_or(LevelDataRef::Absent, LevelDataRef::Materialized),
+            rep_levels.map_or(LevelDataRef::Absent, LevelDataRef::Materialized),
+            None,
+            None,
+            None,
+        )
     }
 
     /// Writer may optionally provide pre-calculated statistics for use when computing
@@ -538,8 +604,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.write_batch_internal(
             values,
             None,
-            def_levels,
-            rep_levels,
+            def_levels.map_or(LevelDataRef::Absent, LevelDataRef::Materialized),
+            rep_levels.map_or(LevelDataRef::Absent, LevelDataRef::Materialized),
             min,
             max,
             distinct_count,
@@ -650,32 +716,49 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         values_offset: usize,
         value_indices: Option<&[usize]>,
         num_levels: usize,
-        def_levels: Option<&[i16]>,
-        rep_levels: Option<&[i16]>,
+        def_levels: LevelDataRef<'_>,
+        rep_levels: LevelDataRef<'_>,
     ) -> Result<usize> {
         // Process definition levels and determine how many values to write.
         let values_to_write = if self.descr.max_def_level() > 0 {
-            let levels = def_levels.ok_or_else(|| {
-                general_err!(
-                    "Definition levels are required, because max definition level = {}",
-                    self.descr.max_def_level()
-                )
-            })?;
-
-            let mut values_to_write = 0usize;
             let max_def = self.descr.max_def_level();
-            let encoder = &mut self.def_levels_encoder;
-            match self.page_metrics.definition_level_histogram.as_mut() {
-                Some(histogram) => encoder.put_with_observer(levels, |level, count| {
-                    values_to_write += count * (level == max_def) as usize;
-                    histogram.increment_by(level, count as i64);
-                }),
-                None => encoder.put_with_observer(levels, |level, count| {
-                    values_to_write += count * (level == max_def) as usize;
-                }),
-            };
-            self.page_metrics.num_page_nulls += (levels.len() - values_to_write) as u64;
-            values_to_write
+            match def_levels {
+                LevelDataRef::Absent => {
+                    return Err(general_err!(
+                        "Definition levels are required, because max definition level = {}",
+                        self.descr.max_def_level()
+                    ));
+                }
+                LevelDataRef::Materialized(levels) => {
+                    let mut values_to_write = 0usize;
+                    let encoder = &mut self.def_levels_encoder;
+                    match self.page_metrics.definition_level_histogram.as_mut() {
+                        Some(histogram) => encoder.put_with_observer(levels, |level, count| {
+                            values_to_write += count * (level == max_def) as usize;
+                            histogram.increment_by(level, count as i64);
+                        }),
+                        None => encoder.put_with_observer(levels, |level, count| {
+                            values_to_write += count * (level == max_def) as usize;
+                        }),
+                    };
+                    self.page_metrics.num_page_nulls += (levels.len() - values_to_write) as u64;
+                    values_to_write
+                }
+                LevelDataRef::Uniform { value, count } => {
+                    let encoder = &mut self.def_levels_encoder;
+                    match self.page_metrics.definition_level_histogram.as_mut() {
+                        Some(histogram) => {
+                            encoder.put_n_with_observer(value, count, |level, run_len| {
+                                histogram.increment_by(level, run_len as i64);
+                            })
+                        }
+                        None => encoder.put_n_with_observer(value, count, |_, _| {}),
+                    };
+                    let values_to_write = count * (value == max_def) as usize;
+                    self.page_metrics.num_page_nulls += (count - values_to_write) as u64;
+                    values_to_write
+                }
+            }
         } else {
             num_levels
         };
@@ -683,31 +766,50 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Process repetition levels and determine how many rows we are about to process.
         if self.descr.max_rep_level() > 0 {
             // A row could contain more than one value.
-            let levels = rep_levels.ok_or_else(|| {
+            let first_level = rep_levels.first().ok_or_else(|| {
                 general_err!(
                     "Repetition levels are required, because max repetition level = {}",
                     self.descr.max_rep_level()
                 )
             })?;
 
-            if !levels.is_empty() && levels[0] != 0 {
+            if first_level != 0 {
                 return Err(general_err!(
                     "Write must start at a record boundary, got non-zero repetition level of {}",
-                    levels[0]
+                    first_level
                 ));
             }
 
             let mut new_rows = 0u32;
-            let encoder = &mut self.rep_levels_encoder;
-            match self.page_metrics.repetition_level_histogram.as_mut() {
-                Some(histogram) => encoder.put_with_observer(levels, |level, count| {
-                    new_rows += (count as u32) * (level == 0) as u32;
-                    histogram.increment_by(level, count as i64);
-                }),
-                None => encoder.put_with_observer(levels, |level, count| {
-                    new_rows += (count as u32) * (level == 0) as u32;
-                }),
-            };
+            match rep_levels {
+                LevelDataRef::Absent => unreachable!(),
+                LevelDataRef::Materialized(levels) => {
+                    let encoder = &mut self.rep_levels_encoder;
+                    match self.page_metrics.repetition_level_histogram.as_mut() {
+                        Some(histogram) => encoder.put_with_observer(levels, |level, count| {
+                            new_rows += (count as u32) * (level == 0) as u32;
+                            histogram.increment_by(level, count as i64);
+                        }),
+                        None => encoder.put_with_observer(levels, |level, count| {
+                            new_rows += (count as u32) * (level == 0) as u32;
+                        }),
+                    };
+                }
+                LevelDataRef::Uniform { value, count } => {
+                    let encoder = &mut self.rep_levels_encoder;
+                    match self.page_metrics.repetition_level_histogram.as_mut() {
+                        Some(histogram) => {
+                            encoder.put_n_with_observer(value, count, |level, run_len| {
+                                new_rows += (run_len as u32) * (level == 0) as u32;
+                                histogram.increment_by(level, run_len as i64);
+                            })
+                        }
+                        None => encoder.put_n_with_observer(value, count, |level, run_len| {
+                            new_rows += (run_len as u32) * (level == 0) as u32;
+                        }),
+                    };
+                }
+            }
             self.page_metrics.num_buffered_rows += new_rows;
         } else {
             // Each value is exactly one row.
@@ -4396,5 +4498,153 @@ mod tests {
             result.metadata.uncompressed_size(),
             result.metadata.compressed_size()
         );
+    }
+
+    /// Write-then-read roundtrip using `write_batch_internal` with the given
+    /// [`LevelDataRef`] variants, and assert the read-back matches `expected_*`.
+    #[allow(clippy::too_many_arguments)]
+    fn column_roundtrip_uniform<T: DataType>(
+        props: WriterProperties,
+        values: &[T::T],
+        def_levels: LevelDataRef<'_>,
+        rep_levels: LevelDataRef<'_>,
+        max_def_level: i16,
+        max_rep_level: i16,
+        expected_values: &[T::T],
+        expected_def_levels: Option<&[i16]>,
+        expected_rep_levels: Option<&[i16]>,
+    ) where
+        T::T: PartialEq + std::fmt::Debug,
+    {
+        let mut file = tempfile::tempfile().unwrap();
+        let mut write = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut write));
+        let mut writer =
+            get_test_column_writer::<T>(page_writer, max_def_level, max_rep_level, Arc::new(props));
+
+        writer
+            .write_batch_internal(values, None, def_levels, rep_levels, None, None, None)
+            .unwrap();
+        let result = writer.close().unwrap();
+        drop(write);
+
+        let props = ReaderProperties::builder()
+            .set_backward_compatible_lz4(false)
+            .build();
+        let page_reader = Box::new(
+            SerializedPageReader::new_with_properties(
+                Arc::new(file),
+                &result.metadata,
+                result.rows_written as usize,
+                None,
+                Arc::new(props),
+            )
+            .unwrap(),
+        );
+        let mut reader = get_test_column_reader::<T>(page_reader, max_def_level, max_rep_level);
+
+        let batch_size = expected_def_levels.map_or(expected_values.len(), |l| l.len());
+        let mut actual_values = Vec::with_capacity(batch_size);
+        let mut actual_def = expected_def_levels.map(|_| Vec::with_capacity(batch_size));
+        let mut actual_rep = expected_rep_levels.map(|_| Vec::with_capacity(batch_size));
+
+        let (_, values_read, levels_read) = reader
+            .read_records(
+                batch_size,
+                actual_def.as_mut(),
+                actual_rep.as_mut(),
+                &mut actual_values,
+            )
+            .unwrap();
+
+        assert_eq!(&actual_values[..values_read], expected_values);
+        if let Some(ref v) = actual_def {
+            assert_eq!(&v[..levels_read], expected_def_levels.unwrap());
+        }
+        if let Some(ref v) = actual_rep {
+            assert_eq!(&v[..levels_read], expected_rep_levels.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_uniform_def_levels_all_null() {
+        // All-null column: def_level=0 (null) for every slot, no values written.
+        let max_def_level = 1;
+        let count = 100;
+        column_roundtrip_uniform::<Int32Type>(
+            Default::default(),
+            &[],
+            LevelDataRef::Uniform { value: 0, count },
+            LevelDataRef::Absent,
+            max_def_level,
+            0,
+            &[],
+            Some(&vec![0i16; count]),
+            None,
+        );
+    }
+
+    #[test]
+    fn test_uniform_def_levels_all_valid() {
+        // All-valid column: def_level=max for every slot, all values written.
+        let max_def_level = 1;
+        let values: Vec<i32> = (0..50).collect();
+        column_roundtrip_uniform::<Int32Type>(
+            Default::default(),
+            &values,
+            LevelDataRef::Uniform {
+                value: max_def_level,
+                count: values.len(),
+            },
+            LevelDataRef::Absent,
+            max_def_level,
+            0,
+            &values,
+            Some(&vec![max_def_level; values.len()]),
+            None,
+        );
+    }
+
+    #[test]
+    fn test_uniform_def_and_rep_levels() {
+        // Simulates a list column where every row is null:
+        // def=0, rep=0 for each row (one row = one entry with no child values).
+        let max_def_level = 2;
+        let max_rep_level = 1;
+        let count = 200;
+        column_roundtrip_uniform::<Int32Type>(
+            Default::default(),
+            &[],
+            LevelDataRef::Uniform { value: 0, count },
+            LevelDataRef::Uniform { value: 0, count },
+            max_def_level,
+            max_rep_level,
+            &[],
+            Some(&vec![0i16; count]),
+            Some(&vec![0i16; count]),
+        );
+    }
+
+    #[test]
+    fn test_uniform_levels_v1_and_v2() {
+        // Verify uniform levels work identically for both Parquet writer versions.
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let props = WriterProperties::builder()
+                .set_writer_version(version)
+                .build();
+            let max_def = 1;
+            let count = 100;
+            column_roundtrip_uniform::<Int32Type>(
+                props,
+                &[],
+                LevelDataRef::Uniform { value: 0, count },
+                LevelDataRef::Absent,
+                max_def,
+                0,
+                &[],
+                Some(&vec![0i16; count]),
+                None,
+            );
+        }
     }
 }
