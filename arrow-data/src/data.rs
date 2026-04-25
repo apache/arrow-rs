@@ -2439,9 +2439,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_try_new_length_offset_overflow() {
-        let err = ArrayData::try_new(
+    // Exercises ArrayData::try_new with len + offset overflowing
+    fn try_new_binary_length_offset_overflow() -> Result<ArrayData, ArrowError> {
+        ArrayData::try_new(
             DataType::Binary,
             usize::MAX,
             None,
@@ -2452,7 +2452,12 @@ mod tests {
             ],
             vec![],
         )
-        .unwrap_err();
+    }
+
+    #[cfg(not(feature = "force_validate"))]
+    #[test]
+    fn test_try_new_length_offset_overflow() {
+        let err = try_new_binary_length_offset_overflow().unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -2461,6 +2466,15 @@ mod tests {
                 usize::MAX
             )
         );
+    }
+
+    #[cfg(feature = "force_validate")]
+    #[test]
+    #[should_panic(
+        expected = "Length 18446744073709551615 with offset 1 overflows usize for Binary"
+    )]
+    fn test_try_new_length_offset_overflow_force_validate() {
+        try_new_binary_length_offset_overflow().unwrap();
     }
 
     #[test]
