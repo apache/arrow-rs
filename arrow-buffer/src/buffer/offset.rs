@@ -263,21 +263,18 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// // Offsets where null at index 1 has an empty range (3..3)
     /// let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6]));
     /// let nulls = NullBuffer::from(vec![true, false, true]);
-    /// assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+    /// assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     ///
     /// // Offsets where null at index 1 has a non-empty range (3..7)
     /// let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10]));
     /// let nulls = NullBuffer::from(vec![true, false, true]);
-    /// assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+    /// assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     /// ```
     ///
     /// # Panics
     ///
     /// Panics if the length of the `null_buffer` does not equal `self.len() - 1`.
-    pub fn is_there_null_pointing_to_non_empty_value(
-        &self,
-        null_buffer: Option<&NullBuffer>,
-    ) -> bool {
+    pub fn has_non_empty_nulls(&self, null_buffer: Option<&NullBuffer>) -> bool {
         let Some(null_buffer) = null_buffer else {
             return false;
         };
@@ -564,130 +561,135 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Tests for is_there_null_pointing_to_non_empty_value
+    // Tests for has_non_empty_nulls
     // ---------------------------------------------------------------
 
     #[test]
-    fn null_pointing_none_null_buffer() {
+    fn has_non_empty_nulls_none_null_buffer() {
         // No null buffer at all -> false
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(None));
+        assert!(!offsets.has_non_empty_nulls(None));
     }
 
     #[test]
-    fn null_pointing_all_valid() {
+    fn has_non_empty_nulls_all_valid() {
         // Null buffer with zero nulls -> false (early return via filter)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
         let nulls = NullBuffer::new_valid(3);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_all_null_empty_offsets() {
+    fn has_non_empty_nulls_all_null_empty_offsets() {
         // All values are null and all offsets are equal (no data behind nulls) -> false
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 0, 0]));
         let nulls = NullBuffer::new_null(3);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_all_null_non_empty_offsets() {
+    fn has_non_empty_nulls_all_null_non_empty_offsets() {
         // All values are null but offsets span data -> true
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 5, 7]));
         let nulls = NullBuffer::new_null(3);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_all_null_nonzero_but_equal_offsets() {
+    fn has_non_empty_nulls_all_null_nonzero_but_equal_offsets() {
         // All null, offsets start at non-zero but are all equal -> false
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![5, 5, 5]));
         let nulls = NullBuffer::new_null(2);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_leading_nulls_with_data() {
+    fn has_non_empty_nulls_leading_nulls_with_data() {
         // Nulls at the beginning that point to non-empty ranges -> true
         // offsets: [0, 3, 5, 8]  nulls: [false, true, true]
         // Index 0 is null with range 0..3 (non-empty)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
         let nulls = NullBuffer::from(vec![false, true, true]);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_leading_nulls_without_data() {
+    fn has_non_empty_nulls_leading_nulls_without_data() {
         // Nulls at the beginning with empty ranges -> continue checking
         // offsets: [0, 0, 3, 6]  nulls: [false, true, true]
         // Index 0 is null with range 0..0 (empty)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 6]));
         let nulls = NullBuffer::from(vec![false, true, true]);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_trailing_nulls_with_data() {
-        // Nulls at the end that point to non-empty ranges -> true
-        // offsets: [0, 3, 5, 8]  nulls: [true, true, false]
-        // Index 2 is null with range 5..8 (non-empty)
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
-        let nulls = NullBuffer::from(vec![true, true, false]);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+    fn has_non_empty_nulls_only_trailing_null_has_data() {
+        // Only the trailing null region has data, everything else is clean
+        // offsets: [0, 0, 3, 6, 8]  nulls: [false, true, true, false]
+        // Null at 0 (0..0 empty), valid at 1,2 (0..3, 3..6), null at 3 (6..8 non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 6, 8]));
+        let nulls = NullBuffer::from(vec![false, true, true, false]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_trailing_nulls_without_data() {
+    fn has_non_empty_nulls_trailing_nulls_without_data() {
         // Nulls at the end with empty ranges -> false
         // offsets: [0, 3, 6, 6]  nulls: [true, true, false]
         // Index 2 is null with range 6..6 (empty)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 6]));
         let nulls = NullBuffer::from(vec![true, true, false]);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_middle_nulls_with_data() {
+    fn has_non_empty_nulls_middle_nulls_with_data() {
         // Null in the middle with non-empty range -> true
         // offsets: [0, 3, 7, 10]  nulls: [true, false, true]
         // Index 1 is null with range 3..7 (non-empty)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10]));
         let nulls = NullBuffer::from(vec![true, false, true]);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_middle_nulls_without_data() {
+    fn has_non_empty_nulls_middle_nulls_without_data() {
         // Null in the middle with empty range -> false
         // offsets: [0, 3, 3, 6]  nulls: [true, false, true]
         // Index 1 is null with range 3..3 (empty)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6]));
         let nulls = NullBuffer::from(vec![true, false, true]);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_multiple_null_regions_all_empty() {
-        // Multiple null regions, all with empty ranges -> false
-        // offsets: [0, 0, 3, 3, 6, 6]  nulls: [false, true, false, true, false]
-        // Nulls at index 0 (0..0) and index 2 (3..3) are empty
+    fn has_non_empty_nulls_alternating_null_valid_all_empty() {
+        // Alternating null/valid where every null has an empty range -> false.
+
+        // Ends with null
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 6]));
         let nulls = NullBuffer::from(vec![false, true, false, true, false]);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+
+        // Ends with valid
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 6, 9]));
+        let nulls = NullBuffer::from(vec![false, true, false, true, false, true]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_multiple_null_regions_second_has_data() {
+    fn has_non_empty_nulls_multiple_null_regions_second_has_data() {
         // Two null regions: first empty, second non-empty -> true
         // offsets: [0, 0, 3, 5, 6]  nulls: [false, true, false, true]
         // Null at index 0 (0..0 empty), null at index 2 (3..5 non-empty)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 5, 6]));
         let nulls = NullBuffer::from(vec![false, true, false, true]);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_multiple_null_regions_later_gap_has_data() {
+    fn has_non_empty_nulls_multiple_null_regions_later_gap_has_data() {
         // Three null regions: first two empty, third non-empty -> true
         // offsets: [0, 0, 3, 3, 6, 8, 10]  nulls: [false, true, false, true, false, true]
         // valid_slices: (1,2), (3,4), (5,6)
@@ -696,46 +698,46 @@ mod tests {
         // loop iter 2: start=5, self[5]=8 != 6 -> true (second gap has data)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 8, 10]));
         let nulls = NullBuffer::from(vec![false, true, false, true, false, true]);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_single_element_null_empty() {
+    fn has_non_empty_nulls_single_element_null_empty() {
         // Single element, null with empty range -> false
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0]));
         let nulls = NullBuffer::new_null(1);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_single_element_null_non_empty() {
+    fn has_non_empty_nulls_single_element_null_non_empty() {
         // Single element, null with non-empty range -> true
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 5]));
         let nulls = NullBuffer::new_null(1);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_single_element_valid() {
+    fn has_non_empty_nulls_single_element_valid() {
         // Single element, valid -> false (no nulls at all)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 5]));
         let nulls = NullBuffer::new_valid(1);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_consecutive_nulls_between_valid_slices() {
+    fn has_non_empty_nulls_consecutive_nulls_between_valid_slices() {
         // Multiple consecutive nulls between valid regions
         // offsets: [0, 2, 2, 2, 5, 8]  nulls: [true, false, false, true, true]
         // Valid: [0], nulls: [1,2], valid: [3,4]
         // Null region [1,2] has offsets 2..2..2 (empty) -> false
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 2, 2, 5, 8]));
         let nulls = NullBuffer::from(vec![true, false, false, true, true]);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_consecutive_nulls_between_valid_slices_with_data() {
+    fn has_non_empty_nulls_consecutive_nulls_between_valid_slices_with_data() {
         // Multiple consecutive nulls between valid regions, nulls have data
         // offsets: [0, 2, 3, 4, 5, 8]  nulls: [true, false, false, true, true]
         // valid_slices: (0,1), (3,5)
@@ -744,267 +746,68 @@ mod tests {
         // second slice: start=3, end=5 -> self[3]=4 != 2 -> true
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3, 4, 5, 8]));
         let nulls = NullBuffer::from(vec![true, false, false, true, true]);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_nonzero_initial_offset_all_null_equal() {
+    fn has_non_empty_nulls_nonzero_initial_offset_all_null_equal() {
         // Non-zero starting offset, all null, all offsets equal -> false
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![10, 10, 10]));
         let nulls = NullBuffer::new_null(2);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_nonzero_initial_offset_with_data() {
+    fn has_non_empty_nulls_nonzero_initial_offset_with_data() {
         // Non-zero starting offset, null has data
         // offsets: [10, 15, 20]  nulls: [false, true]
         // Null at index 0 with range 10..15 (non-empty) -> true
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![10, 15, 20]));
         let nulls = NullBuffer::from(vec![false, true]);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_i64_offsets() {
-        // Test with i64 offset type
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i64>::from(vec![0, 0, 5, 5]));
-        let nulls = NullBuffer::from(vec![false, true, false]);
-        // Null at index 0 (0..0 empty), valid at index 1 (0..5), null at index 2 (5..5 empty) -> false
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_i64_offsets_with_data_in_null() {
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i64>::from(vec![0, 3, 5, 10]));
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        // Valid at index 0 (0..3), null at index 1 (3..5 non-empty) -> true
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "The length of the offsets should be 1 more than the length of the null buffer"
-    )]
-    fn null_pointing_mismatched_lengths() {
-        // Offset buffer length - 1 != null buffer length -> panic
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
-        let nulls = NullBuffer::from(vec![true, false]); // length 2, but offsets has 3 elements
-        offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls));
-    }
-
-    #[test]
-    fn null_pointing_alternating_null_valid_all_empty_nulls() {
-        // Alternating null/valid pattern, all null ranges are empty
-        // offsets: [0, 0, 3, 3, 6, 6, 9]  nulls: [false, true, false, true, false, true]
-        // Nulls at 0,2,4 all have empty ranges
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 6, 9]));
-        let nulls = NullBuffer::from(vec![false, true, false, true, false, true]);
-        assert!(!offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_only_trailing_null_has_data() {
-        // Only the trailing null region has data, everything else is clean
-        // offsets: [0, 0, 3, 6, 8]  nulls: [false, true, true, false]
-        // Null at 0 (0..0 empty), valid at 1,2 (0..3, 3..6), null at 3 (6..8 non-empty)
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 6, 8]));
-        let nulls = NullBuffer::from(vec![false, true, true, false]);
-        assert!(offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_no_nulls_in_null_region() {
+    fn has_non_empty_nulls_sliced_no_nulls_in_null_region() {
         // Original: [0, 3, 3, 6, 6, 9]  -> slice(1, 3) -> [3, 3, 6, 6]
         // initial_offset=3, last_offset=6
         // nulls: [false, true, false]  (null at index 0 has range 3..3 = empty)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6, 6, 9]));
         let sliced = offsets.slice(1, 3);
         let nulls = NullBuffer::from(vec![false, true, false]);
-        assert!(!sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(!sliced.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
-    fn null_pointing_sliced_null_has_data() {
+    fn has_non_empty_nulls_sliced_null_has_data() {
         // Original: [0, 3, 7, 10, 15]  -> slice(1, 2) -> [3, 7, 10]
         // initial_offset=3, last_offset=10
         // nulls: [false, true]  (null at index 0 has range 3..7 = non-empty)
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10, 15]));
         let sliced = offsets.slice(1, 2);
         let nulls = NullBuffer::from(vec![false, true]);
-        assert!(sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_all_null_equal_offsets() {
-        // Original: [0, 5, 5, 5, 10]  -> slice(1, 2) -> [5, 5, 5]
-        // All null, initial_offset=5, last_offset=5 -> false
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 5, 5, 5, 10]));
-        let sliced = offsets.slice(1, 2);
-        let nulls = NullBuffer::new_null(2);
-        assert!(!sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_all_null_different_offsets() {
-        // Original: [0, 3, 5, 8, 12]  -> slice(1, 2) -> [3, 5, 8]
-        // All null, initial_offset=3, last_offset=8, 3 != 8 -> true
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8, 12]));
-        let sliced = offsets.slice(1, 2);
-        let nulls = NullBuffer::new_null(2);
-        assert!(sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_leading_null_with_data() {
-        // Original: [0, 2, 5, 8, 10]  -> slice(1, 3) -> [2, 5, 8, 10]
-        // nulls: [false, true, true]
-        // Null at index 0: range 2..5 (non-empty), initial_offset=2, self[start=1]=5 != 2 -> true
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 5, 8, 10]));
-        let sliced = offsets.slice(1, 3);
-        let nulls = NullBuffer::from(vec![false, true, true]);
-        assert!(sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_trailing_null_with_data() {
-        // Original: [0, 3, 6, 9, 12]  -> slice(1, 2) -> [3, 6, 9]
-        // nulls: [true, false]
-        // Valid at 0: (3..6), null at 1: range 6..9 (non-empty)
-        // end_offset_of_last_valid_value = self[1]=6, last_offset=9, 6 != 9 -> true
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 9, 12]));
-        let sliced = offsets.slice(1, 2);
-        let nulls = NullBuffer::from(vec![true, false]);
-        assert!(sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_trailing_null_without_data() {
-        // Original: [0, 3, 6, 6, 10]  -> slice(1, 2) -> [3, 6, 6]
-        // nulls: [true, false]
-        // Valid at 0: (3..6), null at 1: range 6..6 (empty)
-        // end_offset_of_last_valid_value = self[1]=6, last_offset=6 -> false
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 6, 10]));
-        let sliced = offsets.slice(1, 2);
-        let nulls = NullBuffer::from(vec![true, false]);
-        assert!(!sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_middle_null_with_data() {
-        // Original: [0, 2, 5, 9, 12, 15]  -> slice(1, 3) -> [2, 5, 9, 12]
-        // nulls: [true, false, true]
-        // valid_slices: (0,1), (2,3)
-        // first: start=0 -> self[0]=2 == initial_offset=2 OK, end_offset=self[1]=5
-        // second: start=2 -> self[2]=9 != 5 -> true
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 5, 9, 12, 15]));
-        let sliced = offsets.slice(1, 3);
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        assert!(sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_middle_null_without_data() {
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 5, 5, 8, 12]));
-        let sliced = offsets.slice(1, 3);
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        assert!(!sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_single_element_null_empty() {
-        // Original: [0, 3, 3, 6]  -> slice(1, 1) -> [3, 3]
-        // Single element, null, range 3..3 (empty) -> false
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6]));
-        let sliced = offsets.slice(1, 1);
-        let nulls = NullBuffer::new_null(1);
-        assert!(!sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_single_element_null_non_empty() {
-        // Original: [0, 3, 7, 10]  -> slice(1, 1) -> [3, 7]
-        // Single element, null, range 3..7 (non-empty) -> true
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10]));
-        let sliced = offsets.slice(1, 1);
-        let nulls = NullBuffer::new_null(1);
-        assert!(sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_from_start() {
-        // Slice from the beginning (offset=0) -- offsets stay the same
-        // Original: [0, 3, 3, 6]  -> slice(0, 2) -> [0, 3, 3]
-        // nulls: [true, false]  (null at 1 has range 3..3 = empty) -> false
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6]));
-        let sliced = offsets.slice(0, 2);
-        let nulls = NullBuffer::from(vec![true, false]);
-        assert!(!sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_to_end() {
-        // Slice to the end
-        // Original: [0, 3, 6, 9, 12]  -> slice(2, 2) -> [6, 9, 12]
-        // nulls: [false, true]  (null at 0 has range 6..9 = non-empty) -> true
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 9, 12]));
-        let sliced = offsets.slice(2, 2);
-        let nulls = NullBuffer::from(vec![false, true]);
-        assert!(sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
-    }
-
-    #[test]
-    fn null_pointing_sliced_all_valid_no_nulls() {
-        // Sliced buffer with all-valid nulls -> false (early return)
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 9, 12]));
-        let sliced = offsets.slice(1, 2);
-        let nulls = NullBuffer::new_valid(2);
-        assert!(!sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls)));
+        assert!(sliced.has_non_empty_nulls(Some(&nulls)));
     }
 
     #[test]
     #[should_panic(
         expected = "The length of the offsets should be 1 more than the length of the null buffer"
     )]
-    fn null_pointing_mismatched_lengths_null_buffer_too_long() {
-        // Null buffer longer than offsets - 1 -> panic
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5]));
-        // offsets has 3 elements -> expects null buffer of length 2
-        let nulls = NullBuffer::from(vec![false, true, false]);
-        offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls));
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "The length of the offsets should be 1 more than the length of the null buffer"
-    )]
-    fn null_pointing_sliced_mismatched_lengths() {
-        // Sliced offset buffer with wrong null buffer length -> panic
-        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 9, 12]));
-        let sliced = offsets.slice(1, 2); // [3, 6, 9] -> expects null buffer of length 2
-        let nulls = NullBuffer::from(vec![false, true, false]); // length 3
-        sliced.is_there_null_pointing_to_non_empty_value(Some(&nulls));
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "The length of the offsets should be 1 more than the length of the null buffer"
-    )]
-    fn null_pointing_all_valid_mismatched_lengths_too_short() {
+    fn has_non_empty_nulls_all_valid_mismatched_lengths_too_short() {
         // All-valid null buffer with wrong length should still panic
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
         let nulls = NullBuffer::new_valid(2); // expects 3
-        offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls));
+        offsets.has_non_empty_nulls(Some(&nulls));
     }
 
     #[test]
     #[should_panic(
         expected = "The length of the offsets should be 1 more than the length of the null buffer"
     )]
-    fn null_pointing_all_valid_mismatched_lengths_too_long() {
+    fn has_non_empty_nulls_all_valid_mismatched_lengths_too_long() {
         // All-valid null buffer with wrong length should still panic
         let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
         let nulls = NullBuffer::new_valid(5); // expects 3
-        offsets.is_there_null_pointing_to_non_empty_value(Some(&nulls));
+        offsets.has_non_empty_nulls(Some(&nulls));
     }
 }
