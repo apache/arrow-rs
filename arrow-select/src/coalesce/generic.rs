@@ -17,7 +17,7 @@
 
 use super::InProgressArray;
 use crate::concat::concat;
-use arrow_array::ArrayRef;
+use arrow_array::{Array, ArrayRef};
 use arrow_schema::ArrowError;
 
 /// Generic implementation for [`InProgressArray`] that works with any type of
@@ -58,6 +58,13 @@ impl InProgressArray for GenericInProgressArray {
         let array = source.slice(offset, len);
         self.buffered_arrays.push(array);
         Ok(())
+    }
+
+    fn copy_indices(&mut self, _indices: &dyn Array) -> Result<(), ArrowError> {
+        Err(ArrowError::InvalidArgumentError(
+            "Internal Error: indexed coalescing is only supported for primitive and byte view arrays"
+                .to_string(),
+        ))
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {

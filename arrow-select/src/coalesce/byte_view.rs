@@ -18,8 +18,8 @@
 use crate::coalesce::InProgressArray;
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
-use arrow_array::{Array, ArrayRef, GenericByteViewArray};
-use arrow_buffer::{Buffer, NullBufferBuilder};
+use arrow_array::{Array, ArrayRef, GenericByteViewArray, downcast_integer_array};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder};
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
@@ -58,10 +58,35 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
 struct Source {
     /// The array to copy form
     array: ArrayRef,
-    /// Should the strings from the source array be copied into new buffers?
-    need_gc: bool,
-    /// How many bytes were actually used in the source array's buffers?
-    ideal_buffer_size: usize,
+    /// Total capacity of the source array's data buffers.
+    data_buffer_capacity: usize,
+    /// Lazily computed bytes actually used by the full source array.
+    whole_array_used_bytes: Option<usize>,
+}
+
+impl Source {
+    fn new<B: ByteViewType>(array: ArrayRef) -> Self {
+        let s = array.as_byte_view::<B>();
+        let data_buffer_capacity = s.data_buffers().iter().map(|b| b.capacity()).sum();
+
+        Self {
+            array,
+            data_buffer_capacity,
+            whole_array_used_bytes: None,
+        }
+    }
+
+    fn whole_array_gc_state<B: ByteViewType>(&mut self) -> (bool, usize) {
+        if self.data_buffer_capacity == 0 {
+            return (false, 0);
+        }
+
+        let used_bytes = *self
+            .whole_array_used_bytes
+            .get_or_insert_with(|| self.array.as_byte_view::<B>().total_buffer_bytes_used());
+        let should_compact = used_bytes != 0 && self.data_buffer_capacity > (used_bytes * 2);
+        (should_compact, used_bytes)
+    }
 }
 
 // manually implement Debug because ByteViewType doesn't implement Debug
@@ -101,6 +126,46 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         if self.views.capacity() == 0 {
             self.views.reserve(self.batch_size);
         }
+    }
+
+    fn append_indexed_nulls<I: ArrowNativeType>(
+        &mut self,
+        indices: &[I],
+        source_nulls: Option<&NullBuffer>,
+    ) {
+        if let Some(source_nulls) = source_nulls.filter(|n| n.null_count() > 0) {
+            let taken = NullBuffer::new(BooleanBuffer::collect_bool(indices.len(), |idx| {
+                source_nulls.is_valid(indices[idx].as_usize())
+            }));
+            self.nulls.append_buffer(&taken);
+        } else {
+            self.nulls.append_n_non_nulls(indices.len());
+        }
+    }
+
+    fn collect_indexed_views<I: ArrowNativeType>(
+        &self,
+        views: &[u128],
+        indices: &[I],
+    ) -> Vec<u128> {
+        indices
+            .iter()
+            .map(|index| views[index.as_usize()])
+            .collect()
+    }
+
+    fn append_indexed_views<I: ArrowNativeType>(&mut self, views: &[u128], indices: &[I]) {
+        self.views
+            .extend(indices.iter().map(|index| views[index.as_usize()]));
+    }
+
+    fn selected_buffer_bytes(views: &[u128]) -> usize {
+        views
+            .iter()
+            .map(|view| ByteView::from(*view))
+            .filter(|view| view.length > MAX_INLINE_VIEW_LEN)
+            .map(|view| view.length as usize)
+            .sum()
     }
 
     /// Finishes in progress buffer, if any
@@ -279,39 +344,22 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
 
 impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
     fn set_source(&mut self, source: Option<ArrayRef>) {
-        self.source = source.map(|array| {
-            let s = array.as_byte_view::<B>();
-
-            let (need_gc, ideal_buffer_size) = if s.data_buffers().is_empty() {
-                (false, 0)
-            } else {
-                let ideal_buffer_size = s.total_buffer_bytes_used();
-                // We don't use get_buffer_memory_size here, because gc is for the contents of the
-                // data buffers, not views and nulls.
-                let actual_buffer_size =
-                    s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
-                // copying strings is expensive, so only do it if the array is
-                // sparse (uses at least 2x the memory it needs)
-                let need_gc =
-                    ideal_buffer_size != 0 && actual_buffer_size > (ideal_buffer_size * 2);
-                (need_gc, ideal_buffer_size)
-            };
-
-            Source {
-                array,
-                need_gc,
-                ideal_buffer_size,
-            }
-        })
+        self.source = source.map(|array| Source::new::<B>(array))
     }
 
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         self.ensure_capacity();
-        let source = self.source.take().ok_or_else(|| {
+        let mut source = self.source.take().ok_or_else(|| {
             ArrowError::InvalidArgumentError(
                 "Internal Error: InProgressByteViewArray: source not set".to_string(),
             )
         })?;
+
+        let (need_gc, ideal_buffer_size) = if source.data_buffer_capacity == 0 {
+            (false, 0)
+        } else {
+            source.whole_array_gc_state::<B>()
+        };
 
         // If creating StringViewArray output, ensure input was valid utf8 too
         let s = source.array.as_byte_view::<B>();
@@ -329,7 +377,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         // If there are no data buffers in s (all inlined views), can append the
         // views/nulls and done
-        if source.ideal_buffer_size == 0 {
+        if ideal_buffer_size == 0 {
             self.views.extend_from_slice(views);
             self.source = Some(source);
             return Ok(());
@@ -337,13 +385,57 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         // Copying the strings into a buffer can be time-consuming so
         // only do it if the array is sparse
-        if source.need_gc {
-            self.append_views_and_copy_strings(views, source.ideal_buffer_size, buffers);
+        if need_gc {
+            self.append_views_and_copy_strings(views, ideal_buffer_size, buffers);
         } else {
             self.append_views_and_update_buffer_index(views, buffers);
         }
         self.source = Some(source);
         Ok(())
+    }
+
+    fn copy_indices(&mut self, indices: &dyn Array) -> Result<(), ArrowError> {
+        self.ensure_capacity();
+        let source = self.source.take().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(
+                "Internal Error: InProgressByteViewArray: source not set".to_string(),
+            )
+        })?;
+
+        let s = source.array.as_byte_view::<B>();
+        let views = s.views().as_ref();
+
+        downcast_integer_array!(indices => {
+            self.append_indexed_nulls(indices.values(), s.nulls());
+
+            if source.data_buffer_capacity == 0 {
+                self.append_indexed_views(views, indices.values());
+                self.source = Some(source);
+                return Ok(());
+            }
+
+            let selected_views = self.collect_indexed_views(views, indices.values());
+
+            let selected_buffer_bytes = Self::selected_buffer_bytes(&selected_views);
+
+            if selected_buffer_bytes == 0 {
+                self.views.extend_from_slice(&selected_views);
+            } else if source.data_buffer_capacity > (selected_buffer_bytes * 2) {
+                self.append_views_and_copy_strings(
+                    &selected_views,
+                    selected_buffer_bytes,
+                    s.data_buffers(),
+                );
+            } else {
+                self.append_views_and_update_buffer_index(&selected_views, s.data_buffers());
+            }
+
+            self.source = Some(source);
+            Ok(())
+        },
+        d => Err(ArrowError::InvalidArgumentError(format!(
+            "Internal Error: unsupported index type for byte view coalescing: {d:?}"
+        ))))
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
