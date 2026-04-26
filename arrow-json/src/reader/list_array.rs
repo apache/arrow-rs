@@ -18,12 +18,10 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{
     ArrayRef, FixedSizeListArray, GenericListArray, GenericListViewArray, OffsetSizeTrait,
 };
-use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{NullBufferBuilder, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 
 use crate::reader::tape::{Tape, TapeElement};
@@ -71,23 +69,21 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
         let mut offsets = Vec::with_capacity(pos.len() + 1);
         offsets.push(O::from_usize(0).unwrap());
 
-        let mut nulls = self
-            .is_nullable
-            .then(|| BooleanBufferBuilder::new(pos.len()));
+        let mut nulls = self.is_nullable.then(|| NullBufferBuilder::new(pos.len()));
 
         for p in pos {
             let end_idx = match (tape.get(*p), nulls.as_mut()) {
                 (TapeElement::StartList(end_idx), None) => end_idx,
                 (TapeElement::StartList(end_idx), Some(nulls)) => {
-                    nulls.append(true);
+                    nulls.append_non_null();
                     end_idx
                 }
                 (TapeElement::Null, Some(nulls)) => {
-                    nulls.append(false);
+                    nulls.append_null();
                     *p + 1
                 }
                 (_, Some(nulls)) if self.ignore_type_conflicts => {
-                    nulls.append(false);
+                    nulls.append_null();
                     *p + 1
                 }
                 _ => return Err(tape.error(*p, "[")),
@@ -108,7 +104,7 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
         }
 
         let values = self.decoder.decode(tape, &child_pos)?;
-        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
+        let nulls = nulls.as_mut().and_then(|x| x.finish());
 
         if IS_VIEW {
             let mut sizes = Vec::with_capacity(offsets.len() - 1);
@@ -172,24 +168,22 @@ impl ArrayDecoder for FixedSizeListArrayDecoder {
         let expected = self.size as usize;
         let mut child_pos = Vec::with_capacity(pos.len() * expected);
 
-        let mut nulls = self
-            .is_nullable
-            .then(|| BooleanBufferBuilder::new(pos.len()));
+        let mut nulls = self.is_nullable.then(|| NullBufferBuilder::new(pos.len()));
 
         for p in pos {
             let end_idx = match (tape.get(*p), nulls.as_mut()) {
                 (TapeElement::StartList(end_idx), None) => end_idx,
                 (TapeElement::StartList(end_idx), Some(nulls)) => {
-                    nulls.append(true);
+                    nulls.append_non_null();
                     end_idx
                 }
                 (TapeElement::Null, Some(nulls)) => {
-                    nulls.append(false);
+                    nulls.append_null();
                     child_pos.resize(child_pos.len() + expected, 0);
                     continue;
                 }
                 (_, Some(nulls)) if self.ignore_type_conflicts => {
-                    nulls.append(false);
+                    nulls.append_null();
                     child_pos.resize(child_pos.len() + expected, 0);
                     continue;
                 }
@@ -213,7 +207,7 @@ impl ArrayDecoder for FixedSizeListArrayDecoder {
         }
 
         let values = self.decoder.decode(tape, &child_pos)?;
-        let nulls = nulls.as_mut().map(|x| NullBuffer::new(x.finish()));
+        let nulls = nulls.as_mut().and_then(|x| x.finish());
 
         let array = FixedSizeListArray::try_new_with_length(
             self.field.clone(),

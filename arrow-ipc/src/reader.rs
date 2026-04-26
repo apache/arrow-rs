@@ -669,6 +669,12 @@ impl<'a> RecordBatchDecoder<'a> {
                 self.skip_buffer();
                 self.skip_field(list_field, variadic_count)?;
             }
+            ListView(list_field) | LargeListView(list_field) => {
+                self.skip_buffer(); // Null buffer
+                self.skip_buffer(); // Offsets
+                self.skip_buffer(); // Sizes
+                self.skip_field(list_field, variadic_count)?;
+            }
             FixedSizeList(list_field, _) => {
                 self.skip_buffer();
                 self.skip_field(list_field, variadic_count)?;
@@ -701,8 +707,33 @@ impl<'a> RecordBatchDecoder<'a> {
                     self.skip_field(field, variadic_count)?
                 }
             }
-            Null => {} // No buffer increases
-            _ => {
+            // Null has no buffers to skip
+            Null => {}
+
+            // Fixed-width and boolean types: skip null buffer + values buffer
+            Boolean
+            | Int8
+            | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+            | Timestamp(_, _)
+            | Date32
+            | Date64
+            | Time32(_)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => {
                 self.skip_buffer();
                 self.skip_buffer();
             }
@@ -3452,5 +3483,159 @@ mod tests {
         assert_eq!(col.len(), 4);
         // The result must be a dictionary-typed array.
         assert!(matches!(col.data_type(), DataType::Dictionary(_, _)));
+    }
+
+    // Tests projected reads where a ListView column is skipped before another column.
+    // This catches cases where skipping the ListView consumes the wrong number of buffers.
+    #[test]
+    fn test_projection_skip_list_view() {
+        use crate::reader::FileReader;
+        use crate::writer::FileWriter;
+        use arrow_array::{
+            GenericListViewArray, Int32Array, RecordBatch,
+            builder::{GenericListViewBuilder, UInt32Builder},
+        };
+        use arrow_schema::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        // Build a small ListView column with a mix of valid and null entries
+        let mut builder = GenericListViewBuilder::<i32, _>::new(UInt32Builder::new());
+
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+
+        builder.append(false);
+
+        builder.values().append_value(3);
+        builder.values().append_value(4);
+        builder.append(true);
+
+        let list_view: GenericListViewArray<i32> = builder.finish();
+
+        // Second column with simple values
+        let values = Int32Array::from(vec![10, 20, 30]);
+
+        // Schema: first column is ListView, second is Int32
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", list_view.data_type().clone(), true),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        // Create a batch with both columns
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(list_view), Arc::new(values.clone())])
+                .unwrap();
+
+        // Write the batch to IPC
+        let mut buf = Vec::new();
+        {
+            let mut writer = FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // Skip ListView column and Project only column "b"
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), Some(vec![1])).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+
+        // Verify that the projected column is read correctly
+        assert_eq!(read_batch.num_columns(), 1);
+        assert_eq!(read_batch.column(0).as_ref(), &values);
+    }
+
+    // Tests reading a column when preceding fixed-width and boolean columns are skipped.
+    // Covers all types that use the same two-buffer layout (null + values).
+    // Verifies that skipping these types does not affect subsequent column decoding.
+    #[test]
+    fn test_projection_skip_fixed_width_types() {
+        use std::sync::Arc;
+
+        use arrow_array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, make_array};
+        use arrow_buffer::Buffer;
+        use arrow_data::ArrayData;
+        use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+
+        use crate::reader::FileReader;
+        use crate::writer::FileWriter;
+
+        // Create a minimal array for a given fixed-width or boolean type
+        fn make_array_for_type(data_type: DataType) -> ArrayRef {
+            let len = 3;
+
+            if matches!(data_type, DataType::Boolean) {
+                return Arc::new(BooleanArray::from(vec![true, false, true]));
+            }
+
+            let width = data_type.primitive_width().unwrap();
+            let data = ArrayData::builder(data_type)
+                .len(len)
+                .add_buffer(Buffer::from(vec![0_u8; len * width]))
+                .build()
+                .unwrap();
+
+            make_array(data)
+        }
+
+        // List of types that follow the same two-buffer layout (null + values)
+        let data_types = vec![
+            DataType::Boolean,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time64(TimeUnit::Microsecond),
+            DataType::Duration(TimeUnit::Second),
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 2),
+            DataType::Decimal128(38, 2),
+            DataType::Decimal256(76, 2),
+        ];
+
+        // For each type:
+        // - write a batch with [skipped_column, values]
+        // - read only the second column
+        // - verify the result is correct
+        for data_type in data_types {
+            let skipped = make_array_for_type(data_type.clone());
+            let values = Int32Array::from(vec![10, 20, 30]);
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("skipped", data_type, false),
+                Field::new("values", DataType::Int32, false),
+            ]));
+
+            let batch =
+                RecordBatch::try_new(schema, vec![skipped, Arc::new(values.clone())]).unwrap();
+
+            // Serialize the batch into IPC format
+            let mut buf = Vec::new();
+            {
+                let mut writer = FileWriter::try_new(&mut buf, &batch.schema()).unwrap();
+                writer.write(&batch).unwrap();
+                writer.finish().unwrap();
+            }
+
+            // Read back only the second column (skip the first)
+            let mut reader = FileReader::try_new(std::io::Cursor::new(buf), Some(vec![1])).unwrap();
+            let read_batch = reader.next().unwrap().unwrap();
+
+            // Verify that the returned column matches the original values column
+            assert_eq!(read_batch.num_columns(), 1);
+            assert_eq!(read_batch.column(0).as_ref(), &values);
+        }
     }
 }
