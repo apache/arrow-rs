@@ -531,7 +531,7 @@ where
 
 /// Parses given string to specified decimal native (i128/i256) based on given
 /// scale. Returns an `Err` if it cannot parse given string.
-pub(crate) fn parse_string_to_decimal_native<T: DecimalType>(
+pub fn parse_string_to_decimal_native<T: DecimalType>(
     value_str: &str,
     scale: usize,
 ) -> Result<T::Native, ArrowError>
@@ -777,7 +777,7 @@ where
     if cast_options.safe {
         array
             .unary_opt::<_, D>(|v| {
-                D::Native::from_f64((mul * v.as_()).round())
+                single_float_to_decimal::<D>(v.as_(), mul)
                     .filter(|v| D::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
@@ -785,7 +785,7 @@ where
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                D::Native::from_f64((mul * v.as_()).round())
+                single_float_to_decimal::<D>(v.as_(), mul)
                     .ok_or_else(|| {
                         ArrowError::CastError(format!(
                             "Cannot cast to {}({}, {}). Overflowing on {:?}",
@@ -800,6 +800,17 @@ where
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     }
+}
+
+/// Cast a single floating point value to a decimal native with the given multiple.
+/// Returns `None` if the value cannot be represented with the requested precision.
+#[inline(always)]
+pub fn single_float_to_decimal<D>(input: f64, mul: f64) -> Option<D::Native>
+where
+    D: DecimalType + ArrowPrimitiveType,
+    <D as ArrowPrimitiveType>::Native: DecimalCast,
+{
+    D::Native::from_f64((mul * input).round())
 }
 
 pub(crate) fn cast_decimal_to_integer<D, T>(
@@ -870,11 +881,10 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array
-                            .value(i)
-                            .div_checked(div)
-                            .ok()
-                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        let v = cast_single_decimal_to_integer_div_opt::<D, T::Native>(
+                            array.value(i),
+                            div,
+                        );
                         value_builder.append_option(v);
                     }
                 }
@@ -902,6 +912,19 @@ where
         }
     }
     Ok(Arc::new(value_builder.finish()))
+}
+
+/// Casting a given decimal to an integer by dividing with the given divisor.
+/// Returns `None` if checked division fails or the target cast fails.
+#[inline(always)]
+pub fn cast_single_decimal_to_integer_div_opt<D, T>(value: D::Native, div: D::Native) -> Option<T>
+where
+    T: NumCast + ToPrimitive,
+    D: DecimalType + ArrowPrimitiveType,
+    <D as ArrowPrimitiveType>::Native: ToPrimitive,
+{
+    let v = value.div_checked(div).ok()?;
+    <T as NumCast>::from::<D::Native>(v)
 }
 
 /// Cast a decimal array to a floating point array.

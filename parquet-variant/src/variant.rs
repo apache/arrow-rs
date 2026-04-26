@@ -29,9 +29,14 @@ use crate::decoder::{
 };
 use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
+use arrow::array::ArrowNativeTypeOp;
 use arrow::compute::{
-    cast_num_to_bool, cast_single_string_to_boolean_default, num_cast, single_bool_to_numeric,
+    DecimalCast, cast_num_to_bool, cast_single_decimal_to_integer_div_opt,
+    cast_single_string_to_boolean_default, num_cast, parse_string_to_decimal_native,
+    single_bool_to_numeric, single_decimal_to_float_lossy, single_float_to_decimal,
 };
+use arrow::datatypes::{Decimal32Type, Decimal64Type, Decimal128Type, DecimalType};
+
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use num_traits::NumCast;
@@ -166,10 +171,11 @@ impl Deref for ShortString<'_> {
 ///   Arrow UTF8-to-boolean cast rules.
 /// - Numeric accessors such as [`Self::as_int8`], [`Self::as_int64`], [`Self::as_u8`],
 ///   [`Self::as_u64`], [`Self::as_f16`], [`Self::as_f32`], and [`Self::as_f64`] accept
-///   boolean and numeric variants (integers, floating-point, and decimals with scale `0`).
+///   boolean and numeric variants (integers, floating-point, and decimals).
 ///   They return `None` when conversion is not possible.
 /// - Decimal accessors such as [`Self::as_decimal4`], [`Self::as_decimal8`], and
-///   [`Self::as_decimal16`] accept compatible decimal variants and integer variants.
+///   [`Self::as_decimal16`] accept compatible decimal variants, integer variants,
+///   float variants and string variants.
 ///   They return `None` when conversion is not possible.
 ///
 /// # Examples:
@@ -293,6 +299,35 @@ pub enum Variant<'m, 'v> {
 
 // We don't want this to grow because it could hurt performance of a frequently-created type.
 const _: () = crate::utils::expect_size_of::<Variant>(80);
+
+enum NumericKind {
+    Integer,
+    Float,
+}
+
+trait DecimalCastTarget: NumCast + Default {
+    const KIND: NumericKind;
+}
+
+macro_rules! impl_decimal_cast_target {
+    ($raw_type: ident, $target_kind:expr) => {
+        impl DecimalCastTarget for $raw_type {
+            const KIND: NumericKind = $target_kind;
+        }
+    };
+}
+
+impl_decimal_cast_target!(i8, NumericKind::Integer);
+impl_decimal_cast_target!(i16, NumericKind::Integer);
+impl_decimal_cast_target!(i32, NumericKind::Integer);
+impl_decimal_cast_target!(i64, NumericKind::Integer);
+impl_decimal_cast_target!(u8, NumericKind::Integer);
+impl_decimal_cast_target!(u16, NumericKind::Integer);
+impl_decimal_cast_target!(u32, NumericKind::Integer);
+impl_decimal_cast_target!(u64, NumericKind::Integer);
+impl_decimal_cast_target!(f16, NumericKind::Float);
+impl_decimal_cast_target!(f32, NumericKind::Float);
+impl_decimal_cast_target!(f64, NumericKind::Float);
 
 impl<'m, 'v> Variant<'m, 'v> {
     /// Attempts to interpret a metadata and value buffer pair as a new `Variant`.
@@ -797,14 +832,34 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Converts a boolean or numeric variant(integers, floating-point, and decimals with scale 0)
+    fn cast_decimal_to_num<D, T, F>(raw: D::Native, scale: u8, as_float: F) -> Option<T>
+    where
+        D: DecimalType,
+        D::Native: NumCast + ArrowNativeTypeOp,
+        T: DecimalCastTarget,
+        F: Fn(D::Native) -> f64,
+    {
+        let base: D::Native = NumCast::from(10)?;
+
+        let div = base.pow_checked(<u32 as From<u8>>::from(scale)).ok()?;
+        match T::KIND {
+            NumericKind::Integer => cast_single_decimal_to_integer_div_opt::<D, T>(raw, div),
+            NumericKind::Float => T::from(single_decimal_to_float_lossy::<D, _>(
+                &as_float,
+                raw,
+                <i32 as From<u8>>::from(scale),
+            )),
+        }
+    }
+
+    /// Converts a boolean or numeric variant(integers, floating-point, and decimals)
     /// to the specified numeric type `T`.
     ///
     /// Uses Arrow's casting logic to perform the conversion. Returns `Some(T)` if
     /// the conversion succeeds, `None` if the variant can't be casted to type `T`.
     fn as_num<T>(&self) -> Option<T>
     where
-        T: NumCast + Default,
+        T: DecimalCastTarget,
     {
         match *self {
             Variant::BooleanFalse => single_bool_to_numeric(false),
@@ -815,9 +870,21 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int64(i) => num_cast(i),
             Variant::Float(f) => num_cast(f),
             Variant::Double(d) => num_cast(d),
-            Variant::Decimal4(d) if d.scale() == 0 => num_cast(d.integer()),
-            Variant::Decimal8(d) if d.scale() == 0 => num_cast(d.integer()),
-            Variant::Decimal16(d) if d.scale() == 0 => num_cast(d.integer()),
+            Variant::Decimal4(d) => {
+                Self::cast_decimal_to_num::<Decimal32Type, T, _>(d.integer(), d.scale(), |x| {
+                    x as f64
+                })
+            }
+            Variant::Decimal8(d) => {
+                Self::cast_decimal_to_num::<Decimal64Type, T, _>(d.integer(), d.scale(), |x| {
+                    x as f64
+                })
+            }
+            Variant::Decimal16(d) => {
+                Self::cast_decimal_to_num::<Decimal128Type, T, _>(d.integer(), d.scale(), |x| {
+                    x as f64
+                })
+            }
             _ => None,
         }
     }
@@ -962,17 +1029,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u8(), Some(26u8));
     ///
+    ///  // or a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal4::try_new(123, 2).unwrap();
+    ///  let v3 = Variant::from(d);
+    ///  assert_eq!(v3.as_u8(), Some(1));
+    ///
     /// // or from boolean variant
-    /// let v3 = Variant::BooleanFalse;
-    /// assert_eq!(v3.as_u8(), Some(0));
+    /// let v4 = Variant::BooleanFalse;
+    /// assert_eq!(v4.as_u8(), Some(0));
     ///
     ///  // but not a variant that can't fit into the range
-    ///  let v4 = Variant::from(-1);
-    ///  assert_eq!(v4.as_u8(), None);
-    ///
-    ///  // not a variant that decimal with scale not equal to zero
-    ///  let d = VariantDecimal4::try_new(1, 2).unwrap();
-    ///  let v5 = Variant::from(d);
+    ///  let v5 = Variant::from(-1);
     ///  assert_eq!(v5.as_u8(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
@@ -1003,17 +1070,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u16(), Some(u16::MAX));
     ///
+    ///  // or a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal4::try_new(123, 2).unwrap();
+    ///  let v3 = Variant::from(d);
+    ///  assert_eq!(v3.as_u16(), Some(1));
+    ///
     /// // or from boolean variant
-    /// let v3= Variant::BooleanFalse;
-    /// assert_eq!(v3.as_u16(), Some(0));
+    /// let v4= Variant::BooleanFalse;
+    /// assert_eq!(v4.as_u16(), Some(0));
     ///
     ///  // but not a variant that can't fit into the range
-    ///  let v4 = Variant::from(-1);
-    ///  assert_eq!(v4.as_u16(), None);
-    ///
-    ///  // not a variant that decimal with scale not equal to zero
-    ///  let d = VariantDecimal4::try_new(1, 2).unwrap();
-    ///  let v5 = Variant::from(d);
+    ///  let v5 = Variant::from(-1);
     ///  assert_eq!(v5.as_u16(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
@@ -1044,17 +1111,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u32(), Some(u32::MAX));
     ///
+    ///  // or a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal8::try_new(123, 2).unwrap();
+    ///  let v3 = Variant::from(d);
+    ///  assert_eq!(v3.as_u32(), Some(1));
+    ///
     /// // or from boolean variant
-    /// let v3 = Variant::BooleanFalse;
-    /// assert_eq!(v3.as_u32(), Some(0));
+    /// let v4 = Variant::BooleanFalse;
+    /// assert_eq!(v4.as_u32(), Some(0));
     ///
     ///  // but not a variant that can't fit into the range
-    ///  let v4 = Variant::from(-1);
-    ///  assert_eq!(v4.as_u32(), None);
-    ///
-    ///  // not a variant that decimal with scale not equal to zero
-    ///  let d = VariantDecimal8::try_new(1, 2).unwrap();
-    ///  let v5 = Variant::from(d);
+    ///  let v5 = Variant::from(-1);
     ///  assert_eq!(v5.as_u32(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
@@ -1085,17 +1152,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u64(), Some(u64::MAX));
     ///
+    ///  // or a variant that decimal with scale not equal to zero
+    /// let d = VariantDecimal16::try_new(123, 2).unwrap();
+    ///  let v3 = Variant::from(d);
+    ///  assert_eq!(v3.as_u64(), Some(1));
+    ///
     /// // or from boolean variant
-    /// let v3 = Variant::BooleanFalse;
-    /// assert_eq!(v3.as_u64(), Some(0));
+    /// let v4 = Variant::BooleanFalse;
+    /// assert_eq!(v4.as_u64(), Some(0));
     ///
     ///  // but not a variant that can't fit into the range
-    ///  let v4 = Variant::from(-1);
-    ///  assert_eq!(v4.as_u64(), None);
-    ///
-    ///  // not a variant that decimal with scale not equal to zero
-    /// let d = VariantDecimal16::try_new(1, 2).unwrap();
-    ///  let v5 = Variant::from(d);
+    ///  let v5 = Variant::from(-1);
     ///  assert_eq!(v5.as_u64(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
@@ -1104,6 +1171,21 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_u64(&self) -> Option<u64> {
         self.as_num()
+    }
+
+    fn convert_string_to_decimal<D, VD>(input: &str) -> Option<VD>
+    where
+        D: DecimalType,
+        VD: VariantDecimalType<Native = D::Native>,
+        D::Native: NumCast + DecimalCast,
+    {
+        // find the last '.'
+        let scale_usize = input.rsplit_once('.').map_or(0, |(_, frac)| frac.len());
+
+        let scale = u8::try_from(scale_usize).ok()?;
+
+        let raw = parse_string_to_decimal_native::<D>(input, scale_usize).ok()?;
+        VD::try_new(raw, scale).ok()
     }
 
     /// Converts this variant to tuple with a 4-byte unscaled value if possible.
@@ -1125,18 +1207,30 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(VariantDecimal8::try_new(1234_i64, 2).unwrap());
     /// assert_eq!(v2.as_decimal4(), VariantDecimal4::try_new(1234_i32, 2).ok());
     ///
+    /// // or from string variants if they can be parsed as decimals
+    /// let v3 = Variant::from("123.45");
+    /// assert_eq!(v3.as_decimal4(), VariantDecimal4::try_new(12345, 2).ok());
+    ///
     /// // but not if the value would overflow i32
-    /// let v3 = Variant::from(VariantDecimal8::try_new(12345678901i64, 2).unwrap());
-    /// assert_eq!(v3.as_decimal4(), None);
+    /// let v4 = Variant::from(VariantDecimal8::try_new(12345678901i64, 2).unwrap());
+    /// assert_eq!(v4.as_decimal4(), None);
     ///
     /// // or if the variant is not a decimal
-    /// let v4 = Variant::from("hello!");
-    /// assert_eq!(v4.as_decimal4(), None);
+    /// let v5 = Variant::from("hello!");
+    /// assert_eq!(v5.as_decimal4(), None);
     /// ```
     pub fn as_decimal4(&self) -> Option<VariantDecimal4> {
         match *self {
             Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
                 self.as_num::<i32>().and_then(|x| x.try_into().ok())
+            }
+            Variant::Float(f) => single_float_to_decimal::<Decimal32Type>(f as _, 1f64)
+                .and_then(|x: i32| x.try_into().ok()),
+            Variant::Double(f) => single_float_to_decimal::<Decimal32Type>(f, 1f64)
+                .and_then(|x: i32| x.try_into().ok()),
+            Variant::String(v) => Self::convert_string_to_decimal::<Decimal32Type, _>(v),
+            Variant::ShortString(v) => {
+                Self::convert_string_to_decimal::<Decimal32Type, _>(v.as_str())
             }
             Variant::Decimal4(decimal4) => Some(decimal4),
             Variant::Decimal8(decimal8) => decimal8.try_into().ok(),
@@ -1148,7 +1242,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Converts this variant to tuple with an 8-byte unscaled value if possible.
     ///
     /// Returns `Some((i64, u8))` for decimal variants where the unscaled value
-    /// fits in `i64` range,
+    /// fits in `i64` range, the scale will be 0 if the input is string variants.
     /// `None` for non-decimal variants or decimal values that would overflow.
     ///
     /// # Examples
@@ -1164,18 +1258,30 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(VariantDecimal16::try_new(1234_i128, 2).unwrap());
     /// assert_eq!(v2.as_decimal8(), VariantDecimal8::try_new(1234_i64, 2).ok());
     ///
+    /// // or from string variants if they can be parsed as decimals
+    /// let v3 = Variant::from("123.45");
+    /// assert_eq!(v3.as_decimal8(), VariantDecimal8::try_new(12345, 2).ok());
+    ///
     /// // but not if the value would overflow i64
-    /// let v3 = Variant::from(VariantDecimal16::try_new(2e19 as i128, 2).unwrap());
-    /// assert_eq!(v3.as_decimal8(), None);
+    /// let v4 = Variant::from(VariantDecimal16::try_new(2e19 as i128, 2).unwrap());
+    /// assert_eq!(v4.as_decimal8(), None);
     ///
     /// // or if the variant is not a decimal
-    /// let v4 = Variant::from("hello!");
-    /// assert_eq!(v4.as_decimal8(), None);
+    /// let v5 = Variant::from("hello!");
+    /// assert_eq!(v5.as_decimal8(), None);
     /// ```
     pub fn as_decimal8(&self) -> Option<VariantDecimal8> {
         match *self {
             Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
                 self.as_num::<i64>().and_then(|x| x.try_into().ok())
+            }
+            Variant::Float(f) => single_float_to_decimal::<Decimal64Type>(f as _, 1f64)
+                .and_then(|x: i64| x.try_into().ok()),
+            Variant::Double(f) => single_float_to_decimal::<Decimal64Type>(f, 1f64)
+                .and_then(|x: i64| x.try_into().ok()),
+            Variant::String(v) => Self::convert_string_to_decimal::<Decimal64Type, _>(v),
+            Variant::ShortString(v) => {
+                Self::convert_string_to_decimal::<Decimal64Type, _>(v.as_str())
             }
             Variant::Decimal4(decimal4) => Some(decimal4.into()),
             Variant::Decimal8(decimal8) => Some(decimal8),
@@ -1187,7 +1293,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Converts this variant to tuple with a 16-byte unscaled value if possible.
     ///
     /// Returns `Some((i128, u8))` for decimal variants where the unscaled value
-    /// fits in `i128` range,
+    /// fits in `i128` range, the scale will be 0 if the input is string variants.
     /// `None` for non-decimal variants or decimal values that would overflow.
     ///
     /// # Examples
@@ -1199,14 +1305,30 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v1 = Variant::from(VariantDecimal4::try_new(1234_i32, 2).unwrap());
     /// assert_eq!(v1.as_decimal16(), VariantDecimal16::try_new(1234_i128, 2).ok());
     ///
+    /// // or from a string variant if it can be parsed as decimal
+    /// let v2 = Variant::from("123.45");
+    /// assert_eq!(v2.as_decimal16(), VariantDecimal16::try_new(12345, 2).ok());
+    ///
     /// // but not if the variant is not a decimal
-    /// let v2 = Variant::from("hello!");
-    /// assert_eq!(v2.as_decimal16(), None);
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_decimal16(), None);
     /// ```
     pub fn as_decimal16(&self) -> Option<VariantDecimal16> {
         match *self {
             Variant::Int8(_) | Variant::Int16(_) | Variant::Int32(_) | Variant::Int64(_) => {
-                self.as_num::<i128>().and_then(|x| x.try_into().ok())
+                let x = self.as_num::<i64>()?;
+                <i128 as From<i64>>::from(x).try_into().ok()
+            }
+            Variant::Float(f) => {
+                single_float_to_decimal::<Decimal128Type>(<f64 as From<f32>>::from(f), 1f64)
+                    .and_then(|x| x.try_into().ok())
+            }
+            Variant::Double(f) => {
+                single_float_to_decimal::<Decimal128Type>(f, 1f64).and_then(|x| x.try_into().ok())
+            }
+            Variant::String(v) => Self::convert_string_to_decimal::<Decimal128Type, _>(v),
+            Variant::ShortString(v) => {
+                Self::convert_string_to_decimal::<Decimal128Type, _>(v.as_str())
             }
             Variant::Decimal4(decimal4) => Some(decimal4.into()),
             Variant::Decimal8(decimal8) => Some(decimal8.into()),

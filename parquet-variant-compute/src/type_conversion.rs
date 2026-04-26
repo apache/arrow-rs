@@ -17,7 +17,10 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::compute::{CastOptions, DecimalCast, rescale_decimal};
+use arrow::compute::{
+    CastOptions, DecimalCast, parse_string_to_decimal_native, rescale_decimal,
+    single_float_to_decimal,
+};
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
     DecimalType,
@@ -204,9 +207,12 @@ impl_timestamp_from_variant!(
 ///
 /// - `precision` and `scale` specify the target Arrow decimal parameters
 /// - Integer variants (`Int8/16/32/64`) are treated as decimals with scale 0
+/// - Floating point variants (`Float/Double`) are converted to decimals with the given scale
+/// - String variants (`String/ShortString`) are parsed as decimals with the given scale
 /// - Decimal variants (`Decimal4/8/16`) use their embedded precision and scale
 ///
-/// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` and
+/// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` for integers,
+/// `single_float_to_decimal` for floats, and `parse_string_to_decimal_native` for strings.
 /// returns `None` if it cannot fit the requested precision.
 pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
@@ -217,6 +223,8 @@ where
     O: DecimalType,
     O::Native: DecimalCast,
 {
+    let mul = 10_f64.powi(scale as i32);
+
     match variant {
         Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(
             *i as i32,
@@ -246,6 +254,14 @@ where
             precision,
             scale,
         ),
+        Variant::Float(f) => single_float_to_decimal::<O>(f64::from(*f), mul),
+        Variant::Double(f) => single_float_to_decimal::<O>(*f, mul),
+        // arrow-cast only support cast string to decimal with scale >=0 for now
+        // Please see `cast_string_to_decimal` in arrow-cast/src/cast/decimal.rs for more detail
+        Variant::String(v) if scale >= 0 => parse_string_to_decimal_native::<O>(v, scale as _).ok(),
+        Variant::ShortString(v) if scale >= 0 => {
+            parse_string_to_decimal_native::<O>(v, scale as _).ok()
+        }
         Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
             d.integer(),
             VariantDecimal4::MAX_PRECISION,
