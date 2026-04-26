@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::buffer::ScalarBuffer;
-use crate::{ArrowNativeType, MutableBuffer, OffsetBufferBuilder};
+use crate::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBufferBuilder};
 use std::ops::Deref;
 
 /// A non-empty buffer of monotonically increasing, positive integers.
@@ -237,6 +237,94 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     #[inline]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.0.ptr_eq(&other.0)
+    }
+
+    /// Check if any null positions in the `null_buffer` correspond to
+    /// non-empty ranges in this [`OffsetBuffer`].
+    ///
+    /// In variable-length array types (e.g., `StringArray`, `ListArray`),
+    /// null entries may or may not have empty offset ranges. This method
+    /// detects cases where a null entry has a non-empty range
+    /// (i.e., `offsets[i] != offsets[i+1]`), which means the underlying
+    /// data buffer contains data behind nulls.
+    ///
+    /// This matters because unwrapping (flattening) a list array exposes
+    /// the child values, including those behind null entries. If null
+    /// entries point to non-empty ranges, the unwrapped values will
+    /// contain data that may not be meaningful to operate on and could
+    /// cause errors (e.g., division by zero in the child values).
+    ///
+    /// Returns `false` if `null_buffer` is `None` or contains no nulls.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_buffer::{OffsetBuffer, ScalarBuffer, NullBuffer};
+    /// // Offsets where null at index 1 has an empty range (3..3)
+    /// let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6]));
+    /// let nulls = NullBuffer::from(vec![true, false, true]);
+    /// assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    ///
+    /// // Offsets where null at index 1 has a non-empty range (3..7)
+    /// let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10]));
+    /// let nulls = NullBuffer::from(vec![true, false, true]);
+    /// assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of the `null_buffer` does not equal `self.len() - 1`.
+    pub fn has_non_empty_nulls(&self, null_buffer: Option<&NullBuffer>) -> bool {
+        let Some(null_buffer) = null_buffer else {
+            return false;
+        };
+
+        assert_eq!(
+            self.len() - 1,
+            null_buffer.len(),
+            "The length of the offsets should be 1 more than the length of the null buffer"
+        );
+
+        if null_buffer.null_count() == 0 {
+            return false;
+        }
+
+        // Offsets always have at least 1 value
+        let initial_offset = self[0];
+        let last_offset = self[self.len() - 1];
+
+        // If all the values are null (offsets have 1 more value than the length of the array)
+        if null_buffer.null_count() == self.len() - 1 {
+            return last_offset != initial_offset;
+        }
+
+        let mut valid_slices_iter = null_buffer.valid_slices();
+
+        // This is safe as we validated that are at least 1 valid value in the array
+        let (start, end) = valid_slices_iter.next().unwrap();
+
+        // If the nulls before have length greater than 0
+        if self[start] != initial_offset {
+            return true;
+        }
+
+        // End is exclusive, so it already point to the last offset value
+        // This is valid as the length of the array is always 1 less than the length of the offsets
+        let mut end_offset_of_last_valid_value = self[end];
+
+        for (start, end) in valid_slices_iter {
+            // If there is a null value that point to a non-empty value than the start offset of the valid value
+            // will be different that the end offset of the last valid value
+            if self[start] != end_offset_of_last_valid_value {
+                return true;
+            }
+
+            // End is exclusive, so it already point to the last offset value
+            // This is valid as the length of the array is always 1 less than the length of the offsets
+            end_offset_of_last_valid_value = self[end];
+        }
+
+        end_offset_of_last_valid_value != last_offset
     }
 }
 
@@ -470,5 +558,256 @@ mod tests {
             buffer.as_ref(),
             &[0, third_max as i32, (third_max * 2) as i32]
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Tests for has_non_empty_nulls
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn has_non_empty_nulls_none_null_buffer() {
+        // No null buffer at all -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        assert!(!offsets.has_non_empty_nulls(None));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_all_valid() {
+        // Null buffer with zero nulls -> false (early return via filter)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        let nulls = NullBuffer::new_valid(3);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_all_null_empty_offsets() {
+        // All values are null and all offsets are equal (no data behind nulls) -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 0, 0]));
+        let nulls = NullBuffer::new_null(3);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_all_null_non_empty_offsets() {
+        // All values are null but offsets span data -> true
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 5, 7]));
+        let nulls = NullBuffer::new_null(3);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_all_null_nonzero_but_equal_offsets() {
+        // All null, offsets start at non-zero but are all equal -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![5, 5, 5]));
+        let nulls = NullBuffer::new_null(2);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_leading_nulls_with_data() {
+        // Nulls at the beginning that point to non-empty ranges -> true
+        // offsets: [0, 3, 5, 8]  nulls: [false, true, true]
+        // Index 0 is null with range 0..3 (non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        let nulls = NullBuffer::from(vec![false, true, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_leading_nulls_without_data() {
+        // Nulls at the beginning with empty ranges -> continue checking
+        // offsets: [0, 0, 3, 6]  nulls: [false, true, true]
+        // Index 0 is null with range 0..0 (empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 6]));
+        let nulls = NullBuffer::from(vec![false, true, true]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_only_trailing_null_has_data() {
+        // Only the trailing null region has data, everything else is clean
+        // offsets: [0, 0, 3, 6, 8]  nulls: [false, true, true, false]
+        // Null at 0 (0..0 empty), valid at 1,2 (0..3, 3..6), null at 3 (6..8 non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 6, 8]));
+        let nulls = NullBuffer::from(vec![false, true, true, false]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_trailing_nulls_without_data() {
+        // Nulls at the end with empty ranges -> false
+        // offsets: [0, 3, 6, 6]  nulls: [true, true, false]
+        // Index 2 is null with range 6..6 (empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 6]));
+        let nulls = NullBuffer::from(vec![true, true, false]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_middle_nulls_with_data() {
+        // Null in the middle with non-empty range -> true
+        // offsets: [0, 3, 7, 10]  nulls: [true, false, true]
+        // Index 1 is null with range 3..7 (non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10]));
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_middle_nulls_without_data() {
+        // Null in the middle with empty range -> false
+        // offsets: [0, 3, 3, 6]  nulls: [true, false, true]
+        // Index 1 is null with range 3..3 (empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6]));
+        let nulls = NullBuffer::from(vec![true, false, true]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_alternating_null_valid_all_empty() {
+        // Alternating null/valid where every null has an empty range -> false.
+
+        // Ends with null
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 6]));
+        let nulls = NullBuffer::from(vec![false, true, false, true, false]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+
+        // Ends with valid
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 6, 9]));
+        let nulls = NullBuffer::from(vec![false, true, false, true, false, true]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_multiple_null_regions_second_has_data() {
+        // Two null regions: first empty, second non-empty -> true
+        // offsets: [0, 0, 3, 5, 6]  nulls: [false, true, false, true]
+        // Null at index 0 (0..0 empty), null at index 2 (3..5 non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 5, 6]));
+        let nulls = NullBuffer::from(vec![false, true, false, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_multiple_null_regions_later_gap_has_data() {
+        // Three null regions: first two empty, third non-empty -> true
+        // offsets: [0, 0, 3, 3, 6, 8, 10]  nulls: [false, true, false, true, false, true]
+        // valid_slices: (1,2), (3,4), (5,6)
+        // first slice: start=1, self[1]=0 == initial_offset=0 OK, end_offset=self[2]=3
+        // loop iter 1: start=3, self[3]=3 == 3 OK (first gap empty), end_offset=self[4]=6
+        // loop iter 2: start=5, self[5]=8 != 6 -> true (second gap has data)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0, 3, 3, 6, 8, 10]));
+        let nulls = NullBuffer::from(vec![false, true, false, true, false, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_single_element_null_empty() {
+        // Single element, null with empty range -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 0]));
+        let nulls = NullBuffer::new_null(1);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_single_element_null_non_empty() {
+        // Single element, null with non-empty range -> true
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 5]));
+        let nulls = NullBuffer::new_null(1);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_single_element_valid() {
+        // Single element, valid -> false (no nulls at all)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 5]));
+        let nulls = NullBuffer::new_valid(1);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_consecutive_nulls_between_valid_slices() {
+        // Multiple consecutive nulls between valid regions
+        // offsets: [0, 2, 2, 2, 5, 8]  nulls: [true, false, false, true, true]
+        // Valid: [0], nulls: [1,2], valid: [3,4]
+        // Null region [1,2] has offsets 2..2..2 (empty) -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 2, 2, 5, 8]));
+        let nulls = NullBuffer::from(vec![true, false, false, true, true]);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_consecutive_nulls_between_valid_slices_with_data() {
+        // Multiple consecutive nulls between valid regions, nulls have data
+        // offsets: [0, 2, 3, 4, 5, 8]  nulls: [true, false, false, true, true]
+        // valid_slices: (0,1), (3,5)
+        // first slice: start=0, end=1 -> self[0]=0 == initial_offset=0 OK
+        //   end_offset_of_last_valid_value = self[1] = 2
+        // second slice: start=3, end=5 -> self[3]=4 != 2 -> true
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3, 4, 5, 8]));
+        let nulls = NullBuffer::from(vec![true, false, false, true, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_nonzero_initial_offset_all_null_equal() {
+        // Non-zero starting offset, all null, all offsets equal -> false
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![10, 10, 10]));
+        let nulls = NullBuffer::new_null(2);
+        assert!(!offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_nonzero_initial_offset_with_data() {
+        // Non-zero starting offset, null has data
+        // offsets: [10, 15, 20]  nulls: [false, true]
+        // Null at index 0 with range 10..15 (non-empty) -> true
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![10, 15, 20]));
+        let nulls = NullBuffer::from(vec![false, true]);
+        assert!(offsets.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_sliced_no_nulls_in_null_region() {
+        // Original: [0, 3, 3, 6, 6, 9]  -> slice(1, 3) -> [3, 3, 6, 6]
+        // initial_offset=3, last_offset=6
+        // nulls: [false, true, false]  (null at index 0 has range 3..3 = empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 3, 6, 6, 9]));
+        let sliced = offsets.slice(1, 3);
+        let nulls = NullBuffer::from(vec![false, true, false]);
+        assert!(!sliced.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    fn has_non_empty_nulls_sliced_null_has_data() {
+        // Original: [0, 3, 7, 10, 15]  -> slice(1, 2) -> [3, 7, 10]
+        // initial_offset=3, last_offset=10
+        // nulls: [false, true]  (null at index 0 has range 3..7 = non-empty)
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 7, 10, 15]));
+        let sliced = offsets.slice(1, 2);
+        let nulls = NullBuffer::from(vec![false, true]);
+        assert!(sliced.has_non_empty_nulls(Some(&nulls)));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "The length of the offsets should be 1 more than the length of the null buffer"
+    )]
+    fn has_non_empty_nulls_all_valid_mismatched_lengths_too_short() {
+        // All-valid null buffer with wrong length should still panic
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        let nulls = NullBuffer::new_valid(2); // expects 3
+        offsets.has_non_empty_nulls(Some(&nulls));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "The length of the offsets should be 1 more than the length of the null buffer"
+    )]
+    fn has_non_empty_nulls_all_valid_mismatched_lengths_too_long() {
+        // All-valid null buffer with wrong length should still panic
+        let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 8]));
+        let nulls = NullBuffer::new_valid(5); // expects 3
+        offsets.has_non_empty_nulls(Some(&nulls));
     }
 }
