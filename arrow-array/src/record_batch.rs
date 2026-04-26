@@ -19,7 +19,7 @@
 //! [schema](arrow_schema::Schema).
 
 use crate::cast::AsArray;
-use crate::{Array, ArrayRef, StructArray, new_empty_array};
+use crate::{Array, ArrayRef, StructArray, new_empty_array, new_null_array};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use std::ops::Index;
 use std::sync::Arc;
@@ -417,6 +417,45 @@ impl RecordBatch {
             columns: self.columns,
             row_count: self.row_count,
         })
+    }
+
+    /// Creates a new [`RecordBatch`] that has the specified `target_schema`,
+    /// adding null-valued columns for any fields that exist in `target_schema`
+    /// but not in this batch's schema, and reordering columns to match.
+    pub fn ensure_schema(&self, target_schema: SchemaRef) -> Result<Self, ArrowError> {
+        let columns: Vec<ArrayRef> = target_schema
+            .fields()
+            .iter()
+            .map(|target_field| {
+                match self.schema.column_with_name(target_field.name()) {
+                    Some((idx, existing_field)) => {
+                        if existing_field.data_type() != target_field.data_type() {
+                            return Err(ArrowError::SchemaError(format!(
+                                "Cannot ensure schema: field '{}' has type {} in the batch \
+                                but type {} in the target schema",
+                                target_field.name(),
+                                existing_field.data_type(),
+                                target_field.data_type(),
+                            )));
+                        }
+                        Ok(self.columns[idx].clone())
+                    }
+                    None => Ok(new_null_array(target_field.data_type(), self.row_count)),
+                }
+            })
+            .collect::<Result<_, _>>()?;
+
+        for field in self.schema.fields() {
+            if target_schema.column_with_name(field.name()).is_none() {
+                return Err(ArrowError::SchemaError(format!(
+                    "Cannot ensure schema: field '{}' exists in the batch but not in target schema",
+                    field.name(),
+                )));
+            }
+        }
+
+        let options = RecordBatchOptions::new().with_row_count(Some(self.row_count));
+        Self::try_new_with_options(target_schema, columns, &options)
     }
 
     /// Returns the [`Schema`] of the record batch.
@@ -1791,5 +1830,155 @@ mod tests {
         assert!(col.is_valid(0));
         assert!(col.is_null(1));
         assert!(col.is_valid(2));
+    }
+
+    #[test]
+    fn test_ensure_schema_add_null_columns() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("user", DataType::Utf8, false),
+                Field::new("address", DataType::Utf8, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["Andrew", "Marco"])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["USA", "Germany"])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("user", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("user_comment", DataType::Utf8, true),
+        ]));
+
+        let adapted = batch.ensure_schema(target_schema.clone()).unwrap();
+        assert_eq!(adapted.schema(), target_schema);
+        assert_eq!(adapted.num_columns(), 3);
+        assert_eq!(adapted.num_rows(), 2);
+        assert_eq!(adapted.column(2).null_count(), 2);
+    }
+
+    #[test]
+    fn test_ensure_schema_reorders_columns() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("b", DataType::Int32, false),
+                Field::new("a", DataType::Utf8, false),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let adapted = batch.ensure_schema(target_schema.clone()).unwrap();
+        assert_eq!(adapted.schema(), target_schema);
+        let col_a = adapted.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(col_a.value(0), "x");
+        let col_b = adapted.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(col_b.value(0), 1);
+    }
+
+    #[test]
+    fn test_ensure_schema_same_schema() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )
+        .unwrap();
+
+        let adapted = batch.ensure_schema(schema.clone()).unwrap();
+        assert_eq!(adapted.schema(), schema);
+        assert_eq!(adapted.num_rows(), 3);
+    }
+
+    #[test]
+    fn test_ensure_schema_type_mismatch() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+            ])),
+            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+        ]));
+
+        let err = batch.ensure_schema(target_schema).unwrap_err();
+        assert!(err.to_string().contains("Cannot ensure schema"));
+        assert!(err.to_string().contains("field 'a'"));
+    }
+
+    #[test]
+    fn test_ensure_schema_field_not_in_target() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![2])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        let err = batch.ensure_schema(target_schema).unwrap_err();
+        assert!(err.to_string().contains("field 'b'"));
+        assert!(err.to_string().contains("not in the target schema"));
+    }
+
+    #[test]
+    fn test_ensure_schema_empty_batch() {
+        let batch = RecordBatch::new_empty(Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+        ])));
+
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+
+        let adapted = batch.ensure_schema(target_schema.clone()).unwrap();
+        assert_eq!(adapted.schema(), target_schema);
+        assert_eq!(adapted.num_rows(), 0);
+        assert_eq!(adapted.num_columns(), 2);
+    }
+
+    #[test]
+    fn test_ensure_schema_all_new_columns() {
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(3)),
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new("y", DataType::Utf8, true),
+        ]));
+
+        let adapted = batch.ensure_schema(target_schema.clone()).unwrap();
+        assert_eq!(adapted.schema(), target_schema);
+        assert_eq!(adapted.num_rows(), 3);
+        assert_eq!(adapted.column(0).null_count(), 3);
+        assert_eq!(adapted.column(1).null_count(), 3);
     }
 }
