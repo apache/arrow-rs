@@ -18,17 +18,12 @@
 use crate::cast::*;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, ArrowPrimitiveType, Date32Type, Date64Type, Decimal128Type,
-    Decimal256Type, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    ArrowDictionaryKeyType, ArrowPrimitiveType, Int8Type, Int16Type, Int32Type, Int64Type,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{
-    Array, ArrayRef, BinaryViewArray, BooleanArray, DictionaryArray, FixedSizeBinaryArray,
-    GenericBinaryArray, GenericStringArray, PrimitiveArray, StringViewArray,
+    Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeBinaryArray, GenericBinaryArray,
+    GenericStringArray, OffsetSizeTrait, PrimitiveArray, downcast_primitive_array,
 };
 
 /// Attempts to cast a `RunArray` with index type K into
@@ -182,75 +177,17 @@ fn compute_run_boundaries(array: &ArrayRef) -> (Vec<usize>, Vec<usize>) {
         return (Vec::new(), Vec::new());
     }
 
-    use arrow_schema::{DataType::*, IntervalUnit, TimeUnit};
+    use arrow_schema::DataType::*;
 
-    match array.data_type() {
+    let array = array.as_ref();
+    downcast_primitive_array! {
+        array => runs_for_primitive(array),
         Null => (vec![array.len()], vec![0]),
         Boolean => runs_for_boolean(array.as_boolean()),
-        Int8 => runs_for_primitive(array.as_primitive::<Int8Type>()),
-        Int16 => runs_for_primitive(array.as_primitive::<Int16Type>()),
-        Int32 => runs_for_primitive(array.as_primitive::<Int32Type>()),
-        Int64 => runs_for_primitive(array.as_primitive::<Int64Type>()),
-        UInt8 => runs_for_primitive(array.as_primitive::<UInt8Type>()),
-        UInt16 => runs_for_primitive(array.as_primitive::<UInt16Type>()),
-        UInt32 => runs_for_primitive(array.as_primitive::<UInt32Type>()),
-        UInt64 => runs_for_primitive(array.as_primitive::<UInt64Type>()),
-        Float16 => runs_for_primitive(array.as_primitive::<Float16Type>()),
-        Float32 => runs_for_primitive(array.as_primitive::<Float32Type>()),
-        Float64 => runs_for_primitive(array.as_primitive::<Float64Type>()),
-        Date32 => runs_for_primitive(array.as_primitive::<Date32Type>()),
-        Date64 => runs_for_primitive(array.as_primitive::<Date64Type>()),
-        Time32(TimeUnit::Second) => runs_for_primitive(array.as_primitive::<Time32SecondType>()),
-        Time32(TimeUnit::Millisecond) => {
-            runs_for_primitive(array.as_primitive::<Time32MillisecondType>())
-        }
-        Time64(TimeUnit::Microsecond) => {
-            runs_for_primitive(array.as_primitive::<Time64MicrosecondType>())
-        }
-        Time64(TimeUnit::Nanosecond) => {
-            runs_for_primitive(array.as_primitive::<Time64NanosecondType>())
-        }
-        Duration(TimeUnit::Second) => {
-            runs_for_primitive(array.as_primitive::<DurationSecondType>())
-        }
-        Duration(TimeUnit::Millisecond) => {
-            runs_for_primitive(array.as_primitive::<DurationMillisecondType>())
-        }
-        Duration(TimeUnit::Microsecond) => {
-            runs_for_primitive(array.as_primitive::<DurationMicrosecondType>())
-        }
-        Duration(TimeUnit::Nanosecond) => {
-            runs_for_primitive(array.as_primitive::<DurationNanosecondType>())
-        }
-        Timestamp(TimeUnit::Second, _) => {
-            runs_for_primitive(array.as_primitive::<TimestampSecondType>())
-        }
-        Timestamp(TimeUnit::Millisecond, _) => {
-            runs_for_primitive(array.as_primitive::<TimestampMillisecondType>())
-        }
-        Timestamp(TimeUnit::Microsecond, _) => {
-            runs_for_primitive(array.as_primitive::<TimestampMicrosecondType>())
-        }
-        Timestamp(TimeUnit::Nanosecond, _) => {
-            runs_for_primitive(array.as_primitive::<TimestampNanosecondType>())
-        }
-        Interval(IntervalUnit::YearMonth) => {
-            runs_for_primitive(array.as_primitive::<IntervalYearMonthType>())
-        }
-        Interval(IntervalUnit::DayTime) => {
-            runs_for_primitive(array.as_primitive::<IntervalDayTimeType>())
-        }
-        Interval(IntervalUnit::MonthDayNano) => {
-            runs_for_primitive(array.as_primitive::<IntervalMonthDayNanoType>())
-        }
-        Decimal128(_, _) => runs_for_primitive(array.as_primitive::<Decimal128Type>()),
-        Decimal256(_, _) => runs_for_primitive(array.as_primitive::<Decimal256Type>()),
-        Utf8 => runs_for_string_i32(array.as_string::<i32>()),
-        LargeUtf8 => runs_for_string_i64(array.as_string::<i64>()),
-        Utf8View => runs_for_string_view(array.as_string_view()),
-        Binary => runs_for_binary_i32(array.as_binary::<i32>()),
-        LargeBinary => runs_for_binary_i64(array.as_binary::<i64>()),
-        BinaryView => runs_for_binary_view(array.as_binary_view()),
+        Utf8 => runs_for_string(array.as_string::<i32>()),
+        LargeUtf8 => runs_for_string(array.as_string::<i64>()),
+        Binary => runs_for_binary(array.as_binary::<i32>()),
+        LargeBinary => runs_for_binary(array.as_binary::<i64>()),
         FixedSizeBinary(_) => runs_for_fixed_size_binary(array.as_fixed_size_binary()),
         Dictionary(key_type, _) => match key_type.as_ref() {
             Int8 => runs_for_dictionary::<Int8Type>(array.as_dictionary()),
@@ -261,9 +198,9 @@ fn compute_run_boundaries(array: &ArrayRef) -> (Vec<usize>, Vec<usize>) {
             UInt16 => runs_for_dictionary::<UInt16Type>(array.as_dictionary()),
             UInt32 => runs_for_dictionary::<UInt32Type>(array.as_dictionary()),
             UInt64 => runs_for_dictionary::<UInt64Type>(array.as_dictionary()),
-            _ => runs_generic(array.as_ref()),
+            _ => runs_generic(array),
         },
-        _ => runs_generic(array.as_ref()),
+        _ => runs_generic(array),
     }
 }
 
@@ -361,20 +298,8 @@ fn runs_for_primitive<T: ArrowPrimitiveType>(
     finalize_runs(run_boundaries, len)
 }
 
-fn runs_for_binary_i32(array: &GenericBinaryArray<i32>) -> (Vec<usize>, Vec<usize>) {
-    let mut to_usize = |v: i32| v as usize;
-    runs_for_binary_like(
-        array.len(),
-        array.null_count(),
-        array.value_offsets(),
-        array.value_data(),
-        |idx| array.is_valid(idx),
-        &mut to_usize,
-    )
-}
-
-fn runs_for_binary_i64(array: &GenericBinaryArray<i64>) -> (Vec<usize>, Vec<usize>) {
-    let mut to_usize = |v: i64| v as usize;
+fn runs_for_binary<O: OffsetSizeTrait>(array: &GenericBinaryArray<O>) -> (Vec<usize>, Vec<usize>) {
+    let mut to_usize = |v: O| v.as_usize();
     runs_for_binary_like(
         array.len(),
         array.null_count(),
@@ -449,8 +374,8 @@ fn runs_for_binary_like<T: Copy>(
     finalize_runs(run_boundaries, len)
 }
 
-fn runs_for_string_i32(array: &GenericStringArray<i32>) -> (Vec<usize>, Vec<usize>) {
-    let mut to_usize = |v: i32| v as usize;
+fn runs_for_string<O: OffsetSizeTrait>(array: &GenericStringArray<O>) -> (Vec<usize>, Vec<usize>) {
+    let mut to_usize = |v: O| v.as_usize();
     runs_for_binary_like(
         array.len(),
         array.null_count(),
@@ -459,26 +384,6 @@ fn runs_for_string_i32(array: &GenericStringArray<i32>) -> (Vec<usize>, Vec<usiz
         |idx| array.is_valid(idx),
         &mut to_usize,
     )
-}
-
-fn runs_for_string_i64(array: &GenericStringArray<i64>) -> (Vec<usize>, Vec<usize>) {
-    let mut to_usize = |v: i64| v as usize;
-    runs_for_binary_like(
-        array.len(),
-        array.null_count(),
-        array.value_offsets(),
-        array.value_data(),
-        |idx| array.is_valid(idx),
-        &mut to_usize,
-    )
-}
-
-fn runs_for_string_view(array: &StringViewArray) -> (Vec<usize>, Vec<usize>) {
-    runs_generic(array)
-}
-
-fn runs_for_binary_view(array: &BinaryViewArray) -> (Vec<usize>, Vec<usize>) {
-    runs_generic(array)
 }
 
 fn runs_for_fixed_size_binary(array: &FixedSizeBinaryArray) -> (Vec<usize>, Vec<usize>) {
