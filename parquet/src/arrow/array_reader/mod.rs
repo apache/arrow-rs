@@ -59,6 +59,8 @@ pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[allow(unused_imports)] // Only used for benchmarks
 pub use byte_view_array::make_byte_view_array_reader;
 #[allow(unused_imports)] // Only used for benchmarks
+pub use cached_array_reader::{CacheRole, CachedArrayReader};
+#[allow(unused_imports)] // Only used for benchmarks
 pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
 pub use fixed_size_list_array::FixedSizeListArrayReader;
 pub use list_array::ListArrayReader;
