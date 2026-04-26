@@ -180,6 +180,7 @@ use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 
 mod fixed;
 mod list;
+pub mod radix;
 mod run;
 mod variable;
 
@@ -1456,6 +1457,31 @@ impl<'a> Row<'a> {
     /// The row's bytes, with the lifetime of the underlying data.
     pub fn data(&self) -> &'a [u8] {
         self.data
+    }
+
+    /// The byte at `offset`, or 0 if `offset` is past the end of the row.
+    #[inline]
+    pub fn byte_from(&self, offset: usize) -> u8 {
+        if offset < self.data.len() {
+            // SAFETY: bounds checked above
+            unsafe { *self.data.get_unchecked(offset) }
+        } else {
+            0
+        }
+    }
+
+    /// The row's bytes starting at `offset`, or an empty slice if
+    /// `offset` exceeds the row length.
+    ///
+    /// Useful for comparing rows that share a known prefix (e.g.,
+    /// after radix sort has already discriminated on earlier bytes).
+    pub fn data_from(&self, offset: usize) -> &'a [u8] {
+        if offset <= self.data.len() {
+            // SAFETY: bounds checked above
+            unsafe { self.data.get_unchecked(offset..) }
+        } else {
+            &[]
+        }
     }
 }
 
