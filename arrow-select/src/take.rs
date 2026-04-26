@@ -443,11 +443,50 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
                 },
             })
             .collect(),
-        None => indices
-            .values()
-            .iter()
-            .map(|index| values[index.as_usize()])
-            .collect(),
+        None => {
+            // Vectorised bounds check: reduce each chunk to its maximum index
+            // using `fold`+`max` (no short-circuit, so LLVM can SIMD-reduce it)
+            // and assert once per chunk. Signed natives sign-extend to `usize`,
+            // so negative indices become `usize::MAX` and are still rejected.
+            // Output is written into a preallocated buffer via `chunks_exact_mut`
+            // so the gather compiles to a straight SIMD store.
+            #[cold]
+            #[inline(never)]
+            fn oob(max_idx: usize, values_len: usize) -> ! {
+                panic!("index out of bounds: the len is {values_len} but the index is {max_idx}")
+            }
+            const CHUNK: usize = 16;
+            let idx = indices.values();
+            let values_len = values.len();
+            let len = idx.len();
+            let mut out: Vec<T> = Vec::with_capacity(len);
+            // SAFETY: `T: ArrowNativeType` is `Copy` with no `Drop`; every slot
+            // is written before `out` is read, so uninitialised memory is never
+            // observed.
+            unsafe { out.set_len(len) };
+            let rem_len = len % CHUNK;
+            let (out_full, out_tail) = out.split_at_mut(len - rem_len);
+            let idx_chunks = idx.chunks_exact(CHUNK);
+            let idx_remainder = idx_chunks.remainder();
+            for (out_chunk, idx_chunk) in
+                out_full.chunks_exact_mut(CHUNK).zip(idx_chunks)
+            {
+                let max_idx = idx_chunk
+                    .iter()
+                    .fold(0usize, |acc, &i| acc.max(i.as_usize()));
+                if max_idx >= values_len {
+                    oob(max_idx, values_len);
+                }
+                for (o, &i) in out_chunk.iter_mut().zip(idx_chunk) {
+                    // SAFETY: max_idx < values_len ⇒ every index in chunk is in bounds.
+                    *o = unsafe { *values.get_unchecked(i.as_usize()) };
+                }
+            }
+            for (o, &i) in out_tail.iter_mut().zip(idx_remainder) {
+                *o = values[i.as_usize()];
+            }
+            out.into()
+        }
     }
 }
 
