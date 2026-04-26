@@ -16,10 +16,13 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
+use crate::filter::{
+    FilterPredicate, IndexIterator, IterationStrategy, SlicesIterator, filter_null_mask,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
 use arrow_array::{Array, ArrayRef, GenericByteViewArray};
-use arrow_buffer::{Buffer, NullBufferBuilder};
+use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, NullBufferBuilder};
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
@@ -109,6 +112,75 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             return;
         };
         self.completed.push(next_buffer.into());
+    }
+
+    fn append_inline_views_by_filter(&mut self, views: &[u128], filter: &FilterPredicate) {
+        let current_len = self.views.len();
+        self.views.reserve(filter.count());
+
+        let mut written = 0;
+
+        unsafe {
+            let mut out = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
+
+            match filter.strategy() {
+                IterationStrategy::None => {}
+                IterationStrategy::All => {
+                    std::ptr::copy_nonoverlapping(views.as_ptr(), out, filter.count());
+                    written = filter.count();
+                }
+                IterationStrategy::Slices(slices) => {
+                    for &(start, end) in slices {
+                        let len = end - start;
+                        std::ptr::copy_nonoverlapping(views.as_ptr().add(start), out, len);
+                        out = out.add(len);
+                        written += len;
+                    }
+                }
+                IterationStrategy::SlicesIterator => {
+                    for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                        let len = end - start;
+                        std::ptr::copy_nonoverlapping(views.as_ptr().add(start), out, len);
+                        out = out.add(len);
+                        written += len;
+                    }
+                }
+                IterationStrategy::Indices(indices) => {
+                    for &idx in indices {
+                        out.write(*views.get_unchecked(idx));
+                        out = out.add(1);
+                        written += 1;
+                    }
+                }
+                IterationStrategy::IndexIterator => {
+                    for idx in IndexIterator::new(filter.filter_array(), filter.count()) {
+                        out.write(*views.get_unchecked(idx));
+                        out = out.add(1);
+                        written += 1;
+                    }
+                }
+            }
+
+            self.views.set_len(current_len + written);
+        }
+
+        debug_assert_eq!(written, filter.count());
+    }
+
+    fn append_nulls_by_filter(
+        &mut self,
+        filter: &FilterPredicate,
+        source_nulls: Option<&NullBuffer>,
+    ) {
+        let Some((null_count, nulls)) = filter_null_mask(source_nulls, filter) else {
+            self.nulls.append_n_non_nulls(filter.count());
+            return;
+        };
+
+        let nulls = unsafe {
+            NullBuffer::new_unchecked(BooleanBuffer::new(nulls, 0, filter.count()), null_count)
+        };
+        self.nulls.append_buffer(&nulls);
     }
 
     /// Append views to self.views, updating the buffer index if necessary
@@ -342,6 +414,31 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         } else {
             self.append_views_and_update_buffer_index(views, buffers);
         }
+        self.source = Some(source);
+        Ok(())
+    }
+
+    fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
+        self.ensure_capacity();
+        let source = self.source.take().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(
+                "Internal Error: InProgressByteViewArray: source not set".to_string(),
+            )
+        })?;
+
+        let s = source.array.as_byte_view::<B>();
+
+        if !s.data_buffers().is_empty() {
+            let filtered = filter.filter(source.array.as_ref())?;
+            self.set_source(Some(filtered));
+            let result = self.copy_rows(0, filter.count());
+            self.source = Some(source);
+            return result;
+        }
+
+        self.append_nulls_by_filter(filter, s.nulls());
+        self.append_inline_views_by_filter(s.views(), filter);
+
         self.source = Some(source);
         Ok(())
     }

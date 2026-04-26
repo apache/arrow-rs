@@ -80,13 +80,13 @@ impl Iterator for SlicesIterator<'_> {
 ///
 /// This provides the best performance on most predicates, apart from those which keep
 /// large runs and therefore favour [`SlicesIterator`]
-struct IndexIterator<'a> {
+pub(crate) struct IndexIterator<'a> {
     remaining: usize,
     iter: BitIndexIterator<'a>,
 }
 
 impl<'a> IndexIterator<'a> {
-    fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
+    pub(crate) fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
         let iter = filter.values().set_indices();
         Self { remaining, iter }
@@ -326,7 +326,7 @@ impl FilterBuilder {
 
 /// The iteration strategy used to evaluate [`FilterPredicate`]
 #[derive(Debug)]
-enum IterationStrategy {
+pub(crate) enum IterationStrategy {
     /// A lazily evaluated iterator of ranges
     SlicesIterator,
     /// A lazily evaluated iterator of indices
@@ -407,6 +407,14 @@ impl FilterPredicate {
     /// Number of rows being selected based on this [`FilterPredicate`]
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    pub(crate) fn filter_array(&self) -> &BooleanArray {
+        &self.filter
+    }
+
+    pub(crate) fn strategy(&self) -> &IterationStrategy {
+        &self.strategy
     }
 }
 
@@ -558,7 +566,7 @@ where
 /// `Some((null_count, null_buffer))` where `null_count` is the number of nulls
 /// in the filtered output, and `null_buffer` is the filtered null buffer
 ///
-fn filter_null_mask(
+pub(crate) fn filter_null_mask(
     nulls: Option<&NullBuffer>,
     predicate: &FilterPredicate,
 ) -> Option<(usize, Buffer)> {
@@ -639,7 +647,10 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
 }
 
 #[inline(never)]
-fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) -> Buffer {
+pub(crate) fn filter_native<T: ArrowNativeType>(
+    values: &[T],
+    predicate: &FilterPredicate,
+) -> Buffer {
     assert!(values.len() >= predicate.filter.len());
 
     match &predicate.strategy {

@@ -16,9 +16,12 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
+use crate::filter::{
+    FilterPredicate, IndexIterator, IterationStrategy, SlicesIterator, filter_null_mask,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -90,6 +93,94 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         // Copy the values
         self.current
             .extend_from_slice(&s.values()[offset..offset + len]);
+
+        Ok(())
+    }
+
+    fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
+        self.ensure_capacity();
+
+        let s = self
+            .source
+            .as_ref()
+            .ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "Internal Error: InProgressPrimitiveArray: source not set".to_string(),
+                )
+            })?
+            .as_primitive::<T>();
+
+        match filter.strategy() {
+            IterationStrategy::None => return Ok(()),
+            IterationStrategy::All => return self.copy_rows(0, filter.count()),
+            IterationStrategy::Slices(slices) => {
+                for &(start, end) in slices {
+                    self.copy_rows(start, end - start)?;
+                }
+                return Ok(());
+            }
+            IterationStrategy::SlicesIterator => {
+                for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                    self.copy_rows(start, end - start)?;
+                }
+                return Ok(());
+            }
+            IterationStrategy::Indices(_) | IterationStrategy::IndexIterator => {}
+        }
+
+        if let Some((null_count, nulls)) = filter_null_mask(s.nulls(), filter) {
+            let nulls = unsafe {
+                NullBuffer::new_unchecked(BooleanBuffer::new(nulls, 0, filter.count()), null_count)
+            };
+            self.nulls.append_buffer(&nulls);
+        } else {
+            self.nulls.append_n_non_nulls(filter.count());
+        }
+
+        let values = s.values();
+
+        match filter.strategy() {
+            IterationStrategy::Indices(indices) => {
+                self.current.extend(indices.iter().map(|&idx| values[idx]));
+            }
+            IterationStrategy::IndexIterator => {
+                self.current.extend(
+                    IndexIterator::new(filter.filter_array(), filter.count())
+                        .map(|idx| values[idx]),
+                );
+            }
+            IterationStrategy::None
+            | IterationStrategy::All
+            | IterationStrategy::Slices(_)
+            | IterationStrategy::SlicesIterator => unreachable!(),
+        }
+
+        Ok(())
+    }
+
+    fn copy_rows_by_indices(&mut self, indices: &[usize]) -> Result<(), ArrowError> {
+        self.ensure_capacity();
+
+        let s = self
+            .source
+            .as_ref()
+            .ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "Internal Error: InProgressPrimitiveArray: source not set".to_string(),
+                )
+            })?
+            .as_primitive::<T>();
+
+        if let Some(nulls) = s.nulls().filter(|nulls| nulls.null_count() > 0) {
+            for &idx in indices {
+                self.nulls.append(nulls.is_valid(idx));
+            }
+        } else {
+            self.nulls.append_n_non_nulls(indices.len());
+        }
+
+        let values = s.values();
+        self.current.extend(indices.iter().map(|&idx| values[idx]));
 
         Ok(())
     }
