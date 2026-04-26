@@ -198,9 +198,11 @@ Search for `allow(clippy::` in the codebase to identify lints that are ignored/a
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
 
-## Running Benchmarks
+## Performance Improvements
 
-Running benchmarks are a good way to test the performance of a change. As benchmarks usually take a long time to run, we recommend running targeted tests instead of the full suite.
+Pull requests that improve performance, especially those that add non-trivial complexity or use `unsafe`, should include evidence of the improvement, such as benchmarks.
+
+As benchmarks usually take a long time to run, we recommend running targeted tests instead of the full suite.
 
 ```bash
 # run all benchmarks
@@ -224,6 +226,11 @@ git checkout feature
 
 cargo bench --bench parse_time -- --baseline main
 ```
+
+If your PR proposes a performance improvement, include a summary of the benchmark results (for example, from `cargo-criterion` or `critcmp`) in the PR description.
+If you need to add new benchmarks to cover your change, make a separate PR first (for example, [#9729]) so we can run the benchmarks on an automated runner.
+
+[#9729]: https://github.com/apache/arrow-rs/pull/9729
 
 ## Git Pre-Commit Hook
 

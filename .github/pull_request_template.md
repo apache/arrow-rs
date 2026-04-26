@@ -27,6 +27,8 @@ We typically require tests for all PRs in order to:
 2. Serve as another way to document the expected behavior of the code
 
 If tests are not included in your PR, please explain why (for example, are they covered by existing tests)?
+
+If this PR claims a performance improvement, please include evidence such as benchmark results.
 -->
 
 # Are there any user-facing changes?
