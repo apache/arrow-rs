@@ -21,10 +21,12 @@ use crate::column::writer::encoder::{
     ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
 };
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
-use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
+use crate::encodings::encoding::{DeltaBitPackEncoder, DictFallbackCounter, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use crate::file::properties::{
+    DictionaryFallback, EnabledStatistics, WriterProperties, WriterVersion,
+};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
@@ -421,6 +423,7 @@ impl DictEncoder {
 pub struct ByteArrayEncoder {
     fallback: FallbackEncoder,
     dict_encoder: Option<DictEncoder>,
+    dict_fallback_counter: Option<DictFallbackCounter>,
     statistics_enabled: EnabledStatistics,
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
@@ -442,9 +445,16 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     where
         Self: Sized,
     {
-        let dictionary = props
+        let dict_encoder = props
             .dictionary_enabled(descr.path())
             .then(DictEncoder::default);
+
+        let dict_fallback_counter = match props.dictionary_fallback(descr.path()) {
+            DictionaryFallback::OnUnfavorableAfter(min_sample_len) if dict_encoder.is_some() => {
+                Some(DictFallbackCounter::new(descr, min_sample_len))
+            }
+            _ => None,
+        };
 
         let fallback = FallbackEncoder::new(descr, props)?;
 
@@ -459,7 +469,8 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             statistics_enabled,
             bloom_filter,
             bloom_filter_target_fpp,
-            dict_encoder: dictionary,
+            dict_encoder,
+            dict_fallback_counter,
             min_value: None,
             max_value: None,
             geo_stats_accumulator,
@@ -521,6 +532,20 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         }
     }
 
+    fn is_dict_encoding_unfavorable(&self) -> Option<bool> {
+        match (&self.dict_encoder, &self.dict_fallback_counter) {
+            (Some(encoder), Some(counter)) => {
+                let dict_size = encoder.estimated_dict_page_size();
+                counter.is_dict_encoding_unfavorable(dict_size)
+            }
+            _ => None,
+        }
+    }
+
+    fn disable_dict_fallback_accounting(&mut self) {
+        self.dict_fallback_counter = None;
+    }
+
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {
         match self.dict_encoder.take() {
             Some(encoder) => {
@@ -529,6 +554,8 @@ impl ColumnValueEncoder for ByteArrayEncoder {
                         "Must flush data pages before flushing dictionary"
                     ));
                 }
+
+                self.dict_fallback_counter = None;
 
                 Ok(Some(encoder.flush_dict_page()))
             }
@@ -541,7 +568,13 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         let max_value = self.max_value.take();
 
         match &mut self.dict_encoder {
-            Some(encoder) => Ok(encoder.flush_data_page(min_value, max_value)),
+            Some(encoder) => {
+                let data_page = encoder.flush_data_page(min_value, max_value);
+                if let Some(counter) = self.dict_fallback_counter.as_mut() {
+                    counter.commit_page(&data_page);
+                }
+                Ok(data_page)
+            }
             _ => self.fallback.flush_data_page(min_value, max_value),
         }
     }
@@ -582,7 +615,15 @@ where
     }
 
     match &mut encoder.dict_encoder {
-        Some(dict_encoder) => dict_encoder.encode(values, indices),
+        Some(dict_encoder) => {
+            dict_encoder.encode(values, indices);
+            if let Some(counter) = encoder.dict_fallback_counter.as_mut() {
+                for idx in indices {
+                    let value = values.value(*idx);
+                    counter.update_byte_array(value.as_ref());
+                }
+            }
+        }
         None => encoder.fallback.encode(values, indices),
     }
 }

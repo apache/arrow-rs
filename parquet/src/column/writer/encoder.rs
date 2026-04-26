@@ -25,9 +25,9 @@ use crate::column::writer::{
 };
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
-use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
+use crate::encodings::encoding::{DictEncoder, DictFallbackCounter, Encoder, get_encoder};
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties};
+use crate::file::properties::{DictionaryFallback, EnabledStatistics, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
@@ -109,6 +109,18 @@ pub trait ColumnValueEncoder {
     /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_page_size(&self) -> usize;
 
+    /// Returns `Some(true)` if the estimated size of plainly encoded data, in bytes,
+    /// would be smaller than the size of data encoded with a dictionary.
+    /// If the estimate does not show a clear benefit, returns `Some(false)`.
+    /// If there is no dictionary, or the data size statistic is not available,
+    /// or it is not yet possible to make an estimate due to insufficient
+    /// collected data, returns `None`.
+    /// For similar logic in parquet-java,
+    /// see `DictionaryValuesWriter.isCompressionSatisfying`.
+    fn is_dict_encoding_unfavorable(&self) -> Option<bool>;
+
+    fn disable_dict_fallback_accounting(&mut self);
+
     /// Flush the dictionary page for this column chunk if any. Any subsequent calls to
     /// [`Self::write`] will not be dictionary encoded
     ///
@@ -132,6 +144,7 @@ pub trait ColumnValueEncoder {
 pub struct ColumnValueEncoderImpl<T: DataType> {
     encoder: Box<dyn Encoder<T>>,
     dict_encoder: Option<DictEncoder<T>>,
+    dict_fallback_counter: Option<DictFallbackCounter>,
     descr: ColumnDescPtr,
     num_values: usize,
     statistics_enabled: EnabledStatistics,
@@ -176,7 +189,13 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
         }
 
         match &mut self.dict_encoder {
-            Some(encoder) => encoder.put(slice),
+            Some(encoder) => {
+                encoder.put(slice)?;
+                if let Some(counter) = self.dict_fallback_counter.as_mut() {
+                    counter.update_values(slice);
+                }
+                Ok(())
+            }
             _ => self.encoder.put(slice),
         }
     }
@@ -197,6 +216,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         let dict_supported = props.dictionary_enabled(descr.path())
             && has_dictionary_support(T::get_physical_type(), props);
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
+        let dict_fallback_counter = match props.dictionary_fallback(descr.path()) {
+            DictionaryFallback::OnUnfavorableAfter(min_sample_len) if dict_encoder.is_some() => {
+                Some(DictFallbackCounter::new(descr, min_sample_len))
+            }
+            _ => None,
+        };
 
         // Set either main encoder or fallback encoder.
         let encoder = get_encoder(
@@ -215,6 +240,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         Ok(Self {
             encoder,
             dict_encoder,
+            dict_fallback_counter,
             descr: descr.clone(),
             num_values: 0,
             statistics_enabled,
@@ -284,6 +310,20 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         }
     }
 
+    fn is_dict_encoding_unfavorable(&self) -> Option<bool> {
+        match (&self.dict_encoder, &self.dict_fallback_counter) {
+            (Some(encoder), Some(counter)) => {
+                let dict_size = encoder.dict_encoded_size();
+                counter.is_dict_encoding_unfavorable(dict_size)
+            }
+            _ => None,
+        }
+    }
+
+    fn disable_dict_fallback_accounting(&mut self) {
+        self.dict_fallback_counter = None;
+    }
+
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {
         match self.dict_encoder.take() {
             Some(encoder) => {
@@ -292,6 +332,8 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
                         "Must flush data pages before flushing dictionary"
                     ));
                 }
+
+                self.dict_fallback_counter = None;
 
                 let buf = encoder.write_dict()?;
 
@@ -311,14 +353,20 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             _ => (self.encoder.flush_buffer()?, self.encoder.encoding()),
         };
 
-        Ok(DataPageValues {
+        let page = DataPageValues {
             buf,
             encoding,
             num_values: std::mem::take(&mut self.num_values),
             min_value: self.min_value.take(),
             max_value: self.max_value.take(),
             variable_length_bytes: self.variable_length_bytes.take(),
-        })
+        };
+
+        if let Some(counter) = self.dict_fallback_counter.as_mut() {
+            counter.commit_page(&page);
+        }
+
+        Ok(page)
     }
 
     fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {

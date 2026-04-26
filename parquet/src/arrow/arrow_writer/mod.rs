@@ -1689,6 +1689,7 @@ mod tests {
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::{ARROW_SCHEMA_META_KEY, PARQUET_FIELD_ID_META_KEY};
+    use crate::basic::PageType;
     use crate::column::page::{Page, PageReader};
     use crate::file::metadata::thrift::PageHeader;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
@@ -1711,13 +1712,14 @@ mod tests {
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
-        BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
+        BloomFilterPosition, DictionaryFallback, EnabledStatistics, ReaderProperties, WriterVersion,
     };
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
     };
+    use crate::record::RowAccessor;
 
     #[test]
     fn arrow_writer() {
@@ -2590,6 +2592,91 @@ mod tests {
             10,
             "Expected 10 pages but got {page_locations:#?}"
         );
+    }
+
+    #[test]
+    fn arrow_writer_dictionary_fallback_on_unfavorable_compression() {
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+        let mut builder = StringBuilder::with_capacity(100, 329 * 10_000);
+
+        // Generate an array of 10 unique 10 character strings.
+        // This results in a dictionary encoding larger than the plain encoded data,
+        // which should trigger a fallback to PLAIN encoding.
+        for i in 0..10 {
+            let value = i
+                .to_string()
+                .repeat(10)
+                .chars()
+                .take(10)
+                .collect::<String>();
+
+            builder.append_value(value);
+        }
+
+        let array = Arc::new(builder.finish());
+
+        let batch = RecordBatch::try_new(schema, vec![array.clone()]).unwrap();
+
+        let file = tempfile::tempfile().unwrap();
+
+        // Set dictionary fallback to trigger fallback to PLAIN encoding on unfavorable compression
+        let props = WriterProperties::builder()
+            .set_dictionary_fallback(DictionaryFallback::OnUnfavorableAfter(1))
+            .set_data_page_row_count_limit(2)
+            .set_write_batch_size(1)
+            .build();
+
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props))
+                .expect("Unable to write file");
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(false)
+            .build();
+        let reader =
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap();
+
+        let column = reader.metadata().row_group(0).columns();
+
+        assert_eq!(column.len(), 1);
+
+        // check page encoding stats, should be one dict page, one dict encoded page, and 5
+        // plain encoded pages
+        let stats = column[0].page_encoding_stats().unwrap();
+        assert!(
+            stats
+                .iter()
+                .any(|s| s.page_type == PageType::DICTIONARY_PAGE),
+            "stats are {stats:?}"
+        );
+        let num_dict_encoded: i32 = stats
+            .iter()
+            .filter(|s| {
+                s.page_type == PageType::DATA_PAGE && s.encoding == Encoding::RLE_DICTIONARY
+            })
+            .map(|s| s.count)
+            .sum();
+        assert_eq!(num_dict_encoded, 1);
+        let num_plain_encoded: i32 = stats
+            .iter()
+            .filter(|s| s.page_type == PageType::DATA_PAGE && s.encoding == Encoding::PLAIN)
+            .map(|s| s.count)
+            .sum();
+        assert_eq!(num_plain_encoded, 5);
+
+        // Read back the values and confirm they match the original array.
+        let rows: Vec<_> = reader
+            .get_row_iter(None)
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows.len(), array.len());
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(row.get_string(0).unwrap(), array.value(i));
+        }
     }
 
     #[test]
@@ -4809,6 +4896,15 @@ mod tests {
         assert_eq!(chunk_page_stats, file_page_stats);
     }
 
+    fn get_dict_page_size(meta: &ColumnChunkMetaData, data: Bytes) -> usize {
+        let mut reader = SerializedPageReader::new(Arc::new(data), meta, 0, None).unwrap();
+        let page = reader.get_next_page().unwrap().unwrap();
+        match page {
+            Page::DictionaryPage { buf, .. } => buf.len(),
+            _ => panic!("expected DictionaryPage"),
+        }
+    }
+
     #[test]
     fn test_different_dict_page_size_limit() {
         let array = Arc::new(Int64Array::from_iter(0..1024 * 1024));
@@ -4833,18 +4929,67 @@ mod tests {
         let col0_meta = metadata.row_group(0).column(0);
         let col1_meta = metadata.row_group(0).column(1);
 
-        let get_dict_page_size = move |meta: &ColumnChunkMetaData| {
-            let mut reader =
-                SerializedPageReader::new(Arc::new(data.clone()), meta, 0, None).unwrap();
-            let page = reader.get_next_page().unwrap().unwrap();
-            match page {
-                Page::DictionaryPage { buf, .. } => buf.len(),
-                _ => panic!("expected DictionaryPage"),
-            }
-        };
+        assert_eq!(get_dict_page_size(col0_meta, data.clone()), 1024 * 1024);
+        assert_eq!(get_dict_page_size(col1_meta, data.clone()), 1024 * 1024 * 4);
+    }
 
-        assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
-        assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
+    #[test]
+    fn test_dict_page_size_decided_by_compression_fallback() {
+        // Generate values that are well dispersed across a range approximating (0..256 * 1024)
+        let array = Arc::new(Int32Array::from_iter(
+            (0i32..1024 * 1024).map(|x| x.wrapping_mul(163019) % 262139),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col0",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batch = arrow_array::RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(1024 * 1024)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        let file_length_dict = data.len();
+
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(&data).unwrap();
+        let metadata = metadata.finish().unwrap();
+        let full_dict_meta = metadata.row_group(0).column(0);
+        assert_eq!(get_dict_page_size(full_dict_meta, data.clone()), 1_048_576);
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(1024 * 1024)
+            .set_column_dictionary_fallback(
+                ColumnPath::from("col0"),
+                DictionaryFallback::OnUnfavorableAfter(32_768),
+            )
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        let file_length_fallback = data.len();
+
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(&data).unwrap();
+        let metadata = metadata.finish().unwrap();
+        let fallback_meta = metadata.row_group(0).column(0);
+        assert_eq!(
+            get_dict_page_size(fallback_meta, data.clone()),
+            32_768 * std::mem::size_of::<u32>()
+        );
+
+        let compression_ratio = file_length_fallback as f64 / file_length_dict as f64;
+        assert!(
+            compression_ratio < 0.9,
+            "File encoded with dictionary fallback encoding does not result in sufficient compression, 
+            got {file_length_fallback} vs {file_length_dict} ({:.2}%)",
+            compression_ratio * 100.0
+        );
     }
 
     struct WriteBatchesShape {

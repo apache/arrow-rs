@@ -738,18 +738,32 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Returns true if we need to fall back to non-dictionary encoding.
     ///
-    /// We can only fall back if dictionary encoder is set and we have exceeded dictionary
-    /// size.
-    #[inline]
-    fn should_dict_fallback(&self) -> bool {
-        match self.encoder.estimated_dict_page_size() {
-            Some(size) => {
-                size >= self
-                    .props
-                    .column_dictionary_page_size_limit(self.descr.path())
-            }
-            None => false,
+    /// The behavior is governed by the `dictionary_fallback` column property.
+    fn should_dict_fallback(&mut self) -> bool {
+        let dict_size = match self.encoder.estimated_dict_page_size() {
+            Some(size) => size,
+            None => return false,
+        };
+
+        // First check: dictionary size exceeds limit
+        if dict_size
+            >= self
+                .props
+                .column_dictionary_page_size_limit(self.descr.path())
+        {
+            return true;
         }
+
+        // Second check, if enabled: the compression heuristic.
+        if let Some(should_fallback) = self.encoder.is_dict_encoding_unfavorable() {
+            // The decision on the efficiency is made after processing
+            // the requisite number of values, so disable further accounting
+            // to avoid the overhead.
+            self.encoder.disable_dict_fallback_accounting();
+            return should_fallback;
+        }
+
+        false
     }
 
     /// Returns true if there is enough data for a data page, false otherwise.
