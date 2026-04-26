@@ -194,6 +194,26 @@ impl Default for IpcWriteOptions {
 /// [Arrow IPC Format]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
 pub struct IpcDataGenerator {}
 
+struct IpcWriterScratch {
+    fbb: FlatBufferBuilder<'static>,
+    nodes: Vec<crate::FieldNode>,
+    buffers: Vec<crate::Buffer>,
+    arrow_data: Vec<u8>,
+    variadic_buffer_counts: Vec<i64>,
+}
+
+impl Default for IpcWriterScratch {
+    fn default() -> Self {
+        Self {
+            fbb: FlatBufferBuilder::new(),
+            nodes: Vec::new(),
+            buffers: Vec::new(),
+            arrow_data: Vec::new(),
+            variadic_buffer_counts: Vec::new(),
+        }
+    }
+}
+
 impl IpcDataGenerator {
     /// Converts a schema to an IPC message along with `dictionary_tracker`
     /// and returns it encoded inside [EncodedData] as a flatbuffer.
@@ -1087,6 +1107,8 @@ pub struct FileWriter<W> {
     data_gen: IpcDataGenerator,
 
     compression_context: CompressionContext,
+
+    writer_scratch: IpcWriterScratch,
 }
 
 impl<W: Write> FileWriter<BufWriter<W>> {
@@ -1149,6 +1171,7 @@ impl<W: Write> FileWriter<W> {
             custom_metadata: HashMap::new(),
             data_gen,
             compression_context: CompressionContext::default(),
+            writer_scratch: IpcWriterScratch::default(),
         })
     }
 
@@ -1165,23 +1188,33 @@ impl<W: Write> FileWriter<W> {
             ));
         }
 
-        let (encoded_dictionaries, encoded_message) = self.data_gen.encode(
-            batch,
-            &mut self.dictionary_tracker,
-            &self.write_options,
-            &mut self.compression_context,
-        )?;
+        let (meta, data) = if has_dictionary_batch(batch) {
+            let (encoded_dictionaries, encoded_message) = self.data_gen.encode(
+                batch,
+                &mut self.dictionary_tracker,
+                &self.write_options,
+                &mut self.compression_context,
+            )?;
 
-        for encoded_dictionary in encoded_dictionaries {
-            let (meta, data) =
-                write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
+            for encoded_dictionary in encoded_dictionaries {
+                let (meta, data) =
+                    write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
 
-            let block = crate::Block::new(self.block_offsets as i64, meta as i32, data as i64);
-            self.dictionary_blocks.push(block);
-            self.block_offsets += meta + data;
-        }
+                let block = crate::Block::new(self.block_offsets as i64, meta as i32, data as i64);
+                self.dictionary_blocks.push(block);
+                self.block_offsets += meta + data;
+            }
 
-        let (meta, data) = write_message(&mut self.writer, encoded_message, &self.write_options)?;
+            write_message(&mut self.writer, encoded_message, &self.write_options)?
+        } else {
+            write_record_batch_fast(
+                &mut self.writer,
+                batch,
+                &self.write_options,
+                &mut self.compression_context,
+                &mut self.writer_scratch,
+            )?
+        };
 
         // add a record block for the footer
         let block = crate::Block::new(
@@ -1378,6 +1411,8 @@ pub struct StreamWriter<W> {
     data_gen: IpcDataGenerator,
 
     compression_context: CompressionContext,
+
+    writer_scratch: IpcWriterScratch,
 }
 
 impl<W: Write> StreamWriter<BufWriter<W>> {
@@ -1429,6 +1464,7 @@ impl<W: Write> StreamWriter<W> {
             dictionary_tracker,
             data_gen,
             compression_context: CompressionContext::default(),
+            writer_scratch: IpcWriterScratch::default(),
         })
     }
 
@@ -1440,21 +1476,31 @@ impl<W: Write> StreamWriter<W> {
             ));
         }
 
-        let (encoded_dictionaries, encoded_message) = self
-            .data_gen
-            .encode(
+        if has_dictionary_batch(batch) {
+            let (encoded_dictionaries, encoded_message) = self
+                .data_gen
+                .encode(
+                    batch,
+                    &mut self.dictionary_tracker,
+                    &self.write_options,
+                    &mut self.compression_context,
+                )
+                .expect("StreamWriter is configured to not error on dictionary replacement");
+
+            for encoded_dictionary in encoded_dictionaries {
+                write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
+            }
+
+            write_message(&mut self.writer, encoded_message, &self.write_options)?;
+        } else {
+            write_record_batch_fast(
+                &mut self.writer,
                 batch,
-                &mut self.dictionary_tracker,
                 &self.write_options,
                 &mut self.compression_context,
-            )
-            .expect("StreamWriter is configured to not error on dictionary replacement");
-
-        for encoded_dictionary in encoded_dictionaries {
-            write_message(&mut self.writer, encoded_dictionary, &self.write_options)?;
+                &mut self.writer_scratch,
+            )?;
         }
-
-        write_message(&mut self.writer, encoded_message, &self.write_options)?;
         Ok(())
     }
 
@@ -1548,6 +1594,163 @@ impl<W: Write> RecordBatchWriter for StreamWriter<W> {
     fn close(mut self) -> Result<(), ArrowError> {
         self.finish()
     }
+}
+
+fn has_dictionary_batch(batch: &RecordBatch) -> bool {
+    batch
+        .schema()
+        .fields()
+        .iter()
+        .any(|field| has_dictionary_type(field.data_type()))
+}
+
+fn has_dictionary_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Dictionary(_, _) => true,
+        DataType::Struct(fields) => fields.iter().any(|f| has_dictionary_type(f.data_type())),
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _) => has_dictionary_type(field.data_type()),
+        DataType::Map(field, _) => has_dictionary_type(field.data_type()),
+        DataType::RunEndEncoded(_, field) => has_dictionary_type(field.data_type()),
+        DataType::Union(fields, _) => fields
+            .iter()
+            .any(|(_, f)| has_dictionary_type(f.data_type())),
+        _ => false,
+    }
+}
+
+fn write_record_batch_fast<W: Write>(
+    writer: &mut W,
+    batch: &RecordBatch,
+    write_options: &IpcWriteOptions,
+    compression_context: &mut CompressionContext,
+    scratch: &mut IpcWriterScratch,
+) -> Result<(usize, usize), ArrowError> {
+    scratch.fbb.reset();
+    scratch.nodes.clear();
+    scratch.buffers.clear();
+    scratch.arrow_data.clear();
+    scratch.variadic_buffer_counts.clear();
+
+    let batch_compression_type = write_options.batch_compression_type;
+
+    let compression = batch_compression_type.map(|batch_compression_type| {
+        let mut c = crate::BodyCompressionBuilder::new(&mut scratch.fbb);
+        c.add_method(crate::BodyCompressionMethod::BUFFER);
+        c.add_codec(batch_compression_type);
+        c.finish()
+    });
+
+    let compression_codec: Option<CompressionCodec> =
+        batch_compression_type.map(TryInto::try_into).transpose()?;
+
+    let mut offset = 0;
+
+    for array in batch.columns() {
+        let array_data = array.to_data();
+        offset = write_array_data(
+            &array_data,
+            &mut scratch.buffers,
+            &mut scratch.arrow_data,
+            &mut scratch.nodes,
+            offset,
+            array.len(),
+            array.null_count(),
+            compression_codec,
+            compression_context,
+            write_options,
+        )?;
+
+        append_variadic_buffer_counts(&mut scratch.variadic_buffer_counts, &array_data);
+    }
+
+    let len = scratch.arrow_data.len();
+    let pad_len = pad_to_alignment(write_options.alignment, len);
+    scratch.arrow_data.extend_from_slice(&PADDING[..pad_len]);
+
+    let buffers = scratch.fbb.create_vector(&scratch.buffers);
+    let nodes = scratch.fbb.create_vector(&scratch.nodes);
+    let variadic_buffer = if scratch.variadic_buffer_counts.is_empty() {
+        None
+    } else {
+        Some(scratch.fbb.create_vector(&scratch.variadic_buffer_counts))
+    };
+
+    let root = {
+        let mut batch_builder = crate::RecordBatchBuilder::new(&mut scratch.fbb);
+        batch_builder.add_length(batch.num_rows() as i64);
+        batch_builder.add_nodes(nodes);
+        batch_builder.add_buffers(buffers);
+        if let Some(c) = compression {
+            batch_builder.add_compression(c);
+        }
+        if let Some(v) = variadic_buffer {
+            batch_builder.add_variadicBufferCounts(v);
+        }
+        batch_builder.finish().as_union_value()
+    };
+
+    let mut message = crate::MessageBuilder::new(&mut scratch.fbb);
+    message.add_version(write_options.metadata_version);
+    message.add_header_type(crate::MessageHeader::RecordBatch);
+    message.add_bodyLength(scratch.arrow_data.len() as i64);
+    message.add_header(root);
+    let root = message.finish();
+    scratch.fbb.finish(root, None);
+
+    write_message_parts(
+        writer,
+        scratch.fbb.finished_data(),
+        &scratch.arrow_data,
+        write_options,
+    )
+}
+
+fn write_message_parts<W: Write>(
+    writer: &mut W,
+    ipc_message: &[u8],
+    arrow_data: &[u8],
+    write_options: &IpcWriteOptions,
+) -> Result<(usize, usize), ArrowError> {
+    let arrow_data_len = arrow_data.len();
+    if arrow_data_len % usize::from(write_options.alignment) != 0 {
+        return Err(ArrowError::MemoryError(
+            "Arrow data not aligned".to_string(),
+        ));
+    }
+
+    let a = usize::from(write_options.alignment - 1);
+    let flatbuf_size = ipc_message.len();
+    let prefix_size = if write_options.write_legacy_ipc_format {
+        4
+    } else {
+        8
+    };
+    let aligned_size = (flatbuf_size + prefix_size + a) & !a;
+    let padding_bytes = aligned_size - flatbuf_size - prefix_size;
+
+    write_continuation(
+        &mut *writer,
+        write_options,
+        (aligned_size - prefix_size) as i32,
+    )?;
+
+    if flatbuf_size > 0 {
+        writer.write_all(ipc_message)?;
+    }
+
+    writer.write_all(&PADDING[..padding_bytes])?;
+
+    let body_len = if arrow_data_len > 0 {
+        write_body_buffers(writer, arrow_data, write_options.alignment)?
+    } else {
+        0
+    };
+
+    Ok((aligned_size, body_len))
 }
 
 /// Stores the encoded data, which is an crate::Message, and optional Arrow data
