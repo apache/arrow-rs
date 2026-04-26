@@ -1445,6 +1445,7 @@ pub struct ColumnIndexBuilder {
     min_values: Vec<Vec<u8>>,
     max_values: Vec<Vec<u8>>,
     null_counts: Vec<i64>,
+    nan_counts: Vec<Option<i64>>,
     boundary_order: BoundaryOrder,
     /// contains the concatenation of the histograms of all pages
     repetition_level_histograms: Option<Vec<i64>>,
@@ -1469,6 +1470,7 @@ impl ColumnIndexBuilder {
             min_values: Vec::new(),
             max_values: Vec::new(),
             null_counts: Vec::new(),
+            nan_counts: Vec::new(),
             boundary_order: BoundaryOrder::UNORDERED,
             repetition_level_histograms: None,
             definition_level_histograms: None,
@@ -1477,17 +1479,24 @@ impl ColumnIndexBuilder {
     }
 
     /// Append statistics for the next page
+    ///
+    /// For floating-point columns (FLOAT, DOUBLE, or FLOAT16), `nan_count` must always
+    /// be `Some(n)`, even if n is 0. For non-floating-point columns, `nan_count` must
+    /// always be `None`. This requirement ensures correct serialization according to
+    /// the Parquet specification.
     pub fn append(
         &mut self,
         null_page: bool,
         min_value: Vec<u8>,
         max_value: Vec<u8>,
         null_count: i64,
+        nan_count: Option<i64>,
     ) {
         self.null_pages.push(null_page);
         self.min_values.push(min_value);
         self.max_values.push(max_value);
         self.null_counts.push(null_count);
+        self.nan_counts.push(nan_count);
     }
 
     /// Append the given page-level histograms to the [`ColumnIndex`] histograms.
@@ -1535,51 +1544,79 @@ impl ColumnIndexBuilder {
     pub fn build(self) -> Result<ColumnIndexMetaData> {
         Ok(match self.column_type {
             Type::BOOLEAN => {
-                let index = self.build_page_index()?;
+                let index = self.build_page_index(false)?;
                 ColumnIndexMetaData::BOOLEAN(index)
             }
             Type::INT32 => {
-                let index = self.build_page_index()?;
+                let index = self.build_page_index(false)?;
                 ColumnIndexMetaData::INT32(index)
             }
             Type::INT64 => {
-                let index = self.build_page_index()?;
+                let index = self.build_page_index(false)?;
                 ColumnIndexMetaData::INT64(index)
             }
             Type::INT96 => {
-                let index = self.build_page_index()?;
+                let index = self.build_page_index(false)?;
                 ColumnIndexMetaData::INT96(index)
             }
             Type::FLOAT => {
-                let index = self.build_page_index()?;
+                let index = self.build_page_index(true)?;
                 ColumnIndexMetaData::FLOAT(index)
             }
             Type::DOUBLE => {
-                let index = self.build_page_index()?;
+                let index = self.build_page_index(true)?;
                 ColumnIndexMetaData::DOUBLE(index)
             }
             Type::BYTE_ARRAY => {
-                let index = self.build_byte_array_index()?;
+                let index = self.build_byte_array_index(false)?;
                 ColumnIndexMetaData::BYTE_ARRAY(index)
             }
             Type::FIXED_LEN_BYTE_ARRAY => {
-                let index = self.build_byte_array_index()?;
+                let index = self.build_byte_array_index(true)?;
                 ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)
             }
         })
     }
 
-    fn build_page_index<T>(self) -> Result<PrimitiveColumnIndex<T>>
+    fn build_nan_counts(nan_counts: &[Option<i64>]) -> Option<Vec<i64>> {
+        let has_some = nan_counts.iter().any(|x| x.is_some());
+        let has_none = nan_counts.iter().any(|x| x.is_none());
+
+        if has_some && !has_none {
+            Some(nan_counts.iter().map(|x| x.unwrap()).collect())
+        } else if !has_some && has_none {
+            None
+        } else {
+            debug_assert!(
+                false,
+                "Mixed Some/None in nan_counts - caller should provide consistent values"
+            );
+            Some(nan_counts.iter().map(|x| x.unwrap_or(0)).collect())
+        }
+    }
+
+    fn build_page_index<T>(self, may_have_nan: bool) -> Result<PrimitiveColumnIndex<T>>
     where
         T: ParquetValueType,
     {
         let min_values: Vec<&[u8]> = self.min_values.iter().map(|v| v.as_slice()).collect();
         let max_values: Vec<&[u8]> = self.max_values.iter().map(|v| v.as_slice()).collect();
 
+        // Parquet spec requires nan_counts to be either present for all pages or absent entirely.
+        // Callers must ensure consistency:
+        // - For floating-point columns: all pages must have Some(n)
+        // - For non-floating-point columns: all pages must have None
+        let nan_counts = if may_have_nan && !self.nan_counts.is_empty() {
+            Self::build_nan_counts(&self.nan_counts)
+        } else {
+            None
+        };
+
         PrimitiveColumnIndex::try_new(
             self.null_pages,
             self.boundary_order,
             Some(self.null_counts),
+            nan_counts,
             self.repetition_level_histograms,
             self.definition_level_histograms,
             min_values,
@@ -1587,14 +1624,25 @@ impl ColumnIndexBuilder {
         )
     }
 
-    fn build_byte_array_index(self) -> Result<ByteArrayColumnIndex> {
+    fn build_byte_array_index(self, may_have_nan: bool) -> Result<ByteArrayColumnIndex> {
         let min_values: Vec<&[u8]> = self.min_values.iter().map(|v| v.as_slice()).collect();
         let max_values: Vec<&[u8]> = self.max_values.iter().map(|v| v.as_slice()).collect();
+
+        // Parquet spec requires nan_counts to be either present for all pages or absent entirely.
+        // Callers must ensure consistency:
+        // - For floating-point columns: all pages must have Some(n)
+        // - For non-floating-point columns: all pages must have None
+        let nan_counts = if may_have_nan && !self.nan_counts.is_empty() {
+            Self::build_nan_counts(&self.nan_counts)
+        } else {
+            None
+        };
 
         ByteArrayColumnIndex::try_new(
             self.null_pages,
             self.boundary_order,
             Some(self.null_counts),
+            nan_counts,
             self.repetition_level_histograms,
             self.definition_level_histograms,
             min_values,
@@ -2034,14 +2082,14 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2766;
+        let base_expected_size = 2830;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2934;
+        let base_expected_size = 2998;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
         let mut column_index = ColumnIndexBuilder::new(Type::BOOLEAN);
-        column_index.append(false, vec![1u8], vec![2u8, 3u8], 4);
+        column_index.append(false, vec![1u8], vec![2u8, 3u8], 4, None);
         let column_index = column_index.build().unwrap();
         let native_index = match column_index {
             ColumnIndexMetaData::BOOLEAN(index) => index,
@@ -2065,9 +2113,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3192;
+        let bigger_expected_size = 3280;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3360;
+        let bigger_expected_size = 3448;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
@@ -2114,7 +2162,7 @@ mod tests {
             .set_row_groups(row_group_meta.clone())
             .build();
 
-        let base_expected_size = 2058;
+        let base_expected_size = 2090;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
         let footer_key = "0123456789012345".as_bytes();
@@ -2140,7 +2188,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 3072;
+        let expected_size_with_decryptor = 3104;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(

@@ -995,13 +995,24 @@ impl ColumnDescriptor {
         }
     }
 
-    /// Returns the sort order for this column
+    /// Returns the sort order for this column as currently defined for the logical or
+    /// physical type.
+    ///
+    /// Returns `SortOrder::UNDEFINED` for non-primitive types.
     pub fn sort_order(&self) -> SortOrder {
-        ColumnOrder::sort_order_for_type(
-            self.logical_type_ref(),
-            self.converted_type(),
-            self.physical_type(),
-        )
+        match self.primitive_type.as_ref() {
+            Type::PrimitiveType {
+                basic_info,
+                physical_type,
+                ..
+            } => ColumnOrder::column_order_for_type(
+                basic_info.logical_type_ref(),
+                basic_info.converted_type(),
+                *physical_type,
+            )
+            .sort_order(),
+            _ => SortOrder::UNDEFINED,
+        }
     }
 }
 

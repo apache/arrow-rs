@@ -1335,6 +1335,35 @@ where
     Ok(array)
 }
 
+/// Extracts the NaN count statistics from an iterator
+/// of parquet page [`ColumnIndexMetaData`]'s to an [`ArrayRef`]
+///
+/// The returned Array is an [`UInt64Array`]
+pub(crate) fn nan_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
+where
+    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+{
+    let chunks: Vec<_> = iterator.collect();
+    let total_capacity: usize = chunks.iter().map(|(len, _)| *len).sum();
+    let mut values = Vec::with_capacity(total_capacity);
+    let mut nulls = NullBufferBuilder::new(total_capacity);
+    for (len, index) in chunks {
+        match index.nan_counts() {
+            Some(counts) => {
+                values.extend(counts.iter().map(|&x| x as u64));
+                nulls.append_n_non_nulls(len);
+            }
+            None => {
+                values.resize(values.len() + len, 0);
+                nulls.append_n_nulls(len);
+            }
+        }
+    }
+    let null_buffer = nulls.build();
+    let array = UInt64Array::new(values.into(), null_buffer);
+    Ok(array)
+}
+
 /// Extracts Parquet statistics as Arrow arrays
 ///
 /// This is used to convert Parquet statistics to Arrow [`ArrayRef`], with
@@ -1647,6 +1676,28 @@ impl<'a> StatisticsConverter<'a> {
         Ok(UInt64Array::from_iter(null_counts))
     }
 
+    /// Extract the NaN counts from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_mins`] for details
+    pub fn row_group_nan_counts<I>(&self, metadatas: I) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let Some(parquet_index) = self.parquet_column_index else {
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(UInt64Array::from_iter(std::iter::repeat_n(
+                None,
+                num_row_groups,
+            )));
+        };
+
+        let nan_counts = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics())
+            .map(|s| s.and_then(|s| s.nan_count_opt()));
+        Ok(UInt64Array::from_iter(nan_counts))
+    }
+
     /// Extract the minimum values from Data Page statistics.
     ///
     /// In Parquet files, in addition to the Column Chunk level statistics
@@ -1784,6 +1835,35 @@ impl<'a> StatisticsConverter<'a> {
             (*num_data_pages, column_page_index_per_row_group_per_column)
         });
         null_counts_page_statistics(iter)
+    }
+
+    /// Returns a [`UInt64Array`] with NaN counts for each data page.
+    ///
+    /// See docs on [`Self::data_page_mins`] for details.
+    pub fn data_page_nan_counts<I>(
+        &self,
+        column_page_index: &ParquetColumnIndex,
+        column_offset_index: &ParquetOffsetIndex,
+        row_group_indices: I,
+    ) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let Some(parquet_index) = self.parquet_column_index else {
+            let num_row_groups = row_group_indices.into_iter().count();
+            return Ok(UInt64Array::new_null(num_row_groups));
+        };
+
+        let iter = row_group_indices.into_iter().map(|rg_index| {
+            let column_page_index_per_row_group_per_column =
+                &column_page_index[*rg_index][parquet_index];
+            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
+                .page_locations()
+                .len();
+
+            (*num_data_pages, column_page_index_per_row_group_per_column)
+        });
+        nan_counts_page_statistics(iter)
     }
 
     /// Returns a [`UInt64Array`] with row counts for each data page.

@@ -159,6 +159,7 @@ pub(super) struct ThriftColumnIndex<'a> {
   5: optional list<i64> null_counts
   6: optional list<i64> repetition_level_histograms;
   7: optional list<i64> definition_level_histograms;
+  8: optional list<i64> nan_counts
 }
 );
 

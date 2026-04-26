@@ -113,6 +113,7 @@ struct Statistics<'a> {
    6: optional binary<'a> min_value;
    7: optional bool is_max_value_exact;
    8: optional bool is_min_value_exact;
+   9: optional i64 nan_count;
 }
 );
 
@@ -207,6 +208,8 @@ fn convert_stats(
                 .transpose()?;
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // Generic nan count for floating point types
+            let nan_count = stats.nan_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
             let old_format = stats.min_value.is_none() && stats.max_value.is_none();
             // Generic min value as bytes.
@@ -287,19 +290,25 @@ fn convert_stats(
                     };
                     FStatistics::int96(min, max, distinct_count, null_count, old_format)
                 }
-                Type::FLOAT => FStatistics::float(
-                    min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::FLOAT => FStatistics::Float(
+                    ValueStatistics::new(
+                        min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count),
                 ),
-                Type::DOUBLE => FStatistics::double(
-                    min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::DOUBLE => FStatistics::Double(
+                    ValueStatistics::new(
+                        min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count),
                 ),
                 Type::BYTE_ARRAY => FStatistics::ByteArray(
                     ValueStatistics::new(
@@ -320,6 +329,7 @@ fn convert_stats(
                         null_count,
                         old_format,
                     )
+                    .with_nan_count(nan_count)
                     .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
                     .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
@@ -873,6 +883,7 @@ pub(crate) fn parquet_metadata_from_bytes(
                     column.logical_type_ref(),
                     column.converted_type(),
                     column.physical_type(),
+                    true,
                 );
                 cos[i] = ColumnOrder::TYPE_DEFINED_ORDER(sort_order);
             }
@@ -990,6 +1001,7 @@ pub(crate) struct PageStatistics {
    6: optional binary min_value;
    7: optional bool is_max_value_exact;
    8: optional bool is_min_value_exact;
+   9: optional i64 nan_count;
 }
 );
 
@@ -1852,6 +1864,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
         let decoded_none = super::convert_stats(&column_descr, Some(none_null_count))
             .unwrap()
@@ -1867,6 +1880,7 @@ pub(crate) mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
         let decoded_zero = super::convert_stats(&column_descr, Some(zero_null_count))
             .unwrap()
