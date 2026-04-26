@@ -84,7 +84,6 @@ fn test_to_pyarrow_byte_view() {
         ])
         .unwrap();
 
-        println!("input: {input:?}");
         let res = Python::attach(|py| {
             let py_input = input.to_pyarrow(py)?;
             let records = RecordBatch::from_pyarrow_bound(&py_input)?;
@@ -120,7 +119,7 @@ value = NotATuple()
         assert!(err.is_instance_of::<PyTypeError>(py));
         assert_eq!(
             err.to_string(),
-            "TypeError: Expected __arrow_c_array__ to return a tuple of (schema, array) capsules."
+            "TypeError: Expected __arrow_c_array__ to return a pair of capsules."
         );
     });
 }
