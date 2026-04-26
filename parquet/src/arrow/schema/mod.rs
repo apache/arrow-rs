@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_ipc::writer;
-use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit};
 
 use crate::basic::{
     ConvertedType, LogicalType, Repetition, TimeUnit as ParquetTimeUnit, Type as PhysicalType,
@@ -625,12 +625,24 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            // Cannot represent seconds in LogicalType
-            Type::primitive_type_builder(name, PhysicalType::INT64)
-                .with_repetition(repetition)
-                .with_id(id)
-                .build()
+        DataType::Timestamp(TimeUnit::Second, tz) => {
+            if coerce_types {
+                // Coerce seconds to the closest supported Parquet time unit (milliseconds)
+                Type::primitive_type_builder(name, PhysicalType::INT64)
+                    .with_logical_type(Some(LogicalType::Timestamp {
+                        is_adjusted_to_u_t_c: matches!(tz, Some(z) if !z.as_ref().is_empty()),
+                        unit: ParquetTimeUnit::MILLIS,
+                    }))
+                    .with_repetition(repetition)
+                    .with_id(id)
+                    .build()
+            } else {
+                // Cannot represent seconds in LogicalType, store as raw INT64
+                Type::primitive_type_builder(name, PhysicalType::INT64)
+                    .with_repetition(repetition)
+                    .with_id(id)
+                    .build()
+            }
         }
         DataType::Timestamp(time_unit, tz) => {
             Type::primitive_type_builder(name, PhysicalType::INT64)
@@ -701,6 +713,24 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            if coerce_types {
+                // Coerce to 12-byte Parquet INTERVAL (truncates nanoseconds to milliseconds)
+                Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    .with_converted_type(ConvertedType::INTERVAL)
+                    .with_repetition(repetition)
+                    .with_id(id)
+                    .with_length(12)
+                    .build()
+            } else {
+                // Store as raw 16 bytes: month(4) + days(4) + nanoseconds(8)
+                Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                    .with_repetition(repetition)
+                    .with_id(id)
+                    .with_length(16)
+                    .build()
+            }
+        }
         DataType::Interval(_) => {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_converted_type(ConvertedType::INTERVAL)
@@ -2388,5 +2418,110 @@ mod tests {
                 .to_string()
                 .contains("is not a virtual column")
         );
+    }
+
+    #[test]
+    fn test_timestamp_second_coerce_types_false() {
+        let arrow_schema = Schema::new(vec![Field::new(
+            "ts_seconds",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )]);
+
+        let parquet_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(false)
+            .convert(&arrow_schema)
+            .unwrap();
+
+        let col = parquet_schema.column(0);
+        assert_eq!(col.physical_type(), PhysicalType::INT64);
+        assert_eq!(col.logical_type_ref(), None);
+    }
+
+    #[test]
+    fn test_timestamp_second_no_tz_coerce_types_true() {
+        let arrow_schema = Schema::new(vec![Field::new(
+            "ts_seconds",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )]);
+
+        let parquet_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(true)
+            .convert(&arrow_schema)
+            .unwrap();
+
+        let col = parquet_schema.column(0);
+        assert_eq!(col.physical_type(), PhysicalType::INT64);
+        assert_eq!(
+            col.logical_type_ref(),
+            Some(&LogicalType::Timestamp {
+                is_adjusted_to_u_t_c: false,
+                unit: ParquetTimeUnit::MILLIS,
+            })
+        );
+    }
+
+    #[test]
+    fn test_timestamp_second_utc_coerce_types_true() {
+        let arrow_schema = Schema::new(vec![Field::new(
+            "ts_seconds_utc",
+            DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
+            false,
+        )]);
+
+        let parquet_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(true)
+            .convert(&arrow_schema)
+            .unwrap();
+
+        let col = parquet_schema.column(0);
+        assert_eq!(col.physical_type(), PhysicalType::INT64);
+        assert_eq!(
+            col.logical_type_ref(),
+            Some(&LogicalType::Timestamp {
+                is_adjusted_to_u_t_c: true,
+                unit: ParquetTimeUnit::MILLIS,
+            })
+        );
+    }
+
+    #[test]
+    fn test_interval_month_day_nano_coerce_types_false() {
+        let arrow_schema = Schema::new(vec![Field::new(
+            "interval",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            false,
+        )]);
+
+        let parquet_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(false)
+            .convert(&arrow_schema)
+            .unwrap();
+
+        let col = parquet_schema.column(0);
+        assert_eq!(col.physical_type(), PhysicalType::FIXED_LEN_BYTE_ARRAY);
+        assert_eq!(col.type_length(), 16);
+        assert_ne!(col.converted_type(), ConvertedType::INTERVAL);
+        assert_eq!(col.logical_type_ref(), None);
+    }
+
+    #[test]
+    fn test_interval_month_day_nano_coerce_types_true() {
+        let arrow_schema = Schema::new(vec![Field::new(
+            "interval",
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            false,
+        )]);
+
+        let parquet_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(true)
+            .convert(&arrow_schema)
+            .unwrap();
+
+        let col = parquet_schema.column(0);
+        assert_eq!(col.physical_type(), PhysicalType::FIXED_LEN_BYTE_ARRAY);
+        assert_eq!(col.type_length(), 12);
+        assert_eq!(col.converted_type(), ConvertedType::INTERVAL);
     }
 }
