@@ -30,7 +30,6 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::utf8::check_valid_utf8;
 use arrow_array::{ArrayRef, builder::make_view};
 use arrow_buffer::Buffer;
-use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
@@ -451,6 +450,26 @@ impl ByteViewArrayDecoderPlain {
     }
 }
 
+/// Branchlessly add `base` to the buffer-index field of a long view
+/// (inline views with length ≤ 12 carry data in the high bits and are
+/// left untouched).
+#[inline(always)]
+fn adjust_buffer_index(view: u128, base: u32) -> u128 {
+    let is_long = ((view as u32) > 12) as u128;
+    view.wrapping_add((is_long * base as u128) << 64)
+}
+
+#[cold]
+#[inline(never)]
+fn invalid_dict_key(chunk: &[i32], dict_len: usize) -> ParquetError {
+    let bad = chunk
+        .iter()
+        .copied()
+        .find(|&k| (k as usize) >= dict_len)
+        .unwrap_or(0);
+    general_err!("invalid key={} for dictionary of length {}", bad, dict_len)
+}
+
 pub struct ByteViewArrayDecoderDictionary {
     decoder: DictIndexDecoder,
 }
@@ -504,49 +523,70 @@ impl ByteViewArrayDecoderDictionary {
         // Pre-reserve output capacity to avoid per-chunk reallocation in extend
         output.views.reserve(len);
 
-        let mut error = None;
-        let read = self.decoder.read(len, |keys| {
-            if base_buffer_idx == 0 {
-                // the dictionary buffers are the last buffers in output, we can directly use the views
-                output
-                    .views
-                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
-                        Some(&view) => view,
-                        None => {
-                            if error.is_none() {
-                                error = Some(general_err!("invalid key={} for dictionary", *k));
-                            }
-                            0
-                        }
-                    }));
-                Ok(())
-            } else {
-                output
-                    .views
-                    .extend(keys.iter().map(|k| match dict.views.get(*k as usize) {
-                        Some(&view) => {
-                            let len = view as u32;
-                            if len <= 12 {
-                                view
-                            } else {
-                                let mut view = ByteView::from(view);
-                                view.buffer_index += base_buffer_idx;
-                                view.into()
-                            }
-                        }
-                        None => {
-                            if error.is_none() {
-                                error = Some(general_err!("invalid key={} for dictionary", *k));
-                            }
-                            0
-                        }
-                    }));
-                Ok(())
-            }
-        })?;
-        if let Some(e) = error {
-            return Err(e);
+        let dict_views: &[u128] = dict.views.as_slice();
+        let dict_len = dict_views.len();
+
+        if base_buffer_idx == 0 {
+            // Fused path: RLE decode + view gather in one pass via
+            // `RleDecoder::get_batch_with_dict`, writing directly into spare
+            // capacity (no zero-init) and skipping the intermediate index
+            // buffer for RLE runs.
+            let base = output.views.len();
+            // SAFETY: `reserve(len)` above ensures the spare slice is at
+            // least `len` long.
+            let spare = unsafe { output.views.spare_capacity_mut().get_unchecked_mut(..len) };
+            let read = self.decoder.read_with_dict(len, dict_views, spare)?;
+            // SAFETY: `read_with_dict` wrote exactly `read` views.
+            unsafe { output.views.set_len(base + read) };
+            return Ok(read);
         }
+
+        let mut out_offset = 0usize;
+
+        let read = self.decoder.read(len, |keys| {
+            // SAFETY: `reserve(len)` above + callbacks summing to `len` means
+            // spare capacity is always at least `keys.len()` from `out_offset`.
+            let out: &mut [std::mem::MaybeUninit<u128>] = unsafe {
+                output
+                    .views
+                    .spare_capacity_mut()
+                    .get_unchecked_mut(out_offset..out_offset + keys.len())
+            };
+            out_offset += keys.len();
+
+            const CHUNK: usize = 16;
+            let mut out_chunks = out.chunks_exact_mut(CHUNK);
+            let mut key_chunks = keys.chunks_exact(CHUNK);
+            // Cast to u32 so negative i32 (corrupt data) compares as a large value.
+            let dict_len_u32 = dict_len as u32;
+
+            for (out_chunk, key_chunk) in out_chunks.by_ref().zip(key_chunks.by_ref()) {
+                let max_key = key_chunk.iter().fold(0u32, |acc, &k| acc.max(k as u32));
+                if max_key >= dict_len_u32 {
+                    return Err(invalid_dict_key(key_chunk, dict_len));
+                }
+                for (dst, &k) in out_chunk.iter_mut().zip(key_chunk.iter()) {
+                    // SAFETY: bounds checked above.
+                    let view = unsafe { *dict_views.get_unchecked(k as usize) };
+                    dst.write(adjust_buffer_index(view, base_buffer_idx));
+                }
+            }
+            for (dst, &k) in out_chunks
+                .into_remainder()
+                .iter_mut()
+                .zip(key_chunks.remainder().iter())
+            {
+                let view = *dict_views
+                    .get(k as usize)
+                    .ok_or_else(|| general_err!("invalid key={k} for dictionary"))?;
+                dst.write(adjust_buffer_index(view, base_buffer_idx));
+            }
+
+            Ok(())
+        })?;
+        // SAFETY: decoder.read wrote exactly `read` views via dst.write.
+        debug_assert_eq!(out_offset, read);
+        unsafe { output.views.set_len(output.views.len() + read) };
         Ok(read)
     }
 
