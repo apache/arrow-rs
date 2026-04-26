@@ -1093,6 +1093,290 @@ mod test {
         expect_finished(decoder.try_decode());
     }
 
+    /// When filter pushdown is combined with a `LIMIT`, the predicate must
+    /// not be evaluated for rows beyond the `limit`-th match.
+    ///
+    /// Filter `a > 175` produces 24 matches in row group 0 (rows 176..199).
+    /// With `limit = 10`, only the first 10 matches (rows 176..185) should be
+    /// emitted, AND the predicate counter should observe that evaluation was
+    /// short-circuited.
+    #[test]
+    fn test_decoder_filter_with_limit_short_circuits_within_row_group() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+        let rows_filtered = Arc::new(AtomicUsize::new(0));
+        let rows_filtered_for_predicate = Arc::clone(&rows_filtered);
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| {
+                rows_filtered_for_predicate.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                let scalar_175 = Int64Array::new_scalar(175);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_175)
+            },
+        );
+
+        // Use a small batch size so the row group is evaluated across
+        // multiple predicate batches; that is the regime where Layer 2's
+        // short-circuit saves predicate evaluation work. Matching rows are
+        // 176..199 (24 rows); with batch_size = 10 those span batches 17, 18,
+        // and 19 (rows 170..199). A limit of 10 should stop filter evaluation
+        // in the middle of batch 18.
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_batch_size(10)
+            .with_limit(10)
+            .build()
+            .unwrap();
+
+        // First row group: filter columns fetch (predicate is evaluated here)
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        // The first 10 matching rows come out: 176..185, column "a"
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(176, 10).project(&[0]).unwrap();
+        assert_eq!(batch, expected);
+
+        // no data for row group 1 should be requested — the limit
+        // was satisfied by row group 0 and the `Start` state for row group 1
+        // short-circuits to `Finished`.
+        expect_finished(decoder.try_decode());
+
+        // Row 186 is the 11th match; the scan should stop no later than the
+        // batch containing it (batch 18 of 10 rows = rows 180..189), so at
+        // most 190 rows are evaluated.
+        let evaluated = rows_filtered.load(Ordering::Relaxed);
+        assert!(
+            evaluated <= 190,
+            "predicate evaluated {evaluated} rows; expected ≤ 190 (stop within batch containing 11th match)"
+        );
+    }
+
+    /// Once the limit has been satisfied by a prior row group, subsequent
+    /// row groups should be skipped entirely — no data request for their
+    /// filter columns.
+    #[test]
+    fn test_decoder_filter_with_limit_skips_later_row_groups() {
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+        // `a > 175` matches rows 176..199 in row group 0 (24 matches) and
+        // 200..399 in row group 1 (200 matches). With limit = 5, all matches
+        // should come from row group 0.
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            |batch: RecordBatch| {
+                let scalar_175 = Int64Array::new_scalar(175);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_175)
+            },
+        );
+
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_limit(5)
+            .build()
+            .unwrap();
+
+        // Row group 0: fetch filter pages
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        // First 5 matches: 176..180
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(176, 5).project(&[0]).unwrap();
+        assert_eq!(batch, expected);
+
+        // Row group 1 must NOT request data — the limit is already satisfied
+        // so `Start` in row group 1 short-circuits to `Finished`.
+        expect_finished(decoder.try_decode());
+    }
+
+    /// The predicate short-circuit must account for `self.offset` as well as
+    /// `self.limit`. The post-predicate `with_offset` step skips that many
+    /// already-selected rows before `with_limit` counts output rows — so the
+    /// predicate must retain at least `offset + limit` matches. Without the
+    /// fix, Layer 2 caps at just `limit` and the later `with_offset` consumes
+    /// all of them, producing 0 rows instead of `limit`.
+    ///
+    /// `a > 175` matches rows 176..199 in row group 0 (24 matches). With
+    /// `offset = 10, limit = 5`, the expected output is rows 186..190 (the
+    /// 11th through 15th matches).
+    #[test]
+    fn test_decoder_filter_with_offset_and_limit() {
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            |batch: RecordBatch| {
+                let scalar_175 = Int64Array::new_scalar(175);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_175)
+            },
+        );
+
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_offset(10)
+            .with_limit(5)
+            .build()
+            .unwrap();
+
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(186, 5).project(&[0]).unwrap();
+        assert_eq!(batch, expected);
+
+        expect_finished(decoder.try_decode());
+    }
+
+    /// The limit short-circuit must also be correct when the limited predicate
+    /// is the last predicate in a multi-predicate chain.
+    ///
+    /// `a > 175` first narrows row group 0 to rows 176..199. The final
+    /// predicate `b < 625` is then evaluated only over those 24 rows, all of
+    /// which match. With `limit = 10`, the final output should still be rows
+    /// 176..185, and the second predicate should stop before consuming all 24
+    /// selected rows.
+    #[test]
+    fn test_decoder_multi_filters_with_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+        let first_predicate_rows = Arc::new(AtomicUsize::new(0));
+        let second_predicate_rows = Arc::new(AtomicUsize::new(0));
+
+        let first_predicate_rows_for_filter = Arc::clone(&first_predicate_rows);
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| {
+                first_predicate_rows_for_filter.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                let scalar_175 = Int64Array::new_scalar(175);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_175)
+            },
+        );
+
+        let second_predicate_rows_for_filter = Arc::clone(&second_predicate_rows);
+        let row_filter_b = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["b"]),
+            move |batch: RecordBatch| {
+                second_predicate_rows_for_filter.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                let scalar_625 = Int64Array::new_scalar(625);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                lt(column, &scalar_625)
+            },
+        );
+
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_filter(RowFilter::new(vec![
+                Box::new(row_filter_a),
+                Box::new(row_filter_b),
+            ]))
+            .with_batch_size(10)
+            .with_limit(10)
+            .build()
+            .unwrap();
+
+        // Row group 0, first predicate
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        // Row group 0, second predicate
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        // Final projected data
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(176, 10).project(&[2]).unwrap();
+        assert_eq!(batch, expected);
+
+        // The overall limit was satisfied by row group 0.
+        expect_finished(decoder.try_decode());
+
+        assert_eq!(first_predicate_rows.load(Ordering::Relaxed), 200);
+        assert!(
+            second_predicate_rows.load(Ordering::Relaxed) < 24,
+            "final predicate should short-circuit before consuming all 24 rows selected by the first predicate"
+        );
+    }
+
+    /// When a row selection already exists, limiting the predicate must still
+    /// preserve alignment with that prior selection.
+    ///
+    /// The explicit selection narrows row group 0 to rows 150..199. Applying
+    /// `a > 175` over that selection yields rows 176..199. With `limit = 10`,
+    /// the decoder should emit rows 176..185 and stop without evaluating the
+    /// remaining selected rows.
+    #[test]
+    fn test_decoder_filter_with_row_selection_and_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+        let rows_filtered = Arc::new(AtomicUsize::new(0));
+        let rows_filtered_for_predicate = Arc::clone(&rows_filtered);
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| {
+                rows_filtered_for_predicate.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                let scalar_175 = Int64Array::new_scalar(175);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_175)
+            },
+        );
+
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
+            .with_row_selection(RowSelection::from(vec![
+                RowSelector::skip(150),
+                RowSelector::select(50),
+            ]))
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_batch_size(10)
+            .with_limit(10)
+            .build()
+            .unwrap();
+
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(176, 10).project(&[0]).unwrap();
+        assert_eq!(batch, expected);
+
+        expect_finished(decoder.try_decode());
+
+        assert!(
+            rows_filtered.load(Ordering::Relaxed) < 50,
+            "predicate should short-circuit before consuming all 50 rows from the explicit row selection"
+        );
+    }
+
     #[test]
     fn test_decoder_offset_limit() {
         let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())

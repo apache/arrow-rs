@@ -134,12 +134,11 @@ impl ExtensionType for VariantType {
 ///
 /// # Documentation
 ///
-/// At the time of this writing, Variant has been accepted as an official
-/// extension type but not been published to the [official list of extension
-/// types] on the Apache Arrow website. See the [Extension Type for Parquet
-/// Variant arrow] ticket for more details.
+/// Variant is documented as a canonical Arrow extension type in the
+/// [Parquet Variant] section of the [official list of extension types] on
+/// the Apache Arrow website.
 ///
-/// [Extension Type for Parquet Variant arrow]: https://github.com/apache/arrow/issues/46908
+/// [Parquet Variant]: https://arrow.apache.org/docs/format/CanonicalExtensions.html#parquet-variant
 /// [official list of extension types]: https://arrow.apache.org/docs/format/CanonicalExtensions.html
 ///
 /// # Example: Check if a [`StructArray`] has the [`VariantType`] extension

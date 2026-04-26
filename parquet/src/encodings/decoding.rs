@@ -862,52 +862,50 @@ where
             let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
             self.check_bit_width(bit_width)?;
             let mini_block_to_skip = self.mini_block_remaining.min(to_skip - skip);
-            let mini_block_should_skip = mini_block_to_skip;
 
-            let skip_count = self
-                .bit_reader
-                .get_batch(&mut skip_buffer[0..mini_block_to_skip], bit_width);
-
-            if skip_count != mini_block_to_skip {
-                return Err(general_err!(
-                    "Expected to skip {} values from mini block got {}.",
-                    mini_block_batch_size,
-                    skip_count
-                ));
-            }
-
-            // see commentary in self.get() above regarding optimizations
             let min_delta = self.min_delta.as_i64()?;
             if bit_width == 0 {
-                // if min_delta == 0, there's nothing to do. self.last_value is unchanged
+                // All remainders are zero: every delta equals min_delta exactly.
+                // Advance last_value by n * min_delta with no bit reads.
                 if min_delta != 0 {
-                    let mut delta = self.min_delta;
-                    for v in &mut skip_buffer[0..skip_count] {
-                        *v = self.last_value.wrapping_add(&delta);
-                        delta = delta.wrapping_add(&self.min_delta);
-                    }
-
-                    self.last_value = skip_buffer[skip_count - 1];
+                    let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
+                    let step = T::T::from_i64(total)
+                        .ok_or_else(|| general_err!("delta*n overflow in skip"))?;
+                    self.last_value = self.last_value.wrapping_add(&step);
                 }
-            } else if min_delta == 0 {
-                for v in &mut skip_buffer[0..skip_count] {
-                    *v = v.wrapping_add(&self.last_value);
-
-                    self.last_value = *v;
-                }
+                // bit_width=0 payloads occupy zero bytes; no bit_reader advancement needed.
             } else {
-                for v in &mut skip_buffer[0..skip_count] {
-                    *v = v
-                        .wrapping_add(&self.min_delta)
-                        .wrapping_add(&self.last_value);
+                // bw>0: must decode to track last_value for subsequent get() calls.
+                let skip_count = self
+                    .bit_reader
+                    .get_batch(&mut skip_buffer[0..mini_block_to_skip], bit_width);
 
-                    self.last_value = *v;
+                if skip_count != mini_block_to_skip {
+                    return Err(general_err!(
+                        "Expected to skip {} values from mini block got {}.",
+                        mini_block_to_skip,
+                        skip_count
+                    ));
+                }
+
+                if min_delta == 0 {
+                    for v in &mut skip_buffer[0..skip_count] {
+                        *v = v.wrapping_add(&self.last_value);
+                        self.last_value = *v;
+                    }
+                } else {
+                    for v in &mut skip_buffer[0..skip_count] {
+                        *v = v
+                            .wrapping_add(&self.min_delta)
+                            .wrapping_add(&self.last_value);
+                        self.last_value = *v;
+                    }
                 }
             }
 
-            skip += mini_block_should_skip;
-            self.mini_block_remaining -= mini_block_should_skip;
-            self.values_left -= mini_block_should_skip;
+            skip += mini_block_to_skip;
+            self.mini_block_remaining -= mini_block_to_skip;
+            self.values_left -= mini_block_to_skip;
         }
 
         Ok(to_skip)
@@ -1136,7 +1134,21 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                     let suffix = v[0].data();
 
                     // Extract current prefix length, can be 0
-                    let prefix_len = self.prefix_lengths[self.current_idx] as usize;
+                    let prefix_len = usize::try_from(self.prefix_lengths[self.current_idx])
+                        .map_err(|_| {
+                            general_err!(
+                                "Invalid DELTA_BYTE_ARRAY prefix length {}",
+                                self.prefix_lengths[self.current_idx]
+                            )
+                        })?;
+
+                    if prefix_len > self.previous_value.len() {
+                        return Err(general_err!(
+                            "Invalid DELTA_BYTE_ARRAY prefix length {} exceeds previous value length {}",
+                            prefix_len,
+                            self.previous_value.len()
+                        ));
+                    }
 
                     // Concatenate prefix with suffix
                     let mut result = Vec::with_capacity(prefix_len + suffix.len());
@@ -1183,6 +1195,87 @@ mod tests {
 
     use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::test_common::rand_gen::RandGen;
+
+    #[test]
+    fn test_delta_byte_array_invalid_prefix_len_returns_error() {
+        let col_descr = create_test_col_desc_ptr(-1, Type::BYTE_ARRAY);
+
+        let mut encoder =
+            get_encoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, &col_descr).unwrap();
+        let input = vec![ByteArray::from("a"), ByteArray::from("ab")];
+        encoder.put(&input).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+
+        // First, decode just the prefix-length stream so we know where the suffix stream starts.
+        let mut prefix_len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        prefix_len_decoder
+            .set_data(encoded.clone(), input.len())
+            .unwrap();
+        let num_prefixes = prefix_len_decoder.values_left();
+        let mut prefix_lengths = vec![0; num_prefixes];
+        prefix_len_decoder.get(&mut prefix_lengths).unwrap();
+
+        // check: valid encoding should produce prefix lengths [0, 1]
+        assert_eq!(prefix_lengths, vec![0, 1]);
+
+        let prefix_stream_end = prefix_len_decoder.get_offset();
+
+        // Corrupt the prefix-length stream itself:
+        // replace it with a valid DELTA_BINARY_PACKED stream for [1, 1],
+        // so the first decoded prefix length becomes impossible because previous_value is empty.
+        let mut prefix_encoder = get_encoder::<Int32Type>(
+            Encoding::DELTA_BINARY_PACKED,
+            &create_test_col_desc_ptr(-1, Type::INT32),
+        )
+        .unwrap();
+        prefix_encoder.put(&[1i32, 1i32]).unwrap();
+        let corrupted_prefix = prefix_encoder.flush_buffer().unwrap();
+
+        let mut corrupted = Vec::new();
+        corrupted.extend_from_slice(corrupted_prefix.as_ref());
+        corrupted.extend_from_slice(&encoded[prefix_stream_end..]);
+
+        let mut decoder = DeltaByteArrayDecoder::<ByteArrayType>::new();
+        decoder
+            .set_data(Bytes::from(corrupted), input.len())
+            .unwrap();
+
+        let mut out = vec![ByteArray::new(); input.len()];
+
+        let err = decoder.get(&mut out).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid DELTA_BYTE_ARRAY prefix length"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_delta_byte_array_negative_prefix_len_returns_error() {
+        let col_descr = create_test_col_desc_ptr(-1, Type::BYTE_ARRAY);
+
+        let mut encoder =
+            get_encoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, &col_descr).unwrap();
+        let input = vec![ByteArray::from("a"), ByteArray::from("ab")];
+        encoder.put(&input).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+
+        let mut decoder = DeltaByteArrayDecoder::<ByteArrayType>::new();
+        decoder.set_data(encoded, input.len()).unwrap();
+
+        // Force a negative prefix length after decoder initialization
+        decoder.prefix_lengths[0] = -1;
+        let mut out = vec![ByteArray::new(); input.len()];
+
+        let err = decoder.get(&mut out).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid DELTA_BYTE_ARRAY prefix length"),
+            "{}",
+            err
+        );
+    }
 
     #[test]
     fn test_get_decoders() {
@@ -1688,6 +1781,23 @@ mod tests {
         ];
         test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 5);
         test_skip::<Int32Type>(block_data, Encoding::DELTA_BINARY_PACKED, 100);
+    }
+
+    #[test]
+    fn test_skip_delta_bit_packed_bw0_uniform_step_i32() {
+        // Uniform-step column: every delta equals min_delta, so bw=0 miniblocks.
+        // Partial skip must advance last_value by n * min_delta (min_delta != 0 path).
+        let data: Vec<i32> = (0..128).map(|i| i * 7).collect();
+        test_skip::<Int32Type>(data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
+        test_skip::<Int32Type>(data, Encoding::DELTA_BINARY_PACKED, 200);
+    }
+
+    #[test]
+    fn test_skip_delta_bit_packed_bw0_uniform_step_i64() {
+        // Same as above for i64.
+        let data: Vec<i64> = (0..128).map(|i| i * 100).collect();
+        test_skip::<Int64Type>(data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
+        test_skip::<Int64Type>(data, Encoding::DELTA_BINARY_PACKED, 200);
     }
 
     #[test]

@@ -49,7 +49,7 @@ use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 // Exposed so integration tests and benchmarks can temporarily override the threshold.
-pub use read_plan::{ReadPlan, ReadPlanBuilder};
+pub use read_plan::{PredicateOptions, ReadPlan, ReadPlanBuilder};
 
 mod filter;
 pub mod metrics;
