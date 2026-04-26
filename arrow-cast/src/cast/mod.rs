@@ -2121,18 +2121,30 @@ pub fn cast_with_options(
             cast_with_options(&array, to_type, cast_options)
         }
         (Date32, Timestamp(TimeUnit::Microsecond, _)) => {
-            let array = array
-                .as_primitive::<Date32Type>()
-                .unary::<_, TimestampMicrosecondType>(|x| (x as i64) * MICROSECONDS_IN_DAY);
-
-            cast_with_options(&array, to_type, cast_options)
+            let date_array = array.as_primitive::<Date32Type>();
+            let converted = if cast_options.safe {
+                date_array.unary_opt::<_, TimestampMicrosecondType>(|x| {
+                    (x as i64).checked_mul(MICROSECONDS_IN_DAY)
+                })
+            } else {
+                date_array.try_unary::<_, TimestampMicrosecondType, _>(|x| {
+                    (x as i64).mul_checked(MICROSECONDS_IN_DAY)
+                })?
+            };
+            cast_with_options(&converted, to_type, cast_options)
         }
         (Date32, Timestamp(TimeUnit::Nanosecond, _)) => {
-            let array = array
-                .as_primitive::<Date32Type>()
-                .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY);
-
-            cast_with_options(&array, to_type, cast_options)
+            let date_array = array.as_primitive::<Date32Type>();
+            let converted = if cast_options.safe {
+                date_array.unary_opt::<_, TimestampNanosecondType>(|x| {
+                    (x as i64).checked_mul(NANOSECONDS_IN_DAY)
+                })
+            } else {
+                date_array.try_unary::<_, TimestampNanosecondType, _>(|x| {
+                    (x as i64).mul_checked(NANOSECONDS_IN_DAY)
+                })?
+            };
+            cast_with_options(&converted, to_type, cast_options)
         }
 
         (_, Duration(unit)) if from_type.is_numeric() => {
@@ -10948,6 +10960,56 @@ mod tests {
             .unwrap();
         assert_eq!(1609459200000000000, c.value(0));
         assert_eq!(1640995200000000000, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_us_overflow() {
+        const MAX_DAYS_MICROS: i32 = (i64::MAX / MICROSECONDS_IN_DAY) as i32;
+        let a = Date32Array::from(vec![Some(MAX_DAYS_MICROS), Some(MAX_DAYS_MICROS + 1), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let err = cast_with_options(
+            &array,
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(err.is_err());
+
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Microsecond, None)).unwrap();
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        assert_eq!(9223372022400000000, c.value(0));
+        assert!(c.is_null(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_ns_overflow() {
+        // 2262-04-11, 2062-04-12
+        let a = Date32Array::from(vec![Some(106751), Some(106752), None]);
+        let array = Arc::new(a) as ArrayRef;
+        let err = cast_with_options(
+            &array,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(err.is_err());
+
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
+        let c = b
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap();
+        assert_eq!(9223286400000000000, c.value(0));
+        assert!(c.is_null(1));
         assert!(c.is_null(2));
     }
 
