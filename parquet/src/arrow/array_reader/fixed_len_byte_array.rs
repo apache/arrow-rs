@@ -40,9 +40,6 @@ use std::ops::Range;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided fixed length byte array column
-///
-/// `batch_size` is used to pre-allocate internal buffers,
-/// avoiding reallocations when reading the first batch of data.
 pub fn make_fixed_len_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
@@ -317,11 +314,23 @@ fn move_values<F>(
 impl ValuesBuffer for FixedLenByteArrayBuffer {
     fn with_capacity(capacity: usize) -> Self {
         // `byte_length` is not known initially, so preserve the value-count
-        // hint so the first decode can allocate the exact byte capacity.
+        // hint so the first decode can allocate the initial byte capacity.
         Self {
             buffer: Vec::new(),
             byte_length: None,
             values_capacity: Some(capacity),
+        }
+    }
+
+    fn reserve_exact(&mut self, additional: usize) {
+        match self.byte_length {
+            Some(byte_length) => self
+                .buffer
+                .reserve_exact(additional.saturating_mul(byte_length)),
+            None => {
+                let capacity = self.values_capacity.get_or_insert(0);
+                *capacity = (*capacity).max(additional);
+            }
         }
     }
 
@@ -579,6 +588,18 @@ mod tests {
     use arrow_array::{Decimal256Array, RecordBatch};
     use bytes::Bytes;
     use std::sync::Arc;
+
+    #[test]
+    fn test_pending_reservation_tracks_max_capacity() {
+        let mut buffer = FixedLenByteArrayBuffer::with_capacity(0);
+
+        buffer.reserve_exact(8);
+        buffer.reserve_exact(4);
+        assert_eq!(buffer.values_capacity, Some(8));
+
+        buffer.reserve_exact(12);
+        assert_eq!(buffer.values_capacity, Some(12));
+    }
 
     #[test]
     fn test_decimal_list() {

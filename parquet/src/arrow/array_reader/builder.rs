@@ -97,7 +97,7 @@ pub struct ArrayReaderBuilder<'a> {
     parquet_metadata: Option<&'a ParquetMetaData>,
     /// metrics
     metrics: &'a ArrowReaderMetrics,
-    /// Batch size for pre-allocating internal buffers
+    /// Batch size hint for pre-allocating internal buffers (see [`Self::with_batch_size`])
     batch_size: usize,
 }
 
@@ -151,9 +151,14 @@ impl<'a> ArrayReaderBuilder<'a> {
         }
     }
 
-    /// Set the batch size used to pre-allocate internal buffers.
+    /// Set the batch size hint used to pre-allocate internal buffers.
     ///
-    /// This avoids reallocations when reading the first batch of data.
+    /// This is a hint, not a hard capacity contract. Readers without
+    /// selective null padding reserve their value buffers up front from this
+    /// size to avoid reallocations when reading the first batch. Readers that
+    /// emit compact (selectively padded) child arrays instead size their
+    /// buffers from the number of values actually decoded, and may allocate
+    /// less than the batch size.
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self

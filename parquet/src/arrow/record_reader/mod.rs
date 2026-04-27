@@ -84,9 +84,8 @@ where
 {
     /// Create a new [`GenericRecordReader`]
     ///
-    /// The capacity is used to pre-allocate internal buffers, avoiding reallocations
-    /// when reading the first batch of data. For optimal performance, set this to
-    /// the expected batch size.
+    /// The capacity is used to pre-allocate internal buffers for full-padding
+    /// reads, avoiding reallocations when reading fragmented row selections.
     pub fn new(desc: ColumnDescPtr, capacity: usize) -> Self {
         let def_levels = (desc.max_def_level() > 0)
             .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
@@ -271,56 +270,81 @@ where
         if batch_size == 0 {
             return Ok(0);
         }
-        // Update capacity hint to the largest batch size seen
+        // Update capacity hint to the largest batch size seen.
         if batch_size > self.capacity_hint {
             self.capacity_hint = batch_size;
         }
 
-        // Lazily initialize buffer on first read
-        let capacity_hint = self.capacity_hint;
-        let values = self
-            .values
-            .get_or_insert_with(|| V::with_capacity(capacity_hint));
+        let padding_threshold = self.padding_threshold;
+        let max_def = self.column_desc.max_def_level();
+        let mut physical_values_to_read = 0usize;
+        let mut output_slots_to_read = 0usize;
 
-        let (records_read, values_read, levels_read) =
-            self.column_reader.as_mut().unwrap().read_records(
+        let values = self.values.get_or_insert_with(|| V::with_capacity(0));
+        let compact_bitmap = &mut self.compact_bitmap;
+
+        if padding_threshold.is_none() {
+            values.reserve_exact(self.capacity_hint.saturating_sub(self.num_values));
+        }
+
+        let (records_read, values_read, levels_read) = self
+            .column_reader
+            .as_mut()
+            .unwrap()
+            .read_records_with_reservation(
                 batch_size,
                 self.def_levels.as_mut(),
                 self.rep_levels.as_mut(),
                 values,
+                |values, values_to_read, levels_to_read, def_levels| {
+                    let output_slots = if let Some(threshold) = padding_threshold {
+                        let def_levels = def_levels.ok_or_else(|| {
+                            general_err!(
+                                "Definition levels should exist when data is less than levels!"
+                            )
+                        })?;
+                        let all_levels = def_levels.levels().ok_or_else(|| {
+                            general_err!(
+                                "Raw definition levels must be available for selective padding"
+                            )
+                        })?;
+                        let batch_levels = &all_levels[all_levels.len() - levels_to_read..];
+                        let bitmap =
+                            compact_bitmap.get_or_insert_with(|| BooleanBufferBuilder::new(0));
+
+                        definition_levels::build_filtered_validity_bitmap(
+                            batch_levels,
+                            None,
+                            Some(threshold),
+                            max_def,
+                            bitmap,
+                        )
+                    } else {
+                        levels_to_read
+                    };
+
+                    let additional = output_slots_to_read
+                        .saturating_add(output_slots)
+                        .saturating_sub(physical_values_to_read);
+                    values.reserve_exact(additional);
+
+                    output_slots_to_read += output_slots;
+                    physical_values_to_read += values_to_read;
+                    Ok(())
+                },
             )?;
 
-        if let Some(threshold) = self.padding_threshold {
-            // Selective padding: pad only item-level nulls (def >= threshold),
-            // skip list-level padding (def < threshold).
-            let def_levels = self.def_levels.as_ref().ok_or_else(|| {
-                general_err!("Definition levels should exist when data is less than levels!")
-            })?;
-            let max_def = self.column_desc.max_def_level();
-            let all_levels = def_levels.levels().ok_or_else(|| {
-                general_err!("Raw definition levels must be available for selective padding")
-            })?;
-            let batch_levels = &all_levels[all_levels.len() - levels_read..];
-
-            // Append one bit per item-level entry (d >= threshold) directly
-            // into the accumulated bitmap. Bit is set when d >= max_def
-            // (real value). The bitmap serves double duty: pad_nulls uses
-            // it to scatter values into position, and consume_compact_bitmap
-            // returns it as the leaf null bitmap.
-            let bitmap = self
-                .compact_bitmap
-                .get_or_insert_with(|| BooleanBufferBuilder::new(0));
-
-            let item_count = definition_levels::build_filtered_validity_bitmap(
-                batch_levels,
-                None,
-                Some(threshold),
-                max_def,
-                bitmap,
+        if self.padding_threshold.is_some() {
+            debug_assert_eq!(
+                physical_values_to_read, values_read,
+                "reservation accounting must match decoded values"
             );
+            let item_count = output_slots_to_read;
+            let bitmap = compact_bitmap.get_or_insert_with(|| BooleanBufferBuilder::new(0));
 
             // Pad values to item_count positions (only if there are gaps).
             if values_read < item_count {
+                values.reserve_exact(item_count - values_read);
                 values.pad_nulls(
                     self.values_written,
                     values_read,
@@ -336,11 +360,16 @@ where
             );
             self.values_written += item_count;
         } else if values_read < levels_read {
+            debug_assert_eq!(
+                output_slots_to_read, levels_read,
+                "reservation accounting must match decoded levels"
+            );
             // Full padding: pad all null positions.
             let def_levels = self.def_levels.as_ref().ok_or_else(|| {
                 general_err!("Definition levels should exist when data is less than levels!")
             })?;
 
+            values.reserve_exact(levels_read - values_read);
             values.pad_nulls(
                 self.num_values,
                 values_read,
@@ -447,6 +476,39 @@ mod tests {
         assert_eq!(record_reader.consume_record_data(), &[4, 7, 6, 3, 2, 8, 9]);
         assert_eq!(None, record_reader.consume_def_levels());
         assert_eq!(None, record_reader.consume_bitmap());
+    }
+
+    #[test]
+    fn test_capacity_hint_preserved_across_fragmented_reads() {
+        let message_type = "
+        message test_schema {
+          REQUIRED INT32 leaf;
+        }
+        ";
+        let desc = parse_message_type(message_type)
+            .map(|t| SchemaDescriptor::new(Arc::new(t)))
+            .map(|s| s.column(0))
+            .unwrap();
+
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 8);
+        let values = [1, 2, 3, 4];
+        let mut pb = DataPageBuilderImpl::new(desc, 4, true);
+        pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
+        let page = pb.consume();
+
+        let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
+        record_reader.set_page_reader(page_reader).unwrap();
+
+        assert_eq!(1, record_reader.read_records(1).unwrap());
+        assert_eq!(1, record_reader.read_records(1).unwrap());
+
+        let record_data = record_reader.consume_record_data();
+        assert_eq!(record_data, &[1, 2]);
+        assert!(
+            record_data.capacity() >= 8,
+            "capacity hint should survive fragmented reads, got {}",
+            record_data.capacity()
+        );
     }
 
     #[test]
@@ -694,6 +756,55 @@ mod tests {
             record_reader.consume_compact_bitmap()
         );
         assert_eq!(None, record_reader.consume_bitmap());
+    }
+
+    #[test]
+    fn test_selective_padding_reserves_compact_capacity() {
+        let message_type = "
+        message test_schema {
+          OPTIONAL GROUP my_list (LIST) {
+            REPEATED GROUP list {
+              OPTIONAL INT32 element;
+            }
+          }
+        }
+        ";
+
+        let desc = parse_message_type(message_type)
+            .map(|t| SchemaDescriptor::new(Arc::new(t)))
+            .map(|s| s.column(0))
+            .unwrap();
+
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
+        record_reader.set_padding_threshold(2);
+
+        let values = [10];
+        let mut def_levels = vec![0i16; 30];
+        def_levels.extend([3i16, 2i16]);
+        let rep_levels = vec![0i16; def_levels.len()];
+
+        let mut pb = DataPageBuilderImpl::new(desc, def_levels.len() as u32, true);
+        pb.add_rep_levels(1, &rep_levels);
+        pb.add_def_levels(3, &def_levels);
+        pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
+
+        let page_reader = Box::new(InMemoryPageReader::new(vec![pb.consume()]));
+        record_reader.set_page_reader(page_reader).unwrap();
+        assert_eq!(def_levels.len(), record_reader.read_records(128).unwrap());
+
+        let expected_compact = Buffer::from_iter([true, false]);
+        assert_eq!(
+            Some(expected_compact),
+            record_reader.consume_compact_bitmap()
+        );
+
+        let actual = record_reader.consume_record_data();
+        assert_eq!(actual.len(), 2);
+        assert_eq!(actual[0], 10);
+        assert!(
+            actual.capacity() < def_levels.len(),
+            "selective padding should not reserve one child slot per list-level NULL"
+        );
     }
 
     #[test]

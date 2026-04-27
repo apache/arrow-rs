@@ -19,11 +19,14 @@ use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 
 /// A buffer that supports padding with nulls
 pub trait ValuesBuffer {
-    /// Create a new buffer with capacity for at least `capacity` elements
-    ///
-    /// This allows pre-allocating buffers to avoid reallocations during reading,
-    /// improving performance when the number of values is known in advance.
+    /// Create a new buffer with capacity for at least `capacity` logical values
     fn with_capacity(capacity: usize) -> Self;
+
+    /// Reserve capacity for `additional` more logical values.
+    ///
+    /// Callers should use this once the level decoders have determined how
+    /// many output slots are actually needed for the next read.
+    fn reserve_exact(&mut self, additional: usize);
 
     /// If a column contains nulls, more level data may be read than value data, as null
     /// values are not encoded. Therefore, first the levels data is read, the null count
@@ -51,6 +54,10 @@ pub trait ValuesBuffer {
 impl<T: Copy + Default> ValuesBuffer for Vec<T> {
     fn with_capacity(capacity: usize) -> Self {
         Vec::with_capacity(capacity)
+    }
+
+    fn reserve_exact(&mut self, additional: usize) {
+        Vec::reserve_exact(self, additional)
     }
 
     fn pad_nulls(

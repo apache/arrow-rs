@@ -105,7 +105,6 @@ where
 {
     /// Construct primitive array reader.
     ///
-    /// `batch_size` is used to pre-allocate internal buffers.
     /// `padding_threshold` controls how null padding is applied. When
     /// `None`, the reader pads all null positions (full padding). When
     /// `Some(threshold)`, entries with `def < threshold` are excluded

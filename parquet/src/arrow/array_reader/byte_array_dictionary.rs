@@ -74,9 +74,6 @@ macro_rules! make_reader {
 ///
 /// It is therefore recommended that if `pages` contains data from multiple column chunks,
 /// that the read batch size used is a divisor of the row group size
-///
-/// `batch_size` is used to pre-allocate internal buffers,
-/// avoiding reallocations when reading the first batch of data.
 pub fn make_byte_array_dictionary_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
