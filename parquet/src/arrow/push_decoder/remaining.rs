@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::DecodeResult;
-use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection};
+use crate::arrow::ProjectionMask;
+use crate::arrow::arrow_reader::{
+    ParquetRecordBatchReader, RowFilter, RowSelection, RowSelectionPolicy,
+};
 use crate::arrow::push_decoder::reader_builder::{
     RowBudget, RowGroupBuildResult, RowGroupReaderBuilder,
 };
@@ -226,6 +229,40 @@ impl RemainingRowGroups {
     /// Clear any staged ranges currently buffered for future decode work
     pub fn clear_all_ranges(&mut self) {
         self.row_group_reader_builder.clear_all_ranges();
+    }
+
+    /// True iff the inner row-group reader is between row groups (state
+    /// `Finished`). Forward to [`RowGroupReaderBuilder::is_finished`].
+    pub fn is_at_row_group_boundary(&self) -> bool {
+        self.row_group_reader_builder.is_finished()
+    }
+
+    /// Number of row groups remaining (not including the one currently
+    /// being decoded).
+    pub fn row_groups_remaining(&self) -> usize {
+        self.frontier.row_groups.len()
+    }
+
+    /// Replace the projection. Must be called when
+    /// [`Self::is_at_row_group_boundary`].
+    pub fn set_projection(&mut self, projection: ProjectionMask) -> Result<(), ParquetError> {
+        self.row_group_reader_builder.set_projection(projection)
+    }
+
+    /// Replace the row filter. Must be called when
+    /// [`Self::is_at_row_group_boundary`].
+    pub fn set_filter(&mut self, filter: Option<RowFilter>) -> Result<(), ParquetError> {
+        self.row_group_reader_builder.set_filter(filter)
+    }
+
+    /// Replace the row selection policy. Must be called when
+    /// [`Self::is_at_row_group_boundary`].
+    pub fn set_row_selection_policy(
+        &mut self,
+        policy: RowSelectionPolicy,
+    ) -> Result<(), ParquetError> {
+        self.row_group_reader_builder
+            .set_row_selection_policy(policy)
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next

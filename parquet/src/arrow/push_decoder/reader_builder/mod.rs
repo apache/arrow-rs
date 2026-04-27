@@ -296,6 +296,63 @@ impl RowGroupReaderBuilder {
         self.buffers.push_ranges(ranges, buffers);
     }
 
+    /// True iff the inner state is `Finished`. This is the only state in
+    /// which it is safe to swap projection / filter / row selection policy
+    /// because no `RowGroupInfo`, `FilterInfo`, or in-flight `DataRequest`
+    /// is referencing the previous values.
+    pub(crate) fn is_finished(&self) -> bool {
+        matches!(self.state, Some(RowGroupDecoderState::Finished))
+    }
+
+    /// Replace the projection mask used for subsequent row groups.
+    ///
+    /// Must only be called when [`Self::is_finished`]. `PushBuffers` are
+    /// preserved; bytes already fetched for columns that survive into the
+    /// new mask are reused.
+    pub(crate) fn set_projection(
+        &mut self,
+        projection: ProjectionMask,
+    ) -> Result<(), ParquetError> {
+        if !self.is_finished() {
+            return Err(ParquetError::General(
+                "RowGroupReaderBuilder::set_projection: state must be Finished".to_string(),
+            ));
+        }
+        self.projection = projection;
+        Ok(())
+    }
+
+    /// Replace the row filter used for subsequent row groups.
+    ///
+    /// Must only be called when [`Self::is_finished`]. Pass `None` to clear
+    /// the filter, `Some(filter)` to install a new one.
+    pub(crate) fn set_filter(&mut self, filter: Option<RowFilter>) -> Result<(), ParquetError> {
+        if !self.is_finished() {
+            return Err(ParquetError::General(
+                "RowGroupReaderBuilder::set_filter: state must be Finished".to_string(),
+            ));
+        }
+        self.filter = filter;
+        Ok(())
+    }
+
+    /// Replace the row selection policy used for subsequent row groups.
+    ///
+    /// Must only be called when [`Self::is_finished`].
+    pub(crate) fn set_row_selection_policy(
+        &mut self,
+        policy: RowSelectionPolicy,
+    ) -> Result<(), ParquetError> {
+        if !self.is_finished() {
+            return Err(ParquetError::General(
+                "RowGroupReaderBuilder::set_row_selection_policy: state must be Finished"
+                    .to_string(),
+            ));
+        }
+        self.row_selection_policy = policy;
+        Ok(())
+    }
+
     /// Returns the total number of buffered bytes available
     pub fn buffered_bytes(&self) -> u64 {
         self.buffers.buffered_bytes()
