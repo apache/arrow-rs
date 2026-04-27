@@ -37,8 +37,10 @@ use std::any::Any;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
 ///
-/// `batch_size` is used to pre-allocate internal buffers,
-/// avoiding reallocations when reading the first batch of data.
+/// `batch_size` is a hint used to pre-allocate internal buffers and avoid
+/// reallocations when reading the first batch. It is not a hard capacity
+/// contract: with selective null padding (`padding_threshold`), value buffers
+/// are sized from the number of values actually decoded.
 pub fn make_byte_view_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,

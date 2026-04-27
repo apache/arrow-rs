@@ -47,8 +47,6 @@ where
     T::T: ArrowNativeType,
 {
     /// Construct null array reader.
-    ///
-    /// `batch_size` is used to pre-allocate internal buffers.
     pub fn new(
         pages: Box<dyn PageIterator>,
         column_desc: ColumnDescPtr,
