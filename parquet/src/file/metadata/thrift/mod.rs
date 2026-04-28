@@ -1128,13 +1128,13 @@ impl DataPageHeaderV2 {
                     repetition_levels_byte_length = Some(val);
                 }
                 7 => {
-                    let val = field_ident.bool_val.ok_or_else(|| {
-                        general_err!(
+                    if field_ident.bool_val.is_none() {
+                        return Err(general_err!(
                             "Expected bool field but got thrift type {:?}",
                             field_ident.field_type
-                        )
-                    })?;
-                    is_compressed = Some(val);
+                        ));
+                    }
+                    is_compressed = field_ident.bool_val;
                 }
                 _ => {
                     prot.skip(field_ident.field_type)?;
