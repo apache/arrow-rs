@@ -859,11 +859,10 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::{
         Array, BooleanArray, Float64Array, GenericListViewArray, Int32Array, ListArray, MapArray,
-        NullArray, OffsetSizeTrait, StringArray, StringViewArray, StructArray, make_array,
+        NullArray, OffsetSizeTrait, StringArray, StringViewArray, StructArray,
     };
-    use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer};
+    use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
-    use arrow_data::ArrayDataBuilder;
     use arrow_schema::{Field, Fields};
     use serde_json::json;
     use std::fs::File;
@@ -2177,12 +2176,13 @@ mod tests {
             None,
             None,
         ]);
-        let c = ArrayDataBuilder::new(c_field.data_type().clone())
-            .len(7)
-            .add_child_data(d.to_data())
-            .null_bit_buffer(Some(Buffer::from([0b00111011])))
-            .build()
-            .unwrap();
+        let c = StructArray::new(
+            vec![Field::new("d", DataType::Utf8, true)].into(),
+            vec![Arc::new(d.clone()) as ArrayRef],
+            Some(NullBuffer::from(vec![
+                true, true, false, true, true, true, false,
+            ])),
+        );
         let b = BooleanArray::from(vec![
             Some(true),
             Some(false),
@@ -2192,21 +2192,22 @@ mod tests {
             Some(true),
             None,
         ]);
-        let a = ArrayDataBuilder::new(a_struct_field.data_type().clone())
-            .len(7)
-            .add_child_data(b.to_data())
-            .add_child_data(c.clone())
-            .null_bit_buffer(Some(Buffer::from([0b00111111])))
-            .build()
-            .unwrap();
-        let a_list = ArrayDataBuilder::new(a_field.data_type().clone())
-            .len(6)
-            .add_buffer(Buffer::from_slice_ref([0i32, 2, 3, 6, 6, 6, 7]))
-            .add_child_data(a)
-            .null_bit_buffer(Some(Buffer::from([0b00110111])))
-            .build()
-            .unwrap();
-        let expected = make_array(a_list);
+        let a = StructArray::new(
+            vec![Field::new("b", DataType::Boolean, true), c_field.clone()].into(),
+            vec![
+                Arc::new(b.clone()) as ArrayRef,
+                Arc::new(c.clone()) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![
+                true, true, true, true, true, true, false,
+            ])),
+        );
+        let a_list = ListArray::new(
+            Arc::new(a_struct_field.clone()),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0i32, 2, 3, 6, 6, 6, 7])),
+            Arc::new(a),
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        );
 
         // compare `a` with result from json reader
         let batch = reader.next().unwrap().unwrap();
@@ -2214,7 +2215,7 @@ mod tests {
         assert_eq!(read.len(), 6);
         // compare the arrays the long way around, to better detect differences
         let read: &ListArray = read.as_list::<i32>();
-        let expected = expected.as_list::<i32>();
+        let expected = &a_list;
         assert_eq!(read.value_offsets(), &[0, 2, 3, 6, 6, 6, 7]);
         // compare list null buffers
         assert_eq!(read.nulls(), expected.nulls());
@@ -2232,7 +2233,7 @@ mod tests {
         let read_b = struct_array.column(0);
         assert_eq!(read_b.as_ref(), &b);
         let read_c = struct_array.column(1);
-        assert_eq!(read_c.to_data(), c);
+        assert_eq!(read_c.as_struct(), &c);
         let read_c = read_c.as_struct();
         let read_d = read_c.column(0);
         assert_eq!(read_d.as_ref(), &d);
