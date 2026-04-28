@@ -406,16 +406,14 @@ impl ParquetPushDecoder {
     /// Returns `Err(ParquetError::General)` when called outside a row-group
     /// boundary; check [`Self::can_swap_strategy`] first.
     ///
-    /// The decoder's [`PushBuffers`] are preserved across the swap. Bytes
-    /// that have already been fetched for columns the new strategy still
-    /// needs will not be re-requested. Bytes for columns the new strategy
-    /// no longer needs remain buffered until [`Self::clear_all_ranges`] is
-    /// called or the decoder is dropped.
+    /// The decoder's internal `PushBuffers` are preserved across the swap.
+    /// Bytes that have already been fetched for columns the new strategy
+    /// still needs will not be re-requested. Bytes for columns the new
+    /// strategy no longer needs remain buffered until
+    /// [`Self::clear_all_ranges`] is called or the decoder is dropped.
     ///
     /// Limit, offset, batch size, metadata, fields, and predicate-cache size
     /// are unchanged by a swap.
-    ///
-    /// [`PushBuffers`]: crate::util::push_buffers::PushBuffers
     pub fn swap_strategy(&mut self, swap: StrategySwap) -> Result<(), ParquetError> {
         self.state.swap_strategy(swap)
     }
