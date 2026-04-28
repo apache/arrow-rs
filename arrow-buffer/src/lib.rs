@@ -66,3 +66,6 @@ mod arith;
 mod pool;
 #[cfg(feature = "pool")]
 pub use pool::*;
+
+pub mod heap_size;
+pub use heap_size::HeapSize;

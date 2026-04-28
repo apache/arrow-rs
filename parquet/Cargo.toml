@@ -38,7 +38,7 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 
 [dependencies]
 arrow-array = { workspace = true, optional = true }
-arrow-buffer = { workspace = true, optional = true }
+arrow-buffer = { workspace = true }
 arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
@@ -104,7 +104,7 @@ default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64",
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
-arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
+arrow = ["base64", "arrow-array", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable support for arrow canonical extension types
 arrow_canonical_extension_types = ["arrow-schema?/canonical_extension_types"]
 # Enable CLI tools
