@@ -1116,7 +1116,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         let buffer_len = buffer.len();
                         cmpr.compress(&values_data.buf, &mut buffer)?;
                         let compressed_values_size = buffer.len() - buffer_len;
-                        let threshold = self.props.data_page_v2_compression_ratio_threshold();
+                        let threshold = self
+                            .props
+                            .column_data_page_v2_compression_ratio_threshold(self.descr.path());
                         if (compressed_values_size as f64) >= (uncompressed_size as f64) * threshold
                         {
                             buffer.truncate(buffer_len);

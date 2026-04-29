@@ -252,7 +252,6 @@ pub struct WriterProperties {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
-    data_page_v2_compression_ratio_threshold: f64,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -445,12 +444,28 @@ impl WriterProperties {
         self.content_defined_chunking.as_ref()
     }
 
-    /// Returns the compression ratio threshold above which a Data Page v2's
+    /// Returns the compression ratio threshold at or above which a Data Page v2's
     /// compressed values are discarded in favor of writing the values uncompressed.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_data_page_v2_compression_ratio_threshold`]
     pub fn data_page_v2_compression_ratio_threshold(&self) -> f64 {
-        self.data_page_v2_compression_ratio_threshold
+        self.default_column_properties
+            .data_page_v2_compression_ratio_threshold()
+            .unwrap_or(DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD)
+    }
+
+    /// Returns the Data Page v2 compression ratio threshold for a specific column.
+    ///
+    /// Takes precedence over [`Self::data_page_v2_compression_ratio_threshold`].
+    pub fn column_data_page_v2_compression_ratio_threshold(&self, col: &ColumnPath) -> f64 {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.data_page_v2_compression_ratio_threshold())
+            .or_else(|| {
+                self.default_column_properties
+                    .data_page_v2_compression_ratio_threshold()
+            })
+            .unwrap_or(DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD)
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
@@ -577,7 +592,6 @@ pub struct WriterPropertiesBuilder {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     content_defined_chunking: Option<CdcOptions>,
-    data_page_v2_compression_ratio_threshold: f64,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
@@ -602,8 +616,6 @@ impl Default for WriterPropertiesBuilder {
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
             content_defined_chunking: None,
-            data_page_v2_compression_ratio_threshold:
-                DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -658,7 +670,6 @@ impl WriterPropertiesBuilder {
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
             content_defined_chunking: self.content_defined_chunking,
-            data_page_v2_compression_ratio_threshold: self.data_page_v2_compression_ratio_threshold,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -905,9 +916,10 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets the compression ratio threshold at or above which a Data Page v2's
-    /// compressed values are discarded in favor of writing the values uncompressed
-    /// (defaults to `1.0` via [`DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD`]).
+    /// Sets the default compression ratio threshold at or above which a Data Page
+    /// v2's compressed values are discarded in favor of writing the values
+    /// uncompressed, for all columns (defaults to `1.0` via
+    /// [`DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD`]).
     ///
     /// When writing a Data Page v2 with a configured compression codec, the writer
     /// first compresses the values and then compares the compressed size to the
@@ -928,11 +940,8 @@ impl WriterPropertiesBuilder {
     /// # Panics
     /// If `value` is not finite or is not strictly positive.
     pub fn set_data_page_v2_compression_ratio_threshold(mut self, value: f64) -> Self {
-        assert!(
-            value.is_finite() && value > 0.0,
-            "data_page_v2_compression_ratio_threshold must be a positive finite number, got {value}"
-        );
-        self.data_page_v2_compression_ratio_threshold = value;
+        self.default_column_properties
+            .set_data_page_v2_compression_ratio_threshold(value);
         self
     }
 
@@ -1204,6 +1213,22 @@ impl WriterPropertiesBuilder {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
         self
     }
+
+    /// Sets the Data Page v2 compression ratio threshold for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_data_page_v2_compression_ratio_threshold`].
+    ///
+    /// # Panics
+    /// If `value` is not finite or is not strictly positive.
+    pub fn set_column_data_page_v2_compression_ratio_threshold(
+        mut self,
+        col: ColumnPath,
+        value: f64,
+    ) -> Self {
+        self.get_mut_props(col)
+            .set_data_page_v2_compression_ratio_threshold(value);
+        self
+    }
 }
 
 impl From<WriterProperties> for WriterPropertiesBuilder {
@@ -1228,8 +1253,6 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
             content_defined_chunking: props.content_defined_chunking,
-            data_page_v2_compression_ratio_threshold: props
-                .data_page_v2_compression_ratio_threshold,
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }
@@ -1357,6 +1380,7 @@ struct ColumnProperties {
     bloom_filter_properties: Option<BloomFilterProperties>,
     /// Whether the bloom filter NDV was explicitly set by the user
     bloom_filter_ndv_is_set: bool,
+    data_page_v2_compression_ratio_threshold: Option<f64>,
 }
 
 impl ColumnProperties {
@@ -1443,6 +1467,18 @@ impl ColumnProperties {
         self.bloom_filter_ndv_is_set = true;
     }
 
+    /// Sets the Data Page v2 compression ratio threshold for this column.
+    ///
+    /// # Panics
+    /// If `value` is not finite or is not strictly positive.
+    fn set_data_page_v2_compression_ratio_threshold(&mut self, value: f64) {
+        assert!(
+            value.is_finite() && value > 0.0,
+            "data_page_v2_compression_ratio_threshold must be a positive finite number, got {value}"
+        );
+        self.data_page_v2_compression_ratio_threshold = Some(value);
+    }
+
     /// Returns optional encoding for this column.
     fn encoding(&self) -> Option<Encoding> {
         self.encoding
@@ -1487,6 +1523,11 @@ impl ColumnProperties {
     /// Returns the bloom filter properties, or `None` if not enabled
     fn bloom_filter_properties(&self) -> Option<&BloomFilterProperties> {
         self.bloom_filter_properties.as_ref()
+    }
+
+    /// Returns optional Data Page v2 compression ratio threshold for this column.
+    fn data_page_v2_compression_ratio_threshold(&self) -> Option<f64> {
+        self.data_page_v2_compression_ratio_threshold
     }
 
     /// If bloom filter is enabled and NDV was not explicitly set, resolve it to the
@@ -1886,6 +1927,34 @@ mod tests {
                 ndv: DEFAULT_BLOOM_FILTER_NDV,
             })
         );
+    }
+
+    #[test]
+    fn test_writer_properties_column_data_page_v2_compression_ratio_threshold() {
+        let props = WriterProperties::builder()
+            .set_data_page_v2_compression_ratio_threshold(0.5)
+            .set_column_data_page_v2_compression_ratio_threshold(ColumnPath::from("col"), 0.1)
+            .build();
+
+        assert_eq!(props.data_page_v2_compression_ratio_threshold(), 0.5);
+        assert_eq!(
+            props.column_data_page_v2_compression_ratio_threshold(&ColumnPath::from("col")),
+            0.1
+        );
+        assert_eq!(
+            props.column_data_page_v2_compression_ratio_threshold(&ColumnPath::from("other")),
+            0.5
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "data_page_v2_compression_ratio_threshold must be a positive finite number"
+    )]
+    fn test_writer_properties_panic_on_invalid_data_page_v2_compression_ratio_threshold() {
+        WriterProperties::builder()
+            .set_data_page_v2_compression_ratio_threshold(0.0)
+            .build();
     }
 
     #[test]
