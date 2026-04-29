@@ -35,7 +35,7 @@ use std::sync::Arc;
 fn test_zero_row_dict() {
     let batches: &[&[&str]] = &[&[], &["A"], &[], &["B", "C"], &[]];
     run_delta_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(vec![]),
             MessageType::RecordBatch,
@@ -48,7 +48,7 @@ fn test_zero_row_dict() {
     );
 
     run_resend_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(vec![]),
             MessageType::RecordBatch,
@@ -72,7 +72,7 @@ fn test_mixed_delta() {
     ];
 
     run_delta_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
@@ -87,7 +87,7 @@ fn test_mixed_delta() {
     );
 
     run_resend_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
@@ -106,7 +106,7 @@ fn test_mixed_delta() {
 fn test_disjoint_delta() {
     let batches: &[&[&str]] = &[&["A"], &["B"], &["C", "E"]];
     run_delta_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
@@ -118,7 +118,7 @@ fn test_disjoint_delta() {
     );
 
     run_resend_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
@@ -134,7 +134,7 @@ fn test_disjoint_delta() {
 fn test_increasing_delta() {
     let batches: &[&[&str]] = &[&["A"], &["A", "B"], &["A", "B", "C"]];
     run_delta_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
@@ -146,7 +146,7 @@ fn test_increasing_delta() {
     );
 
     run_resend_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
@@ -162,7 +162,7 @@ fn test_increasing_delta() {
 fn test_single_delta() {
     let batches: &[&[&str]] = &[&["A", "B", "C"], &["D"]];
     run_delta_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A", "B", "C"])),
             MessageType::RecordBatch,
@@ -172,7 +172,7 @@ fn test_single_delta() {
     );
 
     run_resend_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A", "B", "C"])),
             MessageType::RecordBatch,
@@ -186,7 +186,7 @@ fn test_single_delta() {
 fn test_single_same_value_sequence() {
     let batches: &[&[&str]] = &[&["A"], &["A"], &["A"], &["A"]];
     run_delta_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
@@ -197,7 +197,7 @@ fn test_single_same_value_sequence() {
     );
 
     run_resend_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
@@ -216,7 +216,7 @@ fn str_vec(strings: &[&str]) -> Vec<String> {
 fn test_multi_same_value_sequence() {
     let batches: &[&[&str]] = &[&["A", "B", "C"], &["A", "B", "C"]];
     run_delta_sequence_test(
-        batches,
+        &build_batches(batches),
         &[
             MessageType::Dict(str_vec(&["A", "B", "C"])),
             MessageType::RecordBatch,
@@ -232,17 +232,17 @@ enum MessageType {
     RecordBatch,
 }
 
-fn run_resend_sequence_test(batches: &[&[&str]], sequence: &[MessageType]) {
+fn run_resend_sequence_test(batches: &[RecordBatch], sequence: &[MessageType]) {
     let opts = IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Resend);
     run_sequence_test(batches, sequence, opts);
 }
 
-fn run_delta_sequence_test(batches: &[&[&str]], sequence: &[MessageType]) {
+fn run_delta_sequence_test(batches: &[RecordBatch], sequence: &[MessageType]) {
     let opts = IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
     run_sequence_test(batches, sequence, opts);
 }
 
-fn run_sequence_test(batches: &[&[&str]], sequence: &[MessageType], options: IpcWriteOptions) {
+fn run_sequence_test(batches: &[RecordBatch], sequence: &[MessageType], options: IpcWriteOptions) {
     let stream_buf = write_all_to_stream(options.clone(), batches);
     let ipc_stream = get_ipc_message_stream(stream_buf);
     for (message, expected) in ipc_stream.iter().zip(sequence.iter()) {
@@ -310,7 +310,7 @@ fn test_replace_same_length() {
         &["A", "B", "C", "D", "E", "F"],
         &["A", "G", "H", "I", "J", "K"],
     ];
-    run_parity_test(batches);
+    run_parity_test(&build_batches(batches));
 }
 
 #[test]
@@ -323,14 +323,14 @@ fn test_sparse_deltas() {
         &["parquet", "B"],
         &["123", "B", "C"],
     ];
-    run_parity_test(batches);
+    run_parity_test(&build_batches(batches));
 }
 
 #[test]
 fn test_deltas_with_reset() {
     // Dictionary resets at ["C", "D"]
     let batches: &[&[&str]] = &[&["A"], &["A", "B"], &["C", "D"], &["A", "B", "C", "D"]];
-    run_parity_test(batches);
+    run_parity_test(&build_batches(batches));
 }
 
 /// FileWriter can only tolerate very specific patterns of delta dictionaries,
@@ -338,7 +338,7 @@ fn test_deltas_with_reset() {
 #[test]
 fn test_deltas_with_file() {
     let batches: &[&[&str]] = &[&["A"], &["A", "B"], &["A", "B", "C"], &["A", "B", "C", "D"]];
-    run_parity_test(batches);
+    run_parity_test(&build_batches(batches));
 }
 
 /// Encode all batches three times and compare all three for the same results
@@ -348,7 +348,7 @@ fn test_deltas_with_file() {
 /// - Stream encoding without delta
 /// - File encoding with delta (File format does not allow replacement
 ///   dictionaries)
-fn run_parity_test(batches: &[&[&str]]) {
+fn run_parity_test(batches: &[RecordBatch]) {
     let delta_options =
         IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
     let delta_stream_buf = write_all_to_stream(delta_options.clone(), batches);
@@ -368,16 +368,16 @@ fn run_parity_test(batches: &[&[&str]]) {
     let (first_stream, other_streams) = streams.split_first_mut().unwrap();
 
     for (idx, batch) in first_stream.by_ref().enumerate() {
-        let first_dict = extract_dictionary(batch);
-        let expected_values = batches[idx];
-        assert_eq!(expected_values, &dict_to_vec(first_dict.clone()));
+        let first_dict = extract_dictionary(&batch);
+        let expected_values = dict_to_vec(&extract_dictionary(&batches[idx]));
+        assert_eq!(expected_values, dict_to_vec(&first_dict));
 
         for stream in other_streams.iter_mut() {
             let next_batch = stream
                 .next()
                 .expect("All streams should yield same number of elements");
-            let next_dict = extract_dictionary(next_batch);
-            assert_eq!(expected_values, &dict_to_vec(next_dict.clone()));
+            let next_dict = extract_dictionary(&next_batch);
+            assert_eq!(expected_values, dict_to_vec(&next_dict));
             assert_eq!(first_dict, next_dict);
         }
     }
@@ -390,7 +390,7 @@ fn run_parity_test(batches: &[&[&str]]) {
     }
 }
 
-fn dict_to_vec(dict: DictionaryArray<Int32Type>) -> Vec<String> {
+fn dict_to_vec(dict: &DictionaryArray<Int32Type>) -> Vec<String> {
     dict.downcast_dict::<StringArray>()
         .unwrap()
         .into_iter()
@@ -418,7 +418,7 @@ fn get_file_batches(buf: Vec<u8>) -> Box<dyn Iterator<Item = RecordBatch>> {
     )
 }
 
-fn extract_dictionary(batch: RecordBatch) -> DictionaryArray<arrow_array::types::Int32Type> {
+fn extract_dictionary(batch: &RecordBatch) -> DictionaryArray<arrow_array::types::Int32Type> {
     batch
         .column(0)
         .as_any()
@@ -427,8 +427,7 @@ fn extract_dictionary(batch: RecordBatch) -> DictionaryArray<arrow_array::types:
         .clone()
 }
 
-fn write_all_to_file(options: IpcWriteOptions, vals: &[&[&str]]) -> Vec<u8> {
-    let batches = build_batches(vals);
+fn write_all_to_file(options: IpcWriteOptions, batches: &[RecordBatch]) -> Vec<u8> {
     let mut buf: Vec<u8> = Vec::new();
     let mut writer =
         FileWriter::try_new_with_options(&mut buf, &batches[0].schema(), options).unwrap();
@@ -439,14 +438,12 @@ fn write_all_to_file(options: IpcWriteOptions, vals: &[&[&str]]) -> Vec<u8> {
     buf
 }
 
-fn write_all_to_stream(options: IpcWriteOptions, vals: &[&[&str]]) -> Vec<u8> {
-    let batches = build_batches(vals);
-
+fn write_all_to_stream(options: IpcWriteOptions, batches: &[RecordBatch]) -> Vec<u8> {
     let mut buf: Vec<u8> = Vec::new();
     let mut writer =
         StreamWriter::try_new_with_options(&mut buf, &batches[0].schema(), options).unwrap();
     for batch in batches {
-        writer.write(&batch).unwrap();
+        writer.write(batch).unwrap();
     }
 
     writer.finish().unwrap();
