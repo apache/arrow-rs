@@ -55,7 +55,7 @@ pub struct FixedSizeBinaryArray {
     value_data: Buffer,
     nulls: Option<NullBuffer>,
     len: usize,
-    value_length: i32,
+    value_length: i32, // validated to be a valid usize by `try_new`
 }
 
 impl FixedSizeBinaryArray {
@@ -169,12 +169,11 @@ impl FixedSizeBinaryArray {
             self.len()
         );
         let offset = i + self.offset();
+        let value_length = self.value_length as usize; // validated in Self::try_new
+        let value_offset = offset.checked_mul(value_length).expect("offset overflow");
+        // SAFETY: value offset/length computed correctly using checked arithmetic
         unsafe {
-            let pos = self.value_offset_at(offset);
-            std::slice::from_raw_parts(
-                self.value_data.as_ptr().offset(pos as isize),
-                (self.value_offset_at(offset + 1) - pos) as usize,
-            )
+            std::slice::from_raw_parts(self.value_data.as_ptr().add(value_offset), value_length)
         }
     }
 
@@ -186,7 +185,7 @@ impl FixedSizeBinaryArray {
     /// # Safety
     ///
     /// Caller is responsible for ensuring that the index is within the bounds
-    /// of the array
+    /// of the array and the resulting byte offset fits in `i32`
     pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
         let offset = i + self.offset();
         let pos = self.value_offset_at(offset);
@@ -486,6 +485,8 @@ impl FixedSizeBinaryArray {
         })
     }
 
+    /// Returns the byte offset for the element at index `i` without
+    /// checking for overflow.
     #[inline]
     fn value_offset_at(&self, i: usize) -> i32 {
         self.value_length * i as i32
