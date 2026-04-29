@@ -24,8 +24,8 @@ use crate::{
     writer::FileWriter,
 };
 use arrow_array::{
-    Array, ArrayRef, DictionaryArray, RecordBatch, StringArray, StructArray,
-    builder::{ArrayBuilder, StringDictionaryBuilder, StructBuilder},
+    Array, ArrayRef, DictionaryArray, ListArray, RecordBatch, StringArray, StructArray,
+    builder::{ArrayBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder},
     types::Int32Type,
 };
 
@@ -349,6 +349,12 @@ fn test_deltas_with_in_struct() {
     run_parity_test(&build_struct_batches(batches));
 }
 
+#[test]
+fn test_deltas_with_in_list() {
+    let batches: &[&[&str]] = &[&["A"], &["A", "B"], &["A", "B", "C"], &["A", "B", "C", "D"]];
+    run_parity_test(&build_list_batches(batches));
+}
+
 /// Encode all batches three times and compare all three for the same results
 /// on the other end.
 ///
@@ -434,6 +440,11 @@ fn extract_dictionary(batch: &RecordBatch) -> DictionaryArray<arrow_array::types
         column = struct_arr.column(0);
     }
 
+    // if we've been passed a list, assume the lists' values are the dict
+    if let Some(list_arr) = column.as_any().downcast_ref::<ListArray>() {
+        column = list_arr.values();
+    }
+
     column
         .as_any()
         .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
@@ -489,7 +500,7 @@ fn build_batch(
     RecordBatch::try_new(schema.clone(), vec![Arc::new(array) as ArrayRef]).unwrap()
 }
 
-/// build batches where the dictionary column is nested within a struct column
+/// build batches where the dictionary array is nested within a struct array
 fn build_struct_batches(vals: &[&[&str]]) -> Vec<RecordBatch> {
     let total_vals = vals.iter().map(|v| v.len()).sum();
     let mut struct_builder = StructBuilder::from_fields(
@@ -516,6 +527,36 @@ fn build_struct_batch(vals: &[&str], struct_builder: &mut StructBuilder) -> Reco
     }
 
     let array = struct_builder.finish_preserve_values();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        array.data_type().clone(),
+        true,
+    )]));
+
+    RecordBatch::try_new(schema.clone(), vec![Arc::new(array) as ArrayRef]).unwrap()
+}
+
+/// builds batches where the dictionary array is nested within a list array
+fn build_list_batches(vals: &[&[&str]]) -> Vec<RecordBatch> {
+    let mut list_builder = ListBuilder::new(StringDictionaryBuilder::<Int32Type>::new());
+
+    vals.iter()
+        .map(|v| build_list_batch(v, &mut list_builder))
+        .collect()
+}
+
+fn build_list_batch(
+    vals: &[&str],
+    list_builder: &mut ListBuilder<StringDictionaryBuilder<Int32Type>>,
+) -> RecordBatch {
+    for &val in vals {
+        let vals_builder = list_builder.values();
+        vals_builder.append(val).unwrap();
+        list_builder.append(true);
+    }
+
+    let array = list_builder.finish_preserve_values();
 
     let schema = Arc::new(Schema::new(vec![Field::new(
         "dict",
