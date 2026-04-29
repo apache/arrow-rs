@@ -1128,8 +1128,13 @@ impl DataPageHeaderV2 {
                     repetition_levels_byte_length = Some(val);
                 }
                 7 => {
-                    let val = field_ident.bool_val.unwrap();
-                    is_compressed = Some(val);
+                    if field_ident.bool_val.is_none() {
+                        return Err(general_err!(
+                            "Expected bool field but got thrift type {:?}",
+                            field_ident.field_type
+                        ));
+                    }
+                    is_compressed = field_ident.bool_val;
                 }
                 _ => {
                     prot.skip(field_ident.field_type)?;
@@ -1721,13 +1726,17 @@ write_thrift_field!(RustBoundingBox, FieldType::Struct);
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::basic::Type as PhysicalType;
+    use crate::basic::{Encoding, PageType, Type as PhysicalType};
     use crate::errors::Result;
-    use crate::file::metadata::thrift::{BoundingBox, SchemaElement, write_schema};
+    use crate::file::metadata::thrift::{
+        BoundingBox, DataPageHeaderV2, DictionaryPageHeader, PageHeader, SchemaElement,
+        write_schema,
+    };
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaDataOptions, RowGroupMetaData};
     use crate::parquet_thrift::tests::test_roundtrip;
     use crate::parquet_thrift::{
-        ElementType, ThriftCompactOutputProtocol, ThriftSliceInputProtocol, read_thrift_vec,
+        ElementType, ThriftCompactOutputProtocol, ThriftSliceInputProtocol, WriteThrift,
+        read_thrift_vec,
     };
     use crate::schema::types::{
         ColumnDescriptor, ColumnPath, SchemaDescriptor, TypePtr, num_nodes,
@@ -1792,6 +1801,29 @@ pub(crate) mod tests {
     pub(crate) fn buf_to_schema_list<'a>(buf: &'a mut Vec<u8>) -> Result<Vec<SchemaElement<'a>>> {
         let mut prot = ThriftSliceInputProtocol::new(buf.as_mut_slice());
         read_thrift_vec(&mut prot)
+    }
+
+    fn thrift_bytes<T: WriteThrift>(value: &T) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        value.write_thrift(&mut writer).unwrap();
+        buf
+    }
+
+    fn change_false_bool_field_to_i32(buf: &mut [u8]) {
+        let pos = buf
+            .iter()
+            .rposition(|byte| *byte == 0x12)
+            .expect("expected BOOL_FALSE field header byte");
+        buf[pos] = 0x15;
+    }
+
+    fn assert_malformed_bool_error(err: crate::errors::ParquetError) {
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Expected bool field"),
+            "unexpected error message: {msg}"
+        );
     }
 
     #[test]
@@ -1872,5 +1904,53 @@ pub(crate) mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(decoded_zero.null_count_opt(), Some(0));
+    }
+
+    #[test]
+    fn malformed_bool_field_returns_error_not_panic() {
+        let page_header = PageHeader {
+            r#type: PageType::DICTIONARY_PAGE,
+            uncompressed_page_size: 1,
+            compressed_page_size: 1,
+            crc: None,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: Some(DictionaryPageHeader {
+                num_values: 1,
+                encoding: Encoding::PLAIN,
+                is_sorted: Some(false),
+            }),
+            data_page_header_v2: None,
+        };
+
+        let mut buf = thrift_bytes(&page_header);
+        change_false_bool_field_to_i32(&mut buf);
+
+        let mut prot = ThriftSliceInputProtocol::new(&buf);
+        let err = PageHeader::read_thrift_without_stats(&mut prot)
+            .expect_err("malformed bool field should return an error");
+        assert_malformed_bool_error(err);
+    }
+
+    #[test]
+    fn malformed_data_page_v2_bool_field_returns_error_not_panic() {
+        let data_page_header_v2 = DataPageHeaderV2 {
+            num_values: 1,
+            num_nulls: 0,
+            num_rows: 1,
+            encoding: Encoding::PLAIN,
+            definition_levels_byte_length: 0,
+            repetition_levels_byte_length: 0,
+            is_compressed: Some(false),
+            statistics: None,
+        };
+
+        let mut buf = thrift_bytes(&data_page_header_v2);
+        change_false_bool_field_to_i32(&mut buf);
+
+        let mut prot = ThriftSliceInputProtocol::new(&buf);
+        let err = DataPageHeaderV2::read_thrift_without_stats(&mut prot)
+            .expect_err("malformed bool field should return an error");
+        assert_malformed_bool_error(err);
     }
 }

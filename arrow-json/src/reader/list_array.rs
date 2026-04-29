@@ -209,7 +209,13 @@ impl ArrayDecoder for FixedSizeListArrayDecoder {
         let values = self.decoder.decode(tape, &child_pos)?;
         let nulls = nulls.as_mut().and_then(|x| x.finish());
 
-        let array = FixedSizeListArray::try_new(self.field.clone(), self.size, values, nulls)?;
+        let array = FixedSizeListArray::try_new_with_length(
+            self.field.clone(),
+            self.size,
+            values,
+            nulls,
+            pos.len(),
+        )?;
         Ok(Arc::new(array))
     }
 }
