@@ -183,7 +183,7 @@ impl CompressionCodec {
     ) -> Result<Buffer, ArrowError> {
         // read the first 8 bytes to determine if the data is
         // compressed
-        let decompressed_length = read_uncompressed_size(input);
+        let decompressed_length = read_uncompressed_size(input)?;
         let buffer = if decompressed_length == 0 {
             // empty
             Buffer::from([])
@@ -326,11 +326,16 @@ fn decompress_zstd(
 ///   LENGTH_NO_COMPRESSED_DATA: indicate that the data that follows is not compressed
 ///    0: indicate that there is no data
 ///   positive number: indicate the uncompressed length for the following data
+/// Returns an error if the input buffer is shorter than 8 bytes
 #[inline]
-fn read_uncompressed_size(buffer: &[u8]) -> i64 {
-    let len_buffer = &buffer[0..8];
-    // 64-bit little-endian signed integer
-    i64::from_le_bytes(len_buffer.try_into().unwrap())
+fn read_uncompressed_size(buffer: &[u8]) -> Result<i64, ArrowError> {
+    let len_buffer = buffer.get(..LENGTH_OF_PREFIX_DATA as usize).ok_or_else(|| {
+        ArrowError::IpcError(format!(
+            "Compressed IPC buffer is too short: expected at least {LENGTH_OF_PREFIX_DATA} bytes, got {}",
+            buffer.len()
+        ))
+    })?;
+    Ok(i64::from_le_bytes(len_buffer.try_into().unwrap()))
 }
 
 #[cfg(test)]
@@ -371,5 +376,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(input_bytes, result.as_slice());
+    }
+
+    #[test]
+    fn test_read_uncompressed_size_rejects_short_prefix() {
+        let err = super::read_uncompressed_size(&[1, 2, 3, 4, 5, 6, 7])
+            .expect_err("short compressed IPC prefix should return an error");
+
+        assert!(
+            err.to_string()
+                .contains("Compressed IPC buffer is too short"),
+            "unexpected error: {err}"
+        );
     }
 }
