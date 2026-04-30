@@ -90,7 +90,7 @@ fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
                 .map(|j| {
                     ColumnChunkMetaData::builder(column_desc_ptrs[j].clone())
                         .set_encodings(vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY])
-                        .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+                        .set_compression(parquet::basic::CompressionCodec::UNCOMPRESSED)
                         .set_num_values(rng.random_range(1..1000000))
                         .set_total_compressed_size(rng.random_range(50000..5000000))
                         .set_data_page_offset(rng.random_range(4..2000000000))
