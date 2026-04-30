@@ -3686,6 +3686,45 @@ pub(crate) mod tests {
         }
     }
 
+    // test that we can handle the UNKNOWN logical type annotation on any physical type
+    #[test]
+    fn test_unknown_logical_type() {
+        let message_type = "message uk {
+            OPTIONAL INT32 uki32 (UNKNOWN);
+            OPTIONAL INT64 uki64 (UNKNOWN);
+            OPTIONAL INT96 uki96 (UNKNOWN);
+            OPTIONAL BOOLEAN ukbool (UNKNOWN);
+            OPTIONAL FLOAT ukfloat (UNKNOWN);
+            OPTIONAL DOUBLE ukdbl (UNKNOWN);
+            OPTIONAL BYTE_ARRAY ukbytes (UNKNOWN);
+            OPTIONAL FIXED_LEN_BYTE_ARRAY(10) ukflba (UNKNOWN);
+        }";
+
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let file = tempfile::tempfile().unwrap();
+
+        {
+            let mut writer =
+                SerializedFileWriter::new(file.try_clone().unwrap(), schema, Default::default())
+                    .unwrap();
+            let schema_desc = writer.schema_descr_ptr().clone();
+
+            {
+                let mut row_group_writer = writer.next_row_group().unwrap();
+                for _ in schema_desc.columns() {
+                    let column_writer = row_group_writer.next_column().unwrap().unwrap();
+                    column_writer.close().unwrap();
+                }
+                row_group_writer.close().unwrap();
+            }
+
+            writer.close().unwrap();
+        }
+
+        let _ = ParquetRecordBatchReader::try_new(file, 2).unwrap();
+        // if we get this far we've succeeded
+    }
+
     #[test]
     fn test_nested_nullability() {
         let message_type = "message nested {
