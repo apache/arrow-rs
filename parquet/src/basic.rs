@@ -2144,6 +2144,69 @@ mod tests {
     }
 
     #[test]
+    fn test_compression_conversion() {
+        assert_eq!(
+            CompressionCodec::from(Compression::UNCOMPRESSED),
+            CompressionCodec::UNCOMPRESSED
+        );
+        assert_eq!(
+            CompressionCodec::from(Compression::SNAPPY),
+            CompressionCodec::SNAPPY
+        );
+        assert_eq!(
+            CompressionCodec::from(Compression::GZIP(Default::default())),
+            CompressionCodec::GZIP
+        );
+        assert_eq!(
+            CompressionCodec::from(Compression::LZO),
+            CompressionCodec::LZO
+        );
+        assert_eq!(
+            CompressionCodec::from(Compression::BROTLI(Default::default())),
+            CompressionCodec::BROTLI
+        );
+        assert_eq!(
+            CompressionCodec::from(Compression::LZ4),
+            CompressionCodec::LZ4
+        );
+        assert_eq!(
+            CompressionCodec::from(Compression::ZSTD(Default::default())),
+            CompressionCodec::ZSTD
+        );
+        assert_eq!(
+            CompressionCodec::from(Compression::LZ4_RAW),
+            CompressionCodec::LZ4_RAW
+        );
+
+        assert_eq!(
+            Compression::from(CompressionCodec::UNCOMPRESSED),
+            Compression::UNCOMPRESSED
+        );
+        assert_eq!(
+            Compression::from(CompressionCodec::SNAPPY),
+            Compression::SNAPPY
+        );
+        assert_eq!(
+            Compression::from(CompressionCodec::GZIP),
+            Compression::GZIP(Default::default())
+        );
+        assert_eq!(Compression::from(CompressionCodec::LZO), Compression::LZO);
+        assert_eq!(
+            Compression::from(CompressionCodec::BROTLI),
+            Compression::BROTLI(Default::default())
+        );
+        assert_eq!(Compression::from(CompressionCodec::LZ4), Compression::LZ4);
+        assert_eq!(
+            Compression::from(CompressionCodec::ZSTD),
+            Compression::ZSTD(Default::default())
+        );
+        assert_eq!(
+            Compression::from(CompressionCodec::LZ4_RAW),
+            Compression::LZ4_RAW
+        );
+    }
+
+    #[test]
     fn test_display_compression() {
         assert_eq!(Compression::UNCOMPRESSED.to_string(), "UNCOMPRESSED");
         assert_eq!(Compression::SNAPPY.to_string(), "SNAPPY");
