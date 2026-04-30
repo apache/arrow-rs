@@ -25,7 +25,44 @@ use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
-/// An array of [fixed size binary arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
+/// An array of [fixed-size binary values](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-primitive-layout)
+///
+/// Each element in a [`FixedSizeBinaryArray`] has `value_length` bytes, where
+/// `value_length` is defined by the schema.
+///
+/// This array type is useful for storing fixed-length values such as 16-byte
+/// UUIDs (`value_length = 16`).
+///
+/// # Layout
+///
+/// Values in a [`FixedSizeBinaryArray`] are stored contiguously in a single
+/// buffer. The byte offset for the `i`-th element can be calculated as
+/// `i * value_length`.
+///
+/// Nulls are stored in a standard optional Arrow [`NullBuffer`].
+///
+/// For example, a 100-value [`FixedSizeBinaryArray`] with `value_length = 12`
+/// is shown below.
+///
+/// ```text
+/// ┌──────────────────────────────────────────┐
+/// │ Computed byte offsets                    │
+/// │          ┌──────────────────────┐ ┌────┐ │
+/// │          │┌────────────────────┐│ │    │ │
+/// │       0  ││value 0  (12 bytes) ││ │ 1  │ │
+/// │          │├────────────────────┤│ │    │ │
+/// │       12 ││value 1  (12 bytes) ││ │ 0  │ │
+/// │          │├────────────────────┤│ │    │ │
+/// │       24 ││value 2  (12 bytes) ││ │ 1  │ │
+/// │          │└────────────────────┘│ │    │ │
+/// │          │         ...          │ │... │ │
+/// │          │┌───────────────────┐ │ │    │ │
+/// │     1188 ││value 99 (12 bytes)│ │ │ 1  │ │
+/// │          │└───────────────────┘ │ │    │ │
+/// │          └──────────────────────┘ └────┘ │
+/// │           value_data              nulls  │
+/// └──────────────────────────────────────────┘
+/// ```
 ///
 /// # Examples
 ///
