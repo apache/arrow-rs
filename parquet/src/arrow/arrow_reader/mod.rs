@@ -1600,8 +1600,8 @@ pub(crate) mod tests {
     use crate::basic::{ConvertedType, Encoding, LogicalType, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
-        BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
-        FloatType, Int32Type, Int64Type, Int96, Int96Type,
+        BoolType, ByteArray, ByteArrayType, DataType, DoubleType, FixedLenByteArray,
+        FixedLenByteArrayType, FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetStatisticsPolicy};
@@ -3703,26 +3703,88 @@ pub(crate) mod tests {
         let schema = Arc::new(parse_message_type(message_type).unwrap());
         let file = tempfile::tempfile().unwrap();
 
-        {
-            let mut writer =
-                SerializedFileWriter::new(file.try_clone().unwrap(), schema, Default::default())
-                    .unwrap();
-            let schema_desc = writer.schema_descr_ptr().clone();
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), schema, Default::default())
+                .unwrap();
 
-            {
-                let mut row_group_writer = writer.next_row_group().unwrap();
-                for _ in schema_desc.columns() {
-                    let column_writer = row_group_writer.next_column().unwrap().unwrap();
-                    column_writer.close().unwrap();
-                }
-                row_group_writer.close().unwrap();
-            }
+        let mut row_group_writer = writer.next_row_group().unwrap();
 
-            writer.close().unwrap();
+        // INT32
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        // write out a bunch of nulls
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // INT64
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int64Type>()
+            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // INT96
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int96Type>()
+            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // BOOLEAN
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<BoolType>()
+            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // FLOAT
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<FloatType>()
+            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // DOUBLE
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<DoubleType>()
+            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // BYTE_ARRAY
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<ByteArrayType>()
+            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // FIXED_LEN_BYTE_ARRAY
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<FixedLenByteArrayType>()
+            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+            .unwrap();
+        column_writer.close().unwrap();
+
+        row_group_writer.close().unwrap();
+
+        writer.close().unwrap();
+
+        let mut reader = ParquetRecordBatchReader::try_new(file, 4).unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        for col in batch.columns() {
+            assert_eq!(col.len(), 4);
+            assert_eq!(col.logical_null_count(), 4);
         }
-
-        let _ = ParquetRecordBatchReader::try_new(file, 2).unwrap();
-        // if we get this far we've succeeded
     }
 
     #[test]
