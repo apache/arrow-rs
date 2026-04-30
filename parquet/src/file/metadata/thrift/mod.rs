@@ -35,8 +35,8 @@ use crate::file::{
 };
 use crate::{
     basic::{
-        ColumnOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType,
-        Repetition, Type,
+        ColumnOrder, CompressionCodec, ConvertedType, Encoding, EncodingMask, LogicalType,
+        PageType, Repetition, Type,
     },
     data_type::{ByteArray, FixedLenByteArray, Int96},
     errors::{ParquetError, Result},
@@ -460,7 +460,7 @@ fn read_column_metadata<'a>(
             }
             // 3: path_in_schema is redundant
             4 => {
-                column.compression = Compression::read_thrift(&mut *prot)?;
+                column.compression = CompressionCodec::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_CODEC;
             }
             5 => {

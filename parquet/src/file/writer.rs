@@ -1595,7 +1595,7 @@ mod tests {
 
             let desc = ColumnDescriptor::new(Arc::new(t), 0, 0, ColumnPath::new(vec![]));
             let meta = ColumnChunkMetaData::builder(Arc::new(desc))
-                .set_compression(codec)
+                .set_compression(codec.into())
                 .set_total_compressed_size(reader.len() as i64)
                 .set_num_values(total_num_values)
                 .build()

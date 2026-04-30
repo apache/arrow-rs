@@ -798,6 +798,28 @@ fn i32_to_encoding(val: i32) -> Encoding {
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `CompressionCodec`
 
+thrift_enum!(
+/// Supported compression algorithms.
+///
+/// Codecs added in format version X.Y can be read by readers based on X.Y and later.
+/// Codec support may vary between readers based on the format version and
+/// libraries available at runtime.
+///
+/// See [Compression.md] for a detailed specification of these algorithms.
+///
+/// [Compression.md]: https://github.com/apache/parquet-format/blob/master/Compression.md
+enum CompressionCodec {
+  UNCOMPRESSED = 0;
+  SNAPPY = 1;
+  GZIP = 2;
+  LZO = 3;
+  BROTLI = 4;  // Added in 2.4
+  LZ4 = 5;     // DEPRECATED (Added in 2.4)
+  ZSTD = 6;    // Added in 2.4
+  LZ4_RAW = 7; // Added in 2.9
+}
+);
+
 /// Supported block compression algorithms.
 ///
 /// Block compression can yield non-trivial improvements to storage efficiency at the expense
@@ -834,51 +856,33 @@ pub enum Compression {
     LZ4_RAW,
 }
 
-impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for Compression {
-    fn read_thrift(prot: &mut R) -> Result<Self> {
-        let val = prot.read_i32()?;
-        Ok(match val {
-            0 => Self::UNCOMPRESSED,
-            1 => Self::SNAPPY,
-            2 => Self::GZIP(Default::default()),
-            3 => Self::LZO,
-            4 => Self::BROTLI(Default::default()),
-            5 => Self::LZ4,
-            6 => Self::ZSTD(Default::default()),
-            7 => Self::LZ4_RAW,
-            _ => return Err(general_err!("Unexpected CompressionCodec {}", val)),
-        })
+impl From<CompressionCodec> for Compression {
+    fn from(value: CompressionCodec) -> Self {
+        match value {
+            CompressionCodec::UNCOMPRESSED => Compression::UNCOMPRESSED,
+            CompressionCodec::SNAPPY => Compression::SNAPPY,
+            CompressionCodec::GZIP => Compression::GZIP(Default::default()),
+            CompressionCodec::LZO => Compression::LZO,
+            CompressionCodec::BROTLI => Compression::BROTLI(Default::default()),
+            CompressionCodec::LZ4 => Compression::LZ4,
+            CompressionCodec::ZSTD => Compression::ZSTD(Default::default()),
+            CompressionCodec::LZ4_RAW => Compression::LZ4_RAW,
+        }
     }
 }
 
-// TODO(ets): explore replacing this with a thrift_enum!(ThriftCompression) for the serialization
-// and then provide `From` impls to convert back and forth. This is necessary due to the addition
-// of compression level to some variants.
-impl WriteThrift for Compression {
-    const ELEMENT_TYPE: ElementType = ElementType::I32;
-
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        let id: i32 = match *self {
-            Self::UNCOMPRESSED => 0,
-            Self::SNAPPY => 1,
-            Self::GZIP(_) => 2,
-            Self::LZO => 3,
-            Self::BROTLI(_) => 4,
-            Self::LZ4 => 5,
-            Self::ZSTD(_) => 6,
-            Self::LZ4_RAW => 7,
-        };
-        writer.write_i32(id)
-    }
-}
-
-write_thrift_field!(Compression, FieldType::I32);
-
-impl Compression {
-    /// Returns the codec type of this compression setting as a string, without the compression
-    /// level.
-    pub(crate) fn codec_to_string(self) -> String {
-        format!("{self:?}").split('(').next().unwrap().to_owned()
+impl From<Compression> for CompressionCodec {
+    fn from(value: Compression) -> Self {
+        match value {
+            Compression::UNCOMPRESSED => CompressionCodec::UNCOMPRESSED,
+            Compression::SNAPPY => CompressionCodec::SNAPPY,
+            Compression::GZIP(_) => CompressionCodec::GZIP,
+            Compression::LZO => CompressionCodec::LZO,
+            Compression::BROTLI(_) => CompressionCodec::BROTLI,
+            Compression::LZ4 => CompressionCodec::LZ4,
+            Compression::ZSTD(_) => CompressionCodec::ZSTD,
+            Compression::LZ4_RAW => CompressionCodec::LZ4_RAW,
+        }
     }
 }
 
@@ -2137,15 +2141,6 @@ mod tests {
         );
         assert_eq!(Encoding::DELTA_BYTE_ARRAY.to_string(), "DELTA_BYTE_ARRAY");
         assert_eq!(Encoding::RLE_DICTIONARY.to_string(), "RLE_DICTIONARY");
-    }
-
-    #[test]
-    fn test_compression_codec_to_string() {
-        assert_eq!(Compression::UNCOMPRESSED.codec_to_string(), "UNCOMPRESSED");
-        assert_eq!(
-            Compression::ZSTD(ZstdLevel::default()).codec_to_string(),
-            "ZSTD"
-        );
     }
 
     #[test]

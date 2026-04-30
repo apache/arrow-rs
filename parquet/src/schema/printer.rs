@@ -180,7 +180,7 @@ fn print_column_chunk_metadata(out: &mut dyn io::Write, cc_metadata: &ColumnChun
     writeln!(
         out,
         "compression: {}",
-        cc_metadata.compression().codec_to_string()
+        cc_metadata.compression().to_string()
     );
     writeln!(
         out,
