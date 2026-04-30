@@ -643,8 +643,8 @@ unsafe impl Array for FixedSizeBinaryArray {
     }
 
     fn offset(&self) -> usize {
-        // Slices are normalized by rebasing `value_data`/`nulls`, so this type
-        // does not retain a separate logical element offset.
+        // Slices are normalized by slicing `value_data`/`nulls` directly;
+        // FSB does not retain a separate logical element offset.
         0
     }
 
