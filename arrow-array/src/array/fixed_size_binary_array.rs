@@ -22,6 +22,7 @@ use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
+use num_traits::{ToPrimitive};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -55,7 +56,7 @@ pub struct FixedSizeBinaryArray {
     value_data: Buffer,
     nulls: Option<NullBuffer>,
     len: usize,
-    value_length: i32, // validated to be a valid usize by `try_new`
+    value_length: i32, // NB: validated conversion to usize by `try_new`
 }
 
 impl FixedSizeBinaryArray {
@@ -71,7 +72,10 @@ impl FixedSizeBinaryArray {
     /// Create a new [`Scalar`] from `value`
     pub fn new_scalar(value: impl AsRef<[u8]>) -> Scalar<Self> {
         let v = value.as_ref();
-        Scalar::new(Self::new(v.len() as _, Buffer::from(v), None))
+        let Some(value_len) = v.len().to_i32() else {
+            panic!("FixedSizeBinaryArray value length overflows i32");
+        };
+        Scalar::new(Self::new(value_len, Buffer::from(v), None))
     }
 
     /// Create a new [`FixedSizeBinaryArray`] from the provided parts, returning an error on failure
@@ -81,17 +85,18 @@ impl FixedSizeBinaryArray {
     ///
     /// # Errors
     ///
-    /// * `size < 0`
+    /// * `value_length` can not be converted to `usize` (is negative)
+    /// * `value_length < 0`
     /// * `values.len() / size != nulls.len()`
     /// * `size == 0 && values.len() != 0`
     pub fn try_new(
-        size: i32,
+        value_length: i32,
         values: Buffer,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        let data_type = DataType::FixedSizeBinary(size);
-        let s = size.to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
+        let data_type = DataType::FixedSizeBinary(value_length);
+        let s = value_length.to_usize().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {value_length}"))
         })?;
 
         let len = match values.len().checked_div(s) {
@@ -123,7 +128,7 @@ impl FixedSizeBinaryArray {
         Ok(Self {
             data_type,
             value_data: values,
-            value_length: size,
+            value_length,
             nulls,
             len,
         })
@@ -160,7 +165,8 @@ impl FixedSizeBinaryArray {
     /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
     ///
     /// # Panics
-    /// Panics if index `i` is out of bounds.
+    /// * if index `i` is out of bounds.
+    /// * if the resulting byte offset for index `i` would overflow `usize`
     pub fn value(&self, i: usize) -> &[u8] {
         assert!(
             i < self.len(),
@@ -169,11 +175,11 @@ impl FixedSizeBinaryArray {
             self.len()
         );
         let offset = i + self.offset();
-        let value_length = self.value_length as usize; // validated in Self::try_new
-        let value_offset = offset.checked_mul(value_length).expect("offset overflow");
+        let value_size = self.value_size();
+        let value_offset = offset.checked_mul(value_size).expect("offset overflow");
         // SAFETY: value offset/length computed correctly using checked arithmetic
         unsafe {
-            std::slice::from_raw_parts(self.value_data.as_ptr().add(value_offset), value_length)
+            std::slice::from_raw_parts(self.value_data.as_ptr().add(value_offset), value_size)
         }
     }
 
@@ -207,10 +213,20 @@ impl FixedSizeBinaryArray {
 
     /// Returns the length for an element.
     ///
-    /// All elements have the same length as the array is a fixed size.
+    /// Note this value always fits in a `usize`. See [`Self::value_size`]
     #[inline]
     pub fn value_length(&self) -> i32 {
         self.value_length
+    }
+
+    /// Returns the length for each element as a [`usize`]
+    ///
+    /// All elements have the same length as the array is a fixed size.
+    #[inline]
+    pub fn value_size(&self) -> usize {
+        // Note: `Self::try_new` verifies that `value_length` can be safely
+        // converted to `usize` without truncation
+        self.value_length as usize
     }
 
     /// Returns the values of this array.
@@ -234,13 +250,17 @@ impl FixedSizeBinaryArray {
             "the length + offset of the sliced FixedSizeBinaryArray cannot exceed the existing length"
         );
 
-        let size = self.value_length as usize;
+        let scaled_offset = offset
+            .checked_mul(self.value_size())
+            .expect("Offset overflowed");
+
+        let scaled_len = len.checked_mul(self.value_size()).expect("Len overflowed");
 
         Self {
             data_type: self.data_type.clone(),
             nulls: self.nulls.as_ref().map(|n| n.slice(offset, len)),
             value_length: self.value_length,
-            value_data: self.value_data.slice_with_length(offset * size, len * size),
+            value_data: self.value_data.slice_with_length(scaled_offset, scaled_len),
             len,
         }
     }
@@ -333,12 +353,17 @@ impl FixedSizeBinaryArray {
 
         let nulls = NullBuffer::from_unsliced_buffer(null_buf, len);
 
-        let size = size.unwrap_or(0) as i32;
+        let Some(value_length) = size.unwrap_or(0).to_i32() else {
+            return Err(ArrowError::InvalidArgumentError(
+                "FixedSizeBinaryArray value_size overflows i32".to_owned(),
+            ));
+        };
+
         Ok(Self {
-            data_type: DataType::FixedSizeBinary(size),
+            data_type: DataType::FixedSizeBinary(value_length),
             value_data: buffer.into(),
             nulls,
-            value_length: size,
+            value_length,
             len,
         })
     }
@@ -512,8 +537,10 @@ impl From<ArrayData> for FixedSizeBinaryArray {
             _ => panic!("Expected data type to be FixedSizeBinary"),
         };
 
-        let size = value_length as usize;
-        let value_data = buffers[0].slice_with_length(offset * size, len * size);
+        let Some(value_size) = value_length.to_usize() else {
+            panic!("Invalid SizeBinaryArray value length{value_length}");
+        };
+        let value_data = buffers[0].slice_with_length(offset * value_size, len * value_size);
 
         Self {
             data_type,
