@@ -1606,7 +1606,7 @@ pub(crate) mod tests {
     use crate::errors::Result;
     use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetStatisticsPolicy};
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
-    use crate::file::writer::SerializedFileWriter;
+    use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
     use crate::util::test_common::rand_gen::RandGen;
@@ -3709,70 +3709,39 @@ pub(crate) mod tests {
 
         let mut row_group_writer = writer.next_row_group().unwrap();
 
+        fn write_nulls<T: DataType>(row_group_writer: &mut SerializedRowGroupWriter<'_, File>) {
+            let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+            // write out a bunch of nulls
+            column_writer
+                .typed::<T>()
+                .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+                .unwrap();
+            column_writer.close().unwrap();
+        }
+
         // INT32
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        // write out a bunch of nulls
-        column_writer
-            .typed::<Int32Type>()
-            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
-            .unwrap();
-        column_writer.close().unwrap();
+        write_nulls::<Int32Type>(&mut row_group_writer);
 
         // INT64
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<Int64Type>()
-            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
-            .unwrap();
-        column_writer.close().unwrap();
+        write_nulls::<Int64Type>(&mut row_group_writer);
 
         // INT96
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<Int96Type>()
-            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
-            .unwrap();
-        column_writer.close().unwrap();
+        write_nulls::<Int96Type>(&mut row_group_writer);
 
         // BOOLEAN
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<BoolType>()
-            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
-            .unwrap();
-        column_writer.close().unwrap();
+        write_nulls::<BoolType>(&mut row_group_writer);
 
         // FLOAT
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<FloatType>()
-            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
-            .unwrap();
-        column_writer.close().unwrap();
+        write_nulls::<FloatType>(&mut row_group_writer);
 
         // DOUBLE
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<DoubleType>()
-            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
-            .unwrap();
-        column_writer.close().unwrap();
+        write_nulls::<DoubleType>(&mut row_group_writer);
 
         // BYTE_ARRAY
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<ByteArrayType>()
-            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
-            .unwrap();
-        column_writer.close().unwrap();
+        write_nulls::<ByteArrayType>(&mut row_group_writer);
 
         // FIXED_LEN_BYTE_ARRAY
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<FixedLenByteArrayType>()
-            .write_batch(&[], Some(&[0, 0, 0, 0]), None)
-            .unwrap();
-        column_writer.close().unwrap();
+        write_nulls::<FixedLenByteArrayType>(&mut row_group_writer);
 
         row_group_writer.close().unwrap();
 
