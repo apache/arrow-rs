@@ -481,22 +481,16 @@ async fn test_aes_ctr_encryption() {
 #[tokio::test]
 async fn test_decrypting_without_decryption_properties_fails() {
     let test_data = arrow::util::test_util::parquet_test_data();
-    let paths = [
-        format!("{test_data}/uniform_encryption.parquet.encrypted"),
-        format!("{test_data}/aes256/uniform_encryption.parquet.encrypted"),
-    ];
+    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
+    let mut file = File::open(&path).await.unwrap();
 
-    for path in &paths {
-        let mut file = File::open(&path).await.unwrap();
-
-        let options = ArrowReaderOptions::new();
-        let result = ArrowReaderMetadata::load_async(&mut file, options).await;
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
-        );
-    }
+    let options = ArrowReaderOptions::new();
+    let result = ArrowReaderMetadata::load_async(&mut file, options).await;
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
+    );
 }
 
 #[tokio::test]
@@ -1102,534 +1096,263 @@ async fn concatenate_parallel_row_groups<W: Write + Send>(
 #[tokio::test]
 async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
     // Read example data and set up encryption/decryption properties
-    async fn concurrent_encrypted_writing_over_multiple_row_groups(
-        footer_key: &[u8],
-        dec_column_keys: &[(&str, &[u8])],
-        enc_column_keys: &[(&str, &[u8])],
-    ) {
-        let path = encryption_util::encrypted_data_path(
-            footer_key,
-            "encrypt_columns_and_footer.parquet.encrypted",
-        );
-        let file = std::fs::File::open(path).unwrap();
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    let file = std::fs::File::open(path).unwrap();
 
-        let mut enc_builder =
-            parquet::encryption::encrypt::FileEncryptionProperties::builder(footer_key.to_vec());
-        for (column_name, key) in enc_column_keys {
-            enc_builder = enc_builder.with_column_key(column_name, key.to_vec());
+    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
+    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
+
+    let (record_batches, metadata) =
+        read_encrypted_file(&file, decryption_properties.clone()).unwrap();
+    let schema = metadata.schema();
+
+    // Create a channel to send RecordBatches to the writer and send row groups
+    let (record_batch_tx, data) = tokio::sync::mpsc::channel::<RecordBatch>(100);
+    let data_generator = tokio::spawn(async move {
+        for record_batch in record_batches {
+            record_batch_tx.send(record_batch).await.unwrap();
         }
-        let file_encryption_properties = enc_builder.build().unwrap();
+    });
 
-        let mut dec_builder = FileDecryptionProperties::builder(footer_key.to_vec());
-        for (column_name, key) in dec_column_keys {
-            dec_builder = dec_builder.with_column_key(column_name, key.to_vec());
-        }
-        let decryption_properties = dec_builder.build().unwrap();
+    let props = Arc::new(
+        WriterPropertiesBuilder::default()
+            .with_file_encryption_properties(file_encryption_properties)
+            .build(),
+    );
+    let parquet_schema = ArrowSchemaConverter::new()
+        .with_coerce_types(props.coerce_types())
+        .convert(schema)
+        .unwrap();
 
-        let (record_batches, metadata) =
-            read_encrypted_file(&file, decryption_properties.clone()).unwrap();
-        let schema = metadata.schema();
+    // Create a temporary file to write the encrypted data
+    let temp_file = tempfile::tempfile().unwrap();
 
-        // Create a channel to send RecordBatches to the writer and send row groups
-        let (record_batch_tx, data) = tokio::sync::mpsc::channel::<RecordBatch>(100);
-        let data_generator = tokio::spawn(async move {
-            for record_batch in record_batches {
-                record_batch_tx.send(record_batch).await.unwrap();
-            }
-        });
+    let writer =
+        SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
+    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(schema));
+    let max_row_groups = 1;
 
-        let props = Arc::new(
-            WriterPropertiesBuilder::default()
-                .with_file_encryption_properties(file_encryption_properties)
-                .build(),
-        );
-        let parquet_schema = ArrowSchemaConverter::new()
-            .with_coerce_types(props.coerce_types())
-            .convert(schema)
-            .unwrap();
+    let (serialize_tx, serialize_rx) =
+        tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(max_row_groups);
 
-        // Create a temporary file to write the encrypted data
-        let temp_file = tempfile::tempfile().unwrap();
+    let launch_serialization_task = spawn_parquet_parallel_serialization_task(
+        row_group_writer_factory,
+        data,
+        serialize_tx,
+        schema.clone(),
+    );
 
-        let writer =
-            SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
-        let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(schema));
-        let max_row_groups = 1;
+    let _file_metadata = concatenate_parallel_row_groups(writer, serialize_rx)
+        .await
+        .unwrap();
 
-        let (serialize_tx, serialize_rx) =
-            tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(max_row_groups);
+    data_generator.await.unwrap();
+    launch_serialization_task.await.unwrap().unwrap();
 
-        let launch_serialization_task = spawn_parquet_parallel_serialization_task(
-            row_group_writer_factory,
-            data,
-            serialize_tx,
-            schema.clone(),
-        );
+    // Check that the file was written correctly
+    let (read_record_batches, read_metadata) =
+        read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
 
-        let _file_metadata = concatenate_parallel_row_groups(writer, serialize_rx)
-            .await
-            .unwrap();
-
-        data_generator.await.unwrap();
-        launch_serialization_task.await.unwrap().unwrap();
-
-        // Check that the file was written correctly
-        let (read_record_batches, read_metadata) =
-            read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
-
-        assert_eq!(read_metadata.metadata().file_metadata().num_rows(), 50);
-        verify_encryption_test_data(read_record_batches, read_metadata.metadata());
-    }
-
-    // AES-128
-    concurrent_encrypted_writing_over_multiple_row_groups(
-        b"0123456789012345", // 128bit/16
-        &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
-        ],
-        &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
-        ],
-    )
-    .await;
-
-    // AES-256
-    concurrent_encrypted_writing_over_multiple_row_groups(
-        b"01234567890123456789012345678901", // 256bit/32
-        &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int64_field.list.int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
-        ],
-        &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field.list.int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
-        ],
-    )
-    .await;
+    assert_eq!(read_metadata.metadata().file_metadata().num_rows(), 50);
+    verify_encryption_test_data(read_record_batches, read_metadata.metadata());
 }
 
 #[tokio::test]
 async fn test_multi_threaded_encrypted_writing() {
     // Read example data and set up encryption/decryption properties
-    async fn multi_threaded_encrypted_writing(
-        footer_key: &[u8],
-        dec_column_keys: &[(&str, &[u8])],
-        enc_column_keys: &[(&str, &[u8])],
-    ) {
-        let path = encryption_util::encrypted_data_path(
-            footer_key,
-            "encrypt_columns_and_footer.parquet.encrypted",
-        );
-        let file = std::fs::File::open(path).unwrap();
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    let file = std::fs::File::open(path).unwrap();
 
-        let mut enc_builder =
-            parquet::encryption::encrypt::FileEncryptionProperties::builder(footer_key.to_vec());
-        for (column_name, key) in enc_column_keys {
-            enc_builder = enc_builder.with_column_key(column_name, key.to_vec());
+    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
+    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
+
+    let (record_batches, metadata) =
+        read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
+    let schema = metadata.schema().clone();
+
+    let props = Arc::new(
+        WriterPropertiesBuilder::default()
+            .with_file_encryption_properties(file_encryption_properties)
+            .build(),
+    );
+
+    let parquet_schema = ArrowSchemaConverter::new()
+        .with_coerce_types(props.coerce_types())
+        .convert(&schema)
+        .unwrap();
+
+    // Create a temporary file to write the encrypted data
+    let temp_file = tempfile::tempfile().unwrap();
+    let mut writer =
+        SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
+    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+
+    let (serialize_tx, mut serialize_rx) =
+        tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(1);
+
+    // Create a channel to send RecordBatches to the writer and send row batches
+    let (record_batch_tx, mut data) = tokio::sync::mpsc::channel::<RecordBatch>(100);
+    let data_generator = tokio::spawn(async move {
+        for record_batch in record_batches {
+            record_batch_tx.send(record_batch).await.unwrap();
         }
-        let encryption_properties = enc_builder.build().unwrap();
+    });
 
-        let mut dec_builder = FileDecryptionProperties::builder(footer_key.to_vec());
-        for (column_name, key) in dec_column_keys {
-            dec_builder = dec_builder.with_column_key(column_name, key.to_vec());
-        }
-        let decryption_properties = dec_builder.build().unwrap();
+    // Get column writers
+    let col_writers = row_group_writer_factory.create_column_writers(0).unwrap();
 
-        let (record_batches, metadata) =
-            read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
-        let schema = metadata.schema().clone();
+    let (col_writer_tasks, col_array_channels) =
+        spawn_column_parallel_row_group_writer(col_writers, 10).unwrap();
 
-        let props = Arc::new(
-            WriterPropertiesBuilder::default()
-                .with_file_encryption_properties(encryption_properties)
-                .build(),
-        );
-
-        let parquet_schema = ArrowSchemaConverter::new()
-            .with_coerce_types(props.coerce_types())
-            .convert(&schema)
+    // Spawn serialization tasks for incoming RecordBatches
+    let launch_serialization_task = tokio::spawn(async move {
+        let Some(rb) = data.recv().await else {
+            panic!()
+        };
+        send_arrays_to_column_writers(&col_array_channels, &rb, &schema)
+            .await
             .unwrap();
+        let finalize_rg_task = spawn_rg_join_and_finalize_task(col_writer_tasks, 10);
 
-        // Create a temporary file to write the encrypted data
-        let temp_file = tempfile::tempfile().unwrap();
-        let mut writer =
-            SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
-        let row_group_writer_factory =
-            ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+        serialize_tx.send(finalize_rg_task).await.unwrap();
+        drop(col_array_channels);
+    });
 
-        let (serialize_tx, mut serialize_rx) =
-            tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(1);
-
-        // Create a channel to send RecordBatches to the writer and send row batches
-        let (record_batch_tx, mut data) = tokio::sync::mpsc::channel::<RecordBatch>(100);
-        let data_generator = tokio::spawn(async move {
-            for record_batch in record_batches {
-                record_batch_tx.send(record_batch).await.unwrap();
-            }
-        });
-
-        // Get column writers
-        let col_writers = row_group_writer_factory.create_column_writers(0).unwrap();
-
-        let (col_writer_tasks, col_array_channels) =
-            spawn_column_parallel_row_group_writer(col_writers, 10).unwrap();
-
-        // Spawn serialization tasks for incoming RecordBatches
-        let launch_serialization_task = tokio::spawn(async move {
-            let Some(rb) = data.recv().await else {
-                panic!()
-            };
-            send_arrays_to_column_writers(&col_array_channels, &rb, &schema)
-                .await
-                .unwrap();
-            let finalize_rg_task = spawn_rg_join_and_finalize_task(col_writer_tasks, 10);
-
-            serialize_tx.send(finalize_rg_task).await.unwrap();
-            drop(col_array_channels);
-        });
-
-        // Append the finalized row groups to the SerializedFileWriter
-        while let Some(task) = serialize_rx.recv().await {
-            let (arrow_column_chunks, _) = task.await.unwrap().unwrap();
-            let mut row_group_writer = writer.next_row_group().unwrap();
-            for chunk in arrow_column_chunks {
-                chunk.append_to_row_group(&mut row_group_writer).unwrap();
-            }
-            row_group_writer.close().unwrap();
+    // Append the finalized row groups to the SerializedFileWriter
+    while let Some(task) = serialize_rx.recv().await {
+        let (arrow_column_chunks, _) = task.await.unwrap().unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+        for chunk in arrow_column_chunks {
+            chunk.append_to_row_group(&mut row_group_writer).unwrap();
         }
-
-        // Wait for data generator and serialization task to finish
-        data_generator.await.unwrap();
-        launch_serialization_task.await.unwrap();
-        let metadata = writer.close().unwrap();
-
-        // Close the file writer which writes the footer
-        assert_eq!(metadata.file_metadata().num_rows(), 50);
-
-        // Check that the file was written correctly
-        let (read_record_batches, read_metadata) =
-            read_encrypted_file(&temp_file, decryption_properties).unwrap();
-        verify_encryption_test_data(read_record_batches, read_metadata.metadata());
-
-        // Check that file was encrypted
-        let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
-        );
+        row_group_writer.close().unwrap();
     }
 
-    // AES-128
-    multi_threaded_encrypted_writing(
-        b"0123456789012345", // 128bit/16
-        &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
-        ],
-        &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
-        ],
-    )
-    .await;
+    // Wait for data generator and serialization task to finish
+    data_generator.await.unwrap();
+    launch_serialization_task.await.unwrap();
+    let metadata = writer.close().unwrap();
 
-    // AES-256
-    multi_threaded_encrypted_writing(
-        b"01234567890123456789012345678901", // 256bit/32
-        &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int64_field.list.int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
-        ],
-        &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field.list.int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
-        ],
-    )
-    .await;
+    // Close the file writer which writes the footer
+    assert_eq!(metadata.file_metadata().num_rows(), 50);
+
+    // Check that the file was written correctly
+    let (read_record_batches, read_metadata) =
+        read_encrypted_file(&temp_file, decryption_properties).unwrap();
+    verify_encryption_test_data(read_record_batches, read_metadata.metadata());
+
+    // Check that file was encrypted
+    let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
+    );
 }
 
 #[tokio::test]
 async fn test_multi_threaded_encrypted_writing_deprecated() {
     // Read example data and set up encryption/decryption properties
-    async fn multi_threaded_encrypted_writing_deprecated(
-        footer_key: &[u8],
-        dec_column_keys: &[(&str, &[u8])],
-        enc_column_keys: &[(&str, &[u8])],
-    ) {
-        let path = encryption_util::encrypted_data_path(
-            footer_key,
-            "encrypt_columns_and_footer.parquet.encrypted",
-        );
-        let file = std::fs::File::open(path).unwrap();
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    let file = std::fs::File::open(path).unwrap();
 
-        let mut enc_builder =
-            parquet::encryption::encrypt::FileEncryptionProperties::builder(footer_key.to_vec());
-        for (column_name, key) in enc_column_keys {
-            enc_builder = enc_builder.with_column_key(column_name, key.to_vec());
-        }
-        let encryption_properties = enc_builder.build().unwrap();
+    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
+    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
 
-        let mut dec_builder = FileDecryptionProperties::builder(footer_key.to_vec());
-        for (column_name, key) in dec_column_keys {
-            dec_builder = dec_builder.with_column_key(column_name, key.to_vec());
-        }
-        let decryption_properties = dec_builder.build().unwrap();
+    let (record_batches, metadata) =
+        read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
+    let to_write: Vec<_> = record_batches
+        .iter()
+        .flat_map(|rb| rb.columns().to_vec())
+        .collect();
+    let schema = metadata.schema().clone();
 
-        let (record_batches, metadata) =
-            read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
-        let to_write: Vec<_> = record_batches
-            .iter()
-            .flat_map(|rb| rb.columns().to_vec())
-            .collect();
-        let schema = metadata.schema().clone();
+    let props = Some(
+        WriterPropertiesBuilder::default()
+            .with_file_encryption_properties(file_encryption_properties)
+            .build(),
+    );
 
-        let props = Some(
-            WriterPropertiesBuilder::default()
-                .with_file_encryption_properties(encryption_properties)
-                .build(),
-        );
+    // Create a temporary file to write the encrypted data
+    let temp_file = tempfile::tempfile().unwrap();
+    let mut writer = ArrowWriter::try_new(&temp_file, schema.clone(), props).unwrap();
 
-        // Create a temporary file to write the encrypted data
-        let temp_file = tempfile::tempfile().unwrap();
-        let mut writer = ArrowWriter::try_new(&temp_file, schema.clone(), props).unwrap();
+    // LOW-LEVEL API: Use low level API to write into a file using multiple threads
 
-        // LOW-LEVEL API: Use low level API to write into a file using multiple threads
+    // Get column writers
+    #[allow(deprecated)]
+    let col_writers = writer.get_column_writers().unwrap();
+    let num_columns = col_writers.len();
 
-        // Get column writers
-        #[allow(deprecated)]
-        let col_writers = writer.get_column_writers().unwrap();
-        let num_columns = col_writers.len();
-
-        let (col_writer_tasks, mut col_array_channels) =
-            spawn_column_parallel_row_group_writer(col_writers, 100).unwrap();
+    let (col_writer_tasks, mut col_array_channels) =
+        spawn_column_parallel_row_group_writer(col_writers, 100).unwrap();
 
         // Send the ArrowLeafColumn data to the respective column writer channels
-        let mut worker_iter = col_array_channels.iter_mut();
-        for (array, field) in to_write.iter().zip(schema.fields()) {
-            for leaves in compute_leaves(field, array).unwrap() {
-                worker_iter.next().unwrap().send(leaves).await.unwrap();
-            }
+    let mut worker_iter = col_array_channels.iter_mut();
+    for (array, field) in to_write.iter().zip(schema.fields()) {
+        for leaves in compute_leaves(field, array).unwrap() {
+            worker_iter.next().unwrap().send(leaves).await.unwrap();
         }
-        drop(col_array_channels);
+    }
+    drop(col_array_channels);
 
-        // Wait for all column writers to finish writing
-        let mut finalized_rg = Vec::with_capacity(num_columns);
-        for task in col_writer_tasks.into_iter() {
-            finalized_rg.push(task.await.unwrap().unwrap().close().unwrap());
-        }
-
-        // Append the finalized row group to the SerializedFileWriter
-        #[allow(deprecated)]
-        writer.append_row_group(finalized_rg).unwrap();
-
-        // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
-
-        // Write individual RecordBatches into the file
-        for rb in record_batches {
-            writer.write(&rb).unwrap()
-        }
-        assert!(writer.flush().is_ok());
-
-        // Close the file writer which writes the footer
-        let metadata = writer.finish().unwrap();
-        assert_eq!(metadata.file_metadata().num_rows(), 100);
-
-        // Check that the file was written correctly
-        let (read_record_batches, read_metadata) =
-            read_encrypted_file(&temp_file, decryption_properties).unwrap();
-        verify_encryption_double_test_data(read_record_batches, read_metadata.metadata());
-
-        // Check that file was encrypted
-        let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
-        );
+    // Wait for all column writers to finish writing
+    let mut finalized_rg = Vec::with_capacity(num_columns);
+    for task in col_writer_tasks.into_iter() {
+        finalized_rg.push(task.await.unwrap().unwrap().close().unwrap());
     }
 
-    // AES-128
-    multi_threaded_encrypted_writing_deprecated(
-        b"0123456789012345", // 128bit/16
-        &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
-        ],
-        &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
-        ],
-    )
-    .await;
+    // Append the finalized row group to the SerializedFileWriter
+    #[allow(deprecated)]
+    writer.append_row_group(finalized_rg).unwrap();
 
-    // AES-256
-    multi_threaded_encrypted_writing_deprecated(
-        b"01234567890123456789012345678901", // 256bit/32
-        &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int64_field.list.int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
-        ],
-        &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field.list.int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
-        ],
-    )
-    .await;
+    // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
+
+    // Write individual RecordBatches into the file
+    for rb in record_batches {
+        writer.write(&rb).unwrap()
+    }
+    assert!(writer.flush().is_ok());
+
+    // Close the file writer which writes the footer
+    let metadata = writer.finish().unwrap();
+    assert_eq!(metadata.file_metadata().num_rows(), 100);
+
+    // Check that the file was written correctly
+    let (read_record_batches, read_metadata) =
+        read_encrypted_file(&temp_file, decryption_properties).unwrap();
+    verify_encryption_double_test_data(read_record_batches, read_metadata.metadata());
+
+    // Check that file was encrypted
+    let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
+    );
 }
