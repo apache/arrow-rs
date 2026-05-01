@@ -1794,6 +1794,38 @@ pub(crate) enum IpcMessage {
     },
 }
 
+/// Read exactly `body_len` bytes from `reader` into a freshly allocated
+/// [`MutableBuffer`], growing the buffer in 64 KiB chunks.
+///
+/// This deliberately avoids the previous `MutableBuffer::from_len_zeroed(body_len)`
+/// pattern: when `body_len` is derived from an untrusted IPC message header
+/// that pattern allowed a 4-byte input (claiming a 1.2 GiB body) to drive a
+/// 1.2 GiB up-front allocation before any read failure could surface. The
+/// chunked path here means the high-water-mark allocation is tied to the
+/// number of bytes actually delivered by `reader`, while still preserving
+/// the cache-line alignment that downstream Arrow consumers rely on.
+fn read_body_into_buffer<R: Read>(
+    reader: &mut R,
+    body_len: usize,
+) -> Result<MutableBuffer, ArrowError> {
+    const CHUNK: usize = 64 * 1024;
+    let mut buf = MutableBuffer::with_capacity(0);
+    let mut remaining = body_len;
+    let mut scratch = [0u8; CHUNK];
+    while remaining > 0 {
+        let want = remaining.min(CHUNK);
+        let slice = &mut scratch[..want];
+        reader.read_exact(slice).map_err(|e| {
+            ArrowError::ParseError(format!(
+                "Unexpected EOF reading {body_len} bytes of message body: {e}"
+            ))
+        })?;
+        buf.extend_from_slice(slice);
+        remaining -= want;
+    }
+    Ok(buf)
+}
+
 /// A low-level construct that reads [`Message::Message`]s from a reader while
 /// re-using a buffer for metadata. This is composed into [`StreamReader`].
 struct MessageReader<R> {
@@ -1825,15 +1857,35 @@ impl<R: Read> MessageReader<R> {
             return Ok(None);
         };
 
-        self.buf.resize(meta_len, 0);
-        self.reader.read_exact(&mut self.buf)?;
+        // Both `meta_len` and the message's `bodyLength` are derived from
+        // untrusted input. Eagerly resizing `self.buf` to `meta_len` (or a
+        // fresh `MutableBuffer` to `bodyLength` further down) means a few
+        // bytes of attacker-crafted input — e.g. a header that lies and
+        // claims a 1.2 GiB metadata payload — would force a multi-GB
+        // up-front allocation before any read failure could bound it.
+        //
+        // Read into a buffer that grows as actual bytes arrive instead, so
+        // the upfront allocation is independent of the (untrusted) declared
+        // length, then verify we got exactly the requested number of bytes.
+        self.buf.clear();
+        let read = (&mut self.reader)
+            .take(meta_len as u64)
+            .read_to_end(&mut self.buf)?;
+        if read != meta_len {
+            return Err(ArrowError::ParseError(format!(
+                "Unexpected EOF reading {meta_len} bytes of message metadata, got {read}"
+            )));
+        }
 
         let message = crate::root_as_message(self.buf.as_slice()).map_err(|err| {
             ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
         })?;
 
-        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-        self.reader.read_exact(&mut buf)?;
+        let body_len_i64 = message.bodyLength();
+        let body_len = usize::try_from(body_len_i64).map_err(|_| {
+            ArrowError::ParseError(format!("Invalid message bodyLength: {body_len_i64}"))
+        })?;
+        let buf = read_body_into_buffer(&mut self.reader, body_len)?;
 
         Ok(Some((message, buf)))
     }
@@ -2081,6 +2133,22 @@ mod tests {
             batch_err.unwrap().to_string(),
             "Parser error: Invalid metadata length: -1"
         );
+    }
+
+    /// Regression test: an IPC stream whose first 4 bytes claim a 1.2 GiB
+    /// metadata payload should not drive a multi-GB allocation; it should
+    /// surface as a `ParseError` once `read_to_end` notices the underlying
+    /// stream cannot deliver that many bytes.
+    ///
+    /// Repro from cargo-fuzz `fuzz_ipc_reader` libFuzzer harness.
+    #[test]
+    fn test_stream_reader_huge_meta_len_does_not_oom() {
+        let bytes: [u8; 4] = [0x00, 0x1b, 0x00, 0x48];
+        // i32::from_le_bytes => 0x4800_1b00 = 1_207_975_168 (~1.15 GiB).
+        // Pre-fix this caused MutableBuffer::from_len_zeroed(~1.2 GiB) /
+        // self.buf.resize(~1.2 GiB, 0) before any short-read check ran.
+        let result = StreamReader::try_new(Cursor::new(bytes), None);
+        assert!(result.is_err(), "expected error, got {result:?}");
     }
 
     #[test]
