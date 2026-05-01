@@ -500,7 +500,8 @@ fn build_batch(
     RecordBatch::try_new(schema.clone(), vec![Arc::new(array) as ArrayRef]).unwrap()
 }
 
-/// build batches where the dictionary array is nested within a struct array
+/// build batches where the dictionary array is nested within a struct array. The dictionary array
+/// is the first field within the struct.
 fn build_struct_batches(vals: &[&[&str]]) -> Vec<RecordBatch> {
     let total_vals = vals.iter().map(|v| v.len()).sum();
     let mut struct_builder = StructBuilder::from_fields(
