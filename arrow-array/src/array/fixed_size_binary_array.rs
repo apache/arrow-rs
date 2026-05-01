@@ -71,7 +71,9 @@ impl FixedSizeBinaryArray {
     /// Create a new [`Scalar`] from `value`
     pub fn new_scalar(value: impl AsRef<[u8]>) -> Scalar<Self> {
         let v = value.as_ref();
-        Scalar::new(Self::new(v.len() as _, Buffer::from(v), None))
+        let value_length =
+            i32::try_from(v.len()).expect("FixedSizeBinaryArray value length exceeds i32");
+        Scalar::new(Self::new(value_length, Buffer::from(v), None))
     }
 
     /// Create a new [`FixedSizeBinaryArray`] from the provided parts, returning an error on failure
@@ -84,6 +86,7 @@ impl FixedSizeBinaryArray {
     /// * `size < 0`
     /// * `values.len() / size != nulls.len()`
     /// * `size == 0 && values.len() != 0`
+    /// * `len * size > i32::MAX`
     pub fn try_new(
         value_length: i32,
         values: Buffer,
@@ -136,10 +139,9 @@ impl FixedSizeBinaryArray {
     /// permit constructing any FixedSizeBinaryArray that has a valid offset
     /// past i32::MAX
     fn validate_lengths(value_size: usize, len: usize) -> Result<(), ArrowError> {
-        if len == 0 {
-            return Ok(());
-        }
-        let max_offset = value_size.checked_mul(len - 1).ok_or_else(|| {
+        // the offset is also calculated for the next element (i + 1) so
+        // check `len` (not last element index) to ensure that all offsets are valid
+        let max_offset = value_size.checked_mul(len).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
                 "FixedSizeBinaryArray error: value size {value_size} * len {len} exceeds maximum valid offset"
             ))
@@ -167,6 +169,7 @@ impl FixedSizeBinaryArray {
     ///
     /// * `value_length < 0`
     /// * `value_length * len` would overflow `usize`
+    /// * `value_length * len > i32::MAX`
     pub fn new_null(value_length: i32, len: usize) -> Self {
         const BITS_IN_A_BYTE: usize = 8;
         let value_size = value_length.to_usize().unwrap();
@@ -1073,8 +1076,8 @@ mod tests {
 
     #[test]
     fn test_validate_lengths_allows_i32_max_offset() {
-        FixedSizeBinaryArray::validate_lengths(1, (i32::MAX as usize) + 1).unwrap();
-        FixedSizeBinaryArray::validate_lengths(262_176, 8192).unwrap();
+        FixedSizeBinaryArray::validate_lengths(1, i32::MAX as usize).unwrap();
+        FixedSizeBinaryArray::validate_lengths(262_176, 8191).unwrap();
     }
 
     #[test]
