@@ -85,16 +85,16 @@ impl FixedSizeBinaryArray {
     /// * `values.len() / size != nulls.len()`
     /// * `size == 0 && values.len() != 0`
     pub fn try_new(
-        size: i32,
+        value_length: i32,
         values: Buffer,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        let data_type = DataType::FixedSizeBinary(size);
-        let s = size.to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
+        let data_type = DataType::FixedSizeBinary(value_length);
+        let value_size = value_length.to_usize().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {value_length}"))
         })?;
 
-        let len = match values.len().checked_div(s) {
+        let len = match values.len().checked_div(value_size) {
             Some(len) => {
                 if let Some(n) = nulls.as_ref() {
                     if n.len() != len {
@@ -120,13 +120,43 @@ impl FixedSizeBinaryArray {
             }
         };
 
+        Self::validate_lengths(value_size, len)?;
+
         Ok(Self {
             data_type,
             value_data: values,
-            value_length: size,
+            value_length,
             nulls,
             len,
         })
+    }
+
+    /// Some calculations below use i32 arithmetic which can overflow when
+    /// valid offsets are past i32::MAX. Until that is solved for real do not
+    /// permit constructing any FixedSizeBinaryArray that has a valid offset
+    /// past i32::MAX
+    fn validate_lengths(value_size: usize, len: usize) -> Result<(), ArrowError> {
+        if len == 0 {
+            return Ok(());
+        }
+        let max_offset = value_size.checked_mul(len - 1).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "FixedSizeBinaryArray error: value size {value_size} * len {len} exceeds maximum valid offset"
+            ))
+        })?;
+
+        let max_valid_offset: usize = i32::MAX.try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "FixedSizeBinaryArray error: maximum valid offset exceeds i32::MAX, got {max_offset}"
+            ))
+        })?;
+
+        if max_offset > max_valid_offset {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "FixedSizeBinaryArray error: value size {value_size} * length {len} exceeds maximum valid offset of {max_valid_offset}"
+            )));
+        };
+        Ok(())
     }
 
     /// Create a new [`FixedSizeBinaryArray`] of length `len` where all values are null
