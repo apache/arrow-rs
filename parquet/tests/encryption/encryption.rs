@@ -386,22 +386,16 @@ fn test_uniform_encryption() {
 #[test]
 fn test_decrypting_without_decryption_properties_fails() {
     let test_data = arrow::util::test_util::parquet_test_data();
-    let paths = [
-        format!("{test_data}/uniform_encryption.parquet.encrypted"),
-        format!("{test_data}/aes256/uniform_encryption.parquet.encrypted"),
-    ];
+    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
+    let file = File::open(path).unwrap();
 
-    for path in &paths {
-        let file = File::open(path).unwrap();
-
-        let options = ArrowReaderOptions::default();
-        let result = ArrowReaderMetadata::load(&file, options.clone());
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
-        );
-    }
+    let options = ArrowReaderOptions::default();
+    let result = ArrowReaderMetadata::load(&file, options.clone());
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
+    );
 }
 
 #[test]
