@@ -1015,8 +1015,8 @@ impl ColumnChunkMetaData {
 
     /// [`Compression`] for this column.
     ///
-    /// This is a default value suitable for passing to [`WriterPropertiesBuilder::set_compression`]
-    /// constructed from the `codec` field of the Parquet `ColumnMetaData`
+    /// This is a default value suitable for passing to [`WriterPropertiesBuilder::set_compression`].
+    /// It is constructed from the `codec` field of the Parquet `ColumnMetaData`
     ///
     /// [`WriterPropertiesBuilder::set_compression`]: crate::file::properties::WriterPropertiesBuilder
     pub fn compression(&self) -> Compression {
