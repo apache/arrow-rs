@@ -36,6 +36,7 @@ use crate::{
     write_thrift_field,
 };
 use std::io::Error;
+use std::num::TryFromIntError;
 use std::str::Utf8Error;
 
 #[derive(Debug)]
@@ -46,6 +47,7 @@ pub(crate) enum ThriftProtocolError {
     InvalidElementType(u8),
     FieldDeltaOverflow { field_delta: u8, last_field_id: i16 },
     InvalidBoolean(u8),
+    IntegerOverflow,
     Utf8Error,
     SkipDepth(FieldType),
     SkipUnsupportedType(FieldType),
@@ -70,6 +72,9 @@ impl From<ThriftProtocolError> for ParquetError {
             ThriftProtocolError::InvalidBoolean(value) => {
                 general_err!("cannot convert {} into bool", value)
             }
+            ThriftProtocolError::IntegerOverflow => {
+                general_err!("integer overflow decoding thrift value")
+            }
             ThriftProtocolError::Utf8Error => general_err!("invalid utf8"),
             ThriftProtocolError::SkipDepth(field_type) => {
                 general_err!("cannot parse past {:?}", field_type)
@@ -91,6 +96,13 @@ impl From<Utf8Error> for ThriftProtocolError {
 impl From<Error> for ThriftProtocolError {
     fn from(e: Error) -> Self {
         Self::IO(e)
+    }
+}
+
+impl From<TryFromIntError> for ThriftProtocolError {
+    fn from(_: TryFromIntError) -> Self {
+        // ignore error payload to reduce the size of ThriftProtocolError
+        Self::IntegerOverflow
     }
 }
 
@@ -317,7 +329,13 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             // high bits set high if count and type encoded separately
             possible_element_count as i32
         } else {
-            self.read_vlq()? as _
+            // The list size on the wire is an unsigned varint, but we represent
+            // it as `i32` (matching Java's `int` and the Parquet Thrift schema).
+            // A varint that decodes above `i32::MAX` is malformed input — reject
+            // it here at the protocol layer rather than letting the cast wrap
+            // into a negative size that downstream allocation code has to
+            // re-validate.
+            i32::try_from(self.read_vlq()?)?
         };
 
         Ok(ListIdentifier {
@@ -686,8 +704,18 @@ where
     R: ThriftCompactInputProtocol<'a>,
     T: ReadThrift<'a, R>,
 {
+    // `read_list_begin` rejects sizes above `i32::MAX`; `try_reserve_exact`
+    // catches the remaining attacker-controlled allocation case so a
+    // malformed `size` cannot trigger a `Vec::with_capacity` panic.
     let list_ident = prot.read_list_begin()?;
-    let mut res = Vec::with_capacity(list_ident.size as usize);
+    let len = list_ident.size as usize;
+    let mut res: Vec<T> = Vec::new();
+    if res.try_reserve_exact(len).is_err() {
+        return Err(general_err!(
+            "cannot allocate Thrift list of {} elements",
+            len
+        ));
+    }
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
         res.push(val);
@@ -1105,5 +1133,35 @@ pub(crate) mod tests {
         let header = prot.read_list_begin().expect("error reading list header");
         assert_eq!(header.size, 0);
         assert_eq!(header.element_type, ElementType::Byte);
+    }
+
+    /// Regression test for the 10-byte fuzzer repro that panicked inside
+    /// `alloc::raw_vec::handle_error` with "capacity overflow" before this
+    /// fix: the list header for `SchemaElement` decodes to a multi-billion
+    /// `size`, and `Vec::with_capacity(size)` then tripped the
+    /// `size_of::<SchemaElement>() * size` isize-overflow check. After the
+    /// fix the allocation goes through `try_reserve_exact` and returns a
+    /// clean `ParquetError`.
+    #[test]
+    fn test_decode_metadata_huge_thrift_list_does_not_panic() {
+        let bytes: [u8; 10] = [0x28, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0x51];
+        let result = crate::file::metadata::ParquetMetaDataReader::decode_metadata(&bytes);
+        // The bytes are not valid Parquet metadata — we only require that
+        // `decode_metadata` returns an error rather than panicking.
+        assert!(result.is_err(), "expected error, got {result:?}");
+    }
+
+    /// A Thrift list header whose `size` varint decodes above `i32::MAX`
+    /// must be rejected at the protocol layer rather than wrapping into a
+    /// negative `i32` and being smuggled into downstream allocation code.
+    #[test]
+    fn test_read_list_begin_size_above_i32_max_returns_err() {
+        // List header: element_type=8 (Binary), 0xF=follow-up varint.
+        // Varint 80 80 80 80 08 decodes to 0x8000_0000 = i32::MAX + 1.
+        let mut data: Vec<u8> = vec![0xF8];
+        data.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x08]);
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = prot.read_list_begin();
+        assert!(result.is_err(), "expected error, got {result:?}");
     }
 }
