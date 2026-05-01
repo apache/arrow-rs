@@ -3753,6 +3753,7 @@ pub(crate) mod tests {
         for col in batch.columns() {
             assert_eq!(col.len(), 4);
             assert_eq!(col.logical_null_count(), 4);
+            assert_eq!(*col.data_type(), ArrowDataType::Null);
         }
     }
 
