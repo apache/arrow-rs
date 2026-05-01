@@ -170,14 +170,16 @@ impl FixedSizeBinaryArray {
     /// * `value_length < 0`
     /// * `value_length * len` would overflow `usize`
     /// * `value_length * len > i32::MAX`
+    /// * `value_length * len * 8` would overflow `usize`
     pub fn new_null(value_length: i32, len: usize) -> Self {
         const BITS_IN_A_BYTE: usize = 8;
         let value_size = value_length.to_usize().unwrap();
         Self::validate_lengths(value_size, len).unwrap();
         let capacity_in_bytes = value_size.checked_mul(len).unwrap();
+        let capacity_in_bits = capacity_in_bytes.checked_mul(BITS_IN_A_BYTE).unwrap();
         Self {
             data_type: DataType::FixedSizeBinary(value_length),
-            value_data: MutableBuffer::new_null(capacity_in_bytes * BITS_IN_A_BYTE).into(),
+            value_data: MutableBuffer::new_null(capacity_in_bits).into(),
             nulls: Some(NullBuffer::new_null(len)),
             value_length,
             len,
@@ -345,8 +347,16 @@ impl FixedSizeBinaryArray {
                     // Now that we know how large each element is we can reserve
                     // sufficient capacity in the underlying mutable buffer for
                     // the data.
-                    buffer.reserve(iter_size_hint * len);
-                    buffer.extend_zeros(slice.len() * prepend);
+                    if let Some(capacity) = iter_size_hint.checked_mul(len) {
+                        buffer.reserve(capacity);
+                    }
+                    let prepend_zeros = slice.len().checked_mul(prepend).ok_or_else(|| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "FixedSizeBinaryArray error: value size {} * prepend {prepend} exceeds usize",
+                            slice.len()
+                        ))
+                    })?;
+                    buffer.extend_zeros(prepend_zeros);
                 }
                 bit_util::set_bit(null_buf.as_slice_mut(), len);
                 buffer.extend_from_slice(slice);
@@ -513,7 +523,9 @@ impl FixedSizeBinaryArray {
             } else {
                 let len = slice.len();
                 size = Some(len);
-                buffer.reserve(iter_size_hint * len);
+                if let Some(capacity) = iter_size_hint.checked_mul(len) {
+                    buffer.reserve(capacity);
+                }
             }
 
             buffer.extend_from_slice(slice);
