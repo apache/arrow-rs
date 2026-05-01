@@ -1313,7 +1313,7 @@ async fn test_multi_threaded_encrypted_writing_deprecated() {
     let (col_writer_tasks, mut col_array_channels) =
         spawn_column_parallel_row_group_writer(col_writers, 100).unwrap();
 
-        // Send the ArrowLeafColumn data to the respective column writer channels
+    // Send the ArrowLeafColumn data to the respective column writer channels
     let mut worker_iter = col_array_channels.iter_mut();
     for (array, field) in to_write.iter().zip(schema.fields()) {
         for leaves in compute_leaves(field, array).unwrap() {
