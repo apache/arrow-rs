@@ -4581,6 +4581,44 @@ mod tests {
     }
 
     #[test]
+    fn test_arrow_writer_skip_path_in_schema() {
+        let batch_schema = Schema::new(vec![Field::new("int32", DataType::Int32, false)]);
+        let file_schema = Arc::new(batch_schema.clone());
+
+        let batch = RecordBatch::try_new(
+            Arc::new(batch_schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+
+        // default options should still write path_in_schema
+        let skip_options = ArrowWriterOptions::new();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut buf, file_schema.clone(), skip_options).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // override to not write path_in_schema
+        let skip_options = ArrowWriterOptions::new().with_properties(
+            WriterProperties::builder()
+                .set_write_path_in_schema(false)
+                .build(),
+        );
+
+        let mut buf2 = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut buf2, file_schema.clone(), skip_options)
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // buf2 should be a bit smaller due to lack of path_in_schema
+        assert!(buf.len() > buf2.len());
+    }
+
+    #[test]
     fn mismatched_schemas() {
         let batch_schema = Schema::new(vec![Field::new("count", DataType::Int32, false)]);
         let file_schema = Arc::new(Schema::new(vec![Field::new(
