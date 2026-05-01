@@ -1185,7 +1185,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let data_page_offset = self.column_metrics.data_page_offset.unwrap_or(0) as i64;
 
         let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
-            .set_compression(self.codec.into())
+            .set_compression(self.codec)
             .set_encodings_mask(EncodingMask::new_from_encodings(self.encodings.iter()))
             .set_page_encoding_stats(self.encoding_stats.clone())
             .set_total_compressed_size(total_compressed_size)

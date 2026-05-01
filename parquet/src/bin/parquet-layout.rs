@@ -118,7 +118,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                 .iter()
                 .zip(schema.columns())
                 .map(|(column, column_schema)| {
-                    let compression = compression(column.compression());
+                    let compression = compression(column.compression_codec());
                     let mut pages = vec![];
 
                     let mut start = column

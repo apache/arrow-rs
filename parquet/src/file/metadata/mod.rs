@@ -96,7 +96,8 @@ pub(crate) mod thrift;
 mod writer;
 
 use crate::basic::{
-    BoundaryOrder, ColumnOrder, CompressionCodec, Encoding, EncodingMask, PageType, Type,
+    BoundaryOrder, ColumnOrder, Compression, CompressionCodec, Encoding, EncodingMask, PageType,
+    Type,
 };
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
@@ -1012,8 +1013,18 @@ impl ColumnChunkMetaData {
         self.num_values
     }
 
-    /// Compression for this column.
-    pub fn compression(&self) -> CompressionCodec {
+    /// [`Compression`] for this column.
+    ///
+    /// This is a default value suitable for passing to [`WriterPropertiesBuilder::set_compression`]
+    /// constructed from the `codec` field of the Parquet `ColumnMetaData`
+    ///
+    /// [`WriterPropertiesBuilder::set_compression`]: crate::file::properties::WriterPropertiesBuilder
+    pub fn compression(&self) -> Compression {
+        self.compression.into()
+    }
+
+    /// Returns the compression codec used when writing this column.
+    pub fn compression_codec(&self) -> CompressionCodec {
         self.compression
     }
 
@@ -1281,8 +1292,14 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
-    /// Sets compression.
-    pub fn set_compression(mut self, value: CompressionCodec) -> Self {
+    /// Sets compression codec given a [`Compression`] configuration value.
+    pub fn set_compression(mut self, value: Compression) -> Self {
+        self.0.compression = value.into();
+        self
+    }
+
+    /// Sets compression codec.
+    pub fn set_compression_codec(mut self, value: CompressionCodec) -> Self {
         self.0.compression = value;
         self
     }
@@ -1816,7 +1833,7 @@ mod tests {
             ))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
-            .set_compression(CompressionCodec::SNAPPY)
+            .set_compression_codec(CompressionCodec::SNAPPY)
             .set_total_compressed_size(2000)
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
@@ -1856,7 +1873,7 @@ mod tests {
             ))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
-            .set_compression(CompressionCodec::SNAPPY)
+            .set_compression_codec(CompressionCodec::SNAPPY)
             .set_total_compressed_size(2000)
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
@@ -1899,7 +1916,7 @@ mod tests {
                 [Encoding::PLAIN, Encoding::RLE].iter(),
             ))
             .set_num_values(1000)
-            .set_compression(CompressionCodec::SNAPPY)
+            .set_compression_codec(CompressionCodec::SNAPPY)
             .set_total_compressed_size(2000)
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)

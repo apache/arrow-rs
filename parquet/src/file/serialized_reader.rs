@@ -637,7 +637,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         page_locations: Option<Vec<PageLocation>>,
         props: ReaderPropertiesPtr,
     ) -> Result<Self> {
-        let decompressor = create_codec(meta.compression().into(), props.codec_options())?;
+        let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (start, len) = meta.byte_range();
 
         let state = match page_locations {
