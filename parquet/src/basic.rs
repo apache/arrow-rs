@@ -820,6 +820,11 @@ enum CompressionCodec {
 }
 );
 
+// NOTE: This enum likely belongs in file::properties now, but moving it there would be a
+// breaking API change, that's probably not worth the pain. If a new codec is added to the
+// Parquet specification, or any other breaking changes are made to this enum, this can be
+// revisited.
+
 /// Supported block compression algorithms.
 ///
 /// Block compression can yield non-trivial improvements to storage efficiency at the expense
