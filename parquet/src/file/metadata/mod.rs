@@ -919,14 +919,21 @@ impl LevelHistogram {
         }
     }
 
+    /// Increments the count for a level value by `count`.
+    #[inline]
+    pub fn increment_by(&mut self, level: i16, count: i64) {
+        self.inner[level as usize] += count;
+    }
+
     /// Updates histogram values using provided repetition levels
     ///
     /// # Panics
     /// if any of the levels is greater than the length of the histogram (
     /// the argument supplied to [`Self::try_new`])
+    #[deprecated(since = "58.2.0", note = "Use `increment_by` instead")]
     pub fn update_from_levels(&mut self, levels: &[i16]) {
         for &level in levels {
-            self.inner[level as usize] += 1;
+            self.increment_by(level, 1);
         }
     }
 }
@@ -1683,6 +1690,14 @@ mod tests {
     use crate::file::metadata::thrift::tests::{
         read_column_chunk, read_column_chunk_with_options, read_row_group,
     };
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_level_histogram_update_from_levels_compat() {
+        let mut histogram = LevelHistogram::try_new(2).unwrap();
+        histogram.update_from_levels(&[0, 2, 1, 2, 2]);
+        assert_eq!(histogram.values(), &[1, 1, 3]);
+    }
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {

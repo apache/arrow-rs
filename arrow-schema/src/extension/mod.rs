@@ -257,6 +257,15 @@ pub trait ExtensionType: Sized {
     /// this extension type.
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError>;
 
+    /// Validate this extension type for a field with the given data type and
+    /// metadata.
+    ///
+    /// The default implementation delegates to [`Self::try_new`]. Extension
+    /// types may override this to validate without constructing `Self`.
+    fn validate(data_type: &DataType, metadata: Self::Metadata) -> Result<(), ArrowError> {
+        Self::try_new(data_type, metadata).map(|_| ())
+    }
+
     /// Construct this extension type from field metadata and data type.
     ///
     /// This is a provided method that extracts extension type information from

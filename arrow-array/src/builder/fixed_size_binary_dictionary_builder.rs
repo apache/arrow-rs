@@ -201,6 +201,10 @@ where
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
     }
+
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        Arc::new(self.finish_preserve_values())
+    }
 }
 
 impl<K> FixedSizeBinaryDictionaryBuilder<K>
