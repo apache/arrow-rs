@@ -89,15 +89,15 @@ is described in the [contributing] guide.
 
 Planned Release Schedule
 
-| Approximate Date | Version     | Notes                                   |
-| ---------------- |-------------|-----------------------------------------|
-| May 2026         | [`58.3.0`]  | Minor, NO breaking API changes          |
-| May 2026         | [`57.3.1`]  | Patch, NO breaking API changes          |
-| May 2026         | [`56.2.1`]  | Patch, NO breaking API changes          |
-| May 2026         | [`59.0.0`]  | Major, potentially breaking API changes |
-| June 2026        | [`59.1.0`]  | Minor, NO breaking API changes          |
-| July 2026        | [`59.2.0`]  | Minor, NO breaking API changes          |
-| August 2026      | [`60.0.0`]  | Major, potentially breaking API changes |
+| Approximate Date | Version    | Notes                                   |
+| ---------------- | ---------- | --------------------------------------- |
+| May 2026         | [`58.3.0`] | Minor, NO breaking API changes          |
+| May 2026         | [`57.3.1`] | Patch, NO breaking API changes          |
+| May 2026         | [`56.2.1`] | Patch, NO breaking API changes          |
+| May 2026         | [`59.0.0`] | Major, potentially breaking API changes |
+| June 2026        | [`59.1.0`] | Minor, NO breaking API changes          |
+| July 2026        | [`59.2.0`] | Minor, NO breaking API changes          |
+| August 2026      | [`60.0.0`] | Major, potentially breaking API changes |
 
 [`58.1.0`]: https://github.com/apache/arrow-rs/issues/9108
 [`58.2.0`]: https://github.com/apache/arrow-rs/issues/9109
