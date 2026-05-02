@@ -247,21 +247,18 @@ impl ArrayReader for FixedLenByteArrayReader {
                                     i64::from_le_bytes(b[8..16].try_into().unwrap()),
                                 )
                             };
-                            Arc::new(IntervalMonthDayNanoArray::from_unary(&binary, f))
-                                as ArrayRef
+                            Arc::new(IntervalMonthDayNanoArray::from_unary(&binary, f)) as ArrayRef
                         } else {
                             // Coerced 12-byte: months(4) + days(4) + millis(4)
                             let f = |b: &[u8]| {
-                                let millis =
-                                    i32::from_le_bytes(b[8..12].try_into().unwrap());
+                                let millis = i32::from_le_bytes(b[8..12].try_into().unwrap());
                                 IntervalMonthDayNano::new(
                                     i32::from_le_bytes(b[0..4].try_into().unwrap()),
                                     i32::from_le_bytes(b[4..8].try_into().unwrap()),
                                     millis as i64 * 1_000_000,
                                 )
                             };
-                            Arc::new(IntervalMonthDayNanoArray::from_unary(&binary, f))
-                                as ArrayRef
+                            Arc::new(IntervalMonthDayNanoArray::from_unary(&binary, f)) as ArrayRef
                         }
                     }
                 }
