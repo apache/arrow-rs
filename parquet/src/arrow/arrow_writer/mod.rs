@@ -2782,7 +2782,7 @@ mod tests {
                             .set_bloom_filter_enabled(bloom_filter)
                             .set_bloom_filter_position(bloom_filter_position);
                         if let Some(ndv) = bloom_filter_ndv {
-                            builder = builder.set_bloom_filter_ndv(ndv);
+                            builder = builder.set_bloom_filter_max_ndv(ndv);
                         }
                         let props = builder.build();
 

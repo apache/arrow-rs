@@ -380,7 +380,8 @@ fn main() {
                 writer_properties_builder = writer_properties_builder.set_bloom_filter_fpp(value);
             }
             if let Some(value) = args.bloom_filter_ndv {
-                writer_properties_builder = writer_properties_builder.set_bloom_filter_ndv(value);
+                writer_properties_builder =
+                    writer_properties_builder.set_bloom_filter_max_ndv(value);
             }
             if let Some(value) = args.bloom_filter_position {
                 writer_properties_builder =

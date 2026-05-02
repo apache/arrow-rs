@@ -20,6 +20,7 @@ use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
+use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, SortingColumn};
 use crate::schema::types::ColumnPath;
 use std::str::FromStr;
@@ -1068,10 +1069,10 @@ impl WriterPropertiesBuilder {
     /// * If the bloom filter is enabled previously then it is a no-op.
     ///
     /// * If the bloom filter is not enabled, default values for ndv and fpp
-    ///   value are used used. See [`set_bloom_filter_ndv`] and
+    ///   value are used used. See [`set_bloom_filter_max_ndv`] and
     ///   [`set_bloom_filter_fpp`] to further adjust the ndv and fpp.
     ///
-    /// [`set_bloom_filter_ndv`]: Self::set_bloom_filter_ndv
+    /// [`set_bloom_filter_max_ndv`]: Self::set_bloom_filter_max_ndv
     /// [`set_bloom_filter_fpp`]: Self::set_bloom_filter_fpp
     pub fn set_bloom_filter_enabled(mut self, value: bool) -> Self {
         self.default_column_properties
@@ -1103,9 +1104,15 @@ impl WriterPropertiesBuilder {
     /// been called.
     ///
     /// [`set_bloom_filter_enabled`]: Self::set_bloom_filter_enabled
-    pub fn set_bloom_filter_ndv(mut self, value: u64) -> Self {
+    pub fn set_bloom_filter_max_ndv(mut self, value: u64) -> Self {
         self.default_column_properties.set_bloom_filter_ndv(value);
         self
+    }
+
+    /// Deprecated alias for [`Self::set_bloom_filter_max_ndv`].
+    #[deprecated(since = "59.0.0", note = "Use `set_bloom_filter_max_ndv` instead")]
+    pub fn set_bloom_filter_ndv(self, value: u64) -> Self {
+        self.set_bloom_filter_max_ndv(value)
     }
 
     // ----------------------------------------------------------------------
@@ -1206,10 +1213,11 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets the number of distinct values for bloom filter for a specific column.
+    /// Sets the maximum expected number of distinct values for bloom filter for
+    /// a specific column.
     ///
-    /// Takes precedence over [`Self::set_bloom_filter_ndv`].
-    pub fn set_column_bloom_filter_ndv(mut self, col: ColumnPath, value: u64) -> Self {
+    /// Takes precedence over [`Self::set_bloom_filter_max_ndv`].
+    pub fn set_column_bloom_filter_max_ndv(mut self, col: ColumnPath, value: u64) -> Self {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
         self
     }
@@ -1227,6 +1235,41 @@ impl WriterPropertiesBuilder {
     ) -> Self {
         self.get_mut_props(col)
             .set_data_page_v2_compression_ratio_threshold(value);
+        self
+    }
+
+    /// Deprecated alias for [`Self::set_column_bloom_filter_max_ndv`].
+    #[deprecated(
+        since = "59.0.0",
+        note = "Use `set_column_bloom_filter_max_ndv` instead"
+    )]
+    pub fn set_column_bloom_filter_ndv(self, col: ColumnPath, value: u64) -> Self {
+        self.set_column_bloom_filter_max_ndv(col, value)
+    }
+
+    /// Sets the [`BloomFilterProperties`] for all columns, implicitly enabling
+    /// the bloom filter.
+    ///
+    /// Both `fpp` and `ndv` from `value` are treated as explicit and will not
+    /// be overridden by the build-time row-group-size NDV fallback. For
+    /// dynamic NDV sizing (resolved to `max_row_group_row_count` at build
+    /// time), use [`Self::set_bloom_filter_enabled`] or
+    /// [`Self::set_bloom_filter_fpp`] instead.
+    pub fn set_bloom_filter_properties(mut self, value: BloomFilterProperties) -> Self {
+        self.default_column_properties
+            .set_bloom_filter_properties(value);
+        self
+    }
+
+    /// Sets the [`BloomFilterProperties`] for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_bloom_filter_properties`].
+    pub fn set_column_bloom_filter_properties(
+        mut self,
+        col: ColumnPath,
+        value: BloomFilterProperties,
+    ) -> Self {
+        self.get_mut_props(col).set_bloom_filter_properties(value);
         self
     }
 }
@@ -1316,6 +1359,29 @@ impl Default for EnabledStatistics {
 /// maintaining the target `fpp`. See [`Sbbf::fold_to_target_fpp`] for details on the
 /// folding algorithm.
 ///
+/// # Example
+///
+/// ```rust
+/// # use parquet::{
+/// #    file::properties::{BloomFilterProperties, WriterProperties},
+/// #    schema::types::ColumnPath,
+/// # };
+/// // Build a BloomFilterProperties via the builder, then apply it to one column.
+/// let bf = BloomFilterProperties::builder()
+///     .with_fpp(0.01)
+///     .with_max_ndv(10_000)
+///     .build();
+///
+/// let props = WriterProperties::builder()
+///     .set_column_bloom_filter_properties(ColumnPath::from("user_id"), bf.clone())
+///     .build();
+///
+/// assert_eq!(
+///     props.bloom_filter_properties(&ColumnPath::from("user_id")),
+///     Some(&bf)
+/// );
+/// ```
+///
 /// [`Sbbf::fold_to_target_fpp`]: crate::bloom_filter::Sbbf::fold_to_target_fpp
 #[derive(Debug, Clone, PartialEq)]
 pub struct BloomFilterProperties {
@@ -1332,7 +1398,7 @@ pub struct BloomFilterProperties {
     pub fpp: f64,
     /// Maximum expected number of distinct values. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
     ///
-    /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_ndv`].
+    /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_max_ndv`].
     ///
     /// When not explicitly set via the builder, this defaults to
     /// [`max_row_group_row_count`](WriterProperties::max_row_group_row_count) (resolved at
@@ -1349,7 +1415,7 @@ pub struct BloomFilterProperties {
     /// of the number of distinct values in a row group, it is recommended to set this value explicitly
     /// rather than relying on the default dynamic sizing based on `max_row_group_row_count`.
     /// If you do set this value explicitly it is probably best to set it for each column
-    /// individually via [`WriterPropertiesBuilder::set_column_bloom_filter_ndv`] rather than globally,
+    /// individually via [`WriterPropertiesBuilder::set_column_bloom_filter_max_ndv`] rather than globally,
     /// since different columns may have different numbers of distinct values.
     pub ndv: u64,
 }
@@ -1361,6 +1427,81 @@ impl Default for BloomFilterProperties {
             ndv: DEFAULT_BLOOM_FILTER_NDV,
         }
     }
+}
+
+impl BloomFilterProperties {
+    /// Returns a new [`BloomFilterPropertiesBuilder`] for constructing
+    /// [`BloomFilterProperties`] with custom values.
+    pub fn builder() -> BloomFilterPropertiesBuilder {
+        BloomFilterPropertiesBuilder::new()
+    }
+}
+
+/// Builder for [`BloomFilterProperties`].
+///
+/// Use [`BloomFilterProperties::builder`] or [`BloomFilterPropertiesBuilder::new`]
+/// as the entry point. Unset fields fall back to [`DEFAULT_BLOOM_FILTER_FPP`]
+/// and [`DEFAULT_BLOOM_FILTER_NDV`] at build time.
+#[derive(Debug, Clone, Default)]
+pub struct BloomFilterPropertiesBuilder {
+    fpp: Option<f64>,
+    ndv: Option<u64>,
+}
+
+impl BloomFilterPropertiesBuilder {
+    /// Returns a new builder with no fields set.
+    ///
+    /// Equivalent to [`BloomFilterProperties::builder`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the target false positive probability.
+    ///
+    /// The value must be in `(0.0, 1.0)` exclusively; this is validated at
+    /// build time by [`Self::build`] / [`Self::try_build`]. When unset,
+    /// [`DEFAULT_BLOOM_FILTER_FPP`] is used.
+    pub fn with_fpp(mut self, fpp: f64) -> Self {
+        self.fpp = Some(fpp);
+        self
+    }
+
+    /// Sets the maximum expected number of distinct values used to size the
+    /// bloom filter before folding. When unset, [`DEFAULT_BLOOM_FILTER_NDV`]
+    /// is used.
+    pub fn with_max_ndv(mut self, ndv: u64) -> Self {
+        self.ndv = Some(ndv);
+        self
+    }
+
+    /// Builds [`BloomFilterProperties`].
+    ///
+    /// Panics if the configured `fpp` is not in `(0.0, 1.0)` exclusive.
+    /// Use [`Self::try_build`] for a non-panicking alternative.
+    pub fn build(self) -> BloomFilterProperties {
+        self.try_build().unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Builds [`BloomFilterProperties`], returning an error instead of
+    /// panicking when the configured `fpp` is not in `(0.0, 1.0)` exclusive.
+    pub fn try_build(self) -> Result<BloomFilterProperties> {
+        let fpp = self.fpp.unwrap_or(DEFAULT_BLOOM_FILTER_FPP);
+        validate_bloom_filter_fpp(fpp).map_err(ParquetError::General)?;
+        let ndv = self.ndv.unwrap_or(DEFAULT_BLOOM_FILTER_NDV);
+        Ok(BloomFilterProperties { fpp, ndv })
+    }
+}
+
+/// Single source of truth for the bloom filter fpp range check, shared by
+/// [`ColumnProperties::set_bloom_filter_fpp`] (panic path) and
+/// [`BloomFilterPropertiesBuilder::try_build`] (Result path).
+fn validate_bloom_filter_fpp(fpp: f64) -> std::result::Result<(), String> {
+    if !(fpp > 0.0 && fpp < 1.0) {
+        return Err(format!(
+            "fpp must be between 0.0 and 1.0 exclusive, got {fpp}"
+        ));
+    }
+    Ok(())
 }
 
 /// Container for column properties that can be changed as part of writer.
@@ -1448,11 +1589,9 @@ impl ColumnProperties {
     ///
     /// Panics if the `value` is not between 0 and 1 exclusive
     fn set_bloom_filter_fpp(&mut self, value: f64) {
-        assert!(
-            value > 0. && value < 1.0,
-            "fpp must be between 0 and 1 exclusive, got {value}"
-        );
-
+        if let Err(msg) = validate_bloom_filter_fpp(value) {
+            panic!("{msg}");
+        }
         self.bloom_filter_properties
             .get_or_insert_with(Default::default)
             .fpp = value;
@@ -1464,6 +1603,17 @@ impl ColumnProperties {
         self.bloom_filter_properties
             .get_or_insert_with(Default::default)
             .ndv = value;
+        self.bloom_filter_ndv_is_set = true;
+    }
+
+    /// Sets the bloom filter properties for this column from a fully-built
+    /// [`BloomFilterProperties`], implicitly enabling the bloom filter.
+    ///
+    /// Both `fpp` and `ndv` from `value` are treated as explicit, so the
+    /// build-time row-group-size NDV fallback in
+    /// [`WriterPropertiesBuilder::build`] will not override them.
+    fn set_bloom_filter_properties(&mut self, value: BloomFilterProperties) {
+        self.bloom_filter_properties = Some(value);
         self.bloom_filter_ndv_is_set = true;
     }
 
@@ -1787,7 +1937,7 @@ mod tests {
             .set_column_dictionary_enabled(ColumnPath::from("col"), true)
             .set_column_statistics_enabled(ColumnPath::from("col"), EnabledStatistics::Chunk)
             .set_column_bloom_filter_enabled(ColumnPath::from("col"), true)
-            .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100_u64)
+            .set_column_bloom_filter_max_ndv(ColumnPath::from("col"), 100_u64)
             .set_column_bloom_filter_fpp(ColumnPath::from("col"), 0.1)
             .build();
 
@@ -1909,7 +2059,7 @@ mod tests {
         );
         assert_eq!(
             WriterProperties::builder()
-                .set_bloom_filter_ndv(100)
+                .set_bloom_filter_max_ndv(100)
                 .build()
                 .bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties {
@@ -1955,6 +2105,30 @@ mod tests {
         WriterProperties::builder()
             .set_data_page_v2_compression_ratio_threshold(0.0)
             .build();
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_writer_properties_deprecated_bloom_filter_ndv_setters_still_work() {
+        let col = ColumnPath::from("col");
+        let props = WriterProperties::builder()
+            .set_bloom_filter_ndv(100)
+            .set_column_bloom_filter_ndv(col.clone(), 200)
+            .build();
+        assert_eq!(
+            props.bloom_filter_properties(&ColumnPath::from("other")),
+            Some(&BloomFilterProperties {
+                fpp: DEFAULT_BLOOM_FILTER_FPP,
+                ndv: 100,
+            })
+        );
+        assert_eq!(
+            props.bloom_filter_properties(&col),
+            Some(&BloomFilterProperties {
+                fpp: DEFAULT_BLOOM_FILTER_FPP,
+                ndv: 200,
+            })
+        );
     }
 
     #[test]
@@ -2072,5 +2246,142 @@ mod tests {
         };
         assert_eq!(custom, custom);
         assert_ne!(opts, custom);
+    }
+
+    #[test]
+    fn test_bloom_filter_builder_default() {
+        let props = BloomFilterProperties::builder().build();
+        assert_eq!(props.fpp, DEFAULT_BLOOM_FILTER_FPP);
+        assert_eq!(props.ndv, DEFAULT_BLOOM_FILTER_NDV);
+        assert_eq!(props, BloomFilterProperties::default());
+        assert_eq!(
+            BloomFilterPropertiesBuilder::new().build(),
+            BloomFilterProperties::default()
+        );
+    }
+
+    #[test]
+    fn test_bloom_filter_builder_explicit_fpp() {
+        let props = BloomFilterProperties::builder().with_fpp(0.01).build();
+        assert_eq!(props.fpp, 0.01);
+        assert_eq!(props.ndv, DEFAULT_BLOOM_FILTER_NDV);
+    }
+
+    #[test]
+    fn test_bloom_filter_builder_explicit_ndv() {
+        let props = BloomFilterProperties::builder().with_max_ndv(1000).build();
+        assert_eq!(props.fpp, DEFAULT_BLOOM_FILTER_FPP);
+        assert_eq!(props.ndv, 1000);
+    }
+
+    #[test]
+    fn test_bloom_filter_builder_validates_fpp() {
+        for wrong_val in [0.0_f64, 1.0, -0.5, 2.0] {
+            let result = std::panic::catch_unwind(|| {
+                BloomFilterProperties::builder().with_fpp(wrong_val).build()
+            });
+            assert!(
+                result.is_err(),
+                "with_fpp({wrong_val}).build() should reject value outside (0, 1)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bloom_filter_builder_try_build_validates_fpp() {
+        for wrong_val in [0.0_f64, 1.0, -0.5, 2.0] {
+            let result = BloomFilterProperties::builder()
+                .with_fpp(wrong_val)
+                .try_build();
+            assert!(
+                result.is_err(),
+                "try_build() should return Err for fpp outside (0, 1)"
+            );
+        }
+
+        let ok = BloomFilterProperties::builder()
+            .with_fpp(0.01)
+            .with_max_ndv(1000)
+            .try_build()
+            .expect("valid fpp should yield Ok");
+        assert_eq!(ok.fpp, 0.01);
+        assert_eq!(ok.ndv, 1000);
+    }
+
+    #[test]
+    fn test_column_specific_implicit_ndv_uses_row_group_size() {
+        let custom_row_group_size: usize = 7777;
+        let col = ColumnPath::from("col");
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(custom_row_group_size))
+            .set_column_bloom_filter_enabled(col.clone(), true)
+            .build();
+        let bf = props
+            .bloom_filter_properties(&col)
+            .expect("bloom filter should be enabled for col");
+
+        assert_eq!(bf.ndv, custom_row_group_size as u64);
+        assert_eq!(bf.fpp, DEFAULT_BLOOM_FILTER_FPP);
+    }
+
+    #[test]
+    fn test_set_bloom_filter_properties_applied_globally() {
+        let bf = BloomFilterProperties::builder()
+            .with_fpp(0.01)
+            .with_max_ndv(500)
+            .build();
+        let props = WriterProperties::builder()
+            .set_bloom_filter_properties(bf.clone())
+            .build();
+
+        assert_eq!(
+            props.bloom_filter_properties(&ColumnPath::from("a")),
+            Some(&bf),
+        );
+        assert_eq!(
+            props.bloom_filter_properties(&ColumnPath::from("b")),
+            Some(&bf),
+        );
+    }
+
+    #[test]
+    fn test_set_column_bloom_filter_properties_overrides_global() {
+        let global = BloomFilterProperties::builder()
+            .with_fpp(0.01)
+            .with_max_ndv(500)
+            .build();
+        let tailored = BloomFilterProperties::builder()
+            .with_fpp(0.02)
+            .with_max_ndv(1000)
+            .build();
+
+        let col = ColumnPath::from("col");
+        let props = WriterProperties::builder()
+            .set_bloom_filter_properties(global.clone())
+            .set_column_bloom_filter_properties(col.clone(), tailored.clone())
+            .build();
+
+        assert_eq!(props.bloom_filter_properties(&col), Some(&tailored));
+        assert_eq!(
+            props.bloom_filter_properties(&ColumnPath::from("other")),
+            Some(&global)
+        );
+    }
+
+    #[test]
+    fn test_set_bloom_filter_properties_preserve_explicit_ndv() {
+        let bf = BloomFilterProperties::builder().with_max_ndv(42).build();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(99_999))
+            .set_bloom_filter_properties(bf)
+            .build();
+        let result = props
+            .bloom_filter_properties(&ColumnPath::from("col"))
+            .expect("bloom filter should be enabled");
+
+        assert_eq!(
+            result.ndv, 42,
+            "explicit ndv must not be overridden by row-group-size fallback"
+        );
     }
 }
