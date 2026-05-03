@@ -196,18 +196,27 @@ impl RecordDecoder {
             ));
         }
 
-        // csv_core::Reader writes end offsets relative to the start of the row
-        // Therefore scan through and offset these based on the cumulative row offsets
-        let mut row_offset = 0;
-        self.offsets[1..self.offsets_len]
-            .chunks_exact_mut(self.num_columns)
-            .for_each(|row| {
-                let offset = row_offset;
-                row.iter_mut().for_each(|x| {
-                    *x += offset;
-                    row_offset = *x;
-                });
-            });
+        // csv_core::Reader writes end offsets relative to the start of the row.
+        // Scan through and offset these by the cumulative row offsets so that
+        // each end offset is absolute over `self.data` after this loop.
+        //
+        // Use `checked_add` on the accumulator: malformed input that drives
+        // `csv_core` to emit row-relative offsets large enough to wrap a
+        // `usize` would otherwise hit `attempt to add with overflow` in debug
+        // builds and silently wrap to a wildly out-of-bounds index in release
+        // builds. Surface the overflow as a `CsvError` instead.
+        let mut row_offset: usize = 0;
+        for row in self.offsets[1..self.offsets_len].chunks_exact_mut(self.num_columns) {
+            let offset = row_offset;
+            for x in row.iter_mut() {
+                *x = x.checked_add(offset).ok_or_else(|| {
+                    ArrowError::CsvError(
+                        "CSV record offsets overflowed usize while flushing".to_string(),
+                    )
+                })?;
+                row_offset = *x;
+            }
+        }
 
         // Need to truncate data t1o the actual amount of data read
         let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
@@ -398,5 +407,43 @@ mod tests {
         let (read, bytes) = decoder.decode(csv.as_bytes(), 5).unwrap();
         assert_eq!(read, 5);
         assert_eq!(bytes, csv.len());
+    }
+
+    /// Regression test for a `cargo-fuzz` repro from the `arrow-csv` harness
+    /// being prototyped for #5332 / apache/arrow-rs#9885: 72 bytes that drove
+    /// `*x += offset` in `RecordDecoder::flush` past `usize::MAX`. After this
+    /// patch the overflow is surfaced as `ArrowError::CsvError` instead of
+    /// panicking.
+    #[test]
+    fn test_flush_offset_overflow_does_not_panic() {
+        let bytes: [u8; 72] = [
+            0x2e, 0x22, 0x3f, 0x0a, 0x31, 0x0a, 0x3f, 0x3f, 0x0a, 0x3c, 0x50, 0x50, 0x0a, 0x3f,
+            0x0a, 0x31, 0x0a, 0x3f, 0x38, 0x0a, 0x3c, 0x0a, 0x3f, 0x0a, 0x3c, 0x50, 0x50, 0x0a,
+            0x3f, 0x0a, 0x31, 0x0a, 0x3f, 0x38, 0x0a, 0x0a, 0x2e, 0x22, 0x3f, 0x0a, 0x31, 0x0a,
+            0x3f, 0x3f, 0x0a, 0xce, 0xce, 0xce, 0xb1, 0xce, 0xce, 0xce, 0xce, 0xce, 0xce, 0xce,
+            0xce, 0x31, 0x0a, 0x3f, 0x38, 0x0a, 0x3c, 0x0a, 0x3f, 0x0a, 0x3c, 0x0a, 0x3f, 0x0a,
+            0x3f, 0x69,
+        ];
+        // The fuzz harness uses 1 column / no header, which is what
+        // `Format::default().with_header(false)` infers from this input.
+        let mut decoder = RecordDecoder::new(Reader::new(), 1, false);
+        let mut input = &bytes[..];
+        loop {
+            let (_read, consumed) = match decoder.decode(input, 1024) {
+                Ok(r) => r,
+                Err(_) => break, // Either parse error or our new overflow guard.
+            };
+            if consumed == 0 {
+                break;
+            }
+            input = &input[consumed..];
+            // The buggy version panics inside `flush()`; the patched version
+            // either returns rows or surfaces a clean `CsvError`.
+            if decoder.flush().is_err() {
+                break;
+            }
+            decoder.clear();
+        }
+        // Reaching this assertion at all means we did not panic.
     }
 }
