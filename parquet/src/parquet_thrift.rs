@@ -286,6 +286,24 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     /// Skip the next `n` bytes of input.
     fn skip_bytes(&mut self, n: usize) -> ThriftProtocolResult<()>;
 
+    /// Upper bound on the number of bytes still available to read from this
+    /// input. Implementations backed by an in-memory slice can return the
+    /// exact remaining length; implementations wrapping a streaming reader
+    /// that doesn't know its bound should fall back to `usize::MAX`, which
+    /// is what the default impl returns.
+    ///
+    /// Used by [`read_thrift_vec`] to cap up-front list allocations: a Thrift
+    /// list element occupies at least one byte on the wire, so the list size
+    /// declared in the header is always at most `bytes_remaining()`. Without
+    /// this cap an attacker-controlled varint of `~i32::MAX` in the list
+    /// header drives a multi-GiB up-front allocation; `try_reserve_exact`
+    /// alone is not sufficient because on Linux with default overcommit the
+    /// allocator returns success and the OOM only surfaces under tools like
+    /// libFuzzer / ASan that observe the malloc size.
+    fn bytes_remaining(&self) -> usize {
+        usize::MAX
+    }
+
     /// Read a ULEB128 encoded unsigned varint from the input.
     fn read_vlq(&mut self) -> ThriftProtocolResult<u64> {
         // try the happy path first
@@ -551,6 +569,11 @@ impl<'a> ThriftSliceInputProtocol<'a> {
 
 impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a> {
     #[inline]
+    fn bytes_remaining(&self) -> usize {
+        self.buf.len()
+    }
+
+    #[inline]
     fn read_byte(&mut self) -> ThriftProtocolResult<u8> {
         let ret = *self.buf.first().ok_or(ThriftProtocolError::Eof)?;
         self.buf = &self.buf[1..];
@@ -704,18 +727,27 @@ where
     R: ThriftCompactInputProtocol<'a>,
     T: ReadThrift<'a, R>,
 {
-    // `read_list_begin` rejects sizes above `i32::MAX`; `try_reserve_exact`
-    // catches the remaining attacker-controlled allocation case so a
-    // malformed `size` cannot trigger a `Vec::with_capacity` panic.
+    // `read_list_begin` rejects sizes above `i32::MAX`, but on a 64-bit
+    // target that is still ~2 GiB of `T`s — easily a multi-GB up-front
+    // allocation when `T` is a struct like `SchemaElement`. Cap the
+    // up-front capacity by the bytes still in the input: each Thrift list
+    // element occupies at least one byte on the wire, so a declared size
+    // larger than what the reader has left is always invalid input. The
+    // subsequent `try_reserve_exact` then serves as belt-and-suspenders
+    // for protocol implementations that can't compute a tight bound.
     let list_ident = prot.read_list_begin()?;
-    let len = list_ident.size as usize;
+    let declared = list_ident.size as usize;
+    let bound = declared.min(prot.bytes_remaining());
     let mut res: Vec<T> = Vec::new();
-    if res.try_reserve_exact(len).is_err() {
+    if res.try_reserve_exact(bound).is_err() {
         return Err(general_err!(
             "cannot allocate Thrift list of {} elements",
-            len
+            declared
         ));
     }
+    // Iterate up to the declared length: `T::read_thrift` will surface a
+    // protocol-level EOF the moment the input is exhausted, which is the
+    // correct user-visible error for a header that overstates its list size.
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
         res.push(val);
@@ -1162,6 +1194,35 @@ pub(crate) mod tests {
         data.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x08]);
         let mut prot = ThriftSliceInputProtocol::new(&data);
         let result = prot.read_list_begin();
+        assert!(result.is_err(), "expected error, got {result:?}");
+    }
+
+    /// Regression test for a 7-byte cargo-fuzz repro found by the
+    /// `parquet/fuzz` `thrift_decode` harness on `parquet/main` after the
+    /// `try_reserve_exact` change: the fix above clamps `i32::MAX`-class
+    /// sizes, but on a 64-bit target the allocator is still asked for
+    /// ~6.6 GiB (`i32::MAX * size_of::<SchemaElement>()`) before the
+    /// `try_reserve_exact` Err path can fire, which is enough to OOM the
+    /// process under libFuzzer / ASan. Bounding by `bytes_remaining` keeps
+    /// the up-front allocation proportional to the input size, so on the
+    /// 7-byte input below the allocator is asked for at most a few bytes.
+    #[test]
+    fn test_decode_metadata_oom_repro_7byte_does_not_oom() {
+        let bytes: [u8; 7] = [0x26, 0xf6, 0xf6, 0xf6, 0xd4, 0x6b, 0x6c];
+        let result = crate::file::metadata::ParquetMetaDataReader::decode_metadata(&bytes);
+        assert!(result.is_err(), "expected error, got {result:?}");
+    }
+
+    /// Regression test for the larger 42-byte fuzz repro produced by the
+    /// `parquet/fuzz` `arrow_reader` harness with the seed corpus from
+    /// `apache/arrow-testing`. The header padding is the literal byte 0x20
+    /// (ASCII space) — those bytes drove the `Vec<SchemaElement>` allocation
+    /// past 6 GiB before this fix.
+    #[test]
+    fn test_decode_metadata_oom_repro_padded_does_not_oom() {
+        let mut bytes: Vec<u8> = vec![0x15, 0x20, 0x19, 0xf3, 0xff, 0xff, 0xff];
+        bytes.extend(std::iter::repeat(0x20u8).take(42 - bytes.len()));
+        let result = crate::file::metadata::ParquetMetaDataReader::decode_metadata(&bytes);
         assert!(result.is_err(), "expected error, got {result:?}");
     }
 }
