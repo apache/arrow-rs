@@ -1037,10 +1037,9 @@ pub fn array_from_json(
                 } else {
                     let view_obj = view.as_object().unwrap();
                     let size = view_obj["SIZE"].as_u64().unwrap() as usize;
-                    if size < 12 {
-                        // Inlined value
-                        let inlined = view_obj["INLINED"].as_str().unwrap();
-                        builder.append_value(inlined);
+                    // Check for INLINED key presence - inlined if SIZE <= 12
+                    if let Some(inlined) = view_obj.get("INLINED") {
+                        builder.append_value(inlined.as_str().unwrap());
                     } else {
                         // Reference to variadic buffer
                         let buffer_index = view_obj["BUFFER_INDEX"].as_u64().unwrap() as usize;
@@ -1068,10 +1067,9 @@ pub fn array_from_json(
                 } else {
                     let view_obj = view.as_object().unwrap();
                     let size = view_obj["SIZE"].as_u64().unwrap() as usize;
-                    if size < 12 {
-                        // Inlined value - stored as hex for binary
-                        let inlined = view_obj["INLINED"].as_str().unwrap();
-                        let data = hex::decode(inlined).unwrap();
+                    // Check for INLINED key presence - inlined if SIZE <= 12
+                    if let Some(inlined) = view_obj.get("INLINED") {
+                        let data = hex::decode(inlined.as_str().unwrap()).unwrap();
                         builder.append_value(&data);
                     } else {
                         // Reference to variadic buffer
