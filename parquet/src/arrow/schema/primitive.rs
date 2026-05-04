@@ -115,17 +115,22 @@ fn from_parquet(parquet_type: &Type) -> Result<DataType> {
             scale,
             precision,
             ..
-        } => match physical_type {
-            PhysicalType::BOOLEAN => Ok(DataType::Boolean),
-            PhysicalType::INT32 => from_int32(basic_info, *scale, *precision),
-            PhysicalType::INT64 => from_int64(basic_info, *scale, *precision),
-            PhysicalType::INT96 => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-            PhysicalType::FLOAT => Ok(DataType::Float32),
-            PhysicalType::DOUBLE => Ok(DataType::Float64),
-            PhysicalType::BYTE_ARRAY => from_byte_array(basic_info, *precision, *scale),
-            PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                from_fixed_len_byte_array(basic_info, *scale, *precision, *type_length)
-            }
+        } => match basic_info.logical_type_ref() {
+            // Any physical type can have the UNKNOWN logical type annotation. Check for that first.
+            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#unknown-always-null
+            Some(&LogicalType::Unknown) => Ok(DataType::Null),
+            _ => match physical_type {
+                PhysicalType::BOOLEAN => Ok(DataType::Boolean),
+                PhysicalType::INT32 => from_int32(basic_info, *scale, *precision),
+                PhysicalType::INT64 => from_int64(basic_info, *scale, *precision),
+                PhysicalType::INT96 => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+                PhysicalType::FLOAT => Ok(DataType::Float32),
+                PhysicalType::DOUBLE => Ok(DataType::Float64),
+                PhysicalType::BYTE_ARRAY => from_byte_array(basic_info, *precision, *scale),
+                PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+                    from_fixed_len_byte_array(basic_info, *scale, *precision, *type_length)
+                }
+            },
         },
         Type::GroupType { .. } => unreachable!(),
     }
@@ -194,8 +199,6 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
                 unit
             )),
         },
-        // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#unknown-always-null
-        (Some(LogicalType::Unknown), _) => Ok(DataType::Null),
         (None, ConvertedType::UINT_8) => Ok(DataType::UInt8),
         (None, ConvertedType::UINT_16) => Ok(DataType::UInt16),
         (None, ConvertedType::UINT_32) => Ok(DataType::UInt32),

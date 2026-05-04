@@ -24,7 +24,8 @@ use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
+    ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
+    RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -309,6 +310,19 @@ impl RowGroupReaderBuilder {
     ) -> Result<NextState, ParquetError> {
         let result = match current_state {
             RowGroupDecoderState::Start { row_group_info } => {
+                // Short-circuit once the overall output limit is exhausted.
+                //
+                // `self.limit` tracks how many more rows the reader is still
+                // allowed to emit and is decremented as each row group is
+                // planned in `StartData`, so `Some(0)` means earlier row
+                // groups have already produced the full requested output.
+                if matches!(self.limit, Some(0)) {
+                    return Ok(NextState::result(
+                        RowGroupDecoderState::Finished,
+                        DecodeResult::Finished,
+                    ));
+                }
+
                 let column_chunks = None; // no prior column chunks
 
                 let Some(filter) = self.filter.take() else {
@@ -458,10 +472,24 @@ impl RowGroupReaderBuilder {
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
                 );
-                // `with_predicate` actually evaluates the filter
 
-                plan_builder =
-                    plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
+                // When this is the final predicate in the chain and an output
+                // limit is set, tell the filter evaluation to stop once enough
+                // matching rows have been accumulated.
+                let predicate_limit = self
+                    .limit
+                    .filter(|_| filter_info.is_last())
+                    .map(|l| l.saturating_add(self.offset.unwrap_or(0)));
+
+                // Evaluate the filter via `with_predicate_options`, opting into
+                // early termination when this is the final predicate and an
+                // output limit was set.
+                let mut predicate_options =
+                    PredicateOptions::new(array_reader, filter_info.current_mut());
+                if let Some(limit) = predicate_limit {
+                    predicate_options = predicate_options.with_limit(limit, row_count);
+                }
+                plan_builder = plan_builder.with_predicate_options(predicate_options)?;
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
