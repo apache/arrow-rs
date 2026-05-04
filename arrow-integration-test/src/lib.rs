@@ -203,6 +203,15 @@ pub struct ArrowJsonColumn {
     /// The type id for union types
     #[serde(rename = "TYPE_ID")]
     pub type_id: Option<Vec<i8>>,
+    /// The sizes for ListView/LargeListView types
+    #[serde(rename = "SIZE")]
+    pub size: Option<Vec<Value>>,
+    /// The views for BinaryView/Utf8View types
+    #[serde(rename = "VIEWS")]
+    pub views: Option<Vec<Value>>,
+    /// The variadic data buffers for BinaryView/Utf8View types
+    #[serde(rename = "VARIADIC_DATA_BUFFERS")]
+    pub variadic_data_buffers: Option<Vec<String>>,
     /// The children columns for nested types
     pub children: Option<Vec<ArrowJsonColumn>>,
 }
@@ -772,6 +781,66 @@ pub fn array_from_json(
                 .unwrap();
             Ok(Arc::new(LargeListArray::from(list_data)))
         }
+        DataType::ListView(child_field) => {
+            let null_buf = create_null_buf(&json_col);
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
+            let offsets: Vec<i32> = json_col
+                .offset
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap() as i32)
+                .collect();
+            let sizes: Vec<i32> = json_col
+                .size
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap() as i32)
+                .collect();
+            let list_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_buffer(Buffer::from(offsets.to_byte_slice()))
+                .add_buffer(Buffer::from(sizes.to_byte_slice()))
+                .add_child_data(child_array.into_data())
+                .null_bit_buffer(Some(null_buf))
+                .build()
+                .unwrap();
+            Ok(Arc::new(ListViewArray::from(list_data)))
+        }
+        DataType::LargeListView(child_field) => {
+            let null_buf = create_null_buf(&json_col);
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
+            let offsets: Vec<i64> = json_col
+                .offset
+                .unwrap()
+                .iter()
+                .map(|v| match v {
+                    Value::Number(n) => n.as_i64().unwrap(),
+                    Value::String(s) => s.parse::<i64>().unwrap(),
+                    _ => panic!("64-bit offset must be either string or number"),
+                })
+                .collect();
+            let sizes: Vec<i64> = json_col
+                .size
+                .unwrap()
+                .iter()
+                .map(|v| match v {
+                    Value::Number(n) => n.as_i64().unwrap(),
+                    Value::String(s) => s.parse::<i64>().unwrap(),
+                    _ => panic!("64-bit size must be either string or number"),
+                })
+                .collect();
+            let list_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_buffer(Buffer::from(offsets.to_byte_slice()))
+                .add_buffer(Buffer::from(sizes.to_byte_slice()))
+                .add_child_data(child_array.into_data())
+                .null_bit_buffer(Some(null_buf))
+                .build()
+                .unwrap();
+            Ok(Arc::new(LargeListViewArray::from(list_data)))
+        }
         DataType::FixedSizeList(child_field, _) => {
             let children = json_col.children.clone().unwrap();
             let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
@@ -953,6 +1022,87 @@ pub fn array_from_json(
                 UnionArray::try_new(fields.clone(), type_ids.into(), offset, children).unwrap();
             Ok(Arc::new(array))
         }
+        DataType::Utf8View => {
+            let views = json_col.views.ok_or_else(|| {
+                ArrowError::JsonError("Utf8View requires VIEWS field".to_string())
+            })?;
+            let variadic_buffers = json_col.variadic_data_buffers.unwrap_or_default();
+            let validity = json_col.validity.as_ref();
+
+            let mut builder = StringViewBuilder::new();
+            for (i, view) in views.iter().enumerate() {
+                let is_valid = validity.map_or(1, |v| v[i]);
+                if is_valid == 0 {
+                    builder.append_null();
+                } else {
+                    let view_obj = view.as_object().unwrap();
+                    let size = view_obj["SIZE"].as_u64().unwrap() as usize;
+                    if size < 12 {
+                        // Inlined value
+                        let inlined = view_obj["INLINED"].as_str().unwrap();
+                        builder.append_value(inlined);
+                    } else {
+                        // Reference to variadic buffer
+                        let buffer_index = view_obj["BUFFER_INDEX"].as_u64().unwrap() as usize;
+                        let offset = view_obj["OFFSET"].as_u64().unwrap() as usize;
+                        let buffer_data = hex::decode(&variadic_buffers[buffer_index]).unwrap();
+                        let s = std::str::from_utf8(&buffer_data[offset..offset + size]).unwrap();
+                        builder.append_value(s);
+                    }
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::BinaryView => {
+            let views = json_col.views.ok_or_else(|| {
+                ArrowError::JsonError("BinaryView requires VIEWS field".to_string())
+            })?;
+            let variadic_buffers = json_col.variadic_data_buffers.unwrap_or_default();
+            let validity = json_col.validity.as_ref();
+
+            let mut builder = BinaryViewBuilder::new();
+            for (i, view) in views.iter().enumerate() {
+                let is_valid = validity.map_or(1, |v| v[i]);
+                if is_valid == 0 {
+                    builder.append_null();
+                } else {
+                    let view_obj = view.as_object().unwrap();
+                    let size = view_obj["SIZE"].as_u64().unwrap() as usize;
+                    if size < 12 {
+                        // Inlined value - stored as hex for binary
+                        let inlined = view_obj["INLINED"].as_str().unwrap();
+                        let data = hex::decode(inlined).unwrap();
+                        builder.append_value(&data);
+                    } else {
+                        // Reference to variadic buffer
+                        let buffer_index = view_obj["BUFFER_INDEX"].as_u64().unwrap() as usize;
+                        let offset = view_obj["OFFSET"].as_u64().unwrap() as usize;
+                        let buffer_data = hex::decode(&variadic_buffers[buffer_index]).unwrap();
+                        builder.append_value(&buffer_data[offset..offset + size]);
+                    }
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::RunEndEncoded(run_ends_field, values_field) => {
+            let children = json_col.children.clone().unwrap();
+            if children.len() != 2 {
+                return Err(ArrowError::JsonError(
+                    "RunEndEncoded requires exactly 2 children".to_string(),
+                ));
+            }
+            let run_ends_array = array_from_json(run_ends_field, children[0].clone(), dictionaries)?;
+            let values_array = array_from_json(values_field, children[1].clone(), dictionaries)?;
+
+            let run_array_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_child_data(run_ends_array.into_data())
+                .add_child_data(values_array.into_data())
+                .build()
+                .unwrap();
+
+            Ok(make_array(run_array_data))
+        }
         t => Err(ArrowError::JsonError(format!(
             "data type {t} not supported"
         ))),
@@ -1092,6 +1242,9 @@ impl ArrowJsonBatch {
                         data: Some(data),
                         offset: None,
                         type_id: None,
+                        size: None,
+                        views: None,
+                        variadic_data_buffers: None,
                         children: None,
                     }
                 }
@@ -1102,6 +1255,9 @@ impl ArrowJsonBatch {
                     data: None,
                     offset: None,
                     type_id: None,
+                    size: None,
+                    views: None,
+                    variadic_data_buffers: None,
                     children: None,
                 },
             };
