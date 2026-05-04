@@ -262,8 +262,9 @@ git commit --no-verify -m "... commit message ..."
 This project follows the guidance for AI generated submissions used by the
 [Arrow Project](https://arrow.apache.org/docs/dev/developers/overview.html#ai-generated-code).
 As such, it is expected that you will:
+
 - Only submit a PR if you are able to debug and own the changes yourself - review all generated 
-code to understand every detail
+  code to understand every detail
 - Match the style and conventions used in the rest of the codebase, including PR titles and descriptions
 - Be upfront about AI usage and summarise what was AI-generated
 - If there are parts you don’t fully understand, leave comments on your own PR explaining what steps you took to verify correctness
