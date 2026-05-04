@@ -138,6 +138,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     min_value: Option<T::T>,
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
+    bloom_filter_target_fpp: f64,
     variable_length_bytes: Option<i64>,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
@@ -187,7 +188,9 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     type Values = [T::T];
 
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
-        self.bloom_filter.take()
+        let mut sbbf = self.bloom_filter.take()?;
+        sbbf.fold_to_target_fpp(self.bloom_filter_target_fpp);
+        Some(sbbf)
     }
 
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
@@ -205,10 +208,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
-        let bloom_filter = props
-            .bloom_filter_properties(descr.path())
-            .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
-            .transpose()?;
+        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(props, descr)?;
 
         let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
@@ -219,6 +219,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             num_values: 0,
             statistics_enabled,
             bloom_filter,
+            bloom_filter_target_fpp,
             min_value: None,
             max_value: None,
             variable_length_bytes: None,
@@ -381,6 +382,21 @@ fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace:
             T::try_from_le_slice(&f16::to_le_bytes(f16::from_f32(replace))).unwrap()
         }
         _ => val.clone(),
+    }
+}
+
+/// Creates a bloom filter sized for the column's configured NDV, returning the filter
+/// and the target FPP for folding.
+pub(crate) fn create_bloom_filter(
+    props: &WriterProperties,
+    descr: &ColumnDescPtr,
+) -> Result<(Option<Sbbf>, f64)> {
+    match props.bloom_filter_properties(descr.path()) {
+        Some(bf_props) => Ok((
+            Some(Sbbf::new_with_ndv_fpp(bf_props.ndv, bf_props.fpp)?),
+            bf_props.fpp,
+        )),
+        None => Ok((None, 0.0)),
     }
 }
 

@@ -22,6 +22,20 @@ use arrow_array::{cast::AsArray, types::*};
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::sync::Arc;
+macro_rules! ree_length {
+    ($array:expr, $run_type:ty, $k:expr, $v:expr) => {{
+        let ree = $array.as_run_opt::<$run_type>().unwrap();
+        let inner_value_lengths = length(ree.values().as_ref())?;
+        let out_ree = unsafe {
+            RunArray::<$run_type>::new_unchecked(
+                DataType::RunEndEncoded(Arc::clone($k), Arc::clone($v)),
+                ree.run_ends().clone(),
+                inner_value_lengths,
+            )
+        };
+        Ok(Arc::new(out_ree) as ArrayRef)
+    }};
+}
 
 fn length_impl<P: ArrowPrimitiveType>(
     offsets: &OffsetBuffer<P::Native>,
@@ -50,14 +64,14 @@ fn bit_length_impl<P: ArrowPrimitiveType>(
 /// For string array and binary array, length is the number of bytes of each value.
 ///
 /// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray/StringViewArray, BinaryArray/LargeBinaryArray, FixedSizeListArray,
-///   and ListViewArray/LargeListViewArray, or DictionaryArray with above Arrays as values
+///   and ListViewArray/LargeListViewArray, or DictionaryArray with above Arrays as values, or
+///   RunEndEncoded arrays with above arrays as values
 /// * length of null is null.
 pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     if let Some(d) = array.as_any_dictionary_opt() {
         let lengths = length(d.values().as_ref())?;
         return Ok(d.with_values(lengths));
     }
-
     match array.data_type() {
         DataType::List(_) => {
             let list = array.as_list::<i32>();
@@ -116,6 +130,15 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 list.nulls().cloned(),
             )?))
         }
+        DataType::RunEndEncoded(k, v) => match k.data_type() {
+            DataType::Int16 => ree_length!(array, Int16Type, &k, &v),
+            DataType::Int32 => ree_length!(array, Int32Type, &k, &v),
+            DataType::Int64 => ree_length!(array, Int64Type, &k, &v),
+            _ => Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid run-end type: {:?}",
+                k.data_type()
+            ))),
+        },
         other => Err(ArrowError::ComputeError(format!(
             "length not supported for {other:?}"
         ))),
@@ -844,5 +867,40 @@ mod tests {
 
         let result = bit_length(&array).unwrap();
         assert_eq!(result.as_ref(), &Int32Array::from(vec![32; 4]));
+    }
+    #[test]
+    fn length_test_ree_string_values() {
+        use arrow_array::RunArray;
+        use arrow_array::types::Int32Type;
+
+        let string_values = StringArray::from(vec!["hello", "owl", "test", "arrow", "a"]);
+        let run_ends = PrimitiveArray::<Int32Type>::from(vec![2i32, 5, 9, 11, 14]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &string_values).unwrap();
+
+        let result = length(&ree_array).unwrap();
+        let result = result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        let result_values = result
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        let expected: Int32Array = vec![5, 3, 4, 5, 1].into();
+        assert_eq!(&expected, result_values);
+    }
+    #[test]
+    fn length_test_ree_invalid_type_early_fail() {
+        use arrow_array::RunArray;
+        use arrow_array::types::Int32Type;
+
+        let uint64_values = UInt64Array::from(vec![1u64, 2, 3]);
+        let run_ends = PrimitiveArray::<Int32Type>::from(vec![1i32, 2, 3]);
+        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &uint64_values).unwrap();
+
+        assert!(length(&ree_array).is_err());
     }
 }
