@@ -710,12 +710,7 @@ where
     let list_ident = prot.read_list_begin()?;
     let len = list_ident.size as usize;
     let mut res: Vec<T> = Vec::new();
-    if res.try_reserve_exact(len).is_err() {
-        return Err(general_err!(
-            "cannot allocate Thrift list of {} elements",
-            len
-        ));
-    }
+    res.try_reserve_exact(len)?;
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
         res.push(val);

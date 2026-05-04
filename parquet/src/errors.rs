@@ -18,6 +18,7 @@
 //! Common Parquet errors and macros.
 
 use core::num::TryFromIntError;
+use std::collections::TryReserveError;
 use std::error::Error;
 use std::string::FromUtf8Error;
 use std::{cell, io, result, str};
@@ -128,6 +129,12 @@ impl From<str::Utf8Error> for ParquetError {
 
 impl From<FromUtf8Error> for ParquetError {
     fn from(e: FromUtf8Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
+impl From<TryReserveError> for ParquetError {
+    fn from(e: TryReserveError) -> ParquetError {
         ParquetError::External(Box::new(e))
     }
 }
