@@ -359,8 +359,7 @@ async fn test_uniform_encryption() {
             .unwrap();
     }
 
-    // AES-128: there is always a footer key even with a plaintext footer,
-    // but this is used for signing the footer.
+    // AES-128
     uniform_encryption(AES_128_FOOTER_KEY).await;
 
     // AES-256

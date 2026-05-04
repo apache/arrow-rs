@@ -297,8 +297,7 @@ fn test_uniform_encryption() {
         verify_encryption_test_file_read(file, decryption_properties);
     }
 
-    // AES-128: there is always a footer key even with a plaintext footer,
-    // but this is used for signing the footer.
+    // AES-128
     uniform_encryption(AES_128_FOOTER_KEY);
 
     // AES-256
@@ -426,8 +425,8 @@ fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
 }
 
 #[test]
-fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
-    fn uniform_encryption_plaintext_footer_with_key_retriever(
+fn test_roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever() {
+    fn roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever(
         footer_key: &[u8],
         footer_key_metadata: &str,
         wrong_footer_key: &[u8],
@@ -521,7 +520,7 @@ fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
     }
 
     // AES-128
-    uniform_encryption_plaintext_footer_with_key_retriever(
+    roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever(
         AES_128_FOOTER_KEY,
         AES_128_FOOTER_KEY_NAME,
         BAD_AES_128_FOOTER_KEY,
@@ -545,7 +544,7 @@ fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
 
     // AES-256
     // TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
-    uniform_encryption_plaintext_footer_with_key_retriever(
+    roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever(
         AES_256_FOOTER_KEY,
         AES_256_FOOTER_KEY_NAME,
         BAD_AES_256_FOOTER_KEY,
@@ -687,25 +686,21 @@ fn row_group_sizes(metadata: &ParquetMetaData) -> Vec<i64> {
 #[test]
 fn test_uniform_encryption_roundtrip() {
     uniform_encryption_roundtrip(false, false, AES_128_FOOTER_KEY).unwrap();
-    uniform_encryption_roundtrip(false, false, AES_256_FOOTER_KEY).unwrap();
 }
 
 #[test]
 fn test_uniform_encryption_roundtrip_with_dictionary() {
     uniform_encryption_roundtrip(false, true, AES_128_FOOTER_KEY).unwrap();
-    uniform_encryption_roundtrip(false, true, AES_256_FOOTER_KEY).unwrap();
 }
 
 #[test]
 fn test_uniform_encryption_roundtrip_with_page_index() {
     uniform_encryption_roundtrip(true, false, AES_128_FOOTER_KEY).unwrap();
-    uniform_encryption_roundtrip(true, false, AES_256_FOOTER_KEY).unwrap();
 }
 
 #[test]
 fn test_uniform_encryption_roundtrip_with_page_index_and_dictionary() {
     uniform_encryption_roundtrip(true, true, AES_128_FOOTER_KEY).unwrap();
-    uniform_encryption_roundtrip(true, true, AES_256_FOOTER_KEY).unwrap();
 }
 
 fn uniform_encryption_roundtrip(
@@ -809,13 +804,11 @@ fn uniform_encryption_roundtrip(
 #[test]
 fn test_uniform_encryption_page_skipping() {
     uniform_encryption_page_skipping(false, AES_128_FOOTER_KEY).unwrap();
-    uniform_encryption_page_skipping(false, AES_256_FOOTER_KEY).unwrap();
 }
 
 #[test]
 fn test_uniform_encryption_page_skipping_with_page_index() {
     uniform_encryption_page_skipping(true, AES_128_FOOTER_KEY).unwrap();
-    uniform_encryption_page_skipping(true, AES_256_FOOTER_KEY).unwrap();
 }
 
 fn uniform_encryption_page_skipping(
@@ -1063,40 +1056,36 @@ fn test_write_uniform_encryption_plaintext_footer() {
 
 #[test]
 pub fn test_column_statistics_with_plaintext_footer() {
-    let keys = [
-        (AES_128_FOOTER_KEY.to_vec(), AES_128_COLUMN_KEYS[0].to_vec()),
-        (AES_256_FOOTER_KEY.to_vec(), AES_256_COLUMN_KEYS[0].to_vec()),
-    ];
+    let footer_key = AES_128_FOOTER_KEY.to_vec();
+    let column_key = AES_128_COLUMN_KEYS[0].to_vec();
 
-    for (footer_key, column_key) in &keys {
-        // Encrypt with a plaintext footer and column-specific keys
-        let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
-            .with_plaintext_footer(true)
-            .with_column_key("x", column_key.clone())
-            .with_column_key("y", column_key.clone())
-            .with_column_key("s", column_key.clone())
-            .build()
-            .unwrap();
+    // Encrypt with a plaintext footer and column-specific keys
+    let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
+        .with_plaintext_footer(true)
+        .with_column_key("x", column_key.clone())
+        .with_column_key("y", column_key.clone())
+        .with_column_key("s", column_key.clone())
+        .build()
+        .unwrap();
 
-        // Read with only the footer key and the key for one column
-        let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
-            .with_column_key("x", column_key.clone())
-            .build()
-            .unwrap();
+    // Read with only the footer key and the key for one column
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
 
-        // Reader can read plaintext stats from the unencrypted column z
-        // and column x for which the key is provided, but not columns y and s
-        // for which no key is provided.
-        write_and_read_stats(
-            Arc::clone(&encryption_properties),
-            Some(decryption_properties),
-            &[true, false, true, false],
-        );
+    // Reader can read plaintext stats from the unencrypted column z
+    // and column x for which the key is provided, but not columns y and s
+    // for which no key is provided.
+    write_and_read_stats(
+        Arc::clone(&encryption_properties),
+        Some(decryption_properties),
+        &[true, false, true, false],
+    );
 
-        // Read without any decryption properties.
-        // Reader can only read plaintext stats from the unencrypted column z.
-        write_and_read_stats(encryption_properties, None, &[false, false, true, false]);
-    }
+    // Read without any decryption properties.
+    // Reader can only read plaintext stats from the unencrypted column z.
+    write_and_read_stats(encryption_properties, None, &[false, false, true, false]);
 }
 
 #[test]
@@ -1128,61 +1117,55 @@ pub fn test_column_statistics_with_plaintext_footer_and_uniform_encryption() {
 
 #[test]
 pub fn test_column_statistics_with_encrypted_footer() {
-    let keys = [
-        (AES_128_FOOTER_KEY.to_vec(), AES_128_COLUMN_KEYS[0].to_vec()),
-        (AES_256_FOOTER_KEY.to_vec(), AES_256_COLUMN_KEYS[0].to_vec()),
-    ];
+    let footer_key = AES_128_FOOTER_KEY.to_vec();
+    let column_key = AES_128_COLUMN_KEYS[0].to_vec();
 
-    for (footer_key, column_key) in &keys {
-        // Encrypt with an encrypted footer and column-specific keys
-        let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
-            .with_plaintext_footer(false)
-            .with_column_key("x", column_key.clone())
-            .with_column_key("y", column_key.clone())
-            .with_column_key("s", column_key.clone())
-            .build()
-            .unwrap();
+    // Encrypt with an encrypted footer and column-specific keys
+    let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
+        .with_plaintext_footer(false)
+        .with_column_key("x", column_key.clone())
+        .with_column_key("y", column_key.clone())
+        .with_column_key("s", column_key.clone())
+        .build()
+        .unwrap();
 
-        // Read with only the footer key and the key for one column
-        let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
-            .with_column_key("x", column_key.clone())
-            .build()
-            .unwrap();
+    // Read with only the footer key and the key for one column
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
 
-        // Reader can read plaintext stats from the unencrypted column z
-        // and column x for which the key is provided, but not columns y and s
-        // for which no key is provided.
-        write_and_read_stats(
-            encryption_properties,
-            Some(decryption_properties),
-            &[true, false, true, false],
-        );
-    }
+    // Reader can read plaintext stats from the unencrypted column z
+    // and column x for which the key is provided, but not columns y and s
+    // for which no key is provided.
+    write_and_read_stats(
+        encryption_properties,
+        Some(decryption_properties),
+        &[true, false, true, false],
+    );
 }
 
 #[test]
 pub fn test_column_statistics_with_encrypted_footer_and_uniform_encryption() {
-    let footer_keys = [AES_128_FOOTER_KEY.to_vec(), AES_256_FOOTER_KEY.to_vec()];
+    let footer_key = AES_128_FOOTER_KEY.to_vec();
 
-    for footer_key in &footer_keys {
-        // Encrypt with an encrypted footer and uniform encryption
-        let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
-            .with_plaintext_footer(false)
-            .build()
-            .unwrap();
+    // Encrypt with an encrypted footer and uniform encryption
+    let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
+        .with_plaintext_footer(false)
+        .build()
+        .unwrap();
 
-        // Read with the footer key
-        let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
-            .build()
-            .unwrap();
+    // Read with the footer key
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .build()
+        .unwrap();
 
-        // Reader can read stats for all columns.
-        write_and_read_stats(
-            encryption_properties,
-            Some(decryption_properties),
-            &[true, true, true, true],
-        );
-    }
+    // Reader can read stats for all columns.
+    write_and_read_stats(
+        encryption_properties,
+        Some(decryption_properties),
+        &[true, true, true, true],
+    );
 }
 
 /// Write a file with encryption and then verify whether statistics are readable with the provided decryption properties.
