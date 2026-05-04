@@ -685,28 +685,27 @@ fn row_group_sizes(metadata: &ParquetMetaData) -> Vec<i64> {
 
 #[test]
 fn test_uniform_encryption_roundtrip() {
-    uniform_encryption_roundtrip(false, false, AES_128_FOOTER_KEY).unwrap();
+    uniform_encryption_roundtrip(false, false).unwrap();
 }
 
 #[test]
 fn test_uniform_encryption_roundtrip_with_dictionary() {
-    uniform_encryption_roundtrip(false, true, AES_128_FOOTER_KEY).unwrap();
+    uniform_encryption_roundtrip(false, true).unwrap();
 }
 
 #[test]
 fn test_uniform_encryption_roundtrip_with_page_index() {
-    uniform_encryption_roundtrip(true, false, AES_128_FOOTER_KEY).unwrap();
+    uniform_encryption_roundtrip(true, false).unwrap();
 }
 
 #[test]
 fn test_uniform_encryption_roundtrip_with_page_index_and_dictionary() {
-    uniform_encryption_roundtrip(true, true, AES_128_FOOTER_KEY).unwrap();
+    uniform_encryption_roundtrip(true, true).unwrap();
 }
 
 fn uniform_encryption_roundtrip(
     page_index: bool,
     dictionary_encoding: bool,
-    footer_key: &[u8],
 ) -> parquet::errors::Result<()> {
     let x0_arrays = [
         Int32Array::from((0..100).collect::<Vec<_>>()),
@@ -724,6 +723,7 @@ fn uniform_encryption_roundtrip(
 
     let file = tempfile::tempfile()?;
 
+    let footer_key = AES_128_FOOTER_KEY;
     let file_encryption_properties =
         FileEncryptionProperties::builder(footer_key.to_vec()).build()?;
 
@@ -803,18 +803,15 @@ fn uniform_encryption_roundtrip(
 
 #[test]
 fn test_uniform_encryption_page_skipping() {
-    uniform_encryption_page_skipping(false, AES_128_FOOTER_KEY).unwrap();
+    uniform_encryption_page_skipping(false).unwrap();
 }
 
 #[test]
 fn test_uniform_encryption_page_skipping_with_page_index() {
-    uniform_encryption_page_skipping(true, AES_128_FOOTER_KEY).unwrap();
+    uniform_encryption_page_skipping(true).unwrap();
 }
 
-fn uniform_encryption_page_skipping(
-    page_index: bool,
-    footer_key: &[u8],
-) -> parquet::errors::Result<()> {
+fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result<()> {
     let x0_arrays = [
         Int32Array::from((0..100).collect::<Vec<_>>()),
         Int32Array::from((100..150).collect::<Vec<_>>()),
@@ -831,6 +828,7 @@ fn uniform_encryption_page_skipping(
 
     let file = tempfile::tempfile()?;
 
+    let footer_key = AES_128_FOOTER_KEY;
     let file_encryption_properties =
         FileEncryptionProperties::builder(footer_key.to_vec()).build()?;
 
