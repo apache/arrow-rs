@@ -19,11 +19,11 @@
 
 use crate::encryption_util;
 use crate::encryption_util::{
-    AES_128_COLUMN_KEYS, AES_128_COLUMN_NAMES, AES_128_FOOTER_KEY, AES_128_FOOTER_KEY_NAME,
-    AES_128_KEY_NAMES, AES_256_COLUMN_KEYS, AES_256_COLUMN_NAMES, AES_256_FOOTER_KEY,
-    AES_256_FOOTER_KEY_NAME, AES_256_KEY_NAMES, BAD_AES_128_FOOTER_KEY, BAD_AES_256_FOOTER_KEY,
-    TestKeyRetriever, read_encrypted_file, verify_column_indexes,
-    verify_encryption_double_test_data, verify_encryption_test_data,
+    AES_128_COLUMN_KEYS, AES_128_COLUMN_NAME_KEYS, AES_128_COLUMN_NAMES, AES_128_FOOTER_KEY,
+    AES_128_FOOTER_KEY_NAME, AES_128_KEY_NAME_KEY, AES_256_COLUMN_KEYS, AES_256_COLUMN_NAME_KEYS,
+    AES_256_COLUMN_NAMES, AES_256_FOOTER_KEY, AES_256_FOOTER_KEY_NAME, AES_256_KEY_NAME_KEY,
+    BAD_AES_128_FOOTER_KEY, BAD_AES_256_FOOTER_KEY, TestKeyRetriever, read_encrypted_file,
+    verify_column_indexes, verify_encryption_double_test_data, verify_encryption_test_data,
 };
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
@@ -72,30 +72,10 @@ async fn test_non_uniform_encryption_plaintext_footer() {
 
     // AES-128: there is always a footer key even with a plaintext footer,
     // but this is used for signing the footer.
-    non_uniform_encryption_plaintext_footer(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    )
-    .await;
+    non_uniform_encryption_plaintext_footer(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
 
     // AES-256
-    non_uniform_encryption_plaintext_footer(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    )
-    .await;
+    non_uniform_encryption_plaintext_footer(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS).await;
 }
 
 #[tokio::test]
@@ -314,31 +294,8 @@ async fn test_non_uniform_encryption() {
             .unwrap();
     }
 
-    // AES-128
-    non_uniform_encryption(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    )
-    .await;
-
-    // AES-256
-    non_uniform_encryption(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    )
-    .await;
+    non_uniform_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
+    non_uniform_encryption(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS).await;
 }
 
 #[tokio::test]
@@ -359,10 +316,7 @@ async fn test_uniform_encryption() {
             .unwrap();
     }
 
-    // AES-128
     uniform_encryption(AES_128_FOOTER_KEY).await;
-
-    // AES-256
     uniform_encryption(AES_256_FOOTER_KEY).await;
 }
 
@@ -395,31 +349,8 @@ async fn test_aes_ctr_encryption() {
         };
     }
 
-    // AES-128
-    aes_ctr_encryption(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    )
-    .await;
-
-    // AES-256
-    aes_ctr_encryption(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    )
-    .await;
+    aes_ctr_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
+    aes_ctr_encryption(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS).await;
 }
 
 #[tokio::test]
@@ -475,10 +406,7 @@ async fn test_write_non_uniform_encryption() {
         AES_128_FOOTER_KEY,
         AES_128_COLUMN_NAMES.to_vec(),
         AES_128_COLUMN_KEYS.iter().map(|&s| s.to_vec()).collect(),
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
+        AES_128_COLUMN_NAME_KEYS,
     )
     .await;
 
@@ -573,31 +501,15 @@ async fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
             .unwrap();
     }
 
-    // AES-128
     non_uniform_encryption_plaintext_footer_with_key_retriever(
         AES_128_FOOTER_KEY,
-        &[
-            (AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY),
-            (AES_128_KEY_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_KEY_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
+        AES_128_KEY_NAME_KEY,
     )
     .await;
 
-    // AES-256
     non_uniform_encryption_plaintext_footer_with_key_retriever(
         AES_256_FOOTER_KEY,
-        &[
-            (AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY),
-            (AES_256_KEY_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_KEY_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_KEY_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_KEY_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_KEY_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_KEY_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_KEY_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_KEY_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
+        AES_256_KEY_NAME_KEY,
     )
     .await;
 }
@@ -626,33 +538,8 @@ async fn test_non_uniform_encryption_with_key_retriever() {
             .unwrap();
     }
 
-    // AES-128
-    non_uniform_encryption_with_key_retriever(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY),
-            (AES_128_KEY_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_KEY_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    )
-    .await;
-
-    // AES-256
-    non_uniform_encryption_with_key_retriever(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY),
-            (AES_256_KEY_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_KEY_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_KEY_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_KEY_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_KEY_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_KEY_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_KEY_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_KEY_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    )
-    .await;
+    non_uniform_encryption_with_key_retriever(AES_128_FOOTER_KEY, AES_128_KEY_NAME_KEY).await;
+    non_uniform_encryption_with_key_retriever(AES_256_FOOTER_KEY, AES_256_KEY_NAME_KEY).await;
 }
 
 #[tokio::test]
@@ -676,10 +563,8 @@ async fn test_uniform_encryption_with_key_retriever() {
             .await
             .unwrap();
     }
-    // AES-128
-    uniform_encryption_with_key_retriever(AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY).await;
 
-    // AES-256
+    uniform_encryption_with_key_retriever(AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY).await;
     uniform_encryption_with_key_retriever(AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY).await;
 }
 
@@ -720,29 +605,9 @@ async fn test_decrypt_page_index_non_uniform() {
             .unwrap();
     }
 
-    decrypt_page_index_non_uniform(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    )
-    .await;
+    decrypt_page_index_non_uniform(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
 
-    decrypt_page_index_non_uniform(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    )
-    .await;
+    decrypt_page_index_non_uniform(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS).await;
 }
 
 async fn test_decrypt_page_index(

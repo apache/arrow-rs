@@ -19,9 +19,10 @@
 
 use crate::encryption_util;
 use crate::encryption_util::{
-    AES_128_COLUMN_KEYS, AES_128_COLUMN_NAMES, AES_128_FOOTER_KEY, AES_128_FOOTER_KEY_NAME,
-    AES_128_KEY_NAMES, AES_256_COLUMN_KEYS, AES_256_COLUMN_NAMES, AES_256_FOOTER_KEY,
-    AES_256_FOOTER_KEY_NAME, AES_256_KEY_NAMES, BAD_AES_128_FOOTER_KEY, BAD_AES_256_FOOTER_KEY,
+    AES_128_COLUMN_KEYS, AES_128_COLUMN_NAME_KEYS, AES_128_COLUMN_NAMES, AES_128_FOOTER_KEY,
+    AES_128_FOOTER_KEY_NAME, AES_128_KEY_NAME_KEY, AES_128_KEY_NAMES, AES_256_COLUMN_KEYS,
+    AES_256_COLUMN_NAME_KEYS, AES_256_COLUMN_NAMES, AES_256_FOOTER_KEY, AES_256_FOOTER_KEY_NAME,
+    AES_256_KEY_NAME_KEY, AES_256_KEY_NAMES, BAD_AES_128_FOOTER_KEY, BAD_AES_256_FOOTER_KEY,
     TestKeyRetriever, read_and_roundtrip_to_encrypted_file, verify_column_indexes,
     verify_encryption_test_file_read,
 };
@@ -63,28 +64,10 @@ fn test_non_uniform_encryption_plaintext_footer() {
 
     // AES-128: there is always a footer key even with a plaintext footer,
     // but this is used for signing the footer.
-    non_uniform_encryption_plaintext_footer(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    );
+    non_uniform_encryption_plaintext_footer(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS);
 
     // AES-256
-    non_uniform_encryption_plaintext_footer(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    );
+    non_uniform_encryption_plaintext_footer(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS);
 }
 
 #[test]
@@ -127,27 +110,8 @@ fn test_plaintext_footer_signature_verification() {
         );
     }
 
-    plaintext_footer_signature_verification(
-        BAD_AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    );
-
-    plaintext_footer_signature_verification(
-        BAD_AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    )
+    plaintext_footer_signature_verification(BAD_AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS);
+    plaintext_footer_signature_verification(BAD_AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS)
 }
 
 #[test]
@@ -207,29 +171,8 @@ fn test_non_uniform_encryption_disabled_aad_storage() {
         );
     }
 
-    // AES-128
-    non_uniform_encryption_disabled_aad_storage(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    );
-
-    // AES-256
-    non_uniform_encryption_disabled_aad_storage(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    );
+    non_uniform_encryption_disabled_aad_storage(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS);
+    non_uniform_encryption_disabled_aad_storage(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS);
 }
 
 #[test]
@@ -256,29 +199,8 @@ fn test_non_uniform_encryption() {
         verify_encryption_test_file_read(file, decryption_properties);
     }
 
-    // AES-128
-    non_uniform_encryption(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    );
-
-    // AES-256
-    non_uniform_encryption(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    );
+    non_uniform_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS);
+    non_uniform_encryption(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS);
 }
 
 #[test]
@@ -297,10 +219,7 @@ fn test_uniform_encryption() {
         verify_encryption_test_file_read(file, decryption_properties);
     }
 
-    // AES-128
     uniform_encryption(AES_128_FOOTER_KEY);
-
-    // AES-256
     uniform_encryption(AES_256_FOOTER_KEY);
 }
 
@@ -347,29 +266,9 @@ fn test_aes_ctr_encryption() {
             }
         };
     }
-    // AES-128
-    aes_ctr_encryption(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    );
 
-    // AES-256
-    aes_ctr_encryption(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    );
+    aes_ctr_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS);
+    aes_ctr_encryption(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS);
 }
 
 #[test]
@@ -397,30 +296,14 @@ fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
         verify_encryption_test_file_read(file, decryption_properties);
     }
 
-    // AES-128
     non_uniform_encryption_plaintext_footer_with_key_retriever(
         AES_128_FOOTER_KEY,
-        &[
-            (AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY),
-            (AES_128_KEY_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_KEY_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
+        AES_128_KEY_NAME_KEY,
     );
 
-    // AES-256
     non_uniform_encryption_plaintext_footer_with_key_retriever(
         AES_256_FOOTER_KEY,
-        &[
-            (AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY),
-            (AES_256_KEY_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_KEY_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_KEY_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_KEY_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_KEY_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_KEY_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_KEY_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_KEY_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
+        AES_256_KEY_NAME_KEY,
     );
 }
 
@@ -519,7 +402,6 @@ fn test_roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever() {
         );
     }
 
-    // AES-128
     roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever(
         AES_128_FOOTER_KEY,
         AES_128_FOOTER_KEY_NAME,
@@ -542,7 +424,6 @@ fn test_roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever() {
         ],
     );
 
-    // AES-256
     // TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
     roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever(
         AES_256_FOOTER_KEY,
@@ -625,31 +506,9 @@ fn test_non_uniform_encryption_with_key_retriever() {
         verify_encryption_test_file_read(file, decryption_properties);
     }
 
-    // AES-128
-    non_uniform_encryption_with_key_retriever(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY),
-            (AES_128_KEY_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_KEY_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    );
+    non_uniform_encryption_with_key_retriever(AES_128_FOOTER_KEY, AES_128_KEY_NAME_KEY);
 
-    // AES-256
-    non_uniform_encryption_with_key_retriever(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY),
-            (AES_256_KEY_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_KEY_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_KEY_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_KEY_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_KEY_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_KEY_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_KEY_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_KEY_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    );
+    non_uniform_encryption_with_key_retriever(AES_256_FOOTER_KEY, AES_256_KEY_NAME_KEY);
 }
 
 #[test]
@@ -672,10 +531,7 @@ fn test_uniform_encryption_with_key_retriever() {
         verify_encryption_test_file_read(file, decryption_properties);
     }
 
-    // AES-128
     uniform_encryption_with_key_retriever(AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY);
-
-    // AES-256
     uniform_encryption_with_key_retriever(AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY);
 }
 
@@ -950,10 +806,7 @@ fn test_write_non_uniform_encryption() {
         AES_128_FOOTER_KEY,
         AES_128_COLUMN_NAMES.to_vec(),
         AES_128_COLUMN_KEYS.iter().map(|&s| s.to_vec()).collect(),
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
+        AES_128_COLUMN_NAME_KEYS,
     );
 
     // TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
@@ -1347,20 +1200,12 @@ fn test_write_non_uniform_encryption_column_missmatch() {
         );
     }
 
-    // AES-128
     write_non_uniform_encryption_column_missmatch(
         AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
+        AES_128_COLUMN_NAME_KEYS,
+        AES_128_COLUMN_NAME_KEYS,
     );
 
-    // AES-256
     // TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
     write_non_uniform_encryption_column_missmatch(
         AES_256_FOOTER_KEY,
@@ -1641,27 +1486,9 @@ fn test_decrypt_page_index_non_uniform() {
         test_decrypt_page_index(&path, decryption_properties).unwrap();
     }
 
-    decrypt_page_index_non_uniform(
-        AES_128_FOOTER_KEY,
-        &[
-            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
-            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
-        ],
-    );
+    decrypt_page_index_non_uniform(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS);
 
-    decrypt_page_index_non_uniform(
-        AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-        ],
-    );
+    decrypt_page_index_non_uniform(AES_256_FOOTER_KEY, AES_256_COLUMN_NAME_KEYS);
 }
 
 fn test_decrypt_page_index(
