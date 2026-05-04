@@ -31,6 +31,43 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 
+pub(crate) const AES_128_FOOTER_KEY: &[u8; 16] = b"0123456789012345"; // 128bit/16
+pub(crate) const BAD_AES_128_FOOTER_KEY: &[u8; 16] = b"0000000000000000";
+pub(crate) const AES_128_FOOTER_KEY_NAME: &str = "kf";
+pub(crate) const AES_128_KEY_NAMES: [&str; 2] = ["kc1", "kc2"];
+pub(crate) const AES_128_COLUMN_NAMES: [&str; 2] = ["double_field", "float_field"];
+pub(crate) const AES_128_COLUMN_KEYS: [&[u8; 16]; 2] = [b"1234567890123450", b"1234567890123451"];
+
+pub(crate) const AES_256_FOOTER_KEY: &[u8; 32] = b"01234567890123456789012345678901"; // 256bit/32
+pub(crate) const BAD_AES_256_FOOTER_KEY: &[u8; 32] = b"00000000000000000000000000000000";
+pub(crate) const AES_256_FOOTER_KEY_NAME: &str = "kf";
+pub(crate) const AES_256_KEY_NAMES: [&str; 8] =
+    ["kc1", "kc2", "kc3", "kc4", "kc5", "kc6", "kc7", "kc8"];
+
+// TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
+pub(crate) const AES_256_COLUMN_NAMES: [&str; 9] = [
+    "double_field",
+    "float_field",
+    "boolean_field",
+    "int32_field",
+    "ba_field",
+    "flba_field",
+    "int64_field",
+    "int96_field",
+    "int64_field.list.int64_field",
+];
+pub(crate) const AES_256_COLUMN_KEYS: [&[u8]; 9] = [
+    b"12345678901234567890123456789012",
+    b"12345678901234567890123456789013",
+    b"12345678901234567890123456789014",
+    b"12345678901234567890123456789015",
+    b"12345678901234567890123456789016",
+    b"12345678901234567890123456789017",
+    b"12345678901234567890123456789018",
+    b"12345678901234567890123456789019",
+    b"12345678901234567890123456789018",
+];
+
 pub(crate) fn verify_encryption_double_test_data(
     record_batches: Vec<RecordBatch>,
     metadata: &ParquetMetaData,

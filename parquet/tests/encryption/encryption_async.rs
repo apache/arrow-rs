@@ -19,6 +19,9 @@
 
 use crate::encryption_util;
 use crate::encryption_util::{
+    AES_128_COLUMN_KEYS, AES_128_COLUMN_NAMES, AES_128_FOOTER_KEY, AES_128_FOOTER_KEY_NAME,
+    AES_128_KEY_NAMES, AES_256_COLUMN_KEYS, AES_256_COLUMN_NAMES, AES_256_FOOTER_KEY,
+    AES_256_FOOTER_KEY_NAME, AES_256_KEY_NAMES, BAD_AES_128_FOOTER_KEY, BAD_AES_256_FOOTER_KEY,
     TestKeyRetriever, read_encrypted_file, verify_column_indexes,
     verify_encryption_double_test_data, verify_encryption_test_data,
 };
@@ -70,44 +73,26 @@ async fn test_non_uniform_encryption_plaintext_footer() {
     // AES-128: there is always a footer key even with a plaintext footer,
     // but this is used for signing the footer.
     non_uniform_encryption_plaintext_footer(
-        b"0123456789012345", // 128bit/16
+        AES_128_FOOTER_KEY,
         &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
+            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
+            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
         ],
     )
     .await;
 
     // AES-256
     non_uniform_encryption_plaintext_footer(
-        b"01234567890123456789012345678901", // 256bit/32
+        AES_256_FOOTER_KEY,
         &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
+            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
+            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
+            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
+            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
+            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
+            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
+            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
+            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
         ],
     )
     .await;
@@ -132,11 +117,11 @@ async fn test_misspecified_encryption_keys() {
         let mut builder = FileDecryptionProperties::builder(footer_key.to_vec());
 
         if !column_1_key.is_empty() {
-            builder = builder.with_column_key("double_field", column_1_key.to_vec());
+            builder = builder.with_column_key(AES_128_COLUMN_NAMES[0], column_1_key.to_vec());
         }
 
         if !column_2_key.is_empty() {
-            builder = builder.with_column_key("float_field", column_2_key.to_vec());
+            builder = builder.with_column_key(AES_128_COLUMN_NAMES[1], column_2_key.to_vec());
         }
 
         for (column_name, key) in additional_column_keys {
@@ -157,9 +142,9 @@ async fn test_misspecified_encryption_keys() {
 
     // There is always a footer key even with a plaintext footer,
     // but this is used for signing the footer.
-    let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-    let column_1_key = "1234567890123450".as_bytes();
-    let column_2_key = "1234567890123451".as_bytes();
+    let footer_key = AES_128_FOOTER_KEY;
+    let column_1_key = AES_128_COLUMN_KEYS[0];
+    let column_2_key = AES_128_COLUMN_KEYS[1];
     let empty_column_key = &[];
 
     // Too short footer key
@@ -175,7 +160,7 @@ async fn test_misspecified_encryption_keys() {
     // Wrong footer key
     check_for_error(
         "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer",
-        b"1123456789012345",
+        BAD_AES_128_FOOTER_KEY,
         column_1_key,
         column_2_key,
         empty_column_key,
@@ -226,28 +211,16 @@ async fn test_misspecified_encryption_keys() {
     )
     .await;
 
-    let aes256_footer_key = "01234567890123456789012345678901".as_bytes(); // 256bit/32
-    let aes256_column_1_key = "12345678901234567890123456789012".as_bytes();
-    let aes256_column_2_key = "12345678901234567890123456789013".as_bytes();
+    let aes256_footer_key = AES_256_FOOTER_KEY;
+    let aes256_column_1_key = AES_256_COLUMN_KEYS[0];
+    let aes256_column_2_key = AES_256_COLUMN_KEYS[1];
     let additional_column_keys = &[
-        (
-            "boolean_field",
-            b"12345678901234567890123456789014".as_slice(),
-        ),
-        (
-            "int32_field",
-            b"12345678901234567890123456789015".as_slice(),
-        ),
-        ("ba_field", b"12345678901234567890123456789016".as_slice()),
-        ("flba_field", b"12345678901234567890123456789017".as_slice()),
-        (
-            "int64_field",
-            b"12345678901234567890123456789018".as_slice(),
-        ),
-        (
-            "int96_field",
-            b"12345678901234567890123456789019".as_slice(),
-        ),
+        (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
+        (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
+        (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
+        (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
+        (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
+        (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
     ];
 
     // Too short footer key
@@ -262,7 +235,7 @@ async fn test_misspecified_encryption_keys() {
     // Wrong footer key
     check_for_error(
         "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer",
-        b"11234567890123456789012345678901",
+        BAD_AES_256_FOOTER_KEY,
         aes256_column_1_key,
         aes256_column_2_key,
         additional_column_keys,
@@ -343,44 +316,26 @@ async fn test_non_uniform_encryption() {
 
     // AES-128
     non_uniform_encryption(
-        b"0123456789012345",
+        AES_128_FOOTER_KEY,
         &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
+            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
+            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
         ],
     )
     .await;
 
     // AES-256
     non_uniform_encryption(
-        b"01234567890123456789012345678901", // 256bit/32
+        AES_256_FOOTER_KEY,
         &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
+            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
+            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
+            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
+            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
+            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
+            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
+            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
+            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
         ],
     )
     .await;
@@ -388,18 +343,16 @@ async fn test_non_uniform_encryption() {
 
 #[tokio::test]
 async fn test_uniform_encryption() {
-    async fn uniform_encryption(footer_key: &[u8], column_keys: &[(&str, &[u8])]) {
+    async fn uniform_encryption(footer_key: &[u8]) {
         let path = encryption_util::encrypted_data_path(
             footer_key,
             "uniform_encryption.parquet.encrypted",
         );
         let mut file = File::open(&path).await.unwrap();
 
-        let mut builder = FileDecryptionProperties::builder(footer_key.to_vec());
-        for (column_name, key) in column_keys {
-            builder = builder.with_column_key(column_name, key.to_vec());
-        }
-        let decryption_properties = builder.build().unwrap();
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .build()
+            .unwrap();
 
         verify_encryption_test_file_read_async(&mut file, decryption_properties)
             .await
@@ -408,18 +361,10 @@ async fn test_uniform_encryption() {
 
     // AES-128: there is always a footer key even with a plaintext footer,
     // but this is used for signing the footer.
-    uniform_encryption(
-        b"0123456789012345", // 128bit/16
-        &[],
-    )
-    .await;
+    uniform_encryption(AES_128_FOOTER_KEY).await;
 
     // AES-256
-    uniform_encryption(
-        b"01234567890123456789012345678901", // 256bit/32
-        &[],
-    )
-    .await;
+    uniform_encryption(AES_256_FOOTER_KEY).await;
 }
 
 #[tokio::test]
@@ -453,26 +398,26 @@ async fn test_aes_ctr_encryption() {
 
     // AES-128
     aes_ctr_encryption(
-        b"0123456789012345", // 128bit/16
+        AES_128_FOOTER_KEY,
         &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
+            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
+            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
         ],
     )
     .await;
 
     // AES-256
     aes_ctr_encryption(
-        b"01234567890123456789012345678901", // 256bit/32
+        AES_256_FOOTER_KEY,
         &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
+            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
+            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
+            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
+            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
+            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
+            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
+            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
+            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
         ],
     )
     .await;
@@ -528,12 +473,12 @@ async fn test_write_non_uniform_encryption() {
     }
 
     write_non_uniform_encryption(
-        b"0123456789012345", // 128bit/16,
-        vec!["double_field", "float_field"],
-        vec![b"1234567890123450".to_vec(), b"1234567890123451".to_vec()],
+        AES_128_FOOTER_KEY,
+        AES_128_COLUMN_NAMES.to_vec(),
+        AES_128_COLUMN_KEYS.iter().map(|&s| s.to_vec()).collect(),
         &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
+            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
+            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
         ],
     )
     .await;
@@ -541,56 +486,18 @@ async fn test_write_non_uniform_encryption() {
     // AES-256
     // TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
     write_non_uniform_encryption(
-        b"01234567890123456789012345678901",
-        vec![
-            "double_field",
-            "float_field",
-            "boolean_field",
-            "int32_field",
-            "ba_field",
-            "flba_field",
-            "int64_field",
-            "int64_field.list.int64_field",
-            "int96_field",
-        ],
-        vec![
-            b"12345678901234567890123456789012".to_vec(),
-            b"12345678901234567890123456789013".to_vec(),
-            b"12345678901234567890123456789014".to_vec(),
-            b"12345678901234567890123456789015".to_vec(),
-            b"12345678901234567890123456789016".to_vec(),
-            b"12345678901234567890123456789017".to_vec(),
-            b"12345678901234567890123456789018".to_vec(),
-            b"12345678901234567890123456789018".to_vec(),
-            b"12345678901234567890123456789019".to_vec(),
-        ],
+        AES_256_FOOTER_KEY,
+        AES_256_COLUMN_NAMES.to_vec(),
+        AES_256_COLUMN_KEYS.iter().map(|&s| s.to_vec()).collect(),
         &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field.list.int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
+            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
+            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
+            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
+            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
+            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
+            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
+            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
+            (AES_256_COLUMN_NAMES[8], AES_256_COLUMN_KEYS[8]),
         ],
     )
     .await;
@@ -669,28 +576,28 @@ async fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
 
     // AES-128
     non_uniform_encryption_plaintext_footer_with_key_retriever(
-        b"0123456789012345",
+        AES_128_FOOTER_KEY,
         &[
-            ("kf", b"0123456789012345".as_slice()),
-            ("kc1", b"1234567890123450".as_slice()),
-            ("kc2", b"1234567890123451".as_slice()),
+            (AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY),
+            (AES_128_KEY_NAMES[0], AES_128_COLUMN_KEYS[0]),
+            (AES_128_KEY_NAMES[1], AES_128_COLUMN_KEYS[1]),
         ],
     )
     .await;
 
     // AES-256
     non_uniform_encryption_plaintext_footer_with_key_retriever(
-        b"01234567890123456789012345678901",
+        AES_256_FOOTER_KEY,
         &[
-            ("kf", b"01234567890123456789012345678901".as_slice()),
-            ("kc1", b"12345678901234567890123456789012".as_slice()),
-            ("kc2", b"12345678901234567890123456789013".as_slice()),
-            ("kc3", b"12345678901234567890123456789014".as_slice()),
-            ("kc4", b"12345678901234567890123456789015".as_slice()),
-            ("kc5", b"12345678901234567890123456789016".as_slice()),
-            ("kc6", b"12345678901234567890123456789017".as_slice()),
-            ("kc7", b"12345678901234567890123456789018".as_slice()),
-            ("kc8", b"12345678901234567890123456789019".as_slice()),
+            (AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY),
+            (AES_256_KEY_NAMES[0], AES_256_COLUMN_KEYS[0]),
+            (AES_256_KEY_NAMES[1], AES_256_COLUMN_KEYS[1]),
+            (AES_256_KEY_NAMES[2], AES_256_COLUMN_KEYS[2]),
+            (AES_256_KEY_NAMES[3], AES_256_COLUMN_KEYS[3]),
+            (AES_256_KEY_NAMES[4], AES_256_COLUMN_KEYS[4]),
+            (AES_256_KEY_NAMES[5], AES_256_COLUMN_KEYS[5]),
+            (AES_256_KEY_NAMES[6], AES_256_COLUMN_KEYS[6]),
+            (AES_256_KEY_NAMES[7], AES_256_COLUMN_KEYS[7]),
         ],
     )
     .await;
@@ -722,28 +629,28 @@ async fn test_non_uniform_encryption_with_key_retriever() {
 
     // AES-128
     non_uniform_encryption_with_key_retriever(
-        b"0123456789012345",
+        AES_128_FOOTER_KEY,
         &[
-            ("kf", b"0123456789012345".as_slice()),
-            ("kc1", b"1234567890123450".as_slice()),
-            ("kc2", b"1234567890123451".as_slice()),
+            (AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY),
+            (AES_128_KEY_NAMES[0], AES_128_COLUMN_KEYS[0]),
+            (AES_128_KEY_NAMES[1], AES_128_COLUMN_KEYS[1]),
         ],
     )
     .await;
 
     // AES-256
     non_uniform_encryption_with_key_retriever(
-        b"01234567890123456789012345678901",
+        AES_256_FOOTER_KEY,
         &[
-            ("kf", b"01234567890123456789012345678901".as_slice()),
-            ("kc1", b"12345678901234567890123456789012".as_slice()),
-            ("kc2", b"12345678901234567890123456789013".as_slice()),
-            ("kc3", b"12345678901234567890123456789014".as_slice()),
-            ("kc4", b"12345678901234567890123456789015".as_slice()),
-            ("kc5", b"12345678901234567890123456789016".as_slice()),
-            ("kc6", b"12345678901234567890123456789017".as_slice()),
-            ("kc7", b"12345678901234567890123456789018".as_slice()),
-            ("kc8", b"12345678901234567890123456789019".as_slice()),
+            (AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY),
+            (AES_256_KEY_NAMES[0], AES_256_COLUMN_KEYS[0]),
+            (AES_256_KEY_NAMES[1], AES_256_COLUMN_KEYS[1]),
+            (AES_256_KEY_NAMES[2], AES_256_COLUMN_KEYS[2]),
+            (AES_256_KEY_NAMES[3], AES_256_COLUMN_KEYS[3]),
+            (AES_256_KEY_NAMES[4], AES_256_COLUMN_KEYS[4]),
+            (AES_256_KEY_NAMES[5], AES_256_COLUMN_KEYS[5]),
+            (AES_256_KEY_NAMES[6], AES_256_COLUMN_KEYS[6]),
+            (AES_256_KEY_NAMES[7], AES_256_COLUMN_KEYS[7]),
         ],
     )
     .await;
@@ -771,10 +678,10 @@ async fn test_uniform_encryption_with_key_retriever() {
             .unwrap();
     }
     // AES-128
-    uniform_encryption_with_key_retriever("kf", b"0123456789012345").await;
+    uniform_encryption_with_key_retriever(AES_128_FOOTER_KEY_NAME, AES_128_FOOTER_KEY).await;
 
     // AES-256
-    uniform_encryption_with_key_retriever("kf", b"01234567890123456789012345678901").await;
+    uniform_encryption_with_key_retriever(AES_256_FOOTER_KEY_NAME, AES_256_FOOTER_KEY).await;
 }
 
 #[tokio::test]
@@ -793,8 +700,8 @@ async fn test_decrypt_page_index_uniform() {
             .unwrap();
     }
 
-    decrypt_page_index_uniform("0123456789012345".as_bytes()).await;
-    decrypt_page_index_uniform("01234567890123456789012345678901".as_bytes()).await;
+    decrypt_page_index_uniform(AES_128_FOOTER_KEY).await;
+    decrypt_page_index_uniform(AES_256_FOOTER_KEY).await;
 }
 
 #[tokio::test]
@@ -815,43 +722,25 @@ async fn test_decrypt_page_index_non_uniform() {
     }
 
     decrypt_page_index_non_uniform(
-        b"0123456789012345", // 128bit/16
+        AES_128_FOOTER_KEY,
         &[
-            ("double_field", b"1234567890123450".as_slice()),
-            ("float_field", b"1234567890123451".as_slice()),
+            (AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0]),
+            (AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1]),
         ],
     )
     .await;
 
     decrypt_page_index_non_uniform(
-        b"01234567890123456789012345678901", // 256bit/32
+        AES_256_FOOTER_KEY,
         &[
-            (
-                "double_field",
-                b"12345678901234567890123456789012".as_slice(),
-            ),
-            (
-                "float_field",
-                b"12345678901234567890123456789013".as_slice(),
-            ),
-            (
-                "boolean_field",
-                b"12345678901234567890123456789014".as_slice(),
-            ),
-            (
-                "int32_field",
-                b"12345678901234567890123456789015".as_slice(),
-            ),
-            ("ba_field", b"12345678901234567890123456789016".as_slice()),
-            ("flba_field", b"12345678901234567890123456789017".as_slice()),
-            (
-                "int64_field",
-                b"12345678901234567890123456789018".as_slice(),
-            ),
-            (
-                "int96_field",
-                b"12345678901234567890123456789019".as_slice(),
-            ),
+            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
+            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
+            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
+            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
+            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
+            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
+            (AES_256_COLUMN_NAMES[6], AES_256_COLUMN_KEYS[6]),
+            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
         ],
     )
     .await;
@@ -1100,14 +989,14 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
     let file = std::fs::File::open(path).unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let file_encryption_properties = FileEncryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
-    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let decryption_properties = FileDecryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
 
@@ -1173,14 +1062,14 @@ async fn test_multi_threaded_encrypted_writing() {
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
     let file = std::fs::File::open(path).unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let file_encryption_properties = FileEncryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
-    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let decryption_properties = FileDecryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
 
@@ -1274,14 +1163,14 @@ async fn test_multi_threaded_encrypted_writing_deprecated() {
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
     let file = std::fs::File::open(path).unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let file_encryption_properties = FileEncryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
-    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
+    let decryption_properties = FileDecryptionProperties::builder(AES_128_FOOTER_KEY.into())
+        .with_column_key(AES_128_COLUMN_NAMES[0], AES_128_COLUMN_KEYS[0].into())
+        .with_column_key(AES_128_COLUMN_NAMES[1], AES_128_COLUMN_KEYS[1].into())
         .build()
         .unwrap();
 
