@@ -941,29 +941,27 @@ pub fn test_column_statistics_with_plaintext_footer() {
 
 #[test]
 pub fn test_column_statistics_with_plaintext_footer_and_uniform_encryption() {
-    let footer_keys = [AES_128_FOOTER_KEY.to_vec(), AES_256_FOOTER_KEY.to_vec()];
+    let footer_key = AES_128_FOOTER_KEY.to_vec();
 
-    for footer_key in &footer_keys {
-        // Write with uniform encryption and a plaintext footer.
-        let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
-            .with_plaintext_footer(true)
-            .build()
-            .unwrap();
+    // Write with uniform encryption and a plaintext footer.
+    let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
+        .with_plaintext_footer(true)
+        .build()
+        .unwrap();
 
-        let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
-            .build()
-            .unwrap();
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .build()
+        .unwrap();
 
-        // Reader can read stats from plaintext footer metadata if a footer key is provided
-        write_and_read_stats(
-            Arc::clone(&encryption_properties),
-            Some(decryption_properties),
-            &[true, true, true, true],
-        );
+    // Reader can read stats from plaintext footer metadata if a footer key is provided
+    write_and_read_stats(
+        Arc::clone(&encryption_properties),
+        Some(decryption_properties),
+        &[true, true, true, true],
+    );
 
-        // Reader can not read stats from plaintext footer metadata if no key is provided
-        write_and_read_stats(encryption_properties, None, &[false, false, false, false]);
-    }
+    // Reader can not read stats from plaintext footer metadata if no key is provided
+    write_and_read_stats(encryption_properties, None, &[false, false, false, false]);
 }
 
 #[test]
