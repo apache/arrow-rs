@@ -16,8 +16,8 @@
 // under the License.
 use arrow::{
     array::{
-        self, Array, ArrayRef, BinaryViewArray, GenericListArray, GenericListViewArray,
-        ListLikeArray, StructArray, UInt64Array, make_array,
+        self, Array, ArrayRef, GenericListArray, GenericListViewArray, ListLikeArray, StructArray,
+        UInt64Array, make_array,
     },
     buffer::NullBuffer,
     compute::{CastOptions, take},
@@ -25,11 +25,11 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, VariantPath, VariantPathElement};
+use parquet_variant::{VariantPath, VariantPathElement};
 
+use crate::ShreddingState;
 use crate::VariantArray;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
-use crate::{ShreddingState, variant_array::StructArrayBuilder};
 
 use arrow::array::AsArray;
 use std::sync::Arc;
@@ -92,21 +92,7 @@ fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
         .map(|typed| take(typed, &index_array, None))
         .transpose()?;
 
-    let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(
-        EMPTY_VARIANT_METADATA_BYTES,
-        index_array.len(),
-    ));
-
-    let mut builder =
-        StructArrayBuilder::new().with_field("metadata", Arc::new(metadata_array), false);
-    if let Some(taken_value) = taken_value {
-        builder = builder.with_field("value", taken_value, true);
-    }
-    if let Some(taken_typed) = taken_typed {
-        builder = builder.with_field("typed_value", taken_typed, true);
-    }
-
-    Ok(Some(ShreddingState::try_from(&builder.build())?))
+    Ok(Some(ShreddingState::new(taken_value, taken_typed)))
 }
 
 /// Given a shredded variant field -- a `(value?, typed_value?)` pair -- try to take one path step
