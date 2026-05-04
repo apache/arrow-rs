@@ -1091,7 +1091,8 @@ pub fn array_from_json(
                     "RunEndEncoded requires exactly 2 children".to_string(),
                 ));
             }
-            let run_ends_array = array_from_json(run_ends_field, children[0].clone(), dictionaries)?;
+            let run_ends_array =
+                array_from_json(run_ends_field, children[0].clone(), dictionaries)?;
             let values_array = array_from_json(values_field, children[1].clone(), dictionaries)?;
 
             let run_array_data = ArrayData::builder(field.data_type().clone())
