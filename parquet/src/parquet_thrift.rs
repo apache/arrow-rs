@@ -335,7 +335,8 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             // it here at the protocol layer rather than letting the cast wrap
             // into a negative size that downstream allocation code has to
             // re-validate.
-            i32::try_from(self.read_vlq()?)?
+            //i32::try_from(self.read_vlq()?)?
+            self.read_vlq()? as i32
         };
 
         Ok(ListIdentifier {
