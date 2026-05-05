@@ -1166,4 +1166,20 @@ pub(crate) mod tests {
         let result = prot.read_list_begin();
         assert!(result.is_err(), "expected error, got {result:?}");
     }
+
+    #[test]
+    fn test_read_list_wrong_type() {
+        // list header: 4 elements of `Boolean`
+        let data = [0x42, 0x01];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        // try to read as list<i32>
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot);
+        println!("{result:?}");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Expected list element type of I32 but got Bool")
+        );
+    }
 }
