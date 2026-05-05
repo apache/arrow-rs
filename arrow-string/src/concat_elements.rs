@@ -308,6 +308,8 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::Buffer;
+
     #[test]
     fn test_string_concat() {
         let left = [Some("foo"), Some("bar"), None]
@@ -485,6 +487,17 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_binary_concat_empty() {
+        let left = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
+        let right = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
+
+        let output = concat_elements_fixed_size_binary(&left, &right).unwrap();
+
+        let expected = FixedSizeBinaryArray::new(0, Buffer::from(&[]), None);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
     fn test_binary_view_concat() {
         let left = BinaryViewArray::from_iter(vec![Some(b"foo" as &[u8]), Some(b"bar"), None]);
         let right = BinaryViewArray::from_iter(vec![None, Some(b"yyy" as &[u8]), Some(b"zzz")]);
@@ -531,6 +544,16 @@ mod tests {
             output.unwrap_err().to_string(),
             "Compute error: Arrays must have the same length: 2 != 1".to_string()
         );
+    }
+
+    #[test]
+    fn test_binary_view_concat_empty() {
+        let left = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
+        let right = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
+
+        let output = concat_elements_binary_view_array(&left, &right).unwrap();
+        let expected = BinaryViewArray::from_iter(vec![] as Vec<Option<&[u8]>>);
+        assert_eq!(output, expected);
     }
 
     #[test]
