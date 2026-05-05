@@ -31,6 +31,7 @@ use futures::{
     stream::{self, BoxStream},
 };
 use prost::Message;
+use tonic::codegen::{Body, StdError};
 use tonic::{metadata::MetadataMap, transport::Channel};
 
 use crate::error::{FlightError, Result};
@@ -67,22 +68,28 @@ use crate::streams::{FallibleRequestStream, FallibleTonicResponseStream};
 /// # }
 /// ```
 #[derive(Debug)]
-pub struct FlightClient {
+pub struct FlightClient<T = Channel> {
     /// Optional grpc header metadata to include with each request
     metadata: MetadataMap,
 
     /// The inner client
-    inner: FlightServiceClient<Channel>,
+    inner: FlightServiceClient<T>,
 }
 
-impl FlightClient {
-    /// Creates a client client with the provided [`Channel`]
-    pub fn new(channel: Channel) -> Self {
-        Self::new_from_inner(FlightServiceClient::new(channel))
+impl<T> FlightClient<T>
+where
+    T: tonic::client::GrpcService<tonic::body::Body>,
+    T::Error: Into<StdError>,
+    T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+    <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+{
+    /// Creates a client with the provided transport
+    pub fn new(inner: T) -> Self {
+        Self::new_from_inner(FlightServiceClient::new(inner))
     }
 
     /// Creates a new higher level client with the provided lower level client
-    pub fn new_from_inner(inner: FlightServiceClient<Channel>) -> Self {
+    pub fn new_from_inner(inner: FlightServiceClient<T>) -> Self {
         Self {
             metadata: MetadataMap::new(),
             inner,
@@ -120,19 +127,19 @@ impl FlightClient {
 
     /// Return a reference to the underlying tonic
     /// [`FlightServiceClient`]
-    pub fn inner(&self) -> &FlightServiceClient<Channel> {
+    pub fn inner(&self) -> &FlightServiceClient<T> {
         &self.inner
     }
 
     /// Return a mutable reference to the underlying tonic
     /// [`FlightServiceClient`]
-    pub fn inner_mut(&mut self) -> &mut FlightServiceClient<Channel> {
+    pub fn inner_mut(&mut self) -> &mut FlightServiceClient<T> {
         &mut self.inner
     }
 
     /// Consume this client and return the underlying tonic
     /// [`FlightServiceClient`]
-    pub fn into_inner(self) -> FlightServiceClient<Channel> {
+    pub fn into_inner(self) -> FlightServiceClient<T> {
         self.inner
     }
 
@@ -664,7 +671,7 @@ impl FlightClient {
     }
 
     /// return a Request, adding any configured metadata
-    fn make_request<T>(&self, t: T) -> tonic::Request<T> {
+    fn make_request<R>(&self, t: R) -> tonic::Request<R> {
         // Pass along metadata
         let mut request = tonic::Request::new(t);
         *request.metadata_mut() = self.metadata.clone();
