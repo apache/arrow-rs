@@ -214,7 +214,7 @@ pub fn concat_elements_fixed_size_binary(
 ///
 /// # Errors
 /// - Returns an error if the input arrays have different lengths.
-/// - Returns an error if any concatenated string exceeds `u32::MAX` in length.
+/// - Returns an error if any concatenated arrays exceeds `i32::MAX` in length.
 pub fn concat_elements_binary_view_array(
     left: &BinaryViewArray,
     right: &BinaryViewArray,
