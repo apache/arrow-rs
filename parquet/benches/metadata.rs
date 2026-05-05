@@ -143,8 +143,11 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
     let mut buffer = Vec::with_capacity(1024);
     {
         let buf = TrackedWrite::new(&mut buffer);
-        let writer = ParquetMetaDataWriter::new_with_tracked(buf, &metadata)
-            .with_write_path_in_schema(write_path_in_schema);
+        let mut writer = ParquetMetaDataWriter::new_with_tracked(buf, &metadata);
+        // use defaults unless `write_path_in_schema` is false
+        if !write_path_in_schema {
+            writer = writer.with_write_path_in_schema(write_path_in_schema);
+        }
         writer.finish().unwrap();
     }
 
