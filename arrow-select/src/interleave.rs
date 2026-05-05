@@ -19,14 +19,13 @@
 
 use crate::concat::concat;
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use crate::take::take;
 use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
+use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
-use arrow_data::{ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
 use std::sync::Arc;
 
@@ -424,6 +423,7 @@ fn interleave_fallback(
     let mut cur_array = indices[0].0;
     let mut start_row_idx = indices[0].1;
     let mut end_row_idx = start_row_idx + 1;
+
     for (array, row) in indices.iter().skip(1).copied() {
         if array == cur_array && row == end_row_idx {
             // subsequent row in same batch
@@ -442,45 +442,7 @@ fn interleave_fallback(
 
     // emit final batch of rows
     array_data.extend(cur_array, start_row_idx, end_row_idx);
-    compact_runs(make_array(array_data.freeze()))
-}
-
-/// Merge adjacent runs of a `RunEndEncoded` array that share equal values.
-/// Returns the input unchanged for non-REE arrays or arrays already compact.
-fn compact_runs(array: ArrayRef) -> Result<ArrayRef, ArrowError> {
-    if !matches!(array.data_type(), DataType::RunEndEncoded(_, _)) {
-        return Ok(array);
-    }
-    let data = array.to_data();
-    let run_ends = &data.child_data()[0];
-    let values = &data.child_data()[1];
-
-    if values.len() <= 1 {
-        return Ok(array);
-    }
-
-    let mut keep: Vec<u32> = Vec::with_capacity(values.len());
-    for i in 0..values.len() {
-        let last_in_group = i + 1 == values.len() || values.slice(i, 1) != values.slice(i + 1, 1);
-        if last_in_group {
-            keep.push(i as u32);
-        }
-    }
-
-    if keep.len() == values.len() {
-        return Ok(array);
-    }
-
-    let idx = UInt32Array::from(keep);
-    let new_run_ends = take(&make_array(run_ends.clone()), &idx, None)?;
-    let new_values = take(&make_array(values.clone()), &idx, None)?;
-
-    let new_data = ArrayDataBuilder::new(array.data_type().clone())
-        .len(array.len())
-        .add_child_data(new_run_ends.to_data())
-        .add_child_data(new_values.to_data())
-        .build()?;
-    Ok(make_array(new_data))
+    Ok(make_array(array_data.freeze()))
 }
 
 /// Fallback implementation for interleaving dictionaries when it was determined
@@ -1581,94 +1543,5 @@ mod tests {
             result_lv.value(2).as_primitive::<Int64Type>().values(),
             &[3]
         );
-    }
-
-    #[test]
-    fn test_interleave_run_end_encoded_merges_identical_runs() {
-        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend([0, 0, 0, 1, 1, 0, 0, 1, 1, 1].into_iter().map(Some));
-        let a = builder.finish();
-
-        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend([2, 2, 1, 1, 1, 0, 1, 0, 0, 0].into_iter().map(Some));
-        let b = builder.finish();
-
-        // logical: [1, 1, 1, 1, 1] across an a→b boundary; should compact to one run.
-        let result = interleave(&[&a, &b], &[(0, 3), (0, 4), (1, 2), (1, 3), (1, 4)]).unwrap();
-        let result = result.as_run::<Int32Type>();
-
-        assert_eq!(result.run_ends().values(), &[5]);
-        let values = result.values().as_primitive::<Int32Type>();
-        assert_eq!(values.values(), &[1]);
-    }
-
-    #[test]
-    fn test_interleave_run_end_encoded_partial_compaction() {
-        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend([1, 1, 2, 2].into_iter().map(Some));
-        let a = builder.finish();
-
-        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend([1, 1, 2, 2].into_iter().map(Some));
-        let b = builder.finish();
-
-        // logical: [1, 1, 1, 2, 2, 1, 1] — fallback emits 5 raw runs;
-        // compaction must merge adjacent equal pairs but keep the trailing 1s
-        // distinct from the leading 1s (separated by 2s).
-        let indices = &[(0, 0), (0, 1), (1, 0), (0, 2), (1, 3), (1, 0), (1, 1)];
-        let result = interleave(&[&a, &b], indices).unwrap();
-        let result = result.as_run::<Int32Type>();
-
-        assert_eq!(result.run_ends().values(), &[3, 5, 7]);
-        let values = result.values().as_primitive::<Int32Type>();
-        assert_eq!(values.values(), &[1, 2, 1]);
-    }
-
-    #[test]
-    fn test_interleave_run_end_encoded_pulls_identical_values() {
-        use arrow_array::builder::StringRunBuilder;
-
-        let mut builder = StringRunBuilder::<Int32Type>::new();
-        builder.extend(
-            [
-                "alice", "alice", "bob", "bob", "charlie", "charlie", "david",
-            ]
-            .into_iter()
-            .map(Some),
-        );
-        let a = builder.finish();
-
-        let mut builder = StringRunBuilder::<Int32Type>::new();
-        builder.extend(
-            ["alice", "bob", "charlie", "david", "david", "eve"]
-                .into_iter()
-                .map(Some),
-        );
-        let b = builder.finish();
-
-        // logical: ["alice","alice","bob","bob","charlie","charlie","david","david","david","alice","alice"]
-        let result = interleave(
-            &[&a, &b],
-            &[
-                (0, 0),
-                (1, 0),
-                (0, 2),
-                (1, 1),
-                (0, 4),
-                (1, 2),
-                (0, 6),
-                (1, 3),
-                (1, 4),
-                (0, 0),
-                (1, 0),
-            ],
-        )
-        .unwrap();
-        let result = result.as_run::<Int32Type>();
-
-        assert_eq!(result.run_ends().values(), &[2, 4, 6, 9, 11]);
-        let values = result.values().as_string::<i32>();
-        let values: Vec<_> = values.into_iter().map(Option::unwrap).collect();
-        assert_eq!(values, vec!["alice", "bob", "charlie", "david", "alice"]);
     }
 }
