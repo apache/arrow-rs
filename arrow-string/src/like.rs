@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Provide SQL's LIKE operators for Arrow's string arrays
+//! String predicate kernels for Arrow arrays.
+//!
+//! Provides SQL `LIKE`/`ILIKE` kernels as well as related
+//! string predicates such as `contains`, `starts_with`, `ends_with`, and
+//! ASCII case-insensitive equality.
 
 use crate::predicate::Predicate;
 
@@ -189,7 +193,7 @@ pub fn contains(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Arr
     like_op(Op::Contains, left, right)
 }
 
-/// Perform equality check on two byte arrays using an ASCII case-insensitive match.
+/// Perform equality check on two arrays using an ASCII case-insensitive match.
 ///
 /// `left` and `right` must be the same type, and one of
 /// - Utf8
@@ -1427,18 +1431,18 @@ mod tests {
 
     test_utf8!(
         test_utf8_array_eq_ignore_ascii_case,
-        vec!["arrow", "arrow", "arrow", "parquet", "parquet"],
-        vec!["arrow", "ARROW", "aRrOw", "arrow", "ARROW"],
+        vec!["arrow", "arrow", "arrow", "arrow", "parquet", "parquet"],
+        vec!["arrow", "ARROW", "arro", "aRrOw", "arrow", "ARROW"],
         eq_ignore_ascii_case,
-        vec![true, true, true, false, false]
+        vec![true, true, false, true, false, false]
     );
 
     test_utf8_scalar!(
         test_utf8_array_eq_ignore_ascii_case_scalar,
-        vec!["arrow", "aRrOW", "ARROW", "parquet", "PARQUET"],
+        vec!["arrow", "aRrOW", "arro", "ARROW", "parquet", "PARQUET"],
         "arrow",
         eq_ignore_ascii_case,
-        vec![true, true, true, false, false]
+        vec![true, true, false, true, false, false]
     );
 
     #[test]
