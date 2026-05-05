@@ -1600,13 +1600,13 @@ pub(crate) mod tests {
     use crate::basic::{ConvertedType, Encoding, LogicalType, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
-        BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
-        FloatType, Int32Type, Int64Type, Int96, Int96Type,
+        BoolType, ByteArray, ByteArrayType, DataType, DoubleType, FixedLenByteArray,
+        FixedLenByteArrayType, FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetStatisticsPolicy};
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
-    use crate::file::writer::SerializedFileWriter;
+    use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
     use crate::util::test_common::rand_gen::RandGen;
@@ -3683,6 +3683,77 @@ pub(crate) mod tests {
 
         for batch in record_batch_reader {
             batch.unwrap();
+        }
+    }
+
+    // test that we can handle the UNKNOWN logical type annotation on any physical type
+    #[test]
+    fn test_unknown_logical_type() {
+        let message_type = "message uk {
+            OPTIONAL INT32 uki32 (UNKNOWN);
+            OPTIONAL INT64 uki64 (UNKNOWN);
+            OPTIONAL INT96 uki96 (UNKNOWN);
+            OPTIONAL BOOLEAN ukbool (UNKNOWN);
+            OPTIONAL FLOAT ukfloat (UNKNOWN);
+            OPTIONAL DOUBLE ukdbl (UNKNOWN);
+            OPTIONAL BYTE_ARRAY ukbytes (UNKNOWN);
+            OPTIONAL FIXED_LEN_BYTE_ARRAY(10) ukflba (UNKNOWN);
+        }";
+
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let file = tempfile::tempfile().unwrap();
+
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), schema, Default::default())
+                .unwrap();
+
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        fn write_nulls<T: DataType>(row_group_writer: &mut SerializedRowGroupWriter<'_, File>) {
+            let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+            // write out a bunch of nulls
+            column_writer
+                .typed::<T>()
+                .write_batch(&[], Some(&[0, 0, 0, 0]), None)
+                .unwrap();
+            column_writer.close().unwrap();
+        }
+
+        // INT32
+        write_nulls::<Int32Type>(&mut row_group_writer);
+
+        // INT64
+        write_nulls::<Int64Type>(&mut row_group_writer);
+
+        // INT96
+        write_nulls::<Int96Type>(&mut row_group_writer);
+
+        // BOOLEAN
+        write_nulls::<BoolType>(&mut row_group_writer);
+
+        // FLOAT
+        write_nulls::<FloatType>(&mut row_group_writer);
+
+        // DOUBLE
+        write_nulls::<DoubleType>(&mut row_group_writer);
+
+        // BYTE_ARRAY
+        write_nulls::<ByteArrayType>(&mut row_group_writer);
+
+        // FIXED_LEN_BYTE_ARRAY
+        write_nulls::<FixedLenByteArrayType>(&mut row_group_writer);
+
+        row_group_writer.close().unwrap();
+
+        writer.close().unwrap();
+
+        let mut reader = ParquetRecordBatchReader::try_new(file, 4).unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        for col in batch.columns() {
+            assert_eq!(col.len(), 4);
+            assert_eq!(col.logical_null_count(), 4);
+            assert_eq!(*col.data_type(), ArrowDataType::Null);
         }
     }
 

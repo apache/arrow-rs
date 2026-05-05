@@ -86,8 +86,7 @@ pub fn substring(
                                        stringify!($gt), array.data_type())
                             });
                         let values = substring(dict.values(), start, length)?;
-                        let result = DictionaryArray::try_new(dict.keys().clone(), values)?;
-                        Ok(Arc::new(result))
+                        Ok(Arc::new(dict.with_values(values)))
                     },
                 )*
                     t => panic!("Unsupported dictionary key type: {}", t)

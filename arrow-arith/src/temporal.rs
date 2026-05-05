@@ -23,6 +23,7 @@ use arrow_array::cast::AsArray;
 use cast::as_primitive_array;
 use chrono::{Datelike, TimeZone, Timelike, Utc};
 
+use arrow_array::ree_map;
 use arrow_array::temporal_conversions::{
     MICROSECONDS, MICROSECONDS_IN_DAY, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
     NANOSECONDS_IN_DAY, SECONDS_IN_DAY, date32_to_datetime, date64_to_datetime,
@@ -194,6 +195,15 @@ pub fn date_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef, ArrowErr
             let new_array = array.with_values(values);
             Ok(new_array)
         }
+        DataType::RunEndEncoded(k, _) => match k.data_type() {
+            DataType::Int16 => ree_map!(array, Int16Type, |a| date_part(a, part)),
+            DataType::Int32 => ree_map!(array, Int32Type, |a| date_part(a, part)),
+            DataType::Int64 => ree_map!(array, Int64Type, |a| date_part(a, part)),
+            _ => Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid run-end type: {:?}",
+                k.data_type()
+            ))),
+        },
         t => return_compute_error_with!(format!("{part} does not support"), t),
     )
 }
@@ -2039,5 +2049,34 @@ mod tests {
         assert_eq!(2015, actual.value(0));
         assert_eq!(2015, actual.value(1));
         assert_eq!(2016, actual.value(2));
+    }
+
+    #[test]
+    fn test_ree_timestamp_year() {
+        let vals: TimestampSecondArray =
+            vec![Some(1514764800), Some(1550636625), Some(1550636625)].into();
+        let run_ends = Int32Array::from(vec![1, 2, 3]);
+        let ree = RunArray::try_new(&run_ends, &vals).unwrap();
+
+        let b = date_part(&ree, DatePart::Year).unwrap();
+        let ree_result = b.as_run_opt::<Int32Type>().unwrap();
+        let values = ree_result.values().as_primitive::<Int32Type>();
+        assert_eq!(2018, values.value(0));
+        assert_eq!(2019, values.value(1));
+        assert_eq!(2019, values.value(2));
+    }
+
+    #[test]
+    fn test_ree_date64_month() {
+        let vals: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), Some(1550636625000)].into();
+        let run_ends = Int64Array::from(vec![2, 4]);
+        let ree = RunArray::try_new(&run_ends, &vals).unwrap();
+
+        let b = date_part(&ree, DatePart::Month).unwrap();
+        let ree_result = b.as_run_opt::<Int64Type>().unwrap();
+        let values = ree_result.values().as_primitive::<Int32Type>();
+        assert_eq!(1, values.value(0));
+        assert_eq!(2, values.value(1));
     }
 }
