@@ -62,7 +62,7 @@ fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
 
     let values = list_array.values();
 
-    let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() else {
+    let Some(struct_array) = values.as_struct_opt() else {
         return Ok(None);
     };
     let shredding_state = ShreddingState::try_from(struct_array)?;
@@ -130,7 +130,7 @@ pub(crate) fn follow_shredded_path_element(
         VariantPathElement::Field { name } => {
             // Try to step into the requested field name of a struct.
             // First, try to downcast to StructArray
-            let Some(struct_array) = typed_value.as_any().downcast_ref::<StructArray>() else {
+            let Some(struct_array) = typed_value.as_struct_opt() else {
                 // Object field path step follows JSONPath semantics and returns missing path step (NotShredded/Missing) on non-struct path
                 return Ok(missing_path_step());
             };
