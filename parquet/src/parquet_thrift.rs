@@ -330,7 +330,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             possible_element_count as i32
         } else {
             // The list size on the wire is an unsigned varint, but we represent
-            // it as `i32` (matching Java's `int` and the Parquet Thrift schema).
+            // it as `i32` (matching Java's `int` and the Thrift schema).
             // A varint that decodes above `i32::MAX` is malformed input — reject
             // it here at the protocol layer rather than letting the cast wrap
             // into a negative size that downstream allocation code has to
