@@ -12,6 +12,7 @@ parquet_derive/test/dependency/*
 **.gitignore
 .gitmodules
 Cargo.lock
+**/Cargo.lock
 filtered_rat.txt
 rat.txt
 # auto-generated
