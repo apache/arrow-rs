@@ -18,7 +18,9 @@
 //! Provides utility functions for concatenation of elements in arrays.
 use std::sync::Arc;
 
-use arrow_array::builder::{BinaryViewBuilder, BufferBuilder, FixedSizeBinaryBuilder};
+use arrow_array::builder::{
+    BinaryViewBuilder, BufferBuilder, FixedSizeBinaryBuilder, StringViewBuilder,
+};
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer};
@@ -214,7 +216,7 @@ pub fn concat_elements_fixed_size_binary(
 ///
 /// # Errors
 /// - Returns an error if the input arrays have different lengths.
-/// - Returns an error if any concatenated arrays exceeds `i32::MAX` in length.
+/// - Returns an error if any concatenated value exceeds `u32::MAX` in length.
 pub fn concat_elements_binary_view_array(
     left: &BinaryViewArray,
     right: &BinaryViewArray,
@@ -242,6 +244,50 @@ pub fn concat_elements_binary_view_array(
             buffer.extend_from_slice(left.value(i));
             buffer.extend_from_slice(right.value(i));
             result.try_append_value(&buffer)?;
+        }
+    }
+    Ok(result.finish())
+}
+
+/// Concatenates two `StringViewArray`s element-wise.
+/// If either element is `Null`, the result element is also `Null`.
+///
+/// # Errors
+/// - Returns an error if the input arrays have different lengths.
+/// - Returns an error if any concatenated value exceeds `u32::MAX` in length.
+/// - Returns an error if concatenated strings do not result in a proper UTF-8 string
+// Cannot reuse code with `GenericByteViewBuilder` since `try_append_value` works with
+// `AsRef<T::Native>`, and there is no conversion from `ByteViewType` to this or [u8]
+pub fn concat_elements_string_view_array(
+    left: &StringViewArray,
+    right: &StringViewArray,
+) -> Result<StringViewArray, ArrowError> {
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Arrays must have the same length: {} != {}",
+            left.len(),
+            right.len()
+        )));
+    }
+
+    let mut result = StringViewBuilder::with_capacity(left.len());
+
+    // Avoid reallocations by writing to a reused buffer
+    let mut buffer: Vec<u8> = Vec::new();
+
+    let nulls = NullBuffer::union(left.nulls(), right.nulls());
+
+    for i in 0..left.len() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+            result.append_null();
+        } else {
+            buffer.clear();
+            buffer.extend_from_slice(left.value(i).as_bytes());
+            buffer.extend_from_slice(right.value(i).as_bytes());
+            let s = std::str::from_utf8(&buffer).map_err(|_| {
+                ArrowError::ComputeError("Concatenated values are not valid UTF-8".into())
+            })?;
+            result.try_append_value(s)?;
         }
     }
     Ok(result.finish())
@@ -285,6 +331,11 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
             let left = left.as_any().downcast_ref::<BinaryViewArray>().unwrap();
             let right = right.as_any().downcast_ref::<BinaryViewArray>().unwrap();
             Ok(Arc::new(concat_elements_binary_view_array(left, right)?))
+        }
+        (DataType::Utf8View, DataType::Utf8View) => {
+            let left = left.as_any().downcast_ref::<StringViewArray>().unwrap();
+            let right = right.as_any().downcast_ref::<StringViewArray>().unwrap();
+            Ok(Arc::new(concat_elements_string_view_array(left, right)?))
         }
         (DataType::FixedSizeBinary(_), DataType::FixedSizeBinary(_)) => {
             let left = left
@@ -505,6 +556,17 @@ mod tests {
         let output = concat_elements_binary_view_array(&left, &right).unwrap();
 
         let expected = BinaryViewArray::from_iter(vec![None, Some(b"baryyy" as &[u8]), None]);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_string_view_concat() {
+        let left = StringViewArray::from_iter(vec![Some("foo"), Some("bar"), None]);
+        let right = StringViewArray::from_iter(vec![None, Some("yyy"), Some("zzz")]);
+
+        let output = concat_elements_string_view_array(&left, &right).unwrap();
+
+        let expected = StringViewArray::from_iter(vec![None, Some("baryyy"), None]);
         assert_eq!(output, expected);
     }
 
