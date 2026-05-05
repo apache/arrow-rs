@@ -726,19 +726,24 @@ where
     T: ReadThrift<'a, R>,
 {
     let list_ident = prot.read_list_begin()?;
-    if list_ident.element_type != T::ELEMENT_TYPE {
-        return Err(general_err!(
-            "Expected list element type of {:?} but got {:?}",
-            T::ELEMENT_TYPE,
-            list_ident.element_type
-        ));
-    }
+    validate_list_type(T::ELEMENT_TYPE, &list_ident)?;
     let mut res = Vec::with_capacity(list_ident.size as usize);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
         res.push(val);
     }
     Ok(res)
+}
+
+pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) -> Result<()> {
+    if got.element_type != expected {
+        return Err(general_err!(
+            "Expected list element type of {:?} but got {:?}",
+            expected,
+            got.element_type
+        ));
+    }
+    Ok(())
 }
 
 /////////////////////////

@@ -51,7 +51,7 @@ use crate::{
     parquet_thrift::{
         ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
         ThriftCompactOutputProtocol, ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
-        read_thrift_vec,
+        read_thrift_vec, validate_list_type,
     },
     schema::types::{
         ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
@@ -387,13 +387,9 @@ fn read_encoding_stats_as_mask<'a>(
     // read the vector of stats, setting mask bits for data pages
     let mut mask = 0i32;
     let list_ident = prot.read_list_begin()?;
-    // check for enum (encoded as I32)
-    if list_ident.element_type != ElementType::I32 {
-        return Err(general_err!(
-            "Expected list element type of Encoding but got {:?}",
-            list_ident.element_type
-        ));
-    }
+    // check for PageEncodingStats struct
+    validate_list_type(ElementType::Struct, &list_ident)?;
+
     for _ in 0..list_ident.size {
         let pes = PageEncodingStats::read_thrift(prot)?;
         match pes.page_type {
@@ -660,12 +656,7 @@ fn read_row_group(
             1 => {
                 let list_ident = prot.read_list_begin()?;
                 // check for list of struct
-                if list_ident.element_type != ElementType::Struct {
-                    return Err(general_err!(
-                        "Expected list element type of Struct but got {:?}",
-                        list_ident.element_type
-                    ));
-                }
+                validate_list_type(ElementType::Struct, &list_ident)?;
                 if schema_descr.num_columns() != list_ident.size as usize {
                     return Err(general_err!(
                         "Column count mismatch. Schema has {} columns while Row Group has {}",
@@ -816,12 +807,7 @@ pub(crate) fn parquet_metadata_from_bytes(
                 let schema_descr = schema_descr.as_ref().unwrap();
                 let list_ident = prot.read_list_begin()?;
                 // check for list of struct
-                if list_ident.element_type != ElementType::Struct {
-                    return Err(general_err!(
-                        "Expected list element type of Struct but got {:?}",
-                        list_ident.element_type
-                    ));
-                }
+                validate_list_type(ElementType::Struct, &list_ident)?;
                 let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
 
                 // Read row groups and handle ordinal assignment
