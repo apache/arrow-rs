@@ -50,6 +50,8 @@ macro_rules! thrift_enum {
         }
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier {
+            const ELEMENT_TYPE: ElementType = ElementType::I32;
+
             #[allow(deprecated)]
             fn read_thrift(prot: &mut R) -> Result<Self> {
                 let val = prot.read_i32()?;
@@ -140,6 +142,8 @@ macro_rules! thrift_union_all_empty {
         }
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
             fn read_thrift(prot: &mut R) -> Result<Self> {
                 let field_ident = prot.read_field_begin(0)?;
                 if field_ident.field_type == FieldType::Stop {
@@ -214,6 +218,8 @@ macro_rules! thrift_union {
         }
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
             fn read_thrift(prot: &mut R) -> Result<Self> {
                 let field_ident = prot.read_field_begin(0)?;
                 if field_ident.field_type == FieldType::Stop {
@@ -281,6 +287,8 @@ macro_rules! thrift_struct {
         }
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
             fn read_thrift(prot: &mut R) -> Result<Self> {
                 $(let mut $field_name: Option<$crate::__thrift_field_type!($field_type $($field_lt)? $($element_type)?)> = None;)*
                 let mut last_field_id = 0i16;

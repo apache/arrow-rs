@@ -636,6 +636,9 @@ impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> 
 /// Trait implemented for objects that can be deserialized from a Thrift input stream.
 /// Implementations are provided for Thrift primitive types.
 pub(crate) trait ReadThrift<'a, R: ThriftCompactInputProtocol<'a>> {
+    /// The [`ElementType`] to use when a list of this object is read.
+    const ELEMENT_TYPE: ElementType;
+
     /// Read an object of type `Self` from the input protocol object.
     fn read_thrift(prot: &mut R) -> Result<Self>
     where
@@ -643,54 +646,72 @@ pub(crate) trait ReadThrift<'a, R: ThriftCompactInputProtocol<'a>> {
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for bool {
+    const ELEMENT_TYPE: ElementType = ElementType::Bool;
+
     fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(prot.read_bool()?)
     }
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for i8 {
+    const ELEMENT_TYPE: ElementType = ElementType::Byte;
+
     fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(prot.read_i8()?)
     }
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for i16 {
+    const ELEMENT_TYPE: ElementType = ElementType::I16;
+
     fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(prot.read_i16()?)
     }
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for i32 {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+
     fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(prot.read_i32()?)
     }
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for i64 {
+    const ELEMENT_TYPE: ElementType = ElementType::I64;
+
     fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(prot.read_i64()?)
     }
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for OrderedF64 {
+    const ELEMENT_TYPE: ElementType = ElementType::Double;
+
     fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(OrderedF64(prot.read_double()?))
     }
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for &'a str {
+    const ELEMENT_TYPE: ElementType = ElementType::Binary;
+
     fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(prot.read_string()?)
     }
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for String {
+    const ELEMENT_TYPE: ElementType = ElementType::Binary;
+
     fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(String::from_utf8(prot.read_bytes_owned()?)?)
     }
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for &'a [u8] {
+    const ELEMENT_TYPE: ElementType = ElementType::Binary;
+
     fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(prot.read_bytes()?)
     }
@@ -705,6 +726,13 @@ where
     T: ReadThrift<'a, R>,
 {
     let list_ident = prot.read_list_begin()?;
+    if list_ident.element_type != T::ELEMENT_TYPE {
+        return Err(general_err!(
+            "Expected list element type of {:?} but got {:?}",
+            T::ELEMENT_TYPE,
+            list_ident.element_type
+        ));
+    }
     let mut res = Vec::with_capacity(list_ident.size as usize);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
