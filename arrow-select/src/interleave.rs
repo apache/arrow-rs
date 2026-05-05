@@ -24,6 +24,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
+use arrow_data::ArrayData;
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
@@ -435,6 +436,8 @@ fn interleave_run_end<R: RunEndIndexType>(
 
     let runs: Vec<&RunArray<R>> = values.iter().map(|a| a.as_run::<R>()).collect();
     let value_arrays: Vec<&dyn Array> = runs.iter().map(|r| r.values().as_ref()).collect();
+    // hoist value data
+    let value_data: Vec<ArrayData> = value_arrays.iter().map(|a| a.to_data()).collect();
 
     // Resolve each (array, logical_row) to (array, physical_row), so we can
     // lookup physical indices by batch.
@@ -442,6 +445,12 @@ fn interleave_run_end<R: RunEndIndexType>(
     let mut grouped: Vec<(Vec<R::Native>, Vec<usize>)> =
         (0..runs.len()).map(|_| (Vec::new(), Vec::new())).collect();
     for (out_pos, &(arr, row)) in indices.iter().enumerate() {
+        if row >= runs[arr].len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "interleave_run_end: row index {row} out of range for array {arr} with length {}",
+                runs[arr].len()
+            )));
+        };
         let row = R::Native::from_usize(row).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
                 "interleave_run_end: row index {row} out of range"
@@ -456,16 +465,16 @@ fn interleave_run_end<R: RunEndIndexType>(
             phys_pairs[*out_pos] = (arr_idx, *p);
         }
     }
-
-    // Coalesce by physical-pair equality only: emit a new run when the
-    // (array_idx, physical_idx) pair changes between adjacent output rows.
-    // TODO: We could perform an equality check across sources to extend the
-    // output run, but we can't call make_comparator from this crate.
     let mut run_ends_buf: Vec<R::Native> = Vec::with_capacity(n);
     let mut dedup_pairs: Vec<(usize, usize)> = Vec::with_capacity(n);
     dedup_pairs.push(phys_pairs[0]);
     for i in 1..n {
-        if phys_pairs[i] != phys_pairs[i - 1] {
+        // this doesnt check for equality of values.
+        let (prev_arr, prev_row) = phys_pairs[i - 1];
+        let (curr_arr, curr_row) = phys_pairs[i];
+        let prev_value = value_data[prev_arr].slice(prev_row, 1);
+        let current_value = value_data[curr_arr].slice(curr_row, 1);
+        if phys_pairs[i] != phys_pairs[i - 1] && prev_value != current_value {
             run_ends_buf.push(R::Native::from_usize(i).unwrap());
             dedup_pairs.push(phys_pairs[i]);
         }
@@ -1613,5 +1622,106 @@ mod tests {
             result_lv.value(2).as_primitive::<Int64Type>().values(),
             &[3]
         );
+    }
+    #[test]
+    fn test_interleave_run_end_encoded_merges_identical_runs() {
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([0, 0, 0, 1, 1, 0, 0, 1, 1, 1].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([2, 2, 1, 1, 1, 0, 1, 0, 0, 0].into_iter().map(Some));
+        let b = builder.finish();
+
+        // logical: [1, 1, 1, 1, 1] across an a→b boundary; should compact to one run.
+        let result: Arc<dyn Array> =
+            interleave(&[&a, &b], &[(0, 3), (0, 4), (1, 2), (1, 3), (1, 4)]).unwrap();
+        let result = result.as_run::<Int32Type>();
+
+        assert_eq!(result.run_ends().values(), &[5]);
+        let values = result.values().as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[1]);
+    }
+    #[test]
+    fn test_break_intent() {
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int16Type>::new();
+        builder.extend([0, 0, 0, 1, 1, 0, 0, 1, 1, 1].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int16Type>::new();
+        builder.extend([2, 2, 1, 1, 1, 0, 1, 0, 0, 0].into_iter().map(Some));
+        let b = builder.finish();
+
+        // logical: [1, 1, 1, 1, 1] across an a→b boundary; should compact to one run.
+        // greater than int16::max
+        assert!(interleave(&[&a, &b], &[(0, 32766), (0, 4), (1, 2), (1, 3), (1, 4)]).is_err())
+    }
+    #[test]
+    fn test_interleave_run_end_encoded_partial_compaction() {
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 1, 2, 2].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 1, 2, 2].into_iter().map(Some));
+        let b = builder.finish();
+
+        // logical: [1, 1, 1, 2, 2, 1, 1] — fallback emits 5 raw runs;
+        // compaction must merge adjacent equal pairs but keep the trailing 1s
+        // distinct from the leading 1s (separated by 2s).
+        let indices = &[(0, 0), (0, 1), (1, 0), (0, 2), (1, 3), (1, 0), (1, 1)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+        let result = result.as_run::<Int32Type>();
+
+        assert_eq!(result.run_ends().values(), &[3, 5, 7]);
+        let values = result.values().as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[1, 2, 1]);
+    }
+    #[test]
+    fn test_interleave_run_end_encoded_pulls_identical_values() {
+        use arrow_array::builder::StringRunBuilder;
+
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend(
+            [
+                "alice", "alice", "bob", "bob", "charlie", "charlie", "david",
+            ]
+            .into_iter()
+            .map(Some),
+        );
+        let a = builder.finish();
+
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend(
+            ["alice", "bob", "charlie", "david", "david", "eve"]
+                .into_iter()
+                .map(Some),
+        );
+        let b = builder.finish();
+
+        // logical: ["alice","alice","bob","bob","charlie","charlie","david","david","david","alice","alice"]
+        let result = interleave(
+            &[&a, &b],
+            &[
+                (0, 0),
+                (1, 0),
+                (0, 2),
+                (1, 1),
+                (0, 4),
+                (1, 2),
+                (0, 6),
+                (1, 3),
+                (1, 4),
+                (0, 0),
+                (1, 0),
+            ],
+        )
+        .unwrap();
+        let result = result.as_run::<Int32Type>();
+
+        assert_eq!(result.run_ends().values(), &[2, 4, 6, 9, 11]);
+        let values = result.values().as_string::<i32>();
+        let values: Vec<_> = values.into_iter().map(Option::unwrap).collect();
+        assert_eq!(values, vec!["alice", "bob", "charlie", "david", "alice"]);
     }
 }
