@@ -432,6 +432,12 @@ impl FileDecryptionProperties {
         }
         (column_names, column_keys)
     }
+
+    /// Whether these decryption properties use a key retriever.
+    /// When false, keys can be retrieved without providing key metadata.
+    pub fn uses_key_retriever(&self) -> bool {
+        matches!(self.keys, DecryptionKeys::ViaRetriever(_))
+    }
 }
 
 impl std::fmt::Debug for FileDecryptionProperties {

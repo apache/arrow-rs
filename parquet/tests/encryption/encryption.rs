@@ -1474,3 +1474,29 @@ fn test_decrypt_page_index(
 
     Ok(())
 }
+
+#[test]
+fn test_decryption_properties_uses_key_retriever() {
+    let key_retriever = TestKeyRetriever::new()
+        .with_key("kf".to_owned(), "0123456789012345".as_bytes().to_vec())
+        .with_key("kc1".to_owned(), "1234567890123450".as_bytes().to_vec());
+
+    let properties_with_retriever =
+        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+            .build()
+            .unwrap();
+
+    assert!(properties_with_retriever.uses_key_retriever());
+
+    let footer_key = "0123456789012345".as_bytes();
+    let column_1_key = "1234567890123450".as_bytes();
+    let column_2_key = "1234567890123451".as_bytes();
+
+    let properties_with_keys = FileDecryptionProperties::builder(footer_key.to_vec())
+        .with_column_key("double_field", column_1_key.to_vec())
+        .with_column_key("float_field", column_2_key.to_vec())
+        .build()
+        .unwrap();
+
+    assert!(!properties_with_keys.uses_key_retriever());
+}
