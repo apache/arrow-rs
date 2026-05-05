@@ -90,6 +90,12 @@ impl OffsetIndexMetaData {
 
         // we have to do this manually because we want to use the fast PageLocation decoder
         let list_ident = prot.read_list_begin()?;
+        if list_ident.element_type != ElementType::Struct {
+            return Err(general_err!(
+                "Expected list element type of Struct but got {:?}",
+                list_ident.element_type
+            ));
+        }
         let mut page_locations = Vec::with_capacity(list_ident.size as usize);
         for _ in 0..list_ident.size {
             page_locations.push(read_page_location(prot)?);

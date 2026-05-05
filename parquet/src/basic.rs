@@ -775,6 +775,13 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EncodingMask {
 
         // This reads a Thrift `list<Encoding>` and turns it into a bitmask
         let list_ident = prot.read_list_begin()?;
+        // check for enum (encoded as I32)
+        if list_ident.element_type != ElementType::I32 {
+            return Err(general_err!(
+                "Expected list element type of Encoding but got {:?}",
+                list_ident.element_type
+            ));
+        }
         for _ in 0..list_ident.size {
             let val = Encoding::read_thrift(prot)?;
             mask |= 1 << val as i32;
