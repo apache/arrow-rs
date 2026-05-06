@@ -902,15 +902,24 @@ impl WriterPropertiesBuilder {
     /// EXPERIMENTAL: Should the writer emit the `path_in_schema` element of the
     /// `ColumnMetaData` Thrift struct. Defaults to `true` via [`DEFAULT_WRITE_PATH_IN_SCHEMA`].
     ///
-    /// The `path_in_schema` field in the Thrift metadata is redundant and wastes a sometimes
-    /// significant amount of space. Parquet file footers can be made smaller and easier to
-    /// parse by omitting this field.
+    /// Because `path_in_schema` is a field on the `ColumnMetaData`, it is repeated
+    /// `num_columns * num_rowgroups` times. Compounding this is any level of nesting or
+    /// repetition in the schema. For instance, a top-level list column named `foo` will have
+    /// a `path_in_schema` of `["foo", "list", "element"]`. A list-of-struct is even worse,
+    /// because the necessary list wrapping is repeated for each element of the struct. A
+    /// file with a deeply nested schema and many row groups can have a large percentage of the
+    /// footer taken up by this field. For example, a file of 38 row groups with a schema containing
+    /// several lists of structs containing lists had 36% of the footer taken up by `path_in_schema`.
+    /// Removing this redundant information can greatly speed up footer parsing, which is particularly
+    /// important in scenarios where one does not wish to read the entire file (e.g. point
+    /// lookups).
     ///
     /// <div class="warning">
     ///
     /// **WARNING:**
     /// Setting this to `false` will break compatibility with Parquet readers that
-    /// still expect this field to be present. Virtually all Parquet readers, with the exception
+    /// still expect this field to be present. Virtually all Parquet readers (parquet-java,
+    /// Spark, arrow-cpp, pyarrow, pandas to name a few), with the exception
     /// of the one in this crate, expect this field to be present, and will terminate execution
     /// if it is not. This will continue to be the case unless/until the Parquet format
     /// specification is explicitly changed to allow this field to be missing. As a consquence,
