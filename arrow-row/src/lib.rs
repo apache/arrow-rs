@@ -1020,14 +1020,20 @@ impl Rows {
 
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> Row<'_> {
-        assert!(row + 1 < self.offsets.len());
+        self.checked_row_end(row);
         unsafe { self.row_unchecked(row) }
+    }
+
+    fn checked_row_end(&self, row: usize) -> usize {
+        row.checked_add(1)
+            .filter(|end| *end < self.offsets.len())
+            .expect("row index out of bounds")
     }
 
     /// Returns the row at `index` without bounds checking
     ///
     /// # Safety
-    /// Caller must ensure that `index` is less than the number of offsets (#rows + 1)
+    /// Caller must ensure that `index + 1` is less than the number of offsets (#rows + 1)
     pub unsafe fn row_unchecked(&self, index: usize) -> Row<'_> {
         let end = unsafe { self.offsets.get_unchecked(index + 1) };
         let start = unsafe { self.offsets.get_unchecked(index) };
@@ -3587,5 +3593,14 @@ mod tests {
         // Since there is single long string, len of values buffer is 13
         assert_eq!(unchecked_values_len, 13);
         assert!(checked_values_len > unchecked_values_len);
+    }
+
+    #[test]
+    #[should_panic(expected = "row index out of bounds")]
+    fn row_should_panic_on_overflowing_index() {
+        let rows = RowConverter::new(vec![SortField::new(DataType::Int32)])
+            .unwrap()
+            .empty_rows(0, 0);
+        rows.row(usize::MAX);
     }
 }
