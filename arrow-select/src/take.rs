@@ -19,6 +19,7 @@
 
 use arrow_array::builder::{BufferBuilder, UInt32Builder};
 use arrow_array::cast::AsArray;
+use arrow_array::comparator::make_comparator;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
@@ -26,7 +27,7 @@ use arrow_buffer::{
     bit_util,
 };
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
+use arrow_schema::{ArrowError, DataType, FieldRef, SortOptions, UnionMode};
 use std::fmt::Display;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
@@ -879,12 +880,16 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     let mut new_run_ends_builder = BufferBuilder::<T::Native>::new(1);
     let mut take_value_indices = BufferBuilder::<I::Native>::new(1);
     let mut new_physical_len = 1;
-    let ree_values = run_array.values().to_data();
+    let values_cmp = make_comparator(
+        run_array.values().as_ref(),
+        run_array.values().as_ref(),
+        SortOptions::default(),
+    )?;
 
     for ix in 1..physical_indices.len() {
         let prev_idx = physical_indices[ix - 1];
         let cur_idx = physical_indices[ix];
-        if cur_idx != prev_idx && ree_values.slice(cur_idx, 1) != ree_values.slice(prev_idx, 1) {
+        if cur_idx != prev_idx && values_cmp(cur_idx, prev_idx).is_ne() {
             take_value_indices.append(I::Native::from_usize(prev_idx).unwrap());
             new_run_ends_builder.append(T::Native::from_usize(ix).unwrap());
             new_physical_len += 1;
