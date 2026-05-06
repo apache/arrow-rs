@@ -1440,8 +1440,7 @@ impl BloomFilterProperties {
 /// Builder for [`BloomFilterProperties`].
 ///
 /// Use [`BloomFilterProperties::builder`] or [`BloomFilterPropertiesBuilder::new`]
-/// as the entry point. Unset fields fall back to [`DEFAULT_BLOOM_FILTER_FPP`]
-/// and [`DEFAULT_BLOOM_FILTER_NDV`] at build time.
+/// as the entry point.
 #[derive(Debug, Clone, Default)]
 pub struct BloomFilterPropertiesBuilder {
     fpp: Option<f64>,
@@ -1459,16 +1458,29 @@ impl BloomFilterPropertiesBuilder {
     /// Sets the target false positive probability.
     ///
     /// The value must be in `(0.0, 1.0)` exclusively; this is validated at
-    /// build time by [`Self::build`] / [`Self::try_build`]. When unset,
-    /// [`DEFAULT_BLOOM_FILTER_FPP`] is used.
+    /// build time by [`Self::build`] / [`Self::try_build`]. When unset, the
+    /// default is `0.05` (5%, see [`DEFAULT_BLOOM_FILTER_FPP`]).
     pub fn with_fpp(mut self, fpp: f64) -> Self {
         self.fpp = Some(fpp);
         self
     }
 
     /// Sets the maximum expected number of distinct values used to size the
-    /// bloom filter before folding. When unset, [`DEFAULT_BLOOM_FILTER_NDV`]
-    /// is used.
+    /// bloom filter before folding.
+    ///
+    /// When unset, the default is `1_048_576` (see [`DEFAULT_BLOOM_FILTER_NDV`]),
+    /// which at the default fpp of 5% reserves roughly 1 MiB per column for the
+    /// filter bitset, derived as follows:
+    ///
+    /// ```text
+    /// ndv = 1,048,576, fpp = 0.05
+    ///   0.05^(1/8)                         ≈ 0.6877
+    ///   1 - 0.6877                         ≈ 0.3123
+    ///   ln(0.3123)                         ≈ -1.164
+    ///   num_bits = -8 * 1,048,576 / -1.164 ≈ 7,206,000 bits
+    ///                                      ≈   900,750 bytes (~900 KB)
+    ///   next_power_of_two(900 KB)          = 1 MiB (= 1,048,576 bytes)
+    /// ```
     pub fn with_max_ndv(mut self, ndv: u64) -> Self {
         self.ndv = Some(ndv);
         self
