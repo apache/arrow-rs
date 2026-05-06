@@ -17,10 +17,6 @@
 
 //! Defines take kernel for [Array]
 
-use std::fmt::Display;
-use std::mem::ManuallyDrop;
-use std::sync::Arc;
-
 use arrow_array::builder::{BufferBuilder, UInt32Builder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -31,6 +27,9 @@ use arrow_buffer::{
 };
 use arrow_data::{ArrayDataBuilder, transform::MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
+use std::fmt::Display;
+use std::mem::ManuallyDrop;
+use std::sync::Arc;
 
 use num_traits::Zero;
 
@@ -935,9 +934,13 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     let mut new_run_ends_builder = BufferBuilder::<T::Native>::new(1);
     let mut take_value_indices = BufferBuilder::<I::Native>::new(1);
     let mut new_physical_len = 1;
+    let ree_values = run_array.values().to_data();
+
     for ix in 1..physical_indices.len() {
-        if physical_indices[ix] != physical_indices[ix - 1] {
-            take_value_indices.append(I::Native::from_usize(physical_indices[ix - 1]).unwrap());
+        let prev_idx = physical_indices[ix - 1];
+        let cur_idx = physical_indices[ix];
+        if cur_idx != prev_idx && ree_values.slice(cur_idx, 1) != ree_values.slice(prev_idx, 1) {
+            take_value_indices.append(I::Native::from_usize(prev_idx).unwrap());
             new_run_ends_builder.append(T::Native::from_usize(ix).unwrap());
             new_physical_len += 1;
         }
@@ -1122,6 +1125,7 @@ pub fn take_record_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::builder::StringRunBuilder;
     use arrow_array::builder::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_data::ArrayData;
@@ -2564,13 +2568,12 @@ mod tests {
             vec![7, 2, 3, 7, 11, 4, 6].into_iter().collect();
 
         let take_out = take_run(&run_array, &take_indices).unwrap();
-
         assert_eq!(take_out.len(), 7);
         assert_eq!(take_out.run_ends().len(), 7);
-        assert_eq!(take_out.run_ends().values(), &[1_i32, 3, 4, 5, 7]);
+        assert_eq!(take_out.run_ends().values(), &[5, 7]);
 
         let take_out_values = take_out.values().as_primitive::<Int32Type>();
-        assert_eq!(take_out_values.values(), &[2, 2, 2, 2, 1]);
+        assert_eq!(take_out_values.values(), &[2, 1]);
     }
 
     #[test]
@@ -2841,5 +2844,59 @@ mod tests {
             .expect("result should be a RunArray");
         assert_eq!(run_result.run_ends().len(), 0);
         assert_eq!(run_result.values().len(), 0);
+    }
+
+    #[test]
+    fn test_take_run_end_encoded_merges_identical_runs() {
+        // see https://github.com/apache/arrow-rs/issues/7710
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 1, 0, 0, 1, 1].into_iter().map(Some));
+        let ree = builder.finish();
+
+        let indexes = Int32Array::from_iter_values(vec![0, 1, 4, 5]);
+        let result = take(&ree, &indexes, None).unwrap();
+        let result = result.as_run::<Int32Type>();
+        assert_eq!(result.run_ends().values(), &[4]);
+        assert_eq!(result.values().as_primitive::<Int32Type>().values(), &[1]);
+    }
+
+    #[test]
+    fn test_take_run_end_encoded_merges_identical_string_runs() {
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend(
+            ["bob", "bob", "alice", "alice", "bob", "bob"]
+                .into_iter()
+                .map(Some),
+        );
+        let ree = builder.finish();
+
+        let indexes = Int32Array::from_iter_values(vec![0, 1, 4, 5]);
+        let result = take(&ree, &indexes, None).unwrap();
+        let result = result.as_run::<Int32Type>();
+        assert_eq!(result.run_ends().values(), &[4]);
+        assert_eq!(result.values().as_string::<i32>().value(0), "bob");
+    }
+
+    #[test]
+    fn test_take_run_end_encoded_mixed_runs() {
+        // Validates that runs are merged whether the same logical value comes
+        // from the same physical index (repeated indices) or distinct ones.
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend(
+            ["bob", "bob", "alice", "alice", "bob", "bob", "eve", "eve"]
+                .into_iter()
+                .map(Some),
+        );
+        let ree = builder.finish();
+
+        let indexes = Int32Array::from_iter_values(vec![0, 0, 1, 4, 5, 2, 3, 2, 6, 7, 6]);
+        let result = take(&ree, &indexes, None).unwrap();
+        let result = result.as_run::<Int32Type>();
+
+        assert_eq!(result.len(), 11);
+        assert_eq!(result.run_ends().values(), &[5, 8, 11]);
+        assert_eq!(result.values().as_string::<i32>().value(0), "bob");
+        assert_eq!(result.values().as_string::<i32>().value(1), "alice");
+        assert_eq!(result.values().as_string::<i32>().value(2), "eve");
     }
 }
