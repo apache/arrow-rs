@@ -315,8 +315,6 @@ pub enum LogicalType {
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for LogicalType {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
     fn read_thrift(prot: &mut R) -> Result<Self> {
         let field_ident = prot.read_field_begin(0)?;
         if field_ident.field_type == FieldType::Stop {
@@ -768,8 +766,6 @@ impl HeapSize for EncodingMask {
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EncodingMask {
-    const ELEMENT_TYPE: ElementType = ElementType::I32;
-
     fn read_thrift(prot: &mut R) -> Result<Self> {
         let mut mask = 0;
 
@@ -841,8 +837,6 @@ pub enum Compression {
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for Compression {
-    const ELEMENT_TYPE: ElementType = ElementType::I32;
-
     fn read_thrift(prot: &mut R) -> Result<Self> {
         let val = prot.read_i32()?;
         Ok(match val {
@@ -1084,8 +1078,6 @@ impl FromStr for EdgeInterpolationAlgorithm {
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EdgeInterpolationAlgorithm {
-    const ELEMENT_TYPE: ElementType = ElementType::I32;
-
     fn read_thrift(prot: &mut R) -> Result<Self> {
         let val = prot.read_i32()?;
         match val {
@@ -1314,8 +1306,6 @@ impl ColumnOrder {
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
     fn read_thrift(prot: &mut R) -> Result<Self> {
         let field_ident = prot.read_field_begin(0)?;
         if field_ident.field_type == FieldType::Stop {
