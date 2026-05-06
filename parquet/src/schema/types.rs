@@ -2533,6 +2533,6 @@ mod tests {
             logical_type: None,
         }];
         let result = parquet_schema_from_array(elements);
-        assert!(result.is_err(), "expected error, got {result:?}");
+        assert!(result.unwrap_err().to_string().contains("Integer overflow"));
     }
 }
