@@ -97,6 +97,8 @@ The proposed release tarball and signatures are hosted at [2].
 
 The changelog is located at [3].
 
+The release tracking issue is: [4]
+
 Please download, verify checksums and signatures, run the unit tests,
 and vote on the release. There is a script [4] that automates some of
 the verification.
@@ -111,6 +113,7 @@ The vote will be open for at least 72 hours.
 [2]: ${url}
 [3]: https://github.com/apache/arrow-rs/blob/${commit_sha}/CHANGELOG.md
 [4]: https://github.com/apache/arrow-rs/blob/master/dev/release/verify-release-candidate.sh
+[5]: RELEASE_ISSUE
 MAIL
 echo "---------------------------------------------------------"
 
