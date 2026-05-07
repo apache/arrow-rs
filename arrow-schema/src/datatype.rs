@@ -273,7 +273,11 @@ pub enum DataType {
     /// of binary data in total.
     Binary,
     /// Opaque binary data of fixed size.
-    /// Enum parameter specifies the number of bytes per value.
+    ///
+    /// Enum parameter specifies the number of bytes per value, defined by the
+    /// [`byteWidth` field] in the Arrow Spec
+    ///
+    /// [`byteWidth` field]: https://github.com/apache/arrow/blob/2a89d03bbefd620b42126b8e00f8ae57e99cd638/format/Schema.fbs#L211
     FixedSizeBinary(i32),
     /// Opaque binary data of variable length and 64-bit offsets.
     ///
@@ -312,7 +316,6 @@ pub enum DataType {
     ///
     /// A single List array can store up to [`i32::MAX`] elements in total.
     List(FieldRef),
-
     /// A list of some logical data type with variable length.
     ///
     /// Logically the same as [`List`], but the internal representation differs in how child
@@ -326,7 +329,6 @@ pub enum DataType {
     ///
     /// A single LargeList array can store up to [`i64::MAX`] elements in total.
     LargeList(FieldRef),
-
     /// A list of some logical data type with variable length and 64-bit offsets.
     ///
     /// Logically the same as [`LargeList`], but the internal representation differs in how child

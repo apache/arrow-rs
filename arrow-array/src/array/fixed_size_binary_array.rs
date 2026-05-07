@@ -98,6 +98,9 @@ pub struct FixedSizeBinaryArray {
     len: usize,
     /// size of each element, validated to fit in a positive i32
     ///
+    /// Corresponds to the [`byteWidth` field] in the Arrow Spec
+    /// [`byteWidth` field]: https://github.com/apache/arrow/blob/2a89d03bbefd620b42126b8e00f8ae57e99cd638/format/Schema.fbs#L211
+    ///
     /// note: Arrow stores `value_len` using i32. This implementation stores it
     /// as a usize to ensure correct offset calculations.
     value_size: usize,
