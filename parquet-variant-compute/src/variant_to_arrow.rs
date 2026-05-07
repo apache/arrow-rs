@@ -26,11 +26,10 @@ use crate::type_conversion::{
 use crate::variant_array::ShreddedVariantFieldArray;
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
-    ArrayRef, ArrowNativeTypeOp, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewArray,
-    BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, GenericListArray,
-    GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder,
-    OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
-    StructArray,
+    ArrayRef, ArrowNativeTypeOp, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewBuilder,
+    BooleanBuilder, FixedSizeBinaryBuilder, GenericListArray, GenericListViewArray,
+    LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder, OffsetSizeTrait,
+    PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder, StructArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{CastOptions, DecimalCast};
@@ -119,7 +118,7 @@ fn make_typed_variant_to_arrow_row_builder<'a>(
 }
 
 pub(crate) fn make_variant_to_arrow_row_builder<'a>(
-    metadata: &BinaryViewArray,
+    metadata: &ArrayRef,
     path: VariantPath<'a>,
     data_type: Option<&'a DataType>,
     cast_options: &'a CastOptions,
@@ -924,7 +923,7 @@ impl<'a> ListElementBuilder<'a> {
             Self::Shredded(b) => {
                 let (value, typed_value, nulls) = b.finish()?;
                 Ok(ArrayRef::from(ShreddedVariantFieldArray::from_parts(
-                    Some(value),
+                    Some(Arc::new(value)),
                     Some(typed_value),
                     nulls,
                 )))
@@ -1052,13 +1051,13 @@ where
 
 /// Builder for creating VariantArray output (for path extraction without type conversion)
 pub(crate) struct VariantToBinaryVariantArrowRowBuilder {
-    metadata: BinaryViewArray,
+    metadata: ArrayRef,
     builder: VariantValueArrayBuilder,
     nulls: NullBufferBuilder,
 }
 
 impl VariantToBinaryVariantArrowRowBuilder {
-    fn new(metadata: BinaryViewArray, capacity: usize) -> Self {
+    fn new(metadata: ArrayRef, capacity: usize) -> Self {
         Self {
             metadata,
             builder: VariantValueArrayBuilder::new(capacity),
@@ -1083,7 +1082,7 @@ impl VariantToBinaryVariantArrowRowBuilder {
     fn finish(mut self) -> Result<ArrayRef> {
         let variant_array = VariantArray::from_parts(
             self.metadata,
-            Some(self.builder.build()?),
+            Some(Arc::new(self.builder.build()?)),
             None, // no typed_value column
             self.nulls.finish(),
         );

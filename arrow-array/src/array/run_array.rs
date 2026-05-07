@@ -30,6 +30,25 @@ use crate::{
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
 };
 
+/// Recursively applies a function to the values of a RunEndEncoded array, preserving the run structure.
+///
+/// # Example
+///
+/// ```ignore
+/// let result = ree_recurse!(array, Int32Type, my_function)?;
+/// ```
+///
+/// This macro is useful for implementing functions that should work on the logical values
+/// of a REE array while preserving the run-end encoding structure.
+#[macro_export]
+macro_rules! ree_map {
+    ($array:expr, $run_type:ty, $func:expr) => {{
+        let ree = $array.as_run_opt::<$run_type>().unwrap();
+        let inner_values = $func(ree.values().as_ref())?;
+        Ok(std::sync::Arc::new(ree.with_values(inner_values)))
+    }};
+}
+
 /// An array of [run-end encoded values].
 ///
 /// This encoding is variation on [run-length encoding (RLE)] and is good for representing
@@ -198,6 +217,46 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// values here and must be handled separately.
     pub fn values(&self) -> &ArrayRef {
         &self.values
+    }
+
+    /// Returns a new [`RunArray`] with the same `run_ends` and the supplied `values`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `values.len()` does not equal `self.values().len()`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{RunArray, Int32Array, StringArray, ArrayRef,Array};
+    /// # use arrow_array::types::Int32Type;
+    /// // A RunArray logically representing ["a", "a", "b", "c", "c"]
+    /// let run_ends = Int32Array::from(vec![2, 3, 5]);
+    /// let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+    /// let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+    ///
+    /// // Swap in new values while keeping the same run pattern.
+    /// // The result logically represents ["x", "x", "y", "z", "z"].
+    /// let new_values: ArrayRef = Arc::new(StringArray::from(vec!["x", "y", "z"]));
+    /// let new_run_array = run_array.with_values(new_values);
+    ///
+    /// assert_eq!(new_run_array.len(), 5);
+    /// assert_eq!(new_run_array.run_ends().values(), &[2, 3, 5]);
+    /// ```
+    pub fn with_values(&self, values: ArrayRef) -> Self {
+        assert_eq!(values.len(), self.values().len());
+        let (run_ends_field, values_field) = match &self.data_type {
+            DataType::RunEndEncoded(r, v) => (r, v),
+            _ => unreachable!("RunArray should have type RunEndEncoded"),
+        };
+        let data_type =
+            DataType::RunEndEncoded(Arc::clone(run_ends_field), Arc::clone(values_field));
+        Self {
+            data_type,
+            run_ends: self.run_ends.clone(),
+            values,
+        }
     }
 
     /// Similar to [`values`] but accounts for logical slicing, returning only the values

@@ -32,18 +32,20 @@ pub struct OffsetBuffer<I: OffsetSizeTrait> {
     pub values: Vec<u8>,
 }
 
-impl<I: OffsetSizeTrait> Default for OffsetBuffer<I> {
-    fn default() -> Self {
-        let mut offsets = Vec::new();
-        offsets.resize(1, I::default());
+impl<I: OffsetSizeTrait> OffsetBuffer<I> {
+    /// Create a new `OffsetBuffer` with capacity for at least `capacity` elements
+    ///
+    /// Pre-allocates the offsets vector to avoid reallocations during reading.
+    /// The values vector is not pre-allocated as its size is unpredictable.
+    pub fn with_capacity(capacity: usize) -> Self {
+        let mut offsets = Vec::with_capacity(capacity + 1);
+        offsets.push(I::default());
         Self {
             offsets,
             values: Vec::new(),
         }
     }
-}
 
-impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     /// Returns the number of byte arrays in this buffer
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
@@ -93,6 +95,8 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         dict_offsets: &[V],
         dict_values: &[u8],
     ) -> Result<()> {
+        self.offsets.reserve(keys.len());
+
         for key in keys {
             let index = key.as_usize();
             if index + 1 >= dict_offsets.len() {
@@ -105,7 +109,11 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             let end_offset = dict_offsets[index + 1].as_usize();
 
             // Dictionary values are verified when decoding dictionary page
-            self.try_push(&dict_values[start_offset..end_offset], false)?;
+            self.values
+                .extend_from_slice(&dict_values[start_offset..end_offset]);
+            let index_offset = I::from_usize(self.values.len())
+                .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
+            self.offsets.push(index_offset);
         }
         Ok(())
     }
@@ -139,6 +147,10 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 }
 
 impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -195,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_offset_buffer_empty() {
-        let buffer = OffsetBuffer::<i32>::default();
+        let buffer = OffsetBuffer::<i32>::with_capacity(0);
         let array = buffer.into_array(None, ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(strings.len(), 0);
@@ -203,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_offset_buffer_append() {
-        let mut buffer = OffsetBuffer::<i64>::default();
+        let mut buffer = OffsetBuffer::<i64>::with_capacity(0);
         buffer.try_push("hello".as_bytes(), true).unwrap();
         buffer.try_push("bar".as_bytes(), true).unwrap();
         buffer
@@ -220,11 +232,11 @@ mod tests {
 
     #[test]
     fn test_offset_buffer() {
-        let mut buffer = OffsetBuffer::<i32>::default();
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
         for v in ["hello", "world", "cupcakes", "a", "b", "c"] {
             buffer.try_push(v.as_bytes(), false).unwrap()
         }
-        let split = std::mem::take(&mut buffer);
+        let split = std::mem::replace(&mut buffer, OffsetBuffer::with_capacity(0));
 
         let array = split.into_array(None, ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
@@ -244,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_offset_buffer_pad_nulls() {
-        let mut buffer = OffsetBuffer::<i32>::default();
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
         let values = ["a", "b", "c", "def", "gh"];
         for v in &values {
             buffer.try_push(v.as_bytes(), false).unwrap()
@@ -287,7 +299,7 @@ mod tests {
         let valid_4_byte_utf8 = &[0b11110010, 0b10101000, 0b10101001, 0b10100101];
         std::str::from_utf8(valid_4_byte_utf8).unwrap();
 
-        let mut buffer = OffsetBuffer::<i32>::default();
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
         buffer.try_push(valid_2_byte_utf8, true).unwrap();
         buffer.try_push(valid_3_byte_utf8, true).unwrap();
         buffer.try_push(valid_4_byte_utf8, true).unwrap();
@@ -320,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_pad_nulls_empty() {
-        let mut buffer = OffsetBuffer::<i32>::default();
+        let mut buffer = OffsetBuffer::<i32>::with_capacity(0);
         let valid_mask = Buffer::from_iter(std::iter::repeat_n(false, 9));
         buffer.pad_nulls(0, 0, 9, valid_mask.as_slice());
 

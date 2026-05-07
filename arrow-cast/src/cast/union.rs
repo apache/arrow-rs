@@ -21,7 +21,7 @@ use crate::cast::can_cast_types;
 use crate::cast_with_options;
 use arrow_array::{Array, ArrayRef, UnionArray};
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionFields};
-use arrow_select::union_extract::union_extract;
+use arrow_select::union_extract::union_extract_by_id;
 
 use super::CastOptions;
 
@@ -64,7 +64,7 @@ fn same_type_family(a: &DataType, b: &DataType) -> bool {
 pub(crate) fn resolve_child_array<'a>(
     fields: &'a UnionFields,
     target_type: &DataType,
-) -> Option<&'a FieldRef> {
+) -> Option<(i8, &'a FieldRef)> {
     fields
         .iter()
         .find(|(_, f)| f.data_type() == target_type)
@@ -84,7 +84,6 @@ pub(crate) fn resolve_child_array<'a>(
                 .iter()
                 .find(|(_, f)| can_cast_types(f.data_type(), target_type))
         })
-        .map(|(_, f)| f)
 }
 
 /// Extracts the best-matching child array from a [`UnionArray`] for a given target type,
@@ -137,7 +136,7 @@ pub fn union_extract_by_type(
         _ => unreachable!("union_extract_by_type called on non-union array"),
     };
 
-    let Some(field) = resolve_child_array(fields, target_type) else {
+    let Some((type_id, _)) = resolve_child_array(fields, target_type) else {
         return Err(ArrowError::CastError(format!(
             "cannot cast Union with fields {} to {}",
             fields
@@ -149,7 +148,7 @@ pub fn union_extract_by_type(
         )));
     };
 
-    let extracted = union_extract(union_array, field.name())?;
+    let extracted = union_extract_by_id(union_array, type_id)?;
 
     if extracted.data_type() == target_type {
         return Ok(extracted);
@@ -353,6 +352,63 @@ mod tests {
         assert!(arr.value(0));
         assert!(arr.is_null(1));
         assert!(!arr.value(2));
+    }
+
+    // duplicate field names: ensure we resolve by type_id, not field name.
+    // Union has two children both named "val" — Int32 (type_id 0) and Utf8 (type_id 1).
+    // Casting to Utf8 should select the Utf8 child (type_id 1), not the Int32 child (type_id 0).
+    #[test]
+    fn test_duplicate_field_names() {
+        let fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("val", DataType::Int32, true),
+                Field::new("val", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let target = DataType::Utf8;
+
+        let sparse = UnionArray::try_new(
+            fields.clone(),
+            vec![0_i8, 1, 0, 1].into(),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(42), None, Some(99), None])) as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    None,
+                    Some("hello"),
+                    None,
+                    Some("world"),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let result = cast::cast(&sparse, &target).unwrap();
+        let arr = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert!(arr.is_null(0));
+        assert_eq!(arr.value(1), "hello");
+        assert!(arr.is_null(2));
+        assert_eq!(arr.value(3), "world");
+
+        let dense = UnionArray::try_new(
+            fields,
+            vec![0_i8, 1, 1].into(),
+            Some(vec![0_i32, 0, 1].into()),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(42)])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("hello"), Some("world")])),
+            ],
+        )
+        .unwrap();
+
+        let result = cast::cast(&dense, &target).unwrap();
+        let arr = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert!(arr.is_null(0));
+        assert_eq!(arr.value(1), "hello");
+        assert_eq!(arr.value(2), "world");
     }
 
     // no matching child array, all three passes fail.

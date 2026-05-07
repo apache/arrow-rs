@@ -41,7 +41,7 @@ use parquet::file::serialized_reader::ReadOptionsBuilder;
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
 
-fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
+fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) -> Vec<u8> {
     let mut rng = seedable_rng();
 
     let mut column_desc_ptrs: Vec<ColumnDescPtr> = Vec::with_capacity(NUM_COLUMNS);
@@ -143,7 +143,11 @@ fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
     let mut buffer = Vec::with_capacity(1024);
     {
         let buf = TrackedWrite::new(&mut buffer);
-        let writer = ParquetMetaDataWriter::new_with_tracked(buf, &metadata);
+        let mut writer = ParquetMetaDataWriter::new_with_tracked(buf, &metadata);
+        // use defaults unless `write_path_in_schema` is false
+        if !write_path_in_schema {
+            writer = writer.with_write_path_in_schema(write_path_in_schema);
+        }
         writer.finish().unwrap();
     }
 
@@ -233,7 +237,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let buf: Bytes = black_box(encoded_meta(false, false)).into();
+    let buf: Bytes = black_box(encoded_meta(false, false, true)).into();
     let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
     c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
@@ -275,7 +279,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let buf: Bytes = black_box(encoded_meta(true, true)).into();
+    let buf: Bytes = black_box(encoded_meta(false, false, false)).into();
+    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
+    c.bench_function("decode parquet metadata no path_in_schema (wide)", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let buf: Bytes = black_box(encoded_meta(true, true, true)).into();
     c.bench_function("decode parquet metadata w/ size stats (wide)", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata(&buf).unwrap();

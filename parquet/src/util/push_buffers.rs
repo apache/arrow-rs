@@ -156,7 +156,6 @@ impl PushBuffers {
     }
 
     /// Clear all buffered ranges and their corresponding data
-    #[cfg(feature = "arrow")]
     pub fn clear_all_ranges(&mut self) {
         self.ranges.clear();
         self.buffers.clear();

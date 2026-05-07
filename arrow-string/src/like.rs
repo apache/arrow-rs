@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Provide SQL's LIKE operators for Arrow's string arrays
+//! String predicate kernels for Arrow arrays.
+//!
+//! Provides SQL `LIKE`/`ILIKE` kernels as well as related
+//! string predicates such as `contains`, `starts_with`, `ends_with`, and
+//! ASCII case-insensitive equality.
 
 use crate::predicate::Predicate;
 
@@ -32,6 +36,7 @@ pub(crate) enum Op {
     Like(bool),
     ILike(bool),
     Contains,
+    EqIgnoreAsciiCase,
     StartsWith,
     EndsWith,
 }
@@ -44,6 +49,7 @@ impl std::fmt::Display for Op {
             Op::ILike(false) => write!(f, "ILIKE"),
             Op::ILike(true) => write!(f, "NILIKE"),
             Op::Contains => write!(f, "CONTAINS"),
+            Op::EqIgnoreAsciiCase => write!(f, "EQ_IGNORE_ASCII_CASE"),
             Op::StartsWith => write!(f, "STARTS_WITH"),
             Op::EndsWith => write!(f, "ENDS_WITH"),
         }
@@ -122,7 +128,7 @@ pub fn nilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Arrow
 /// # Example
 /// ```
 /// # use arrow_array::{StringArray, BooleanArray};
-/// # use arrow_string::like::{like, starts_with};
+/// # use arrow_string::like::starts_with;
 /// let strings = StringArray::from(vec!["arrow-rs", "arrow-rs", "arrow-rs", "Parquet"]);
 /// let patterns = StringArray::from(vec!["arr", "arrow", "arrow-cpp", "p"]);
 ///
@@ -148,7 +154,7 @@ pub fn starts_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, 
 /// # Example
 /// ```
 /// # use arrow_array::{StringArray, BooleanArray};
-/// # use arrow_string::like::{ends_with, like, starts_with};
+/// # use arrow_string::like::ends_with;
 /// let strings = StringArray::from(vec!["arrow-rs", "arrow-rs",  "Parquet"]);
 /// let patterns = StringArray::from(vec!["arr", "-rs", "t"]);
 ///
@@ -174,7 +180,7 @@ pub fn ends_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Ar
 /// # Example
 /// ```
 /// # use arrow_array::{StringArray, BooleanArray};
-/// # use arrow_string::like::{contains, like, starts_with};
+/// # use arrow_string::like::contains;
 /// let strings = StringArray::from(vec!["arrow-rs", "arrow-rs", "arrow-rs", "Parquet"]);
 /// let patterns = StringArray::from(vec!["arr", "-rs", "arrow-cpp", "X"]);
 ///
@@ -183,6 +189,30 @@ pub fn ends_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Ar
 /// ```
 pub fn contains(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::Contains, left, right)
+}
+
+/// Perform equality check on two arrays using an ASCII case-insensitive match.
+///
+/// `left` and `right` must be the same type, and one of
+/// - Utf8
+/// - LargeUtf8
+/// - Utf8View
+///
+/// # Example
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::like::eq_ignore_ascii_case;
+/// let strings = StringArray::from(vec!["arrow", "rs", "arrow-rS", "Parquet"]);
+/// let patterns = StringArray::from(vec!["ARROW", "rS", "ARROW-rs", "arrow"]);
+///
+/// let result = eq_ignore_ascii_case(&strings, &patterns).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![true, true, true, false]));
+/// ```
+pub fn eq_ignore_ascii_case(
+    left: &dyn Datum,
+    right: &dyn Datum,
+) -> Result<BooleanArray, ArrowError> {
+    like_op(Op::EqIgnoreAsciiCase, left, right)
 }
 
 fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
@@ -326,6 +356,7 @@ fn op_scalar<'a, T: StringArrayType<'a>>(
         Op::Like(neg) => Predicate::like(r)?.evaluate_array(l, neg),
         Op::ILike(neg) => Predicate::ilike(r, l.is_ascii())?.evaluate_array(l, neg),
         Op::Contains => Predicate::contains(r).evaluate_array(l, false),
+        Op::EqIgnoreAsciiCase => Predicate::IEqAscii(r).evaluate_array(l, false),
         Op::StartsWith => Predicate::StartsWith(r).evaluate_array(l, false),
         Op::EndsWith => Predicate::EndsWith(r).evaluate_array(l, false),
     };
@@ -360,6 +391,10 @@ fn op_binary<'a>(
         Op::Like(neg) => binary_predicate(l, r, neg, Predicate::like),
         Op::ILike(neg) => binary_predicate(l, r, neg, |s| Predicate::ilike(s, false)),
         Op::Contains => Ok(l.zip(r).map(|(l, r)| Some(str_contains(l?, r?))).collect()),
+        Op::EqIgnoreAsciiCase => Ok(l
+            .zip(r)
+            .map(|(l, r)| Some(Predicate::IEqAscii(l?).evaluate(r?)))
+            .collect()),
         Op::StartsWith => Ok(l
             .zip(r)
             .map(|(l, r)| Some(Predicate::StartsWith(r?).evaluate(l?)))
