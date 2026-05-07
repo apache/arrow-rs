@@ -88,7 +88,7 @@ use std::sync::Arc;
 ///
 #[derive(Clone)]
 pub struct FixedSizeBinaryArray {
-    /// Must be DataType::FixedSizeBinary(value_length)
+    /// Must be DataType::FixedSizeBinary(value_size)
     data_type: DataType,
     /// `len` values, each `value_size` bytes
     value_data: Buffer,
