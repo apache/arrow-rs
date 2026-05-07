@@ -59,9 +59,10 @@ impl From<ThriftProtocolError> for ParquetError {
         match e {
             ThriftProtocolError::Eof => eof_err!("Unexpected EOF"),
             ThriftProtocolError::IO(e) => e.into(),
-            ThriftProtocolError::InvalidFieldType(value) => {
-                general_err!("Unexpected struct field type {}", value)
-            }
+            ThriftProtocolError::InvalidFieldType(value) => match FieldType::try_from(value) {
+                Ok(fld_type) => general_err!("Unexpected struct field type {:?}", fld_type),
+                Err(_) => general_err!("Unexpected struct field type {}", value),
+            },
             ThriftProtocolError::InvalidElementType(value) => {
                 general_err!("Unexpected list/set element type {}", value)
             }
@@ -247,11 +248,16 @@ pub(crate) struct FieldIdentifier {
     pub(crate) field_type: FieldType,
     /// The field's `id`. May be computed from delta or directly decoded.
     pub(crate) id: i16,
-    /// Stores the value for booleans.
-    ///
-    /// Boolean fields store no data, instead the field type is either boolean true, or
-    /// boolean false.
-    pub(crate) bool_val: Option<bool>,
+}
+
+impl FieldIdentifier {
+    pub(crate) fn bool_val(&self) -> ThriftProtocolResult<bool> {
+        match self.field_type {
+            FieldType::BooleanTrue => Ok(true),
+            FieldType::BooleanFalse => Ok(false),
+            _ => Err(ThriftProtocolError::InvalidFieldType(self.field_type as u8)),
+        }
+    }
 }
 
 /// Struct used to describe a [thrift list].
@@ -360,37 +366,24 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         let field_type = self.read_byte()?;
         let field_delta = (field_type & 0xf0) >> 4;
         let field_type = FieldType::try_from(field_type & 0xf)?;
-        let mut bool_val: Option<bool> = None;
 
-        match field_type {
-            FieldType::Stop => Ok(FieldIdentifier {
+        match (field_type, field_delta) {
+            (FieldType::Stop, _) => Ok(FieldIdentifier {
                 field_type: FieldType::Stop,
                 id: 0,
-                bool_val,
             }),
-            _ => {
-                // special handling for bools
-                if field_type == FieldType::BooleanFalse {
-                    bool_val = Some(false);
-                } else if field_type == FieldType::BooleanTrue {
-                    bool_val = Some(true);
-                }
-                let field_id = if field_delta != 0 {
-                    last_field_id.checked_add(field_delta as i16).ok_or(
-                        ThriftProtocolError::FieldDeltaOverflow {
-                            field_delta,
-                            last_field_id,
-                        },
-                    )?
-                } else {
-                    self.read_full_field_id()?
-                };
-
-                Ok(FieldIdentifier {
-                    field_type,
-                    id: field_id,
-                    bool_val,
-                })
+            (field_type, 0) => {
+                let id = self.read_full_field_id()?;
+                Ok(FieldIdentifier { field_type, id })
+            }
+            (field_type, field_delta) => {
+                let id = last_field_id.checked_add(field_delta as i16).ok_or(
+                    ThriftProtocolError::FieldDeltaOverflow {
+                        field_delta,
+                        last_field_id,
+                    },
+                )?;
+                Ok(FieldIdentifier { field_type, id })
             }
         }
     }
