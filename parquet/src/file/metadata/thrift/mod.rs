@@ -35,8 +35,8 @@ use crate::file::{
 };
 use crate::{
     basic::{
-        ColumnOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType,
-        Repetition, Type,
+        ColumnOrder, CompressionCodec, ConvertedType, Encoding, EncodingMask, LogicalType,
+        PageType, Repetition, Type,
     },
     data_type::{ByteArray, FixedLenByteArray, Int96},
     errors::{ParquetError, Result},
@@ -460,7 +460,7 @@ fn read_column_metadata<'a>(
             }
             // 3: path_in_schema is redundant
             4 => {
-                column.compression = Compression::read_thrift(&mut *prot)?;
+                column.compression = CompressionCodec::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_CODEC;
             }
             5 => {
@@ -1333,10 +1333,15 @@ pub(super) fn serialize_column_meta_data<W: Write>(
         .encodings()
         .collect::<Vec<_>>()
         .write_thrift_field(w, 2, 1)?;
-    let path = column_chunk.column_descr.path().parts();
-    let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
-    path.write_thrift_field(w, 3, 2)?;
-    column_chunk.compression.write_thrift_field(w, 4, 3)?;
+    if w.write_path_in_schema() {
+        let path = column_chunk.column_descr.path().parts();
+        let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
+        path.write_thrift_field(w, 3, 2)?;
+        column_chunk.compression.write_thrift_field(w, 4, 3)?;
+    } else {
+        column_chunk.compression.write_thrift_field(w, 4, 2)?;
+    }
+
     column_chunk.num_values.write_thrift_field(w, 5, 4)?;
     column_chunk
         .total_uncompressed_size
@@ -1406,6 +1411,8 @@ pub(super) fn serialize_column_meta_data<W: Write>(
 pub(super) struct FileMeta<'a> {
     pub(super) file_metadata: &'a crate::file::metadata::FileMetaData,
     pub(super) row_groups: &'a Vec<RowGroupMetaData>,
+    // If true, then write the `path_in_schema` field in the ColumnMetaData struct.
+    pub(super) write_path_in_schema: bool,
 }
 
 // struct FileMetaData {
@@ -1425,6 +1432,8 @@ impl<'a> WriteThrift for FileMeta<'a> {
     // needed for last_field_id w/o encryption
     #[allow(unused_assignments)]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.set_write_path_in_schema(self.write_path_in_schema);
+
         self.file_metadata
             .version
             .write_thrift_field(writer, 1, 0)?;

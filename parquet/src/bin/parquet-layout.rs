@@ -48,7 +48,7 @@ use parquet::file::metadata::ParquetMetaDataReader;
 use serde::Serialize;
 use thrift::protocol::TCompactInputProtocol;
 
-use parquet::basic::Compression;
+use parquet::basic::CompressionCodec;
 use parquet::errors::Result;
 use parquet::file::reader::ChunkReader;
 #[allow(deprecated)]
@@ -118,7 +118,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                 .iter()
                 .zip(schema.columns())
                 .map(|(column, column_schema)| {
-                    let compression = compression(column.compression());
+                    let compression = compression(column.compression_codec());
                     let mut pages = vec![];
 
                     let mut start = column
@@ -225,16 +225,16 @@ fn read_page_header<C: ChunkReader>(reader: &C, offset: u64) -> Result<(usize, P
 }
 
 /// Returns a string representation for a given compression
-fn compression(compression: Compression) -> Option<&'static str> {
+fn compression(compression: CompressionCodec) -> Option<&'static str> {
     match compression {
-        Compression::UNCOMPRESSED => None,
-        Compression::SNAPPY => Some("snappy"),
-        Compression::GZIP(_) => Some("gzip"),
-        Compression::LZO => Some("lzo"),
-        Compression::BROTLI(_) => Some("brotli"),
-        Compression::LZ4 => Some("lz4"),
-        Compression::ZSTD(_) => Some("zstd"),
-        Compression::LZ4_RAW => Some("lz4_raw"),
+        CompressionCodec::UNCOMPRESSED => None,
+        CompressionCodec::SNAPPY => Some("snappy"),
+        CompressionCodec::GZIP => Some("gzip"),
+        CompressionCodec::LZO => Some("lzo"),
+        CompressionCodec::BROTLI => Some("brotli"),
+        CompressionCodec::LZ4 => Some("lz4"),
+        CompressionCodec::ZSTD => Some("zstd"),
+        CompressionCodec::LZ4_RAW => Some("lz4_raw"),
     }
 }
 
