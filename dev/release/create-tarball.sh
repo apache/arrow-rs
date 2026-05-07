@@ -80,6 +80,26 @@ url="https://dist.apache.org/repos/dist/dev/arrow/${release}-rc${rc}"
 echo "Attempting to create ${tarball} from tag ${tag}"
 
 
+# create <tarball> containing the files in git at $tag
+# the files in the tarball are prefixed with {release}
+# (e.g. apache-arrow-rs-4.0.1)
+mkdir -p ${distdir}
+(cd "${SOURCE_TOP_DIR}" && \
+     git archive ${tag} --prefix ${release}/ \
+         | gzip > ${tarball})
+
+echo "Running rat license checker on ${tarball}"
+${SOURCE_DIR}/run-rat.sh ${tarball}
+
+echo "Signing tarball and creating checksums"
+gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
+# create signing with relative path of tarball
+# so that they can be verified with a command such as
+#  shasum --check apache-arrow-rs-4.1.0-rc2.tar.gz.sha512
+(cd ${distdir} && shasum -a 256 ${tarname}) > ${tarball}.sha256
+(cd ${distdir} && shasum -a 512 ${tarname}) > ${tarball}.sha512
+sha256=$(cut -d ' ' -f 1 "${tarball}.sha256")
+
 echo "Draft email for dev@arrow.apache.org mailing list"
 echo ""
 echo "---------------------------------------------------------"
@@ -91,7 +111,8 @@ Hi,
 
 I would like to propose a release of Apache Arrow Rust Implementation, version ${tag}.
 
-This release candidate is based on commit: ${commit_sha} [1]
+This release candidate is based on commit: ${commit_sha} [1].
+The SHA256 of the release candidate is: ${sha256}
 
 The proposed release tarball and signatures are hosted at [2].
 
@@ -116,27 +137,6 @@ The vote will be open for at least 72 hours.
 [5]: RELEASE_ISSUE
 MAIL
 echo "---------------------------------------------------------"
-
-
-
-# create <tarball> containing the files in git at $tag
-# the files in the tarball are prefixed with {release}
-# (e.g. apache-arrow-rs-4.0.1)
-mkdir -p ${distdir}
-(cd "${SOURCE_TOP_DIR}" && \
-     git archive ${tag} --prefix ${release}/ \
-         | gzip > ${tarball})
-
-echo "Running rat license checker on ${tarball}"
-${SOURCE_DIR}/run-rat.sh ${tarball}
-
-echo "Signing tarball and creating checksums"
-gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
-# create signing with relative path of tarball
-# so that they can be verified with a command such as
-#  shasum --check apache-arrow-rs-4.1.0-rc2.tar.gz.sha512
-(cd ${distdir} && shasum -a 256 ${tarname}) > ${tarball}.sha256
-(cd ${distdir} && shasum -a 512 ${tarname}) > ${tarball}.sha512
 
 echo "Uploading to apache dist/dev to ${url}"
 svn co --depth=empty https://dist.apache.org/repos/dist/dev/arrow ${SOURCE_TOP_DIR}/dev/dist
