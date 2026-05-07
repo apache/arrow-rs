@@ -98,7 +98,7 @@ fn test_arrow_gh_41317() {
     let err = read_file("ARROW-GH-41317.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External: Parquet argument error: Parquet error: StructArrayReader out of sync in read_records, expected 5 read, got 2"
+        "Parquet error: Expected list element type of I32 but got I16"
     );
 }
 
