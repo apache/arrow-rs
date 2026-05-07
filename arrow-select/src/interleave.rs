@@ -19,6 +19,7 @@
 
 use crate::concat::concat;
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use crate::take::take;
 use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -446,8 +447,15 @@ fn interleave_fallback(
 }
 
 /// Fallback implementation for interleaving dictionaries when it was determined
-/// that the dictionary values should not be merged. This implementation concatenates
-/// the value slices and recomputes the resulting dictionary keys.
+/// that the dictionary values should not be merged. Sources sharing a values
+/// Arc are deduplicated and concatenated to form a new dictionary values slice.
+///
+/// Additionally, this function calculates the estimated coverage the input
+/// indices have of the underlying source values and decides whether to perform
+/// a `take` to reduce unreferenced values in the output. The estimation is
+/// inexact and assumes a uniform selection of values. However, if the
+/// estimation is incorrect, the result is simply avoiding the take and a larger
+/// result with unreferenced values.
 ///
 /// # Panics
 ///
@@ -458,60 +466,108 @@ fn interleave_fallback_dictionary<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
-    let relative_offsets: Vec<usize> = dictionaries
+    // Only consecutive Arc-distinct values are considered. This makes any
+    // operation cheaper.
+    let groups: Vec<&[&DictionaryArray<K>]> = dictionaries
+        .chunk_by(|a, b| Arc::ptr_eq(a.values(), b.values()))
+        .collect();
+    let distinct_values_total: usize = groups.iter().map(|g| g[0].values().len()).sum();
+
+    let mut source_to_group = Vec::with_capacity(dictionaries.len());
+    for (g, chunk) in groups.iter().enumerate() {
+        source_to_group.resize(source_to_group.len() + chunk.len(), g);
+    }
+
+    if indices.len() >= distinct_values_total {
+        // Index coverage is high enough that take on values likely does not
+        // produce a benefit.
+        let group_offsets: Vec<usize> = groups
+            .iter()
+            .scan(0, |acc, g| {
+                let cur = *acc;
+                *acc += g[0].values().len();
+                Some(cur)
+            })
+            .collect();
+        let projected: Vec<ArrayRef> = groups.iter().map(|g| g[0].values().clone()).collect();
+        return build_fallback_dictionary(dictionaries, indices, projected, |src, key_idx| {
+            group_offsets[source_to_group[src]] + key_idx
+        });
+    }
+
+    // `remaps[g][k] = 1 + position in unique_keys[g]`; 0 means "not yet
+    // referenced". Using zero as an initial value allows us to take advantage
+    // of lazy allocations for zeroed pages in unreferenced regions.
+    let mut remaps: Vec<Vec<K::Native>> = groups
         .iter()
-        .scan(0usize, |offset, dict| {
-            let current = *offset;
-            *offset += dict.values().len();
-            Some(current)
+        .map(|g| vec![K::Native::ZERO; g[0].values().len()])
+        .collect();
+    let mut unique_keys: Vec<Vec<K::Native>> = (0..groups.len()).map(|_| Vec::new()).collect();
+
+    for &(src, row) in indices {
+        let old_keys = dictionaries[src].keys();
+        if !old_keys.is_valid(row) {
+            continue;
+        }
+        let key = old_keys.values()[row];
+        let g = source_to_group[src];
+        let slot = &mut remaps[g][key.as_usize()];
+        if *slot == K::Native::ZERO {
+            unique_keys[g].push(key);
+            *slot = K::Native::from_usize(unique_keys[g].len())
+                .expect("position fits in K::Native since key did");
+        }
+    }
+
+    let projected_values: Vec<ArrayRef> = groups
+        .iter()
+        .enumerate()
+        .map(|(g, chunk)| {
+            let take_indices =
+                PrimitiveArray::<K>::new(std::mem::take(&mut unique_keys[g]).into(), None);
+            take(chunk[0].values().as_ref(), &take_indices, None)
+        })
+        .collect::<Result<_, _>>()?;
+
+    let group_offsets: Vec<usize> = projected_values
+        .iter()
+        .scan(0, |acc, p| {
+            let cur = *acc;
+            *acc += p.len();
+            Some(cur)
         })
         .collect();
-    let all_values: Vec<&dyn Array> = dictionaries.iter().map(|d| d.values().as_ref()).collect();
-    let concatenated_values = concat(&all_values)?;
+    build_fallback_dictionary(dictionaries, indices, projected_values, |src, key_idx| {
+        let g = source_to_group[src];
+        group_offsets[g] + remaps[g][key_idx].as_usize() - 1
+    })
+}
 
-    let any_nulls = dictionaries.iter().any(|d| d.keys().nulls().is_some());
-    let (new_keys, nulls) = if any_nulls {
-        let mut has_nulls = false;
-        let new_keys: Vec<K::Native> = indices
-            .iter()
-            .map(|(array, row)| {
-                let old_keys = dictionaries[*array].keys();
-                if old_keys.is_valid(*row) {
-                    let old_key = old_keys.values()[*row].as_usize();
-                    K::Native::from_usize(relative_offsets[*array] + old_key)
-                        .expect("key overflow should be checked by caller")
-                } else {
-                    has_nulls = true;
-                    K::Native::ZERO
-                }
-            })
-            .collect();
-
-        let nulls = if has_nulls {
-            let null_buffer = BooleanBuffer::collect_bool(indices.len(), |i| {
-                let (array, row) = indices[i];
-                dictionaries[array].keys().is_valid(row)
-            });
-            Some(NullBuffer::new(null_buffer))
+/// Builds the output `DictionaryArray` from per-group `projected_values` and a
+/// `(src, key_idx) -> new_key_idx` lookup into the concatenation of those values.
+fn build_fallback_dictionary<K: ArrowDictionaryKeyType, F: FnMut(usize, usize) -> usize>(
+    dictionaries: &[&DictionaryArray<K>],
+    indices: &[(usize, usize)],
+    projected_values: Vec<ArrayRef>,
+    mut new_key: F,
+) -> Result<ArrayRef, ArrowError> {
+    let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
+    for &(src, row) in indices {
+        let old_keys = dictionaries[src].keys();
+        if old_keys.is_valid(row) {
+            let key_idx = old_keys.values()[row].as_usize();
+            keys.append_value(
+                K::Native::from_usize(new_key(src, key_idx))
+                    .expect("key overflow should be checked by caller"),
+            );
         } else {
-            None
-        };
-        (new_keys, nulls)
-    } else {
-        let new_keys: Vec<K::Native> = indices
-            .iter()
-            .map(|(array, row)| {
-                let old_key = dictionaries[*array].keys().values()[*row].as_usize();
-                K::Native::from_usize(relative_offsets[*array] + old_key)
-                    .expect("key overflow should be checked by caller")
-            })
-            .collect();
-        (new_keys, None)
-    };
-
-    let keys_array = PrimitiveArray::<K>::new(new_keys.into(), nulls);
-    // SAFETY: keys_array is constructed from a valid set of keys.
-    let array = unsafe { DictionaryArray::new_unchecked(keys_array, concatenated_values) };
+            keys.append_null();
+        }
+    }
+    let all_values: Vec<&dyn Array> = projected_values.iter().map(|a| a.as_ref()).collect();
+    let concatenated_values = concat(&all_values)?;
+    // SAFETY: keys are constructed from a valid set of keys.
+    let array = unsafe { DictionaryArray::new_unchecked(keys.finish(), concatenated_values) };
     Ok(Arc::new(array))
 }
 
@@ -1460,6 +1516,49 @@ mod tests {
                 Some("qux")
             ]
         );
+    }
+
+    #[test]
+    fn test_interleave_fallback_dictionary_projects_shared_arc() {
+        let base = DictionaryArray::<Int32Type>::new(
+            Int32Array::from_iter_values(0..6),
+            Arc::new(StringArray::from_iter_values(
+                (0..6).map(|i| format!("v{i}")),
+            )),
+        );
+        let (s1, s2) = (base.slice(0, 4), base.slice(2, 4));
+        let indices = vec![(0, 1), (1, 0), (0, 2), (1, 0)];
+        let result = interleave_fallback_dictionary::<Int32Type>(&[&s1, &s2], &indices).unwrap();
+        let dict_result = result.as_dictionary::<Int32Type>();
+
+        assert_eq!(dict_result.values().len(), 2);
+        let expected: DictionaryArray<Int32Type> = [Some("v1"), Some("v2"), Some("v2"), Some("v2")]
+            .into_iter()
+            .collect();
+        assert_eq!(dict_result, &expected);
+    }
+
+    #[test]
+    fn test_interleave_fallback_dictionary_projects_with_nulls() {
+        let dict_a = DictionaryArray::<Int32Type>::new(
+            Int32Array::from_iter([Some(2), None, Some(3)]),
+            Arc::new(StringArray::from_iter_values(["a0", "a1", "a2", "a3"])),
+        );
+        let dict_b = DictionaryArray::<Int32Type>::new(
+            Int32Array::from_iter_values([1, 2, 3]),
+            Arc::new(StringArray::from_iter_values(["b0", "b1", "b2", "b3"])),
+        );
+        let indices = vec![(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)];
+        let result =
+            interleave_fallback_dictionary::<Int32Type>(&[&dict_a, &dict_b], &indices).unwrap();
+        let dict_result = result.as_dictionary::<Int32Type>();
+
+        assert_eq!(dict_result.values().len(), 4);
+        let expected: DictionaryArray<Int32Type> =
+            [Some("a2"), None, Some("a3"), Some("b1"), Some("b2")]
+                .into_iter()
+                .collect();
+        assert_eq!(dict_result, &expected);
     }
 
     #[test]
