@@ -31,6 +31,7 @@ use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::basic::Compression;
 use parquet::column::page::PageReader;
+use parquet::column::reader::ColumnReaderImpl;
 use parquet::data_type::Int32Type;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
@@ -150,9 +151,105 @@ fn bench_codec(c: &mut Criterion, codec_label: &str, compression: Compression) {
     group.finish();
 }
 
+/// Simulates the existing **row-group-level reverse** strategy used by
+/// DataFusion (apache/datafusion#18817): forward-decode the entire column
+/// chunk, reverse the resulting value buffer, then take the first `n`
+/// elements. Peak buffer = full column chunk; time-to-first-N = full decode.
+fn time_to_first_n_row_group_sim(
+    chunk_reader: &Arc<Bytes>,
+    metadata: &Arc<ParquetMetaData>,
+    n: usize,
+) {
+    let rg = metadata.row_group(0);
+    let column_chunk = rg.column(0);
+    let total_rows = rg.num_rows() as usize;
+    let column_descr = metadata.file_metadata().schema_descr().column(0);
+    let page_locations = metadata.offset_index().unwrap()[0][0]
+        .page_locations()
+        .clone();
+
+    let forward = Box::new(
+        SerializedPageReader::new(
+            chunk_reader.clone(),
+            column_chunk,
+            total_rows,
+            Some(page_locations),
+        )
+        .unwrap(),
+    );
+    let mut col_reader: ColumnReaderImpl<Int32Type> = ColumnReaderImpl::new(column_descr, forward);
+    let mut values: Vec<i32> = Vec::with_capacity(total_rows);
+    col_reader
+        .read_records(total_rows, None, None, &mut values)
+        .unwrap();
+    values.reverse();
+    values.truncate(n);
+    black_box(values);
+}
+
+/// **Page-level reverse** strategy enabled by `ReverseSerializedPageReader`:
+/// emit pages in reverse order, decode just enough pages to gather `n` values,
+/// reverse those values, take the first `n`. Peak buffer = at most one page
+/// worth of values when `n` is smaller than the last page's row count.
+fn time_to_first_n_page_reverse(
+    chunk_reader: &Arc<Bytes>,
+    metadata: &Arc<ParquetMetaData>,
+    n: usize,
+) {
+    let rg = metadata.row_group(0);
+    let column_chunk = rg.column(0);
+    let column_descr = metadata.file_metadata().schema_descr().column(0);
+    let offset_index = &metadata.offset_index().unwrap()[0][0];
+
+    let reverse = Box::new(
+        ReverseSerializedPageReader::new(chunk_reader.clone(), column_chunk, offset_index).unwrap(),
+    );
+    let mut col_reader: ColumnReaderImpl<Int32Type> = ColumnReaderImpl::new(column_descr, reverse);
+
+    // Decode pages until we have at least `n` values. Each iteration asks for
+    // a generous chunk so the column reader pulls a whole page at a time.
+    let mut values: Vec<i32> = Vec::with_capacity(n);
+    while values.len() < n {
+        let want = n.saturating_sub(values.len()).max(PAGE_ROW_COUNT_LIMIT);
+        let (records, _, _) = col_reader
+            .read_records(want, None, None, &mut values)
+            .unwrap();
+        if records == 0 {
+            break;
+        }
+    }
+    // Within each emitted page rows are in forward order; reverse so the
+    // first `n` of the result correspond to the *last* `n` rows of the
+    // forward chunk.
+    values.reverse();
+    values.truncate(n);
+    black_box(values);
+}
+
+fn bench_time_to_first_n(c: &mut Criterion) {
+    let bytes = write_int32_file(NUM_VALUES, Compression::UNCOMPRESSED);
+    let metadata = open_metadata(&bytes);
+    let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+    let num_pages = metadata.offset_index().unwrap()[0][0]
+        .page_locations()
+        .len();
+
+    let mut group = c.benchmark_group("time_to_first_n_reversed_values");
+    for &n in &[10usize, 100, 1024] {
+        group.bench_function(format!("row_group_sim/n={n}/pages={num_pages}"), |b| {
+            b.iter(|| time_to_first_n_row_group_sim(&chunk_reader, &metadata, n));
+        });
+        group.bench_function(format!("page_reverse/n={n}/pages={num_pages}"), |b| {
+            b.iter(|| time_to_first_n_page_reverse(&chunk_reader, &metadata, n));
+        });
+    }
+    group.finish();
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     bench_codec(c, "uncompressed", Compression::UNCOMPRESSED);
     bench_codec(c, "snappy", Compression::SNAPPY);
+    bench_time_to_first_n(c);
 }
 
 criterion_group!(benches, criterion_benchmark);
