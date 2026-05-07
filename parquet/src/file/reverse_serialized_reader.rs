@@ -51,25 +51,33 @@ use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
 /// A [`PageReader`] that emits pages in reverse order using `OffsetIndex`.
 ///
 /// See the module-level documentation for details.
+///
+/// # Stability
+///
+/// This type is part of an experimental API surface (see #9934) and is
+/// subject to change without a major-version bump. It is currently
+/// `#[doc(hidden)]` for that reason.
+#[doc(hidden)]
 pub struct ReverseSerializedPageReader<R: ChunkReader> {
     reader: Arc<R>,
     decompressor: Option<Box<dyn Codec>>,
     physical_type: Type,
+    /// Data page locations, in forward order. Iteration walks this slice
+    /// from the back via `state.cursor`.
+    page_locations: Vec<PageLocation>,
+    /// Synthesized dictionary-page location, if the column chunk has one.
+    dictionary_page: Option<PageLocation>,
     state: ReverseState,
     read_stats: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
 enum ReverseState {
-    /// Initial state. The dictionary page (if any) is emitted on the next call,
-    /// then the state transitions to [`ReverseState::Data`].
-    NeedDict {
-        dictionary_page: Option<PageLocation>,
-        page_locations: Vec<PageLocation>,
-    },
-    /// Iterate `page_locations[..cursor]` from the back: emit
-    /// `page_locations[cursor - 1]` and decrement `cursor`.
+    /// Initial state. The dictionary page (if any) is emitted on the next
+    /// `get_next_page` call, then the state transitions to `Data`.
+    NeedDict,
+    /// Emit `page_locations[cursor - 1]` next, then decrement `cursor`.
     Data {
-        page_locations: Vec<PageLocation>,
         cursor: usize,
     },
     Exhausted,
@@ -97,12 +105,12 @@ impl<R: ChunkReader> ReverseSerializedPageReader<R> {
     ) -> Result<Self> {
         let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (chunk_start, _chunk_len) = meta.byte_range();
-        let locations = offset_index.page_locations().clone();
+        let page_locations = offset_index.page_locations().clone();
 
         // If the first data page does not start at the column chunk's start, a
         // dictionary page sits in front. Synthesize a `PageLocation` for it
         // (mirrors `SerializedPageReader::new_with_properties`).
-        let dictionary_page = match locations.first() {
+        let dictionary_page = match page_locations.first() {
             Some(first) if (first.offset as u64) != chunk_start => Some(PageLocation {
                 offset: chunk_start as i64,
                 compressed_page_size: (first.offset as u64 - chunk_start) as i32,
@@ -115,17 +123,20 @@ impl<R: ChunkReader> ReverseSerializedPageReader<R> {
             reader,
             decompressor,
             physical_type: meta.column_type(),
-            state: ReverseState::NeedDict {
-                dictionary_page,
-                page_locations: locations,
-            },
+            page_locations,
+            dictionary_page,
+            state: ReverseState::NeedDict,
             read_stats: props.read_page_stats(),
         })
     }
 
     fn read_page_at(&mut self, loc: &PageLocation) -> Result<Page> {
-        let page_len = usize::try_from(loc.compressed_page_size)
-            .map_err(|e| ParquetError::General(format!("invalid compressed_page_size: {e}")))?;
+        let page_len = usize::try_from(loc.compressed_page_size).map_err(|e| {
+            ParquetError::General(format!(
+                "invalid compressed_page_size {} at offset {}: {e}",
+                loc.compressed_page_size, loc.offset
+            ))
+        })?;
         let buffer = self.reader.get_bytes(loc.offset as u64, page_len)?;
 
         let mut prot = ThriftSliceInputProtocol::new(buffer.as_ref());
@@ -157,34 +168,33 @@ impl<R: ChunkReader> Iterator for ReverseSerializedPageReader<R> {
 impl<R: ChunkReader> PageReader for ReverseSerializedPageReader<R> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         loop {
-            match std::mem::replace(&mut self.state, ReverseState::Exhausted) {
-                ReverseState::NeedDict {
-                    dictionary_page,
-                    page_locations,
-                } => {
-                    let cursor = page_locations.len();
-                    self.state = ReverseState::Data {
-                        page_locations,
-                        cursor,
-                    };
-                    if let Some(loc) = dictionary_page {
-                        return self.read_page_at(&loc).map(Some);
+            match self.state {
+                ReverseState::NeedDict => {
+                    if let Some(loc) = self.dictionary_page.clone() {
+                        // Read first; only commit the state transition on success.
+                        let page = self.read_page_at(&loc)?;
+                        self.state = ReverseState::Data {
+                            cursor: self.page_locations.len(),
+                        };
+                        return Ok(Some(page));
                     }
-                    // No dictionary; fall through to read the first reverse data page.
+                    // No dictionary; transition to Data and loop to emit the
+                    // back-most data page (or terminate if there are none).
+                    self.state = ReverseState::Data {
+                        cursor: self.page_locations.len(),
+                    };
                 }
-                ReverseState::Data {
-                    page_locations,
-                    cursor,
-                } => {
+                ReverseState::Data { cursor } => {
                     if cursor == 0 {
+                        self.state = ReverseState::Exhausted;
                         return Ok(None);
                     }
-                    let loc = page_locations[cursor - 1].clone();
-                    self.state = ReverseState::Data {
-                        page_locations,
-                        cursor: cursor - 1,
-                    };
-                    return self.read_page_at(&loc).map(Some);
+                    let loc = self.page_locations[cursor - 1].clone();
+                    // Read first; only commit the cursor decrement on success
+                    // so a transient I/O error does not silently skip a page.
+                    let page = self.read_page_at(&loc)?;
+                    self.state = ReverseState::Data { cursor: cursor - 1 };
+                    return Ok(Some(page));
                 }
                 ReverseState::Exhausted => return Ok(None),
             }
@@ -192,20 +202,32 @@ impl<R: ChunkReader> PageReader for ReverseSerializedPageReader<R> {
     }
 
     fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
-        match &self.state {
-            ReverseState::NeedDict {
-                dictionary_page, ..
-            } => Ok(Some(PageMetadata {
-                num_rows: None,
-                num_levels: None,
-                is_dict: dictionary_page.is_some(),
-            })),
-            ReverseState::Data { cursor, .. } => {
-                if *cursor == 0 {
+        match self.state {
+            ReverseState::NeedDict => {
+                if self.dictionary_page.is_some() {
+                    Ok(Some(PageMetadata {
+                        num_rows: None,
+                        num_levels: None,
+                        is_dict: true,
+                    }))
+                } else if !self.page_locations.is_empty() {
+                    // num_rows precise computation requires `total_rows`,
+                    // which is not currently threaded through; Phase 1
+                    // returns None.
+                    Ok(Some(PageMetadata {
+                        num_rows: None,
+                        num_levels: None,
+                        is_dict: false,
+                    }))
+                } else {
+                    // Empty column chunk with no dictionary.
+                    Ok(None)
+                }
+            }
+            ReverseState::Data { cursor } => {
+                if cursor == 0 {
                     Ok(None)
                 } else {
-                    // num_rows precise computation requires `total_rows`, which
-                    // is not currently threaded through. Phase 1 returns None.
                     Ok(Some(PageMetadata {
                         num_rows: None,
                         num_levels: None,
@@ -218,35 +240,23 @@ impl<R: ChunkReader> PageReader for ReverseSerializedPageReader<R> {
     }
 
     fn skip_next_page(&mut self) -> Result<()> {
-        match std::mem::replace(&mut self.state, ReverseState::Exhausted) {
-            ReverseState::NeedDict {
-                dictionary_page,
-                page_locations,
-            } => {
-                // If a dictionary page is pending, skipping consumes only the
-                // dictionary slot (no data page is dropped) — matching
+        match self.state {
+            ReverseState::NeedDict => {
+                // If a dictionary page is pending, skipping consumes only
+                // the dictionary slot (no data page is dropped) — matching
                 // `SerializedPageReader::skip_next_page` in `Pages` mode.
                 // If there is no dictionary, skipping drops the back-most
                 // data page.
-                let mut cursor = page_locations.len();
-                if dictionary_page.is_none() {
+                let mut cursor = self.page_locations.len();
+                if self.dictionary_page.is_none() {
                     cursor = cursor.saturating_sub(1);
                 }
-                self.state = ReverseState::Data {
-                    page_locations,
-                    cursor,
-                };
+                self.state = ReverseState::Data { cursor };
                 Ok(())
             }
-            ReverseState::Data {
-                page_locations,
-                cursor,
-            } => {
+            ReverseState::Data { cursor } => {
                 if cursor > 0 {
-                    self.state = ReverseState::Data {
-                        page_locations,
-                        cursor: cursor - 1,
-                    };
+                    self.state = ReverseState::Data { cursor: cursor - 1 };
                 } else {
                     self.state = ReverseState::Exhausted;
                 }
@@ -1011,6 +1021,43 @@ mod tests {
         assert_pages_match_forward_reverse(bytes2);
         // And the value-level decode comparison.
         run_value_decode_match::<Int32Type>(bytes);
+    }
+
+    #[test]
+    fn peek_returns_none_for_empty_chunk() {
+        // Write a column chunk with zero rows. The resulting OffsetIndex
+        // either has no page_locations or the location count matches the
+        // empty data; either way `peek_next_page` and `get_next_page` must
+        // agree on emptiness.
+        let spec = TestFileSpec {
+            enable_dict: false,
+            ..TestFileSpec::default()
+        };
+        let values: Vec<i32> = vec![];
+        let bytes = write_int32_file(&spec, &values, None);
+        let (bytes, metadata) = open_with_offset_index(bytes);
+        let chunk_reader: Arc<Bytes> = Arc::new(bytes);
+        let rg = metadata.row_group(0);
+        let column_chunk = rg.column(0);
+        let offset_index = match metadata.offset_index() {
+            Some(oi) if !oi[0].is_empty() => &oi[0][0],
+            // Without an OffsetIndex we cannot construct the reader; this
+            // test is then a no-op for that writer configuration.
+            _ => return,
+        };
+
+        let mut reverse =
+            ReverseSerializedPageReader::new(chunk_reader, column_chunk, offset_index).unwrap();
+
+        // Whatever peek says must agree with get_next_page on first call.
+        let peek1 = reverse.peek_next_page().unwrap();
+        let page1 = reverse.get_next_page().unwrap();
+        assert_eq!(peek1.is_some(), page1.is_some());
+
+        // Drain to exhaustion and verify peek == None and get == None.
+        while reverse.get_next_page().unwrap().is_some() {}
+        assert!(reverse.peek_next_page().unwrap().is_none());
+        assert!(reverse.get_next_page().unwrap().is_none());
     }
 
     #[test]
