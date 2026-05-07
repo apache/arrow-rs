@@ -65,8 +65,9 @@ else
     tar=tar
 fi
 
-if ! git -C "${SOURCE_TOP_DIR}" rev-list --max-count=1 ${tag}; then
+if ! commit_sha=$(git -C "${SOURCE_TOP_DIR}" rev-list --max-count=1 "${tag}"); then
     echo "Cannot continue: unknown git tag: $tag"
+    exit 1
 fi
 
 
@@ -90,7 +91,7 @@ Hi,
 
 I would like to propose a release of Apache Arrow Rust Implementation, version ${tag}.
 
-This release candidate is based on commit: ${tag} [1]
+This release candidate is based on commit: ${commit_sha} [1]
 
 The proposed release tarball and signatures are hosted at [2].
 
@@ -106,9 +107,9 @@ The vote will be open for at least 72 hours.
 [ ] +0
 [ ] -1 Do not release this as Apache Arrow Rust ${version} because...
 
-[1]: https://github.com/apache/arrow-rs/tree/${tag}
+[1]: https://github.com/apache/arrow-rs/tree/${commit_sha}
 [2]: ${url}
-[3]: https://github.com/apache/arrow-rs/blob/${tag}/CHANGELOG.md
+[3]: https://github.com/apache/arrow-rs/blob/${commit_sha}/CHANGELOG.md
 [4]: https://github.com/apache/arrow-rs/blob/master/dev/release/verify-release-candidate.sh
 MAIL
 echo "---------------------------------------------------------"
