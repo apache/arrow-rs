@@ -109,7 +109,7 @@ Subject: [VOTE][RUST] Release Apache Arrow Rust ${version} RC${rc}
 
 Hi,
 
-I would like to propose a release of Apache Arrow Rust Implementation, version ${tag}.
+I would like to propose a release of Apache Arrow Rust Implementation, version ${version}.
 
 This release candidate is based on commit: ${commit_sha} [1].
 The SHA256 of the release candidate is: ${sha256}
