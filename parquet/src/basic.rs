@@ -28,7 +28,7 @@ pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
 use crate::file::metadata::HeapSize;
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
-    WriteThrift, WriteThriftField,
+    WriteThrift, WriteThriftField, validate_list_type,
 };
 use crate::{thrift_enum, thrift_struct, thrift_union_all_empty, write_thrift_field};
 
@@ -771,6 +771,8 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EncodingMask {
 
         // This reads a Thrift `list<Encoding>` and turns it into a bitmask
         let list_ident = prot.read_list_begin()?;
+        // check for enum (encoded as I32)
+        validate_list_type(ElementType::I32, &list_ident)?;
         for _ in 0..list_ident.size {
             let val = Encoding::read_thrift(prot)?;
             mask |= 1 << val as i32;

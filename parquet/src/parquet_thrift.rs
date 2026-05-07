@@ -702,15 +702,27 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for &'a [u8] {
 pub(crate) fn read_thrift_vec<'a, T, R>(prot: &mut R) -> Result<Vec<T>>
 where
     R: ThriftCompactInputProtocol<'a>,
-    T: ReadThrift<'a, R>,
+    T: ReadThrift<'a, R> + WriteThrift,
 {
     let list_ident = prot.read_list_begin()?;
+    validate_list_type(T::ELEMENT_TYPE, &list_ident)?;
     let mut res = Vec::with_capacity(list_ident.size as usize);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
         res.push(val);
     }
     Ok(res)
+}
+
+pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) -> Result<()> {
+    if got.element_type != expected {
+        return Err(general_err!(
+            "Expected list element type of {:?} but got {:?}",
+            expected,
+            got.element_type
+        ));
+    }
+    Ok(())
 }
 
 /////////////////////////
@@ -1154,5 +1166,21 @@ pub(crate) mod tests {
         let mut prot = ThriftSliceInputProtocol::new(&data);
         let result = prot.read_list_begin();
         assert!(result.is_err(), "expected error, got {result:?}");
+    }
+
+    #[test]
+    fn test_read_list_wrong_type() {
+        // list header: 4 elements of `Boolean`
+        let data = [0x42, 0x01];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        // try to read as list<i32>
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot);
+        println!("{result:?}");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Expected list element type of I32 but got Bool")
+        );
     }
 }
