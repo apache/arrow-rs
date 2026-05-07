@@ -19,18 +19,26 @@
 
 # Changelog
 
-## [57.3.0](https://github.com/apache/arrow-rs/tree/57.3.0) (2026-02-02)
+## [57.3.1](https://github.com/apache/arrow-rs/tree/57.3.1) (2026-05-07)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/57.2.0...57.3.0)
-
-**Breaking changes:**
-
-- Revert "Seal Array trait", mark `Array` as `unsafe` [#9313](https://github.com/apache/arrow-rs/pull/9313) ([alamb](https://github.com/alamb), [gabotechs](https://github.com/gabotechs))
-- Mark `BufferBuilder::new_from_buffer` as unsafe [#9312](https://github.com/apache/arrow-rs/pull/9312) ([alamb](https://github.com/alamb), [Jefffrey](https://github.com/Jefffrey))
+[Full Changelog](https://github.com/apache/arrow-rs/compare/57.3.0...57.3.1)
 
 **Fixed bugs:**
 
-- Fix string array equality when the values buffer is the same and only the offsets to access it differ [#9330](https://github.com/apache/arrow-rs/pull/9330) ([alamb](https://github.com/alamb), [jhorstmann](https://github.com/jhorstmann))
-- Ensure `BufferBuilder::truncate` doesn't overset length [#9311](https://github.com/apache/arrow-rs/pull/9311) ([alamb](https://github.com/alamb), [Jefffrey](https://github.com/Jefffrey))
-- [parquet] Provide only encrypted column stats in plaintext footer [#9310](https://github.com/apache/arrow-rs/pull/9310) ([alamb](https://github.com/alamb), [rok](https://github.com/rok), [adamreeve](https://github.com/adamreeve))
-- [regression] Error with adaptive predicate pushdown: "Invalid offset …" [#9309](https://github.com/apache/arrow-rs/pull/9309) ([alamb](https://github.com/alamb), [erratic-pattern](https://github.com/erratic-pattern), [sdf-jkl](https://github.com/sdf-jkl))
+- \[arrow-buffer\] Integer overflow in BufferBuilder::reserve leads to undefined behavior [\#9897](https://github.com/apache/arrow-rs/issues/9897) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[arrow-array\] Integer overflow in FixedSizeBinaryArray::value leads to undefined behavior [\#9898](https://github.com/apache/arrow-rs/issues/9898) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[arrow-data\] Integer overflow in ArrayData::slice leads to undefined behavior [\#9899](https://github.com/apache/arrow-rs/issues/9899) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[arrow-data\] Integer overflow in ArrayData validation leads to undefined behavior [\#9900](https://github.com/apache/arrow-rs/issues/9900) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[arrow-row\] Integer overflow in Rows::row index handling leads to undefined behavior [\#9901](https://github.com/apache/arrow-rs/issues/9901) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[arrow-buffer\] Integer overflow in BitChunks::new leads to undefined behavior [\#9903](https://github.com/apache/arrow-rs/issues/9903) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[arrow-buffer\] Integer overflow in repeat_slice_n_times leads to undefined behavior [\#9904](https://github.com/apache/arrow-rs/issues/9904) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+
+**Merged pull requests:**
+
+- \[57_maintenance\] Prevent ArrayData::slice length overflow \(\#9813\) [\#9927](https://github.com/apache/arrow-rs/pull/9927) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- \[57_maintenance\] Prevent repeat slice length overflow \(\#9819\) [\#9920](https://github.com/apache/arrow-rs/pull/9920) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- \[57_maintenance\] Prevent buffer builder length overflow in MutableBuffer::extend_zeros \(\#9820\) [\#9926](https://github.com/apache/arrow-rs/pull/9926) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- \[57_maintenance\] Prevent FixedSizeBinaryArray i32 offset overflows \(\#9872\) [\#9928](https://github.com/apache/arrow-rs/pull/9928) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- \[57_maintenance\] Prevent ArrayData validation length overflow \(\#9816\) [\#9925](https://github.com/apache/arrow-rs/pull/9925) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- \[57_maintenance\] Prevent Rows row index overflow \(\#9817\) [\#9922](https://github.com/apache/arrow-rs/pull/9922) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- \[57_maintenance\] Prevent BitChunks length overflow \(\#9818\) [\#9918](https://github.com/apache/arrow-rs/pull/9918) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
