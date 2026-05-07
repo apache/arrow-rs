@@ -125,7 +125,7 @@ pub fn substring(
             length.map(|e| e as i32),
         ),
         DataType::FixedSizeBinary(old_len) => {
-            let old_len: usize = (*old_len).try_into().expect("old_len overflow");
+            let old_len: usize = (*old_len).try_into().expect("negative FixedSizeBinary value length");
             fixed_size_binary_substring(
                 array
                     .as_any()
