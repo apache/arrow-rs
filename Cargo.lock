@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "arrow"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-avro"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "bytes",
  "criterion 0.5.1",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-csv"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-flight"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "anyhow",
  "arrow-arith",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-integration-test"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-integration-testing"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-json"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -408,7 +408,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ord"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-pyarrow"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-row"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "bincode",
  "bitflags",
@@ -456,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-select"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-string"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2263,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "ahash",
  "arrow",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "parquet_derive"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "parquet",
  "proc-macro2",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "parquet_derive_test"
-version = "56.2.0"
+version = "56.2.1"
 dependencies = [
  "chrono",
  "parquet",
