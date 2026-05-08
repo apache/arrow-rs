@@ -24,7 +24,7 @@ use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::decoding::Decoder;
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::{BitReader, FromBytes};
+use crate::util::bit_util::{BitReader, FromBitpacked, FromBytes};
 
 const ALP_HEADER_SIZE: usize = 7;
 const ALP_COMPRESSION_MODE: u8 = 0;
@@ -159,7 +159,7 @@ struct AlpPageLayout<Exact: AlpExact> {
 /// - FOR stores non-negative deltas optimized for bitpacking.
 /// - Unsigned arithmetic avoids signed-overflow edge cases in FOR stage.
 /// - Signed interpretation is applied later during decimal reconstruction.
-pub(super) trait AlpExact: Copy + std::fmt::Debug {
+pub(super) trait AlpExact: Copy + std::fmt::Debug + FromBitpacked {
     const WIDTH: usize;
     type Signed: Copy;
     fn from_le_slice(slice: &[u8]) -> Self;
@@ -644,7 +644,7 @@ fn parse_vector_view<Exact: AlpExact>(
 }
 
 /// Decode bit-packed deltas into exact integers.
-fn bit_unpack_integers<Exact: AlpExact + FromBytes>(
+fn bit_unpack_integers<Exact: AlpExact + FromBytes + FromBitpacked>(
     packed_values: Bytes,
     bit_width: u8,
     num_elements: u16,
