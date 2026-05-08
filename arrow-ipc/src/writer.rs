@@ -41,10 +41,10 @@ use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, layout};
 use arrow_schema::*;
 
-use crate::CONTINUATION_MARKER;
 use crate::compression::CompressionCodec;
 pub use crate::compression::CompressionContext;
 use crate::convert::IpcSchemaEncoder;
+use crate::{Buffer as IpcBuffer, CONTINUATION_MARKER, FieldNode};
 
 /// IPC write options used to control the behaviour of the [`IpcDataGenerator`]
 #[derive(Debug, Clone)]
@@ -194,14 +194,17 @@ impl Default for IpcWriteOptions {
 /// [Arrow IPC Format]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
 pub struct IpcDataGenerator {}
 
+/// Scratch buffers reused while encoding record batches.
+///
+/// This avoids allocating new metadata and body buffers for every batch. The
+/// data remains valid until the next call that reuses this scratch space.
 struct IpcWriterScratch {
     fbb: FlatBufferBuilder<'static>,
-    nodes: Vec<crate::FieldNode>,
-    buffers: Vec<crate::Buffer>,
+    nodes: Vec<FieldNode>,
+    buffers: Vec<IpcBuffer>,
     arrow_data: Vec<u8>,
     variadic_buffer_counts: Vec<i64>,
 }
-
 impl Default for IpcWriterScratch {
     fn default() -> Self {
         Self {
@@ -535,95 +538,20 @@ impl IpcDataGenerator {
         )
     }
 
-    /// Write a `RecordBatch` into two sets of bytes, one for the header (crate::Message) and the
-    /// other for the batch's data
     fn record_batch_to_bytes(
         &self,
         batch: &RecordBatch,
         write_options: &IpcWriteOptions,
         compression_context: &mut CompressionContext,
     ) -> Result<EncodedData, ArrowError> {
-        let mut fbb = FlatBufferBuilder::new();
+        let mut scratch = IpcWriterScratch::default();
 
-        let mut nodes: Vec<crate::FieldNode> = vec![];
-        let mut buffers: Vec<crate::Buffer> = vec![];
-        let mut arrow_data: Vec<u8> = vec![];
-        let mut offset = 0;
-
-        // get the type of compression
-        let batch_compression_type = write_options.batch_compression_type;
-
-        let compression = batch_compression_type.map(|batch_compression_type| {
-            let mut c = crate::BodyCompressionBuilder::new(&mut fbb);
-            c.add_method(crate::BodyCompressionMethod::BUFFER);
-            c.add_codec(batch_compression_type);
-            c.finish()
-        });
-
-        let compression_codec: Option<CompressionCodec> =
-            batch_compression_type.map(TryInto::try_into).transpose()?;
-
-        let mut variadic_buffer_counts = vec![];
-
-        for array in batch.columns() {
-            let array_data = array.to_data();
-            offset = write_array_data(
-                &array_data,
-                &mut buffers,
-                &mut arrow_data,
-                &mut nodes,
-                offset,
-                array.len(),
-                array.null_count(),
-                compression_codec,
-                compression_context,
-                write_options,
-            )?;
-
-            append_variadic_buffer_counts(&mut variadic_buffer_counts, &array_data);
-        }
-        // pad the tail of body data
-        let len = arrow_data.len();
-        let pad_len = pad_to_alignment(write_options.alignment, len);
-        arrow_data.extend_from_slice(&PADDING[..pad_len]);
-
-        // write data
-        let buffers = fbb.create_vector(&buffers);
-        let nodes = fbb.create_vector(&nodes);
-        let variadic_buffer = if variadic_buffer_counts.is_empty() {
-            None
-        } else {
-            Some(fbb.create_vector(&variadic_buffer_counts))
-        };
-
-        let root = {
-            let mut batch_builder = crate::RecordBatchBuilder::new(&mut fbb);
-            batch_builder.add_length(batch.num_rows() as i64);
-            batch_builder.add_nodes(nodes);
-            batch_builder.add_buffers(buffers);
-            if let Some(c) = compression {
-                batch_builder.add_compression(c);
-            }
-
-            if let Some(v) = variadic_buffer {
-                batch_builder.add_variadicBufferCounts(v);
-            }
-            let b = batch_builder.finish();
-            b.as_union_value()
-        };
-        // create an crate::Message
-        let mut message = crate::MessageBuilder::new(&mut fbb);
-        message.add_version(write_options.metadata_version);
-        message.add_header_type(crate::MessageHeader::RecordBatch);
-        message.add_bodyLength(arrow_data.len() as i64);
-        message.add_header(root);
-        let root = message.finish();
-        fbb.finish(root, None);
-        let finished_data = fbb.finished_data();
+        let (ipc_message, arrow_data) =
+            encode_record_batch_into(&mut scratch, batch, write_options, compression_context)?;
 
         Ok(EncodedData {
-            ipc_message: finished_data.to_vec(),
-            arrow_data,
+            ipc_message: ipc_message.to_vec(),
+            arrow_data: arrow_data.to_vec(),
         })
     }
 
@@ -1207,12 +1135,18 @@ impl<W: Write> FileWriter<W> {
 
             write_message(&mut self.writer, encoded_message, &self.write_options)?
         } else {
-            write_record_batch_fast(
-                &mut self.writer,
+            let (ipc_message, arrow_data) = encode_record_batch_into(
+                &mut self.writer_scratch,
                 batch,
                 &self.write_options,
                 &mut self.compression_context,
-                &mut self.writer_scratch,
+            )?;
+
+            write_message_parts(
+                &mut self.writer,
+                ipc_message,
+                arrow_data,
+                &self.write_options,
             )?
         };
 
@@ -1493,12 +1427,18 @@ impl<W: Write> StreamWriter<W> {
 
             write_message(&mut self.writer, encoded_message, &self.write_options)?;
         } else {
-            write_record_batch_fast(
-                &mut self.writer,
+            let (ipc_message, arrow_data) = encode_record_batch_into(
+                &mut self.writer_scratch,
                 batch,
                 &self.write_options,
                 &mut self.compression_context,
-                &mut self.writer_scratch,
+            )?;
+
+            write_message_parts(
+                &mut self.writer,
+                ipc_message,
+                arrow_data,
+                &self.write_options,
             )?;
         }
         Ok(())
@@ -1622,13 +1562,18 @@ fn has_dictionary_type(data_type: &DataType) -> bool {
     }
 }
 
-fn write_record_batch_fast<W: Write>(
-    writer: &mut W,
+/// Encodes a record batch into reusable scratch buffers.
+///
+/// The returned slices borrow from `scratch` and are valid until the scratch
+/// space is reused. Writers use this helper to avoid allocating owned
+/// `EncodedData` for each record batch.
+fn encode_record_batch_into<'a>(
+    scratch: &'a mut IpcWriterScratch,
     batch: &RecordBatch,
     write_options: &IpcWriteOptions,
     compression_context: &mut CompressionContext,
-    scratch: &mut IpcWriterScratch,
-) -> Result<(usize, usize), ArrowError> {
+) -> Result<(&'a [u8], &'a [u8]), ArrowError> {
+    // Reset reusable scratch state while preserving allocated capacity.
     scratch.fbb.reset();
     scratch.nodes.clear();
     scratch.buffers.clear();
@@ -1649,6 +1594,7 @@ fn write_record_batch_fast<W: Write>(
 
     let mut offset = 0;
 
+    // Encode array buffers and IPC metadata for each column.
     for array in batch.columns() {
         let array_data = array.to_data();
         offset = write_array_data(
@@ -1667,10 +1613,12 @@ fn write_record_batch_fast<W: Write>(
         append_variadic_buffer_counts(&mut scratch.variadic_buffer_counts, &array_data);
     }
 
+    // IPC body buffers must be aligned.
     let len = scratch.arrow_data.len();
     let pad_len = pad_to_alignment(write_options.alignment, len);
     scratch.arrow_data.extend_from_slice(&PADDING[..pad_len]);
 
+    // Build the RecordBatch flatbuffer metadata.
     let buffers = scratch.fbb.create_vector(&scratch.buffers);
     let nodes = scratch.fbb.create_vector(&scratch.nodes);
     let variadic_buffer = if scratch.variadic_buffer_counts.is_empty() {
@@ -1679,6 +1627,7 @@ fn write_record_batch_fast<W: Write>(
         Some(scratch.fbb.create_vector(&scratch.variadic_buffer_counts))
     };
 
+    // Build the RecordBatch message payload referencing the encoded body buffers.
     let root = {
         let mut batch_builder = crate::RecordBatchBuilder::new(&mut scratch.fbb);
         batch_builder.add_length(batch.num_rows() as i64);
@@ -1699,14 +1648,10 @@ fn write_record_batch_fast<W: Write>(
     message.add_bodyLength(scratch.arrow_data.len() as i64);
     message.add_header(root);
     let root = message.finish();
+    // Finalize the IPC message into the reusable flatbuffer builder.
     scratch.fbb.finish(root, None);
 
-    write_message_parts(
-        writer,
-        scratch.fbb.finished_data(),
-        &scratch.arrow_data,
-        write_options,
-    )
+    Ok((scratch.fbb.finished_data(), &scratch.arrow_data))
 }
 
 fn write_message_parts<W: Write>(
@@ -2009,9 +1954,9 @@ fn get_or_truncate_buffer(array_data: &ArrayData) -> &[u8] {
 #[allow(clippy::too_many_arguments)]
 fn write_array_data(
     array_data: &ArrayData,
-    buffers: &mut Vec<crate::Buffer>,
+    buffers: &mut Vec<IpcBuffer>,
     arrow_data: &mut Vec<u8>,
-    nodes: &mut Vec<crate::FieldNode>,
+    nodes: &mut Vec<FieldNode>,
     offset: i64,
     num_rows: usize,
     null_count: usize,
@@ -2021,11 +1966,11 @@ fn write_array_data(
 ) -> Result<i64, ArrowError> {
     let mut offset = offset;
     if !matches!(array_data.data_type(), DataType::Null) {
-        nodes.push(crate::FieldNode::new(num_rows as i64, null_count as i64));
+        nodes.push(FieldNode::new(num_rows as i64, null_count as i64));
     } else {
         // NullArray's null_count equals to len, but the `null_count` passed in is from ArrayData
         // where null_count is always 0.
-        nodes.push(crate::FieldNode::new(num_rows as i64, num_rows as i64));
+        nodes.push(FieldNode::new(num_rows as i64, num_rows as i64));
     }
     if has_validity_bitmap(array_data.data_type(), write_options) {
         // write null buffer if exists
@@ -2317,10 +2262,10 @@ fn write_array_data(
 /// follows is not compressed, which can be useful for cases where
 /// compression does not yield appreciable savings.
 fn write_buffer(
-    buffer: &[u8],                    // input
-    buffers: &mut Vec<crate::Buffer>, // output buffer descriptors
-    arrow_data: &mut Vec<u8>,         // output stream
-    offset: i64,                      // current output stream offset
+    buffer: &[u8],                // input
+    buffers: &mut Vec<IpcBuffer>, // output buffer descriptors
+    arrow_data: &mut Vec<u8>,     // output stream
+    offset: i64,                  // current output stream offset
     compression_codec: Option<CompressionCodec>,
     compression_context: &mut CompressionContext,
     alignment: u8,
@@ -2338,7 +2283,7 @@ fn write_buffer(
     })?;
 
     // make new index entry
-    buffers.push(crate::Buffer::new(offset, len));
+    buffers.push(IpcBuffer::new(offset, len));
     // padding and make offset aligned
     let pad_len = pad_to_alignment(alignment, len as usize);
     arrow_data.extend_from_slice(&PADDING[..pad_len]);
