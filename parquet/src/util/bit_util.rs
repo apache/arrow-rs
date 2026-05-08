@@ -489,7 +489,7 @@ impl BitReader {
         self.byte_offset + ceil(self.bit_offset, 8)
     }
 
-    /// Reads a `num_bits` as a single bit-packed value of type `T` from the
+    /// Reads a single bit-packed value of `num_bits` bits as a `T` from the
     /// stream.
     ///
     /// The value is read as the low `num_bits` bits of `T`. Bits are consumed
@@ -533,7 +533,7 @@ impl BitReader {
         Some(T::from_u64(v))
     }
 
-    /// Reads up to `batch.len()` bit-packed values of ``num_bits` each, into
+    /// Reads up to `batch.len()` bit-packed values of `num_bits` each, into
     /// `batch`.
     ///
     /// Equivalent to repeatedly calling [`BitReader::get_value`] with the same
@@ -743,7 +743,7 @@ impl BitReader {
     /// assumed to be byte aligned, so the reader is first advanced to the
     /// start of the next byte before reading.
     ///
-    /// Returns `Some(value)` if there are at least `num_bytes`  left in
+    /// Returns `Some(value)` if there are at least `num_bytes` bytes left in
     /// the buffer after byte-alignment, and `None` otherwise. On `None` the
     /// reader's byte position is still advanced to the alignment boundary.
     pub fn get_aligned<T: FromBytes>(&mut self, num_bytes: usize) -> Option<T> {
@@ -772,7 +772,7 @@ impl BitReader {
     /// # Panics
     ///
     /// Panics if the encoded integer is longer than [`MAX_VLQ_BYTE_LEN`]
-    /// bytes (bad input)
+    /// bytes (bad input).
     pub fn get_vlq_int(&mut self) -> Option<i64> {
         // Align to byte boundary once, then read bytes directly
         self.byte_offset = self.get_byte_offset();
@@ -820,7 +820,7 @@ impl BitReader {
         })
     }
 
-    /// Loads up to the the next 8 bytes from `self.buffer` at `self.byte_offset`
+    /// Loads up to the next 8 bytes from `self.buffer` at `self.byte_offset`
     /// into `self.buffered_values`.
     ///
     /// Reads fewer than 8 bytes if there are fewer than 8 bytes left
