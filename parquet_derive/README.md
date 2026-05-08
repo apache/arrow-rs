@@ -144,6 +144,12 @@ To compile and test doctests, run `cargo test --doc -- --show-output`
 To build documentation, run `cargo doc --no-deps`.
 To compile and view in the browser, run `cargo doc --no-deps --open`.
 
+## Security
+
+See the [Security Policy] for information on the security model and how to report vulnerabilities.
+
+[Security Policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md
+
 ## License
 
 Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0.

@@ -1255,14 +1255,20 @@ impl Rows {
 
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> Row<'_> {
-        assert!(row + 1 < self.offsets.len());
+        self.checked_row_end(row);
         unsafe { self.row_unchecked(row) }
+    }
+
+    fn checked_row_end(&self, row: usize) -> usize {
+        row.checked_add(1)
+            .filter(|end| *end < self.offsets.len())
+            .expect("row index out of bounds")
     }
 
     /// Returns the row at `index` without bounds checking
     ///
     /// # Safety
-    /// Caller must ensure that `index` is less than the number of offsets (#rows + 1)
+    /// Caller must ensure that `index + 1` is less than the number of offsets (#rows + 1)
     pub unsafe fn row_unchecked(&self, index: usize) -> Row<'_> {
         let end = unsafe { self.offsets.get_unchecked(index + 1) };
         let start = unsafe { self.offsets.get_unchecked(index) };
@@ -1276,9 +1282,9 @@ impl Rows {
     /// Returns the number of bytes the row at index `row` is occupying,
     /// that is, what is the length of the returned [`Row::data`] will be.
     pub fn row_len(&self, row: usize) -> usize {
-        assert!(row + 1 < self.offsets.len());
+        let end = self.checked_row_end(row);
 
-        self.offsets[row + 1] - self.offsets[row]
+        self.offsets[end] - self.offsets[row]
     }
 
     /// Get an iterator over the lengths of each row in this [`Rows`]
@@ -1414,9 +1420,12 @@ impl DoubleEndedIterator for RowsIter<'_> {
         if self.end == self.start {
             return None;
         }
-        // Safety: We have checked that `start` is less than `end`
-        let row = unsafe { self.rows.row_unchecked(self.end) };
+
         self.end -= 1;
+
+        // Safety: By construction we create `end >= start`, so if `end` is not equal to `start` it cannot be less than `start`
+        //          therefore `end - 1` is within range
+        let row = unsafe { self.rows.row_unchecked(self.end) };
         Some(row)
     }
 }
@@ -5402,6 +5411,24 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "row index out of bounds")]
+    fn row_should_panic_on_overflowing_index() {
+        let rows = RowConverter::new(vec![SortField::new(DataType::Int32)])
+            .unwrap()
+            .empty_rows(0, 0);
+        rows.row(usize::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "row index out of bounds")]
+    fn row_len_should_panic_on_overflowing_index() {
+        let rows = RowConverter::new(vec![SortField::new(DataType::Int32)])
+            .unwrap()
+            .empty_rows(0, 0);
+        rows.row_len(usize::MAX);
+    }
+
+    #[test]
     fn test_nested_null_list() {
         let null_array = Arc::new(NullArray::new(3));
         // [[NULL], [], [NULL, NULL]]
@@ -5650,5 +5677,41 @@ mod tests {
                 .to_string()
                 .contains("not yet implemented")
         );
+    }
+
+    #[test]
+    fn empty_row_iter_next_back() {
+        let rows = RowConverter::new(vec![SortField::new(DataType::UInt8)])
+            .unwrap()
+            .empty_rows(0, 0);
+        let mut rows_iter = rows.iter();
+        assert_eq!(rows_iter.next_back(), None);
+        assert_eq!(rows_iter.next_back(), None);
+        assert_eq!(rows_iter.next_back(), None);
+    }
+
+    #[test]
+    fn row_iter_next_back() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let array = generate_primitive_array::<UInt8Type>(&mut rng, 100, 0.8);
+        let rows = row_converter.convert_columns(&[Arc::new(array)]).unwrap();
+
+        let mut rows_iter = rows.iter();
+        let mut bytes: Vec<u8> = vec![];
+
+        while let Some(row) = rows_iter.next_back() {
+            bytes.extend(row.data.iter().rev());
+        }
+
+        bytes.reverse();
+
+        assert_eq!(
+            bytes,
+            &rows.buffer.as_slice()[..*rows.offsets.last().unwrap()]
+        );
+
+        assert_eq!(rows_iter.next_back(), None);
+        assert_eq!(rows_iter.next(), None);
     }
 }

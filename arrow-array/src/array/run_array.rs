@@ -123,6 +123,70 @@ impl<R: RunEndIndexType> RunArray<R> {
         Ok(array_data.into())
     }
 
+    /// Create a new [`RunArray`] from the provided parts, without validation
+    ///
+    /// # Safety
+    ///
+    /// Safe if [`Self::try_new`] would not error
+    pub unsafe fn new_unchecked(
+        data_type: DataType,
+        run_ends: RunEndBuffer<R::Native>,
+        values: ArrayRef,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            match &data_type {
+                DataType::RunEndEncoded(run_ends, values_field) => {
+                    assert!(!run_ends.is_nullable(), "run_ends should not be nullable");
+                    assert_eq!(
+                        run_ends.data_type(),
+                        &R::DATA_TYPE,
+                        "Incorrect run ends type"
+                    );
+                    assert_eq!(
+                        values_field.data_type(),
+                        values.data_type(),
+                        "Incorrect values type"
+                    );
+                }
+                _ => {
+                    panic!(
+                        "Invalid data type {data_type:?} for RunArray. Should be DataType::RunEndEncoded"
+                    );
+                }
+            }
+
+            let run_array = Self {
+                data_type,
+                run_ends,
+                values,
+            };
+
+            // Safety: `validate_data` checks below
+            //    1. The given array data has exactly two child arrays.
+            //    2. The first child array (run_ends) has valid data type.
+            //    3. run_ends array does not have null values
+            //    4. run_ends array has non-zero and strictly increasing values.
+            //    5. The length of run_ends array and values array are the same.
+            run_array
+                .to_data()
+                .validate_data()
+                .expect("RunArray data should be valid");
+
+            return run_array;
+        }
+
+        Self {
+            data_type,
+            run_ends,
+            values,
+        }
+    }
+
+    /// Deconstruct this array into its constituent parts
+    pub fn into_parts(self) -> (DataType, RunEndBuffer<R::Native>, ArrayRef) {
+        (self.data_type, self.run_ends, self.values)
+    }
+
     /// Returns a reference to the [`RunEndBuffer`].
     pub fn run_ends(&self) -> &RunEndBuffer<R::Native> {
         &self.run_ends
@@ -258,6 +322,7 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         let run_ends = unsafe { RunEndBuffer::new_unchecked(scalar, offset, len) };
 
         let values = make_array(values_child);
+
         Self {
             data_type,
             run_ends,
@@ -1305,5 +1370,45 @@ mod tests {
 
         let slice3 = array1.slice(0, 4); // a, a, b, b
         assert_ne!(slice1, slice3);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn allow_to_create_invalid_array_using_new_unchecked() {
+        let valid = RunArray::<Int32Type>::from_iter(["32"]);
+        let (_, buffer, values) = valid.into_parts();
+
+        let _ = unsafe {
+            // mismatch data type
+            RunArray::<Int32Type>::new_unchecked(DataType::Int64, buffer, values)
+        };
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Invalid data type Int64 for RunArray. Should be DataType::RunEndEncoded"
+    )]
+    #[cfg(feature = "force_validate")]
+    fn should_not_be_able_to_create_invalid_array_using_new_unchecked_when_force_validate_is_enabled()
+     {
+        let valid = RunArray::<Int32Type>::from_iter(["32"]);
+        let (_, buffer, values) = valid.into_parts();
+
+        let _ = unsafe {
+            // mismatch data type
+            RunArray::<Int32Type>::new_unchecked(DataType::Int64, buffer, values)
+        };
+    }
+
+    #[test]
+    fn test_run_array_roundtrip() {
+        let run = Int32Array::from(vec![3, 6, 9, 12]);
+        let values = Int32Array::from(vec![Some(0), None, Some(1), None]);
+        let array = RunArray::try_new(&run, &values).unwrap();
+
+        let (dt, buffer, values) = array.clone().into_parts();
+        let created_from_parts =
+            unsafe { RunArray::<Int32Type>::new_unchecked(dt, buffer, values) };
+        assert_eq!(array, created_from_parts);
     }
 }

@@ -42,7 +42,10 @@ use arrow_array::{
     Array, ArrayRef, BinaryViewArray, Int32Array, RecordBatch, StringArray, StringViewArray,
 };
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
+use pyo3::exceptions::PyTypeError;
+use pyo3::types::{PyAnyMethods, PyModule};
 use pyo3::Python;
+use std::ffi::CString;
 use std::sync::Arc;
 
 #[test]
@@ -92,6 +95,34 @@ fn test_to_pyarrow_byte_view() {
 
         assert_eq!(input, res);
     }
+}
+
+#[test]
+fn test_from_pyarrow_non_tuple() {
+    Python::initialize();
+
+    Python::attach(|py| {
+        let code = CString::new(
+            r#"
+class NotATuple:
+    def __arrow_c_array__(self):
+        return 1
+
+value = NotATuple()
+"#,
+        )
+        .unwrap();
+
+        let module = PyModule::from_code(py, code.as_c_str(), c"test.py", c"test_module").unwrap();
+        let value = module.getattr("value").unwrap();
+
+        let err = RecordBatch::from_pyarrow_bound(&value).unwrap_err();
+        assert!(err.is_instance_of::<PyTypeError>(py));
+        assert_eq!(
+            err.to_string(),
+            "TypeError: Expected __arrow_c_array__ to return a tuple of (schema, array) capsules."
+        );
+    });
 }
 
 fn binary_view_column(num_variadic_buffers: usize) -> BinaryViewArray {

@@ -27,21 +27,20 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
     let offsets = array.buffer::<T>(0);
     let sizes = array.buffer::<T>(1);
     Box::new(
-        move |mutable: &mut _MutableArrayData, _index: usize, start: usize, len: usize| {
-            let offset_buffer = &mut mutable.buffer1;
-            let sizes_buffer = &mut mutable.buffer2;
+        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
+            let mut new_offset = T::usize_as(mutable.child_data[0].len());
 
-            for &offset in &offsets[start..start + len] {
-                offset_buffer.push(offset);
+            for i in start..start + len {
+                mutable.buffer1.push(new_offset);
+                mutable.buffer2.push(sizes[i]);
+                new_offset = new_offset.checked_add(&sizes[i]).expect("offset overflow");
+
+                let size = sizes[i].as_usize();
+                if size > 0 {
+                    let child_start = offsets[i].as_usize();
+                    mutable.child_data[0].extend(index, child_start, child_start + size);
+                }
             }
-
-            // sizes
-            for &size in &sizes[start..start + len] {
-                sizes_buffer.push(size);
-            }
-
-            // the beauty of views is that we don't need to copy child_data, we just splat
-            // the offsets and sizes.
         },
     )
 }

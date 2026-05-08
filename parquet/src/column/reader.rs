@@ -1401,12 +1401,12 @@ mod tests {
         // Helper: build a DataPage v2 for this list column.
         let make_v2_page =
             |rep_levels: &[i16], def_levels: &[i16], values: &[i32], num_rows: u32| -> Page {
-                let mut rep_enc = LevelEncoder::v2(max_rep_level, rep_levels.len());
-                rep_enc.put(rep_levels);
+                let mut rep_enc = LevelEncoder::v2_streaming(max_rep_level);
+                rep_enc.put_with_observer(rep_levels, |_, _| {});
                 let rep_bytes = rep_enc.consume();
 
-                let mut def_enc = LevelEncoder::v2(max_def_level, def_levels.len());
-                def_enc.put(def_levels);
+                let mut def_enc = LevelEncoder::v2_streaming(max_def_level);
+                def_enc.put_with_observer(def_levels, |_, _| {});
                 let def_bytes = def_enc.consume();
 
                 let val_bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();

@@ -28,14 +28,28 @@ use std::fmt::Write;
 use std::hint::black_box;
 use std::sync::Arc;
 
+// Shared
 const ROWS: usize = 1 << 17; // 128K rows
 const BATCH_SIZE: usize = 1 << 13; // 8K rows per batch
 
+// Wide object / struct
 const WIDE_FIELDS: usize = 64;
-const BINARY_BYTES: usize = 64;
 const WIDE_PROJECTION_TOTAL_FIELDS: usize = 100; // 100 fields total, select only 3
-const LIST_SHORT_ELEMENTS: usize = 5;
-const LIST_LONG_ELEMENTS: usize = 100;
+
+// Binary
+const BINARY_BYTES: usize = 64;
+
+// List
+const SHORT_LIST_ELEMENTS: usize = 5;
+const LONG_LIST_ELEMENTS: usize = 100;
+
+// Map
+const SMALL_MAP_ENTRIES: usize = 5;
+const LARGE_MAP_ENTRIES: usize = 50;
+
+// Run-end encoded
+const SHORT_REE_RUN_LENGTH: usize = 2;
+const LONG_REE_RUN_LENGTH: usize = 100;
 
 fn decode_and_flush(decoder: &mut Decoder, data: &[u8]) {
     let mut offset = 0;
@@ -47,6 +61,38 @@ fn decode_and_flush(decoder: &mut Decoder, data: &[u8]) {
         offset += read;
         while let Some(_batch) = decoder.flush().unwrap() {}
     }
+}
+
+fn bench_decode_schema(c: &mut Criterion, name: &str, data: &[u8], schema: Arc<Schema>) {
+    let mut group = c.benchmark_group(name);
+    group.throughput(Throughput::Bytes(data.len() as u64));
+    group.sample_size(50);
+    group.measurement_time(std::time::Duration::from_secs(5));
+    group.warm_up_time(std::time::Duration::from_secs(2));
+    group.sampling_mode(SamplingMode::Flat);
+    group.bench_function(BenchmarkId::from_parameter(ROWS), |b| {
+        b.iter(|| {
+            let mut decoder = ReaderBuilder::new(schema.clone())
+                .with_batch_size(BATCH_SIZE)
+                .build_decoder()
+                .unwrap();
+            decode_and_flush(&mut decoder, data);
+        })
+    });
+    group.finish();
+}
+
+fn bench_serialize_values(c: &mut Criterion, name: &str, values: &[Value], schema: Arc<Schema>) {
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            let mut decoder = ReaderBuilder::new(schema.clone())
+                .with_batch_size(BATCH_SIZE)
+                .build_decoder()
+                .unwrap();
+            decoder.serialize(values).unwrap();
+            while let Some(_batch) = decoder.flush().unwrap() {}
+        })
+    });
 }
 
 fn build_schema(field_count: usize) -> Arc<Schema> {
@@ -104,33 +150,13 @@ fn build_wide_values(rows: usize, fields: usize) -> Vec<Value> {
 fn bench_decode_wide_object(c: &mut Criterion) {
     let data = build_wide_json(ROWS, WIDE_FIELDS);
     let schema = build_schema(WIDE_FIELDS);
-
-    c.bench_function("decode_wide_object_i64_json", |b| {
-        b.iter(|| {
-            let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(BATCH_SIZE)
-                .build_decoder()
-                .unwrap();
-            decode_and_flush(&mut decoder, &data);
-        })
-    });
+    bench_decode_schema(c, "decode_wide_object_json", &data, schema);
 }
 
 fn bench_serialize_wide_object(c: &mut Criterion) {
     let values = build_wide_values(ROWS, WIDE_FIELDS);
     let schema = build_schema(WIDE_FIELDS);
-
-    c.bench_function("decode_wide_object_i64_serialize", |b| {
-        b.iter(|| {
-            let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(BATCH_SIZE)
-                .build_decoder()
-                .unwrap();
-
-            decoder.serialize(&values).unwrap();
-            while let Some(_batch) = decoder.flush().unwrap() {}
-        })
-    });
+    bench_serialize_values(c, "decode_wide_object_serialize", &values, schema);
 }
 
 fn bench_decode_binary(c: &mut Criterion, name: &str, data: &[u8], field: Arc<Field>) {
@@ -181,25 +207,6 @@ fn bench_binary_hex(c: &mut Criterion) {
 
     let view_field = Arc::new(Field::new("item", DataType::BinaryView, false));
     bench_decode_binary(c, "decode_binary_view_hex_json", &binary_data, view_field);
-}
-
-fn bench_decode_schema(c: &mut Criterion, name: &str, data: &[u8], schema: Arc<Schema>) {
-    let mut group = c.benchmark_group(name);
-    group.throughput(Throughput::Bytes(data.len() as u64));
-    group.sample_size(50);
-    group.measurement_time(std::time::Duration::from_secs(5));
-    group.warm_up_time(std::time::Duration::from_secs(2));
-    group.sampling_mode(SamplingMode::Flat);
-    group.bench_function(BenchmarkId::from_parameter(ROWS), |b| {
-        b.iter(|| {
-            let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(BATCH_SIZE)
-                .build_decoder()
-                .unwrap();
-            decode_and_flush(&mut decoder, data);
-        })
-    });
-    group.finish();
 }
 
 fn build_wide_projection_json(rows: usize, total_fields: usize) -> Vec<u8> {
@@ -277,52 +284,178 @@ fn build_list_values(rows: usize, elements: usize) -> Vec<Value> {
     out
 }
 
-fn build_list_schema() -> Arc<Schema> {
+fn bench_decode_list(c: &mut Criterion) {
+    let short_data = build_list_json(ROWS, SHORT_LIST_ELEMENTS);
+    let long_data = build_list_json(ROWS, LONG_LIST_ELEMENTS);
+    let child = Arc::new(Field::new_list_field(DataType::Int64, false));
+
+    for (dt, label) in [
+        (DataType::List(child.clone()), "list"),
+        (DataType::ListView(child), "list_view"),
+    ] {
+        let schema = Arc::new(Schema::new(vec![Field::new("list", dt, false)]));
+        bench_decode_schema(
+            c,
+            &format!("decode_{label}_short_json"),
+            &short_data,
+            schema.clone(),
+        );
+        bench_decode_schema(c, &format!("decode_{label}_long_json"), &long_data, schema);
+    }
+}
+
+fn bench_serialize_list(c: &mut Criterion) {
+    let short_values = build_list_values(ROWS, SHORT_LIST_ELEMENTS);
+    let long_values = build_list_values(ROWS, LONG_LIST_ELEMENTS);
+    let child = Arc::new(Field::new_list_field(DataType::Int64, false));
+
+    for (dt, label) in [
+        (DataType::List(child.clone()), "list"),
+        (DataType::ListView(child), "list_view"),
+    ] {
+        let schema = Arc::new(Schema::new(vec![Field::new("list", dt, false)]));
+        bench_serialize_values(
+            c,
+            &format!("decode_{label}_short_serialize"),
+            &short_values,
+            schema.clone(),
+        );
+        bench_serialize_values(
+            c,
+            &format!("decode_{label}_long_serialize"),
+            &long_values,
+            schema,
+        );
+    }
+}
+
+fn build_map_json(rows: usize, entries: usize) -> Vec<u8> {
+    let mut out = String::with_capacity(rows * (entries * 20 + 16));
+    for row in 0..rows {
+        out.push_str("{\"map\":{");
+        for i in 0..entries {
+            if i > 0 {
+                out.push(',');
+            }
+            write!(&mut out, "\"k{}\":{}", i, (row + i) as i64).unwrap();
+        }
+        out.push_str("}}\n");
+    }
+    out.into_bytes()
+}
+
+fn build_map_values(rows: usize, entries: usize) -> Vec<Value> {
+    let mut out = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let mut inner = Map::with_capacity(entries);
+        for i in 0..entries {
+            inner.insert(
+                format!("k{i}"),
+                Value::Number(Number::from((row + i) as i64)),
+            );
+        }
+        let mut map = Map::with_capacity(1);
+        map.insert("map".to_string(), Value::Object(inner));
+        out.push(Value::Object(map));
+    }
+    out
+}
+
+fn build_map_schema() -> Arc<Schema> {
+    let entries_field = Arc::new(Field::new(
+        "entries",
+        DataType::Struct(
+            vec![
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::Int64, true),
+            ]
+            .into(),
+        ),
+        false,
+    ));
     Arc::new(Schema::new(vec![Field::new(
-        "list",
-        DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
+        "map",
+        DataType::Map(entries_field, false),
         false,
     )]))
 }
 
-fn bench_decode_list(c: &mut Criterion) {
-    let schema = build_list_schema();
+fn bench_decode_map(c: &mut Criterion) {
+    let schema = build_map_schema();
 
-    // Short lists: tests list handling overhead (few elements per row)
-    let short_data = build_list_json(ROWS, LIST_SHORT_ELEMENTS);
-    bench_decode_schema(c, "decode_list_short_i64_json", &short_data, schema.clone());
+    let small_data = build_map_json(ROWS, SMALL_MAP_ENTRIES);
+    bench_decode_schema(c, "decode_map_small_json", &small_data, schema.clone());
 
-    // Long lists: tests child element decode throughput (many elements per row)
-    let long_data = build_list_json(ROWS, LIST_LONG_ELEMENTS);
-    bench_decode_schema(c, "decode_list_long_i64_json", &long_data, schema);
+    let large_data = build_map_json(ROWS, LARGE_MAP_ENTRIES);
+    bench_decode_schema(c, "decode_map_large_json", &large_data, schema);
 }
 
-fn bench_serialize_list(c: &mut Criterion) {
-    let schema = build_list_schema();
+fn bench_serialize_map(c: &mut Criterion) {
+    let schema = build_map_schema();
 
-    let short_values = build_list_values(ROWS, LIST_SHORT_ELEMENTS);
-    c.bench_function("decode_list_short_i64_serialize", |b| {
-        b.iter(|| {
-            let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(BATCH_SIZE)
-                .build_decoder()
-                .unwrap();
-            decoder.serialize(&short_values).unwrap();
-            while let Some(_batch) = decoder.flush().unwrap() {}
-        })
-    });
+    let small_values = build_map_values(ROWS, SMALL_MAP_ENTRIES);
+    bench_serialize_values(
+        c,
+        "decode_map_small_serialize",
+        &small_values,
+        schema.clone(),
+    );
 
-    let long_values = build_list_values(ROWS, LIST_LONG_ELEMENTS);
-    c.bench_function("decode_list_long_i64_serialize", |b| {
-        b.iter(|| {
-            let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(BATCH_SIZE)
-                .build_decoder()
-                .unwrap();
-            decoder.serialize(&long_values).unwrap();
-            while let Some(_batch) = decoder.flush().unwrap() {}
-        })
-    });
+    let large_values = build_map_values(ROWS, LARGE_MAP_ENTRIES);
+    bench_serialize_values(c, "decode_map_large_serialize", &large_values, schema);
+}
+
+fn build_ree_json(rows: usize, run_length: usize) -> Vec<u8> {
+    let mut out = String::with_capacity(rows * 24);
+    for row in 0..rows {
+        let value = (row / run_length) as i64;
+        writeln!(&mut out, "{{\"val\":{value}}}").unwrap();
+    }
+    out.into_bytes()
+}
+
+fn build_ree_values(rows: usize, run_length: usize) -> Vec<Value> {
+    let mut out = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let value = (row / run_length) as i64;
+        let mut map = Map::with_capacity(1);
+        map.insert("val".to_string(), Value::Number(Number::from(value)));
+        out.push(Value::Object(map));
+    }
+    out
+}
+
+fn build_ree_schema() -> Arc<Schema> {
+    let ree_type = DataType::RunEndEncoded(
+        Arc::new(Field::new("run_ends", DataType::Int32, false)),
+        Arc::new(Field::new("values", DataType::Int64, true)),
+    );
+    Arc::new(Schema::new(vec![Field::new("val", ree_type, false)]))
+}
+
+fn bench_decode_ree(c: &mut Criterion) {
+    let schema = build_ree_schema();
+
+    let short_data = build_ree_json(ROWS, SHORT_REE_RUN_LENGTH);
+    bench_decode_schema(c, "decode_ree_short_json", &short_data, schema.clone());
+
+    let long_data = build_ree_json(ROWS, LONG_REE_RUN_LENGTH);
+    bench_decode_schema(c, "decode_ree_long_json", &long_data, schema);
+}
+
+fn bench_serialize_ree(c: &mut Criterion) {
+    let schema = build_ree_schema();
+
+    let short_values = build_ree_values(ROWS, SHORT_REE_RUN_LENGTH);
+    bench_serialize_values(
+        c,
+        "decode_ree_short_serialize",
+        &short_values,
+        schema.clone(),
+    );
+
+    let long_values = build_ree_values(ROWS, LONG_REE_RUN_LENGTH);
+    bench_serialize_values(c, "decode_ree_long_serialize", &long_values, schema);
 }
 
 fn bench_schema_inference(c: &mut Criterion) {
@@ -402,6 +535,10 @@ criterion_group!(
     bench_wide_projection,
     bench_decode_list,
     bench_serialize_list,
+    bench_decode_map,
+    bench_serialize_map,
+    bench_decode_ree,
+    bench_serialize_ree,
     bench_schema_inference
 );
 criterion_main!(benches);

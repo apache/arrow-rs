@@ -478,7 +478,7 @@
 //!   descriptive error. Populate the store up front to avoid this.
 //!
 //! ---
-use crate::codec::AvroFieldBuilder;
+use crate::codec::{AvroFieldBuilder, Tz};
 use crate::errors::AvroError;
 use crate::reader::header::read_header;
 use crate::schema::{
@@ -500,7 +500,9 @@ mod record;
 mod vlq;
 
 #[cfg(feature = "async")]
-mod async_reader;
+pub mod async_reader;
+
+pub use header::{HeaderInfo, read_header_info};
 
 #[cfg(feature = "object_store")]
 pub use async_reader::AvroObjectReader;
@@ -967,6 +969,7 @@ pub struct ReaderBuilder {
     batch_size: usize,
     strict_mode: bool,
     utf8_view: bool,
+    tz: Tz,
     reader_schema: Option<AvroSchema>,
     projection: Option<Vec<usize>>,
     writer_schema_store: Option<SchemaStore>,
@@ -979,6 +982,7 @@ impl Default for ReaderBuilder {
             batch_size: 1024,
             strict_mode: false,
             utf8_view: false,
+            tz: Default::default(),
             reader_schema: None,
             projection: None,
             writer_schema_store: None,
@@ -993,6 +997,7 @@ impl ReaderBuilder {
     /// * `batch_size = 1024`
     /// * `strict_mode = false`
     /// * `utf8_view = false`
+    /// * `tz = Tz::OffsetZero`
     /// * `reader_schema = None`
     /// * `projection = None`
     /// * `writer_schema_store = None`
@@ -1013,6 +1018,7 @@ impl ReaderBuilder {
         let root = builder
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
+            .with_tz(self.tz)
             .build()?;
         RecordDecoder::try_new_with_options(root.data_type())
     }
@@ -1173,6 +1179,14 @@ impl ReaderBuilder {
         self
     }
 
+    /// Sets the timezone representation for Avro timestamp fields.
+    ///
+    /// The default is `Tz::OffsetZero`, meaning the "+00:00" time zone ID.
+    pub fn with_tz(mut self, tz: Tz) -> Self {
+        self.tz = tz;
+        self
+    }
+
     /// Sets the **reader schema** used during decoding.
     ///
     /// If not provided, the writer schema from the OCF header (for `Reader`) or the
@@ -1273,7 +1287,7 @@ impl ReaderBuilder {
     /// the discovered writer (and optional reader) schema, and prepares to iterate blocks,
     /// decompressing if necessary.
     pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
-        let header = read_header(&mut reader)?;
+        let (header, _) = read_header(&mut reader)?;
         let decoder = self.make_decoder(Some(&header), self.reader_schema.as_ref())?;
         Ok(Reader {
             reader,
@@ -1400,7 +1414,7 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 
 #[cfg(test)]
 mod test {
-    use crate::codec::AvroFieldBuilder;
+    use crate::codec::{AvroFieldBuilder, Tz};
     use crate::reader::header::HeaderDecoder;
     use crate::reader::record::RecordDecoder;
     use crate::reader::{Decoder, Reader, ReaderBuilder};
@@ -1632,7 +1646,7 @@ mod test {
 
     fn load_writer_schema_json(path: &str) -> Value {
         let file = File::open(path).unwrap();
-        let header = super::read_header(BufReader::new(file)).unwrap();
+        let (header, _) = super::read_header(BufReader::new(file)).unwrap();
         let schema = header.schema().unwrap().unwrap();
         serde_json::to_value(&schema).unwrap()
     }
@@ -3127,6 +3141,43 @@ mod test {
                     || lower_msg.contains("does not match")),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn test_timestamp_with_utc_tz() {
+        let path = arrow_test_data("avro/alltypes_plain.avro");
+        let reader_schema =
+            make_reader_schema_with_selected_fields_in_order(&path, &["timestamp_col"]);
+        let file = File::open(path).unwrap();
+        let reader = ReaderBuilder::new()
+            .with_batch_size(1024)
+            .with_utf8_view(false)
+            .with_reader_schema(reader_schema)
+            .with_tz(Tz::Utc)
+            .build(BufReader::new(file))
+            .unwrap();
+        let schema = reader.schema();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let batch = arrow::compute::concat_batches(&schema, &batches).unwrap();
+        let expected = RecordBatch::try_from_iter_with_nullable([(
+            "timestamp_col",
+            Arc::new(
+                TimestampMicrosecondArray::from_iter_values([
+                    1235865600000000, // 2009-03-01T00:00:00.000
+                    1235865660000000, // 2009-03-01T00:01:00.000
+                    1238544000000000, // 2009-04-01T00:00:00.000
+                    1238544060000000, // 2009-04-01T00:01:00.000
+                    1233446400000000, // 2009-02-01T00:00:00.000
+                    1233446460000000, // 2009-02-01T00:01:00.000
+                    1230768000000000, // 2009-01-01T00:00:00.000
+                    1230768060000000, // 2009-01-01T00:01:00.000
+                ])
+                .with_timezone("UTC"),
+            ) as _,
+            true,
+        )])
+        .unwrap();
+        assert_eq!(batch, expected);
     }
 
     #[test]
@@ -9538,5 +9589,220 @@ mod test {
             expected, batch,
             "entire RecordBatch mismatch (schema, all columns, all rows)"
         );
+    }
+
+    // Build Avro OCF bytes whose schema contains a TypeName::Ref
+    //
+    // Schema written to the OCF header verbatim:
+    // ```text
+    // Root {
+    //   ts:    Timestamp { seconds: long, nanos: int },
+    //   extra: Event     { time: "Timestamp" }        <- TypeName::Ref
+    // }
+    // ```
+    fn make_type_ref_ocf() -> Vec<u8> {
+        use apache_avro::{Schema as ApacheSchema, Writer as ApacheWriter, types::Value};
+        let schema_json = r#"{
+            "type": "record", "name": "Root",
+            "fields": [
+                {"name": "ts", "type": {"type": "record", "name": "Timestamp", "fields": [
+                    {"name": "seconds", "type": "long"},
+                    {"name": "nanos",   "type": "int"}
+                ]}},
+                {"name": "extra", "type": {"type": "record", "name": "Event", "fields": [
+                    {"name": "time", "type": "Timestamp"}
+                ]}}
+            ]
+        }"#;
+        let schema = ApacheSchema::parse_str(schema_json).expect("valid schema");
+        let mut out = Vec::new();
+        {
+            let mut writer = ApacheWriter::new(&schema, &mut out);
+            let ts_val = |s: i64, n: i32| {
+                Value::Record(vec![
+                    ("seconds".into(), Value::Long(s)),
+                    ("nanos".into(), Value::Int(n)),
+                ])
+            };
+            // Two rows: ts={1000,100}/extra.time={-1,-1}  and  ts={2000,200}/extra.time={-2,-2}.
+            for (ts_s, ts_n, ex_s, ex_n) in [(1000i64, 100i32, -1i64, -1i32), (2000, 200, -2, -2)] {
+                let row = Value::Record(vec![
+                    ("ts".into(), ts_val(ts_s, ts_n)),
+                    (
+                        "extra".into(),
+                        Value::Record(vec![("time".into(), ts_val(ex_s, ex_n))]),
+                    ),
+                ]);
+                writer.append_value_ref(&row).expect("append row");
+            }
+            writer.flush().expect("flush");
+        }
+        out
+    }
+
+    // writer-plain / reader-nullable mismatch.
+    //
+    // The writer schema uses a TypeName::Ref ("Timestamp" referenced in `extra.time`).
+    // The reader wraps `ts` in `["null", T]` unions and omits `extra`.
+    // The Skipper for `extra.time` resolves "Timestamp" via the resolver and must use
+    // the writer's plain field types (long, int) — not the nullable reader types - when
+    // consuming bytes.  Without the fix, it skips union-encoded fields from plain data,
+    // reads the wrong number of bytes, and corrupts row 2's `ts.seconds`.
+    #[test]
+    fn test_nullable_reader_schema_vs_plain_writer_nested_struct() {
+        let bytes = make_type_ref_ocf();
+        let reader_schema = AvroSchema::new(
+            r#"{"type":"record","name":"Root","fields":[
+                {"name":"ts","type":["null",{"type":"record","name":"Timestamp","fields":[
+                    {"name":"seconds","type":["null","long"]},
+                    {"name":"nanos",  "type":["null","int"]}
+                ]}]}
+            ]}"#
+            .to_string(),
+        );
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(bytes))
+            .expect("reader should build");
+        let batch = reader
+            .next()
+            .expect("should have a batch")
+            .expect("reading should succeed");
+        assert_eq!(batch.num_rows(), 2);
+        let ts = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let seconds = ts
+            .column_by_name("seconds")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(seconds.value(0), 1000);
+        assert_eq!(seconds.value(1), 2000);
+    }
+
+    // Skipper must consume all writer fields, including writer-only ones.
+    //
+    // The writer schema uses a TypeName::Ref ("Timestamp" referenced in `extra.time`).
+    // The reader requests only `ts.seconds` (no `nanos`, no `extra`).
+    // The Skipper for `extra.time` resolves "Timestamp" and must skip both `seconds`
+    // and `nanos` bytes.  Without the fix it skips only `seconds`, leaving the `nanos`
+    // bytes in the buffer and corrupting row 2's `ts.seconds` read.
+    #[test]
+    fn test_skipper_consumes_writer_only_struct_fields() {
+        let bytes = make_type_ref_ocf();
+        let reader_schema = AvroSchema::new(
+            r#"{"type":"record","name":"Root","fields":[
+                {"name":"ts","type":{"type":"record","name":"Timestamp","fields":[
+                    {"name":"seconds","type":"long"}
+                ]}}
+            ]}"#
+            .to_string(),
+        );
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(bytes))
+            .expect("reader should build");
+        let batch = reader
+            .next()
+            .expect("should have a batch")
+            .expect("Skipper must consume both seconds and nanos for extra.time");
+        assert_eq!(batch.num_rows(), 2);
+        let ts = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let seconds = ts
+            .column_by_name("seconds")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(seconds.value(0), 1000);
+        assert_eq!(seconds.value(1), 2000);
+    }
+
+    // The Skipper for a skipped array field must consume all bytes of each element,
+    // including every field of a nested struct resolved via a TypeName::Ref.
+    //
+    // Writer: `Root { ts: Timestamp{seconds,nanos}, events: array<Event{time:"Timestamp"}> }`
+    // Reader: only `ts` with nullable wrappers; `events` is absent (forces a Skip).
+    // The Skipper for `events` resolves each element's `time` field as "Timestamp"
+    // and must use the writer's plain {seconds,nanos} definition — not the
+    // nullable-wrapped reader type — when consuming bytes.
+    #[test]
+    fn test_skip_array_of_structs_uses_writer_schema_not_resolved() {
+        use apache_avro::{Schema as ApacheSchema, Writer as ApacheWriter, types::Value};
+        let schema_json = r#"{
+            "type": "record", "name": "Root",
+            "fields": [
+                {"name": "ts", "type": {"type": "record", "name": "Timestamp", "fields": [
+                    {"name": "seconds", "type": "long"},
+                    {"name": "nanos",   "type": "int"}
+                ]}},
+                {"name": "events", "type": {"type": "array", "items": {
+                    "type": "record", "name": "Event", "fields": [
+                        {"name": "time", "type": "Timestamp"}
+                    ]
+                }}}
+            ]
+        }"#;
+        let schema = ApacheSchema::parse_str(schema_json).expect("valid schema");
+        let mut bytes = Vec::new();
+        {
+            let mut writer = ApacheWriter::new(&schema, &mut bytes);
+            // One row: ts={100, 5}, events=[{time={200, 1}}]
+            let ts_val = |s: i64, n: i32| {
+                Value::Record(vec![
+                    ("seconds".into(), Value::Long(s)),
+                    ("nanos".into(), Value::Int(n)),
+                ])
+            };
+            let row = Value::Record(vec![
+                ("ts".into(), ts_val(100, 5)),
+                (
+                    "events".into(),
+                    Value::Array(vec![Value::Record(vec![("time".into(), ts_val(200, 1))])]),
+                ),
+            ]);
+            writer.append_value_ref(&row).expect("append row");
+            writer.flush().expect("flush");
+        }
+
+        // Reader omits `events` (forces Skip) and wraps `ts` fields in nullable unions.
+        let reader_schema = AvroSchema::new(
+            r#"{"type":"record","name":"Root","fields":[
+                {"name":"ts","type":["null",{"type":"record","name":"Timestamp","fields":[
+                    {"name":"seconds","type":["null","long"]},
+                    {"name":"nanos",  "type":["null","int"]}
+                ]}]}
+            ]}"#
+            .to_string(),
+        );
+        let mut reader = ReaderBuilder::new()
+            .with_reader_schema(reader_schema)
+            .build(Cursor::new(bytes))
+            .expect("reader should build");
+        let batch = reader
+            .next()
+            .expect("should have a batch")
+            .expect("Skipper must consume all events bytes using writer field types");
+        assert_eq!(batch.num_rows(), 1);
+        let ts = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let seconds = ts
+            .column_by_name("seconds")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(seconds.value(0), 100);
     }
 }

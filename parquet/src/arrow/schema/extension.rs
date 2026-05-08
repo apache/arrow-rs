@@ -110,19 +110,13 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
 /// Return the Parquet logical type to use for the specified Arrow Struct field, if any.
 #[cfg(feature = "variant_experimental")]
 pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
-    use arrow_schema::extension::ExtensionType;
     use parquet_variant_compute::VariantType;
-    // Check the name (= quick and cheap) and only try_extension_type if the name matches
-    // to avoid unnecessary String allocations in ArrowError
-    if field.extension_type_name()? != VariantType::NAME {
-        return None;
-    }
-    match field.try_extension_type::<VariantType>() {
-        Ok(VariantType) => Some(LogicalType::Variant {
+    if field.has_valid_extension_type::<VariantType>() {
+        Some(LogicalType::Variant {
             specification_version: None,
-        }),
-        // Given check above, this should not error, but if it does ignore
-        Err(_e) => None,
+        })
+    } else {
+        None
     }
 }
 
@@ -137,9 +131,8 @@ pub(crate) fn logical_type_for_fixed_size_binary(field: &Field) -> Option<Logica
     use arrow_schema::extension::Uuid;
     // If set, map arrow uuid extension type to parquet uuid logical type.
     field
-        .try_extension_type::<Uuid>()
-        .ok()
-        .map(|_| LogicalType::Uuid)
+        .has_valid_extension_type::<Uuid>()
+        .then_some(LogicalType::Uuid)
 }
 
 #[cfg(not(feature = "arrow_canonical_extension_types"))]
@@ -153,9 +146,11 @@ pub(crate) fn logical_type_for_string(field: &Field) -> Option<LogicalType> {
     use arrow_schema::extension::Json;
     // Use the Json logical type if the canonical Json
     // extension type is set on this field.
-    field
-        .try_extension_type::<Json>()
-        .map_or(Some(LogicalType::String), |_| Some(LogicalType::Json))
+    Some(if field.has_valid_extension_type::<Json>() {
+        LogicalType::Json
+    } else {
+        LogicalType::String
+    })
 }
 
 #[cfg(not(feature = "arrow_canonical_extension_types"))]

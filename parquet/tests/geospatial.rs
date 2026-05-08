@@ -380,8 +380,8 @@ mod test {
 
         for i in 0..reader.num_row_groups() {
             let row_group = reader.get_row_group(i).unwrap();
-            values.truncate(0);
-            def_levels.truncate(0);
+            values.clear();
+            def_levels.clear();
 
             let mut row_group_out = writer.next_row_group().unwrap();
 

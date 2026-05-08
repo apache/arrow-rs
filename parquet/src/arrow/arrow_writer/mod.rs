@@ -17,6 +17,8 @@
 
 //! Contains writer which writes arrow data into parquet data.
 
+use crate::column::chunker::ContentDefinedChunker;
+
 use bytes::Bytes;
 use std::io::{Read, Write};
 use std::iter::Peekable;
@@ -192,6 +194,9 @@ pub struct ArrowWriter<W: Write> {
 
     /// The maximum size in bytes for a row group, or None for unlimited
     max_row_group_bytes: Option<usize>,
+
+    /// CDC chunkers persisted across row groups (one per leaf column).
+    cdc_chunkers: Option<Vec<ContentDefinedChunker>>,
 }
 
 impl<W: Write + Send> std::fmt::Debug for ArrowWriter<W> {
@@ -261,6 +266,18 @@ impl<W: Write + Send> ArrowWriter<W> {
         let row_group_writer_factory =
             ArrowRowGroupWriterFactory::new(&file_writer, arrow_schema.clone());
 
+        let cdc_chunkers = props_ptr
+            .content_defined_chunking()
+            .map(|opts| {
+                file_writer
+                    .schema_descr()
+                    .columns()
+                    .iter()
+                    .map(|desc| ContentDefinedChunker::new(desc, opts))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+
         Ok(Self {
             writer: file_writer,
             in_progress: None,
@@ -268,6 +285,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             row_group_writer_factory,
             max_row_group_row_count,
             max_row_group_bytes,
+            cdc_chunkers,
         })
     }
 
@@ -383,7 +401,10 @@ impl<W: Write + Send> ArrowWriter<W> {
             }
         }
 
-        in_progress.write(batch)?;
+        match self.cdc_chunkers.as_mut() {
+            Some(chunkers) => in_progress.write_with_chunkers(batch, chunkers)?,
+            None => in_progress.write(batch)?,
+        }
 
         let should_flush = self
             .max_row_group_row_count
@@ -744,6 +765,26 @@ impl std::fmt::Debug for ArrowColumnChunk {
 }
 
 impl ArrowColumnChunk {
+    /// Returns the [`ColumnCloseResult`] produced when the chunk was closed.
+    ///
+    /// Exposes encoding information, collected statistics, and the optional
+    /// [`ColumnIndexMetaData`](crate::file::page_index::column_index::ColumnIndexMetaData)
+    /// / [`OffsetIndexMetaData`](crate::file::page_index::offset_index::OffsetIndexMetaData)
+    /// gathered for the column chunk.
+    pub fn close(&self) -> &ColumnCloseResult {
+        &self.close
+    }
+
+    /// Returns a mutable reference to the [`ColumnCloseResult`].
+    ///
+    /// This allows callers to mutate the close result before the chunk is
+    /// appended to a row group — for example, clearing `column_index` or
+    /// `bloom_filter` based on a dynamic rule that inspects the encodings and
+    /// collected page statistics.
+    pub fn close_mut(&mut self) -> &mut ColumnCloseResult {
+        &mut self.close
+    }
+
     /// Calls [`SerializedRowGroupWriter::append_column`] with this column's data
     pub fn append_to_row_group<W: Write + Send>(
         self,
@@ -869,20 +910,50 @@ enum ArrowColumnWriterImpl {
 impl ArrowColumnWriter {
     /// Write an [`ArrowLeafColumn`]
     pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
+        self.write_internal(&col.0)
+    }
+
+    /// Write with content-defined chunking, inserting page flushes at chunk boundaries.
+    fn write_with_chunker(
+        &mut self,
+        col: &ArrowLeafColumn,
+        chunker: &mut ContentDefinedChunker,
+    ) -> Result<()> {
+        let levels = &col.0;
+        let chunks =
+            chunker.get_arrow_chunks(levels.def_levels(), levels.rep_levels(), levels.array())?;
+
+        let num_chunks = chunks.len();
+        for (i, chunk) in chunks.iter().enumerate() {
+            let chunk_levels = levels.slice_for_chunk(chunk);
+            self.write_internal(&chunk_levels)?;
+
+            // Add a page break after each chunk except the last
+            if i + 1 < num_chunks {
+                match &mut self.writer {
+                    ArrowColumnWriterImpl::Column(c) => c.add_data_page()?,
+                    ArrowColumnWriterImpl::ByteArray(c) => c.add_data_page()?,
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_internal(&mut self, levels: &ArrayLevels) -> Result<()> {
         match &mut self.writer {
             ArrowColumnWriterImpl::Column(c) => {
-                let leaf = col.0.array();
+                let leaf = levels.array();
                 match leaf.as_any_dictionary_opt() {
                     Some(dictionary) => {
                         let materialized =
                             arrow_select::take::take(dictionary.values(), dictionary.keys(), None)?;
-                        write_leaf(c, &materialized, &col.0)?
+                        write_leaf(c, &materialized, levels)?
                     }
-                    None => write_leaf(c, leaf, &col.0)?,
+                    None => write_leaf(c, leaf, levels)?,
                 };
             }
             ArrowColumnWriterImpl::ByteArray(c) => {
-                write_primitive(c, col.0.array().as_ref(), &col.0)?;
+                write_primitive(c, levels.array().as_ref(), levels)?;
             }
         }
         Ok(())
@@ -958,7 +1029,26 @@ impl ArrowRowGroupWriter {
         let mut writers = self.writers.iter_mut();
         for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
             for leaf in compute_leaves(field.as_ref(), column)? {
-                writers.next().unwrap().write(&leaf)?
+                writers.next().unwrap().write(&leaf)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_with_chunkers(
+        &mut self,
+        batch: &RecordBatch,
+        chunkers: &mut [ContentDefinedChunker],
+    ) -> Result<()> {
+        self.buffered_rows += batch.num_rows();
+        let mut writers = self.writers.iter_mut();
+        let mut chunkers = chunkers.iter_mut();
+        for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column)? {
+                writers
+                    .next()
+                    .unwrap()
+                    .write_with_chunker(&leaf, chunkers.next().unwrap())?;
             }
         }
         Ok(())
@@ -2611,6 +2701,7 @@ mod tests {
         values: ArrayRef,
         schema: SchemaRef,
         bloom_filter: bool,
+        bloom_filter_ndv: Option<u64>,
         bloom_filter_position: BloomFilterPosition,
     }
 
@@ -2622,6 +2713,7 @@ mod tests {
                 values,
                 schema: Arc::new(schema),
                 bloom_filter: false,
+                bloom_filter_ndv: None,
                 bloom_filter_position: BloomFilterPosition::AfterRowGroup,
             }
         }
@@ -2642,6 +2734,7 @@ mod tests {
             values,
             schema,
             bloom_filter,
+            bloom_filter_ndv,
             bloom_filter_position,
         } = options;
 
@@ -2680,15 +2773,18 @@ mod tests {
             for encoding in &encodings {
                 for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
                     for row_group_size in row_group_sizes {
-                        let props = WriterProperties::builder()
+                        let mut builder = WriterProperties::builder()
                             .set_writer_version(version)
                             .set_max_row_group_row_count(Some(row_group_size))
                             .set_dictionary_enabled(dictionary_size != 0)
                             .set_dictionary_page_size_limit(dictionary_size.max(1))
                             .set_encoding(*encoding)
                             .set_bloom_filter_enabled(bloom_filter)
-                            .set_bloom_filter_position(bloom_filter_position)
-                            .build();
+                            .set_bloom_filter_position(bloom_filter_position);
+                        if let Some(ndv) = bloom_filter_ndv {
+                            builder = builder.set_bloom_filter_ndv(ndv);
+                        }
+                        let props = builder.build();
 
                         files.push(roundtrip_opts(&expected_batch, props))
                     }
@@ -3062,6 +3158,41 @@ mod tests {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let mut options = RoundTripOptions::new(array, false);
         options.bloom_filter = true;
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            (0..SMALL_SIZE as i32).collect(),
+            (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
+    }
+
+    /// Test that bloom filter folding produces correct results even when
+    /// the configured NDV differs significantly from actual NDV.
+    /// A large NDV means a larger initial filter that gets folded down;
+    /// a small NDV means a smaller initial filter.
+    #[test]
+    fn i32_column_bloom_filter_fixed_ndv() {
+        let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
+
+        // NDV much larger than actual distinct values — tests folding a large filter down
+        let mut options = RoundTripOptions::new(array.clone(), false);
+        options.bloom_filter = true;
+        options.bloom_filter_ndv = Some(1_000_000);
+
+        let files = one_column_roundtrip_with_options(options);
+        check_bloom_filter(
+            files,
+            "col".to_string(),
+            (0..SMALL_SIZE as i32).collect(),
+            (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
+
+        // NDV smaller than actual distinct values — tests the underestimate path
+        let mut options = RoundTripOptions::new(array, false);
+        options.bloom_filter = true;
+        options.bloom_filter_ndv = Some(3);
 
         let files = one_column_roundtrip_with_options(options);
         check_bloom_filter(
@@ -4954,5 +5085,55 @@ mod tests {
 
         let total_rows: i64 = sizes.iter().sum();
         assert_eq!(total_rows, 100, "Total rows should be preserved");
+    }
+
+    #[test]
+    fn arrow_column_chunk_close_mut_drops_column_index() {
+        use crate::arrow::ArrowSchemaConverter;
+        use crate::file::writer::SerializedFileWriter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let parquet_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(props.coerce_types())
+            .convert(&schema)
+            .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer =
+            SerializedFileWriter::new(&mut buf, parquet_schema.root_schema_ptr(), props.clone())
+                .unwrap();
+
+        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+        let mut col_writers = factory.create_column_writers(0).unwrap();
+        let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..64));
+        for leaves in compute_leaves(schema.field(0), &arr).unwrap() {
+            col_writers[0].write(&leaves).unwrap();
+        }
+        let mut chunk = col_writers.pop().unwrap().close().unwrap();
+
+        // Immutable accessor exposes the close result produced at close time.
+        assert!(
+            chunk.close().column_index.is_some(),
+            "EnabledStatistics::Page should produce a column_index"
+        );
+
+        // Mutable accessor lets callers drop the page-level index before append.
+        chunk.close_mut().column_index = None;
+        assert!(chunk.close().column_index.is_none());
+
+        let mut rg = writer.next_row_group().unwrap();
+        chunk.append_to_row_group(&mut rg).unwrap();
+        rg.close().unwrap();
+        let file_meta = writer.close().unwrap();
+
+        // After dropping column_index, the resulting file records no column
+        // index offset/length for this chunk.
+        let cc = file_meta.row_group(0).column(0);
+        assert!(cc.column_index_range().is_none());
     }
 }
