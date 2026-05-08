@@ -35,6 +35,7 @@ use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::util::push_buffers::PushBuffers;
+use crate::util::retention::RetentionSet;
 use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
@@ -169,6 +170,12 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// The underlying data store
     buffers: PushBuffers,
+
+    /// Optional retention filter.  When present, incoming `push_data` buffers
+    /// are trimmed to only keep byte ranges the decoder will eventually need.
+    /// The set is extended with ranges the decoder explicitly requests via
+    /// `NeedsData`, so the filter only discards truly speculative prefetch.
+    retention: Option<RetentionSet>,
 }
 
 impl RowGroupReaderBuilder {
@@ -186,6 +193,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        retention: Option<RetentionSet>,
     ) -> Self {
         Self {
             batch_size,
@@ -200,12 +208,23 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
+            retention,
         }
     }
 
-    /// Push new data buffers that can be used to satisfy pending requests
+    /// Push new data buffers that can be used to satisfy pending requests.
+    ///
+    /// When a [`RetentionSet`] is configured, incoming buffers are filtered so
+    /// that only byte ranges the decoder will eventually need are stored.
+    /// Portions outside the retention set are silently discarded.
     pub fn push_data(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
-        self.buffers.push_ranges(ranges, buffers);
+        let (ranges, buffers) = match &self.retention {
+            Some(retention) => retention.filter(ranges, buffers),
+            None => (ranges, buffers),
+        };
+        if !ranges.is_empty() {
+            self.buffers.push_ranges(ranges, buffers);
+        }
     }
 
     /// Returns the total number of buffered bytes available
@@ -213,9 +232,21 @@ impl RowGroupReaderBuilder {
         self.buffers.buffered_bytes()
     }
 
-    /// Clear any staged ranges currently buffered for future decode work.
-    pub fn clear_all_ranges(&mut self) {
-        self.buffers.clear_all_ranges();
+    /// Release all staged ranges currently buffered for future decode work.
+    pub(crate) fn release_all(&mut self) {
+        self.buffers.release_all();
+    }
+
+    /// Release all column chunk byte ranges for a given row group.
+    ///
+    /// This is safe to call even if some (or all) column chunks were never
+    /// fetched — [`PushBuffers::release_range`] is a no-op for ranges that
+    /// have no overlapping entry.
+    fn release_row_group(&mut self, row_group_idx: usize) {
+        for col in self.metadata.row_group(row_group_idx).columns() {
+            let (start, len) = col.byte_range();
+            self.buffers.release_range(start..start + len);
+        }
     }
 
     /// take the current state, leaving None in its place.
@@ -281,6 +312,13 @@ impl RowGroupReaderBuilder {
                 } => {
                     // put back the next state
                     self.state = Some(next_state);
+                    // Extend the retention set with explicitly requested
+                    // ranges so the IO layer's response is not filtered out.
+                    if let DecodeResult::NeedsData(ref ranges) = result {
+                        if let Some(retention) = &mut self.retention {
+                            retention.extend(ranges);
+                        }
+                    }
                     return Ok(result);
                 }
                 // completed one internal state, maybe can proceed further
@@ -375,7 +413,9 @@ impl RowGroupReaderBuilder {
 
                 // If nothing is selected, we are done with this row group
                 if !plan_builder.selects_any() {
-                    // ruled out entire row group
+                    // ruled out entire row group — release any column chunks
+                    // that were fetched for predicate evaluation.
+                    self.release_row_group(row_group_idx);
                     self.filter = Some(filter_info.into_filter());
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
@@ -537,7 +577,9 @@ impl RowGroupReaderBuilder {
                 let rows_before = plan_builder.num_rows_selected().unwrap_or(row_count);
 
                 if rows_before == 0 {
-                    // ruled out entire row group
+                    // ruled out entire row group — release any column chunks
+                    // that were fetched for predicate evaluation.
+                    self.release_row_group(row_group_idx);
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
                         DecodeResult::Finished,
@@ -561,7 +603,9 @@ impl RowGroupReaderBuilder {
                 }
 
                 if rows_after == 0 {
-                    // no rows left after applying limit/offset
+                    // no rows left after applying limit/offset — release any
+                    // column chunks that were fetched for predicate evaluation.
+                    self.release_row_group(row_group_idx);
                     return Ok(NextState::result(
                         RowGroupDecoderState::Finished,
                         DecodeResult::Finished,
@@ -654,6 +698,10 @@ impl RowGroupReaderBuilder {
                     array_reader_builder
                         .build_array_reader(self.fields.as_deref(), &self.projection)
                 }?;
+
+                // Release column chunks now that all borrows from
+                // self.metadata / self.buffers are done.
+                self.release_row_group(row_group_idx);
 
                 let reader = ParquetRecordBatchReader::new(array_reader, plan);
                 NextState::result(RowGroupDecoderState::Finished, DecodeResult::Data(reader))
