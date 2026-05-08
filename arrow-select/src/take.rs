@@ -2838,9 +2838,10 @@ mod tests {
 
         let indexes = Int32Array::from_iter_values(vec![0, 1, 4, 5]);
         let result = take(&ree, &indexes, None).unwrap();
-        let result = result.as_run::<Int32Type>();
-        assert_eq!(result.run_ends().values(), &[4]);
-        assert_eq!(result.values().as_primitive::<Int32Type>().values(), &[1]);
+        let result = result.as_run::<Int32Type>().downcast::<Int32Array>().unwrap();
+
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(actual, vec![1, 1, 1, 1]);
     }
 
     #[test]
@@ -2855,9 +2856,13 @@ mod tests {
 
         let indexes = Int32Array::from_iter_values(vec![0, 1, 4, 5]);
         let result = take(&ree, &indexes, None).unwrap();
-        let result = result.as_run::<Int32Type>();
-        assert_eq!(result.run_ends().values(), &[4]);
-        assert_eq!(result.values().as_string::<i32>().value(0), "bob");
+        let result = result
+            .as_run::<Int32Type>()
+            .downcast::<StringArray>()
+            .unwrap();
+
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(actual, vec!["bob", "bob", "bob", "bob"]);
     }
 
     #[test]
@@ -2874,12 +2879,15 @@ mod tests {
 
         let indexes = Int32Array::from_iter_values(vec![0, 0, 1, 4, 5, 2, 3, 2, 6, 7, 6]);
         let result = take(&ree, &indexes, None).unwrap();
-        let result = result.as_run::<Int32Type>();
+        let result = result
+            .as_run::<Int32Type>()
+            .downcast::<StringArray>()
+            .unwrap();
 
-        assert_eq!(result.len(), 11);
-        assert_eq!(result.run_ends().values(), &[5, 8, 11]);
-        assert_eq!(result.values().as_string::<i32>().value(0), "bob");
-        assert_eq!(result.values().as_string::<i32>().value(1), "alice");
-        assert_eq!(result.values().as_string::<i32>().value(2), "eve");
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec!["bob", "bob", "bob", "bob", "bob", "alice", "alice", "alice", "eve", "eve", "eve"]
+        );
     }
 }
