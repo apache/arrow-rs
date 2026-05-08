@@ -262,7 +262,7 @@ pub struct BitWriter {
     buffer: Vec<u8>,
     /// Accumulator for in progress values
     buffered_values: u64,
-    /// Current write offset within `buffer_values`
+    /// Current write offset within `buffered_values`
     bit_offset: u8,
 }
 
@@ -415,9 +415,9 @@ impl BitWriter {
     /// bit-packed form.
     ///
     /// Values are packed in little-endian bit order: this call appends
-    /// `num_bits` bits starting at the current bit position;
+    /// `num_bits` bits starting at the current bit position.
     ///
-    /// `num_bits` must be no larger than 64
+    /// `num_bits` must be no larger than 64.
     #[inline]
     pub fn put_value(&mut self, v: u64, num_bits: usize) {
         debug_assert!(num_bits <= 64);
