@@ -101,13 +101,6 @@ impl From<io::Error> for ParquetError {
     }
 }
 
-#[cfg(any(feature = "snap", test))]
-impl From<snap::Error> for ParquetError {
-    fn from(e: snap::Error) -> ParquetError {
-        ParquetError::External(Box::new(e))
-    }
-}
-
 impl From<thrift::Error> for ParquetError {
     fn from(e: thrift::Error) -> ParquetError {
         ParquetError::External(Box::new(e))
