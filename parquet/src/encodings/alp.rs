@@ -87,7 +87,7 @@ impl AlpHeader {
 ///
 /// ##### AlpInfo (4 bytes, both types)
 ///
-/// ```
+/// ```text
 ///  Byte:    0           1          2       3
 ///        +----------+----------+---------+---------+
 ///        | exponent |  factor  |  num_exceptions   |
