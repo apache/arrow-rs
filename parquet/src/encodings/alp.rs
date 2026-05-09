@@ -29,7 +29,6 @@ pub(crate) const ALP_MAX_LOG_VECTOR_SIZE: u8 = 15;
 pub(crate) const ALP_MAX_EXPONENT_F32: u8 = 10;
 pub(crate) const ALP_MAX_EXPONENT_F64: u8 = 18;
 
-
 /// Page-level ALP header (7 bytes).
 ///
 /// ```text
@@ -49,8 +48,8 @@ pub(crate) const ALP_MAX_EXPONENT_F64: u8 = 18;
 pub(crate) struct AlpHeader {
     pub(crate) compression_mode: u8,
     pub(crate) integer_encoding: u8,
-    pub(crate)  log_vector_size: u8,
-    pub(crate)  num_elements: i32,
+    pub(crate) log_vector_size: u8,
+    pub(crate) num_elements: i32,
 }
 
 impl AlpHeader {
@@ -83,7 +82,6 @@ impl AlpHeader {
         }
     }
 }
-
 
 /// Per-vector ALP metadata (4 bytes), equivalent to C++ `AlpEncodedVectorInfo`.
 ///
@@ -140,7 +138,6 @@ impl<Exact: AlpExact> AlpEncodedForVectorInfo<Exact> {
             + num_exceptions as usize * Exact::WIDTH
     }
 }
-
 
 /// Exact integer type used by FOR reconstruction.
 ///

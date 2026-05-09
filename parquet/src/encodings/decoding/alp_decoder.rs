@@ -22,7 +22,11 @@ use bytes::Bytes;
 
 use crate::basic::Encoding;
 use crate::data_type::DataType;
-use crate::encodings::alp::{AlpEncodedForVectorInfo, AlpEncodedVectorInfo, AlpExact, AlpFloat, AlpHeader, ALP_COMPRESSION_MODE, ALP_HEADER_SIZE, ALP_INTEGER_ENCODING_FOR_BIT_PACK, ALP_MAX_EXPONENT_F32, ALP_MAX_EXPONENT_F64, ALP_MAX_LOG_VECTOR_SIZE, ALP_MIN_LOG_VECTOR_SIZE};
+use crate::encodings::alp::{
+    ALP_COMPRESSION_MODE, ALP_HEADER_SIZE, ALP_INTEGER_ENCODING_FOR_BIT_PACK, ALP_MAX_EXPONENT_F32,
+    ALP_MAX_EXPONENT_F64, ALP_MAX_LOG_VECTOR_SIZE, ALP_MIN_LOG_VECTOR_SIZE,
+    AlpEncodedForVectorInfo, AlpEncodedVectorInfo, AlpExact, AlpFloat, AlpHeader,
+};
 use crate::encodings::decoding::Decoder;
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::{BitReader, FromBitpacked, FromBytes};
@@ -59,7 +63,6 @@ struct AlpPageLayout<Exact: AlpExact> {
     body: Bytes,
     vectors: Vec<AlpEncodedVectorView<Exact>>,
 }
-
 
 /// Parse and validate a full ALP-encoded page body.
 ///
@@ -631,7 +634,9 @@ where
 mod tests {
     use super::*;
     use crate::data_type::FloatType;
-    use crate::encodings::alp::{ALP_NEG_POW10_F32, ALP_NEG_POW10_F64, ALP_POW10_F32, ALP_POW10_F64};
+    use crate::encodings::alp::{
+        ALP_NEG_POW10_F32, ALP_NEG_POW10_F64, ALP_POW10_F32, ALP_POW10_F64,
+    };
 
     fn make_alp_page_bytes(
         compression_mode: u8,
