@@ -26,7 +26,7 @@ use super::rle::RleDecoder;
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
-use crate::encodings::decoding::alp::AlpDecoder;
+use crate::encodings::decoding::alp_decoder::AlpDecoder;
 use crate::encodings::decoding::byte_stream_split_decoder::{
     ByteStreamSplitDecoder, VariableWidthByteStreamSplitDecoder,
 };
@@ -34,7 +34,7 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{self, BitReader, FromBitpacked};
 
-mod alp;
+mod alp_decoder;
 mod byte_stream_split_decoder;
 
 pub(crate) mod private {
