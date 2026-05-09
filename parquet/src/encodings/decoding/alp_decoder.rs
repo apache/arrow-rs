@@ -25,7 +25,7 @@ use crate::data_type::DataType;
 use crate::encodings::alp::{
     ALP_COMPRESSION_MODE, ALP_HEADER_SIZE, ALP_INTEGER_ENCODING_FOR_BIT_PACK, ALP_MAX_EXPONENT_F32,
     ALP_MAX_EXPONENT_F64, ALP_MAX_LOG_VECTOR_SIZE, ALP_MIN_LOG_VECTOR_SIZE,
-    AlpEncodedForVectorInfo, AlpEncodedVectorInfo, AlpExact, AlpFloat, AlpHeader,
+    ForInfo, AlpInfo, AlpExact, AlpFloat, AlpHeader,
 };
 use crate::encodings::decoding::Decoder;
 use crate::errors::{ParquetError, Result};
@@ -38,8 +38,8 @@ use crate::util::bit_util::{BitReader, FromBitpacked, FromBytes};
 #[derive(Debug)]
 struct AlpEncodedVectorView<Exact: AlpExact> {
     num_elements: u16,
-    alp_info: AlpEncodedVectorInfo,
-    for_info: AlpEncodedForVectorInfo<Exact>,
+    alp_info: AlpInfo,
+    for_info: ForInfo<Exact>,
     packed_values: Range<usize>,
     exception_positions: Vec<u16>,
     exception_values: Vec<Exact>,
@@ -47,8 +47,8 @@ struct AlpEncodedVectorView<Exact: AlpExact> {
 
 impl<Exact: AlpExact> AlpEncodedVectorView<Exact> {
     fn expected_stored_size(&self) -> usize {
-        AlpEncodedVectorInfo::STORED_SIZE
-            + AlpEncodedForVectorInfo::<Exact>::stored_size()
+        AlpInfo::STORED_SIZE
+            + ForInfo::<Exact>::stored_size()
             + self
                 .for_info
                 .get_data_stored_size(self.num_elements, self.alp_info.num_exceptions)
@@ -240,7 +240,7 @@ fn parse_vector_view<Exact: AlpExact>(
     let vector_bytes = &body[vector_start..vector_end];
 
     let metadata_size =
-        AlpEncodedVectorInfo::STORED_SIZE + AlpEncodedForVectorInfo::<Exact>::stored_size();
+        AlpInfo::STORED_SIZE + ForInfo::<Exact>::stored_size();
     if vector_bytes.len() < metadata_size {
         return Err(general_err!(
             "Invalid ALP page: vector metadata too short, expected at least {} bytes, got {}",
@@ -249,7 +249,7 @@ fn parse_vector_view<Exact: AlpExact>(
         ));
     }
 
-    let alp_info = AlpEncodedVectorInfo {
+    let alp_info = AlpInfo {
         exponent: vector_bytes[0],
         factor: vector_bytes[1],
         num_exceptions: u16::from_le_bytes([vector_bytes[2], vector_bytes[3]]),
@@ -285,7 +285,7 @@ fn parse_vector_view<Exact: AlpExact>(
         ));
     }
 
-    let for_start = AlpEncodedVectorInfo::STORED_SIZE;
+    let for_start = AlpInfo::STORED_SIZE;
     let for_end = for_start + Exact::WIDTH;
     let frame_of_reference = Exact::from_le_slice(&vector_bytes[for_start..for_end]);
     let bit_width = vector_bytes[for_end];
@@ -298,7 +298,7 @@ fn parse_vector_view<Exact: AlpExact>(
         ));
     }
 
-    let for_info = AlpEncodedForVectorInfo::<Exact> {
+    let for_info = ForInfo::<Exact> {
         frame_of_reference,
         bit_width,
     };

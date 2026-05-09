@@ -95,19 +95,21 @@ impl AlpHeader {
 ///        +----------+----------+---------+---------+
 /// ```
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct AlpEncodedVectorInfo {
+pub(crate) struct AlpInfo {
     pub(crate) exponent: u8,
     pub(crate) factor: u8,
     pub(crate) num_exceptions: u16,
 }
 
-impl AlpEncodedVectorInfo {
+impl AlpInfo {
     pub(crate) const STORED_SIZE: usize = 4;
 }
 
 /// Per-vector FOR metadata for exact integer type (`u32` for `f32`, `u64` for `f64`).
 ///
 /// Frame of reference (FOR) encoding
+///
+/// ###### ForInfo for FLOAT (5 bytes) / DOUBLE (9 bytes)
 ///
 /// ```text
 /// Byte:    0    1    2    3       4
@@ -117,12 +119,12 @@ impl AlpEncodedVectorInfo {
 /// +----+----+----+----+-----------+
 /// ```
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct AlpEncodedForVectorInfo<Exact: AlpExact> {
+pub(crate) struct ForInfo<Exact: AlpExact> {
     pub(crate) frame_of_reference: Exact,
     pub(crate) bit_width: u8,
 }
 
-impl<Exact: AlpExact> AlpEncodedForVectorInfo<Exact> {
+impl<Exact: AlpExact> ForInfo<Exact> {
     pub(crate) fn stored_size() -> usize {
         Exact::WIDTH + 1
     }
