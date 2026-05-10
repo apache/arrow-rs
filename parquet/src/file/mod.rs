@@ -103,7 +103,6 @@ pub mod metadata;
 pub mod page_index;
 pub mod properties;
 pub mod reader;
-pub mod reverse_serialized_reader;
 pub mod serialized_reader;
 pub mod statistics;
 pub mod writer;

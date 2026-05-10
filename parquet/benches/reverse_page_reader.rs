@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmarks for `ReverseSerializedPageReader` (issue #9934).
+//! Benchmarks for `SerializedPageReader::with_reverse_pages(true)` (issue #9934).
 //!
 //! Phase 1's primary empirical claim is **per-page cost parity** with the
 //! existing forward `SerializedPageReader`. These benches verify that claim
@@ -36,7 +36,6 @@ use parquet::data_type::Int32Type;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::SerializedPageReader;
-use parquet::file::reverse_serialized_reader::ReverseSerializedPageReader;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
 
@@ -116,9 +115,14 @@ fn bench_codec(c: &mut Criterion, codec_label: &str, compression: Compression) {
 
     group.bench_function("reverse_drain", |b| {
         b.iter(|| {
-            let reader =
-                ReverseSerializedPageReader::new(chunk_reader.clone(), column_chunk, offset_index)
-                    .unwrap();
+            let reader = SerializedPageReader::new(
+                chunk_reader.clone(),
+                column_chunk,
+                total_rows,
+                Some(page_locations.clone()),
+            )
+            .unwrap()
+            .with_reverse_pages(true);
             drain(reader);
         });
     });
@@ -139,9 +143,14 @@ fn bench_codec(c: &mut Criterion, codec_label: &str, compression: Compression) {
 
     group.bench_function("reverse_first_page", |b| {
         b.iter(|| {
-            let mut reader =
-                ReverseSerializedPageReader::new(chunk_reader.clone(), column_chunk, offset_index)
-                    .unwrap();
+            let mut reader = SerializedPageReader::new(
+                chunk_reader.clone(),
+                column_chunk,
+                total_rows,
+                Some(page_locations.clone()),
+            )
+            .unwrap()
+            .with_reverse_pages(true);
             // Skip dictionary if any (none here — dict is disabled in this fixture).
             let page = reader.get_next_page().unwrap().unwrap();
             black_box(page);
@@ -187,7 +196,7 @@ fn time_to_first_n_row_group_sim(
     black_box(values);
 }
 
-/// **Page-level reverse** strategy enabled by `ReverseSerializedPageReader`:
+/// **Page-level reverse** strategy enabled by `SerializedPageReader::with_reverse_pages(true)`:
 /// emit pages in reverse order, decode just enough pages to gather `n` values,
 /// reverse those values, take the first `n`.
 ///
@@ -202,11 +211,21 @@ fn time_to_first_n_page_reverse(
 ) {
     let rg = metadata.row_group(0);
     let column_chunk = rg.column(0);
+    let total_rows = rg.num_rows() as usize;
     let column_descr = metadata.file_metadata().schema_descr().column(0);
-    let offset_index = &metadata.offset_index().unwrap()[0][0];
+    let page_locations = metadata.offset_index().unwrap()[0][0]
+        .page_locations()
+        .clone();
 
     let reverse = Box::new(
-        ReverseSerializedPageReader::new(chunk_reader.clone(), column_chunk, offset_index).unwrap(),
+        SerializedPageReader::new(
+            chunk_reader.clone(),
+            column_chunk,
+            total_rows,
+            Some(page_locations),
+        )
+        .unwrap()
+        .with_reverse_pages(true),
     );
     let mut col_reader: ColumnReaderImpl<Int32Type> = ColumnReaderImpl::new(column_descr, reverse);
 
@@ -251,11 +270,21 @@ fn time_to_first_n_page_reverse_cross_page(
 ) {
     let rg = metadata.row_group(0);
     let column_chunk = rg.column(0);
+    let total_rows = rg.num_rows() as usize;
     let column_descr = metadata.file_metadata().schema_descr().column(0);
-    let offset_index = &metadata.offset_index().unwrap()[0][0];
+    let page_locations = metadata.offset_index().unwrap()[0][0]
+        .page_locations()
+        .clone();
 
     let reverse = Box::new(
-        ReverseSerializedPageReader::new(chunk_reader.clone(), column_chunk, offset_index).unwrap(),
+        SerializedPageReader::new(
+            chunk_reader.clone(),
+            column_chunk,
+            total_rows,
+            Some(page_locations),
+        )
+        .unwrap()
+        .with_reverse_pages(true),
     );
     let mut col_reader: ColumnReaderImpl<Int32Type> = ColumnReaderImpl::new(column_descr, reverse);
 
