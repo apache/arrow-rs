@@ -401,6 +401,7 @@ impl ParquetDecoderState {
     ) -> Result<(Self, DecodeResult<ParquetRecordBatchReader>), ParquetError> {
         let mut current_state = self;
         loop {
+            current_state.disable_post_filter_fallback();
             let (next_state, decode_result) = current_state.transition()?;
             // if more data is needed to transition, can't proceed further without it
             match decode_result {
@@ -418,6 +419,11 @@ impl ParquetDecoderState {
                     mut record_batch_reader,
                     remaining_row_groups,
                 } => {
+                    // The reader API can advance to future row groups before
+                    // the returned reader is consumed. Disable post-filter
+                    // fallback before building row groups for this API; this
+                    // materialization remains only as a guard for mixed API use
+                    // where a post-filter reader was already active.
                     record_batch_reader.materialize_post_filter()?;
                     let result = DecodeResult::Data(*record_batch_reader);
                     let next_state = Self::ReadingRowGroup {
@@ -429,6 +435,15 @@ impl ParquetDecoderState {
                     return Ok((Self::Finished, DecodeResult::Finished));
                 }
             }
+        }
+    }
+
+    fn disable_post_filter_fallback(&mut self) {
+        if let Self::ReadingRowGroup {
+            remaining_row_groups,
+        } = self
+        {
+            remaining_row_groups.disable_post_filter_fallback();
         }
     }
 
@@ -1090,43 +1105,27 @@ mod test {
             .build()
             .unwrap();
 
-        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+        let batch = next_batch_with_data(&mut decoder, data).unwrap();
         assert_eq!(predicate_rows.load(Ordering::Relaxed), 100);
-        assert_eq!(
-            reader.next().unwrap().unwrap(),
-            TEST_BATCH.slice(0, 100).project(&[2]).unwrap()
-        );
-        assert!(reader.next().is_none());
+        assert_eq!(batch, TEST_BATCH.slice(0, 100).project(&[2]).unwrap());
 
-        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+        let batch = next_batch_with_data(&mut decoder, data).unwrap();
         assert_eq!(predicate_rows.load(Ordering::Relaxed), 200);
-        assert_eq!(
-            reader.next().unwrap().unwrap(),
-            TEST_BATCH.slice(100, 100).project(&[2]).unwrap()
-        );
-        assert!(reader.next().is_none());
+        assert_eq!(batch, TEST_BATCH.slice(100, 100).project(&[2]).unwrap());
 
-        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+        let batch = next_batch_with_data(&mut decoder, data).unwrap();
         assert_eq!(
             predicate_rows.load(Ordering::Relaxed),
             300,
-            "fallback should evaluate predicates before returning the reader to preserve row-group order"
+            "fallback should evaluate predicates while producing the current row group"
         );
-        assert_eq!(
-            reader.next().unwrap().unwrap(),
-            TEST_BATCH.slice(200, 100).project(&[2]).unwrap()
-        );
+        assert_eq!(batch, TEST_BATCH.slice(200, 100).project(&[2]).unwrap());
         assert_eq!(predicate_rows.load(Ordering::Relaxed), 300);
-        assert!(reader.next().is_none());
 
-        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+        let batch = next_batch_with_data(&mut decoder, data).unwrap();
         assert_eq!(predicate_rows.load(Ordering::Relaxed), 400);
-        assert_eq!(
-            reader.next().unwrap().unwrap(),
-            TEST_BATCH.slice(300, 100).project(&[2]).unwrap()
-        );
+        assert_eq!(batch, TEST_BATCH.slice(300, 100).project(&[2]).unwrap());
         assert_eq!(predicate_rows.load(Ordering::Relaxed), 400);
-        assert!(reader.next().is_none());
 
         assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
         assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
@@ -1135,6 +1134,48 @@ mod test {
             metrics.fallback_high_selectivity_no_pruning_count(),
             Some(1)
         );
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
+    }
+
+    #[test]
+    fn test_decoder_try_next_reader_skips_post_filter_fallback() {
+        let data = &FALLBACK_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| {
+                let scalar_neg_one = Int64Array::new_scalar(-1);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_neg_one)
+            },
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                reader.next().unwrap().unwrap(),
+                TEST_BATCH
+                    .slice(row_group_idx * 100, 100)
+                    .project(&[2])
+                    .unwrap()
+            );
+            assert!(reader.next().is_none());
+        }
+
+        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(0));
         assert!(next_reader_with_data(&mut decoder, data).is_none());
     }
 
@@ -1166,34 +1207,32 @@ mod test {
             .unwrap();
 
         for row_group_idx in 0..2 {
-            let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
             assert_eq!(
                 predicate_rows.load(Ordering::Relaxed),
                 (row_group_idx + 1) * 100
             );
             assert_eq!(
-                reader.next().unwrap().unwrap(),
+                batch,
                 expected_c_not_multiple_of_three(row_group_idx * 100, 100)
             );
-            assert!(reader.next().is_none());
         }
 
         for row_group_idx in 2..4 {
-            let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
             assert_eq!(
                 predicate_rows.load(Ordering::Relaxed),
                 (row_group_idx + 1) * 100,
-                "fallback should evaluate predicates before returning the reader to preserve row-group order"
+                "fallback should evaluate predicates while producing the current row group"
             );
             assert_eq!(
-                reader.next().unwrap().unwrap(),
+                batch,
                 expected_c_not_multiple_of_three(row_group_idx * 100, 100)
             );
             assert_eq!(
                 predicate_rows.load(Ordering::Relaxed),
                 (row_group_idx + 1) * 100
             );
-            assert!(reader.next().is_none());
         }
 
         assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
@@ -1203,7 +1242,7 @@ mod test {
             metrics.fallback_fragmented_high_selectivity_materialization_count(),
             Some(1)
         );
-        assert!(next_reader_with_data(&mut decoder, data).is_none());
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
     }
 
     #[test]
@@ -1234,20 +1273,16 @@ mod test {
             .unwrap();
 
         for row_group_idx in 0..4 {
-            let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+            let batch = next_batch_with_data(&mut decoder, data).unwrap();
             assert_eq!(
                 predicate_rows.load(Ordering::Relaxed),
                 (row_group_idx + 1) * 100
             );
-            assert_eq!(
-                reader.next().unwrap().unwrap(),
-                expected_c_multiple_of_ten(row_group_idx * 100, 100)
-            );
+            assert_eq!(batch, expected_c_multiple_of_ten(row_group_idx * 100, 100));
             assert_eq!(
                 predicate_rows.load(Ordering::Relaxed),
                 (row_group_idx + 1) * 100
             );
-            assert!(reader.next().is_none());
         }
 
         assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
@@ -1257,7 +1292,7 @@ mod test {
             metrics.fallback_fragmented_moderate_selectivity_count(),
             Some(1)
         );
-        assert!(next_reader_with_data(&mut decoder, data).is_none());
+        assert!(next_batch_with_data(&mut decoder, data).is_none());
     }
 
     #[test]
@@ -1286,12 +1321,8 @@ mod test {
             .build()
             .unwrap();
 
-        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
-        assert_eq!(
-            reader.next().unwrap().unwrap(),
-            TEST_BATCH.slice(0, 100).project(&[0, 2]).unwrap()
-        );
-        assert!(reader.next().is_none());
+        let batch = next_batch_with_data(&mut decoder, data).unwrap();
+        assert_eq!(batch, TEST_BATCH.slice(0, 100).project(&[0, 2]).unwrap());
 
         assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
         assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(1));
@@ -1911,6 +1942,21 @@ mod test {
                     push_ranges_to_decoder_with_data(decoder, ranges, data);
                 }
                 DecodeResult::Data(reader) => return Some(reader),
+                DecodeResult::Finished => return None,
+            }
+        }
+    }
+
+    fn next_batch_with_data(decoder: &mut ParquetPushDecoder, data: &Bytes) -> Option<RecordBatch> {
+        loop {
+            match decoder
+                .try_decode()
+                .expect("decoder should produce a batch or request data")
+            {
+                DecodeResult::NeedsData(ranges) => {
+                    push_ranges_to_decoder_with_data(decoder, ranges, data);
+                }
+                DecodeResult::Data(batch) => return Some(batch),
                 DecodeResult::Finished => return None,
             }
         }

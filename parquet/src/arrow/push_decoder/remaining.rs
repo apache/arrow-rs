@@ -75,6 +75,12 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.clear_all_ranges();
     }
 
+    /// Prevent Auto selection from switching to post-filter fallback for reader
+    /// handoff APIs.
+    pub(crate) fn disable_post_filter_fallback(&mut self) {
+        self.row_group_reader_builder.disable_post_filter_fallback();
+    }
+
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
     /// group of rows from the Parquet data, or the list of data ranges still
     /// needed to proceed

@@ -204,6 +204,9 @@ pub(crate) struct RowGroupReaderBuilder {
     #[allow(dead_code)]
     fallback_state: RowGroupFallbackState,
 
+    /// Whether this builder may switch Auto policy to post-filter fallback.
+    post_filter_fallback_enabled: bool,
+
     /// Current state of the decoder.
     ///
     /// It is taken when processing, and must be put back before returning
@@ -243,6 +246,7 @@ impl RowGroupReaderBuilder {
             max_predicate_cache_size,
             row_selection_policy,
             fallback_state: RowGroupFallbackState::default(),
+            post_filter_fallback_enabled: true,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -261,6 +265,12 @@ impl RowGroupReaderBuilder {
     /// Clear any staged ranges currently buffered for future decode work.
     pub fn clear_all_ranges(&mut self) {
         self.buffers.clear_all_ranges();
+    }
+
+    /// Disable post-filter fallback for APIs that hand row-group readers back to
+    /// callers before they are consumed.
+    pub(crate) fn disable_post_filter_fallback(&mut self) {
+        self.post_filter_fallback_enabled = false;
     }
 
     /// take the current state, leaving None in its place.
@@ -812,12 +822,16 @@ impl RowGroupReaderBuilder {
                                     row_group_info.row_count,
                                 )])
                             });
-                            let column_chunks = data_request.into_column_chunks();
+                            // The in-flight request may contain chunks loaded
+                            // for a sparse predicate selection. The fallback
+                            // below rebuilds a base/full-selection read plan,
+                            // so do not reuse chunks whose page coverage no
+                            // longer matches the requested rows.
                             return self.start_post_selection_filter(
                                 row_group_info,
                                 selection,
                                 cache_info,
-                                Some(column_chunks),
+                                None,
                             );
                         }
 
@@ -1017,7 +1031,8 @@ impl RowGroupReaderBuilder {
         matches!(
             self.fallback_state,
             RowGroupFallbackState::UsePostFilter { .. }
-        ) && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
+        ) && self.post_filter_fallback_enabled
+            && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
             && self.limit.is_none()
             && self.offset.is_none()
             && !self.has_virtual_columns()
@@ -1097,7 +1112,8 @@ impl RowGroupReaderBuilder {
         let Some(filter) = self.filter.as_ref() else {
             return false;
         };
-        matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
+        self.post_filter_fallback_enabled
+            && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
             && self.limit.is_none()
             && self.offset.is_none()
             && !self.has_virtual_columns()

@@ -490,28 +490,47 @@ impl RowSelection {
         page_locations: &[PageLocation],
         total_rows: usize,
     ) -> Vec<Range<usize>> {
-        let selected_byte_ranges = self.scan_ranges(page_locations);
-        page_locations
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, page)| {
-                let start = page.offset as u64;
-                let end = start + page.compressed_page_size as u64;
-                let page_is_selected = selected_byte_ranges
-                    .iter()
-                    .any(|range| range.start == start && range.end == end);
-                if !page_is_selected {
-                    return None;
-                }
+        let mut ranges = Vec::new();
+        let mut selector_idx = 0;
+        let mut selector_start = 0usize;
 
-                let row_start = page.first_row_index as usize;
-                let row_end = page_locations
-                    .get(idx + 1)
-                    .map(|next| next.first_row_index as usize)
-                    .unwrap_or(total_rows);
-                Some(row_start..row_end)
-            })
-            .collect()
+        for (page_idx, page) in page_locations.iter().enumerate() {
+            let page_start = page.first_row_index as usize;
+            let page_end = page_locations
+                .get(page_idx + 1)
+                .map(|next| next.first_row_index as usize)
+                .unwrap_or(total_rows);
+
+            while selector_idx < self.selectors.len() {
+                let selector_end = selector_start + self.selectors[selector_idx].row_count;
+                if selector_end > page_start {
+                    break;
+                }
+                selector_start = selector_end;
+                selector_idx += 1;
+            }
+
+            let mut scan_idx = selector_idx;
+            let mut scan_start = selector_start;
+            let mut page_is_selected = false;
+
+            while scan_idx < self.selectors.len() && scan_start < page_end {
+                let selector = self.selectors[scan_idx];
+                let selector_end = scan_start + selector.row_count;
+                if !selector.skip && selector_end > page_start {
+                    page_is_selected = true;
+                    break;
+                }
+                scan_start = selector_end;
+                scan_idx += 1;
+            }
+
+            if page_is_selected {
+                ranges.push(page_start..page_end);
+            }
+        }
+
+        ranges
     }
 
     /// Splits off the first `row_count` from this [`RowSelection`]
