@@ -41,7 +41,10 @@ enum QueuedRowGroupDecision {
 struct NextRowGroup {
     row_group_idx: usize,
     row_count: usize,
+    /// This row group's slice of the global selection, or `None` when all rows
+    /// are selected.
     selection: Option<RowSelection>,
+    /// Budget snapshot to apply while decoding this row group.
     budget: RowBudget,
 }
 

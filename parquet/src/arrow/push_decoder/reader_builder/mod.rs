@@ -104,6 +104,7 @@ impl RowBudget {
         matches!(self.limit, Some(0))
     }
 
+    /// Returns how many selected rows remain after applying this budget.
     pub(crate) fn rows_after(self, rows_before_budget: usize) -> usize {
         let rows_after_offset = rows_before_budget.saturating_sub(self.offset.unwrap_or(0));
         match self.limit {
@@ -135,6 +136,11 @@ impl RowBudget {
         }
     }
 
+    /// Advance the budget past one row group.
+    ///
+    /// `rows_before_budget` is the number of rows selected before applying the
+    /// budget, and `rows_after_budget` is the number retained for output from
+    /// this row group.
     pub(crate) fn advance(mut self, rows_before_budget: usize, rows_after_budget: usize) -> Self {
         if let Some(offset) = &mut self.offset {
             // Reduction is either because of offset or limit, as limit is applied
@@ -154,9 +160,15 @@ impl RowBudget {
 
 #[derive(Debug)]
 struct BudgetedReadPlan {
+    /// Read plan after applying this row group's share of the offset/limit budget.
     plan_builder: ReadPlanBuilder,
+    /// Number of rows selected by row selection and predicates before applying
+    /// this row group's offset/limit budget.
     rows_before_budget: usize,
+    /// Number of selected rows that remain to be read after applying this row
+    /// group's offset/limit budget.
     rows_after_budget: usize,
+    /// Budget remaining for later row groups.
     remaining_budget: RowBudget,
 }
 
