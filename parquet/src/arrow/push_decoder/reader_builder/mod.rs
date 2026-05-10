@@ -16,27 +16,33 @@
 // under the License.
 
 mod data;
+mod fallback;
 mod filter;
+mod selection_policy;
 
 use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::arrow_reader::selection::{
-    FallbackObservation, FallbackTriggerReason, LoadedRowRanges, RowGroupExecutionMode,
-    RowSelectionShape, RowSelectionStrategy, RowSelectionStrategyDecision,
-};
+use crate::arrow::arrow_reader::selection::RowGroupExecutionMode;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
     RowSelectionPolicy, RowSelector,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
+use crate::arrow::push_decoder::reader_builder::fallback::RowGroupFallbackState;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
-use crate::arrow::schema::{ParquetField, ParquetFieldType};
-use crate::basic::Type as PhysicalType;
+use crate::arrow::push_decoder::reader_builder::selection_policy::{
+    ExpensiveOutputProfile, resolve_selection_policy_for_expensive_output,
+};
+#[cfg(test)]
+use crate::arrow::push_decoder::reader_builder::selection_policy::{
+    loaded_ranges_for_projection, resolve_selection_policy_for_projection,
+};
+use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
-use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::ParquetMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
@@ -106,22 +112,6 @@ enum RowGroupDecoderState {
     },
     /// Finished (or not yet started) reading this group
     Finished,
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-enum RowGroupFallbackState {
-    Observing { observation: FallbackObservation },
-    UsePushdown,
-    UsePostFilter { reason: FallbackTriggerReason },
-}
-
-impl Default for RowGroupFallbackState {
-    fn default() -> Self {
-        Self::Observing {
-            observation: FallbackObservation::default(),
-        }
-    }
 }
 
 /// Result of a state transition
@@ -1027,105 +1017,6 @@ impl RowGroupReaderBuilder {
         ))
     }
 
-    fn should_use_post_filter_fallback(&self) -> bool {
-        matches!(
-            self.fallback_state,
-            RowGroupFallbackState::UsePostFilter { .. }
-        ) && self.post_filter_fallback_enabled
-            && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
-            && self.limit.is_none()
-            && self.offset.is_none()
-            && !self.has_virtual_columns()
-    }
-
-    fn post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {
-        if !self.should_use_post_filter_fallback() {
-            return None;
-        }
-
-        self.build_post_filter_read_projection(filter)
-    }
-
-    fn build_post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {
-        let mut read_projection = self.projection.clone();
-        read_projection.union(&filter.union_projection()?);
-
-        if self.post_filter_supports_projection(&read_projection) {
-            Some(read_projection)
-        } else {
-            None
-        }
-    }
-
-    fn post_filter_supports_projection(&self, projection: &ProjectionMask) -> bool {
-        let schema = self.metadata.file_metadata().schema_descr();
-        (0..schema.num_columns()).all(|leaf_idx| {
-            !projection.leaf_included(leaf_idx) || schema.get_column_root(leaf_idx).is_primitive()
-        })
-    }
-
-    fn observe_fallback_candidate(
-        &mut self,
-        decision: RowSelectionStrategyDecision,
-        row_count: usize,
-    ) {
-        if !matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. }) {
-            return;
-        }
-
-        let RowGroupFallbackState::Observing { observation } = &mut self.fallback_state else {
-            return;
-        };
-
-        let mut shape = decision.shape;
-        if shape.total_rows() == 0 {
-            shape = RowSelectionShape {
-                selected_rows: row_count,
-                skipped_rows: 0,
-                selector_count: 1,
-                selected_run_count: 1,
-                skipped_run_count: 0,
-            };
-        }
-
-        observation.observed_row_groups += 1;
-        observation.shape.add_assign(shape);
-        self.metrics.record_fallback_observed_row_group();
-
-        let reason = observation.trigger_reason();
-        if matches!(reason, FallbackTriggerReason::ObservationIncomplete) {
-            self.metrics.record_fallback_trigger(reason);
-            return;
-        }
-
-        let should_fallback = observation.should_fallback();
-        self.metrics.record_fallback_trigger(reason);
-
-        if should_fallback && self.post_filter_fallback_supported() {
-            self.fallback_state = RowGroupFallbackState::UsePostFilter { reason };
-        } else {
-            self.fallback_state = RowGroupFallbackState::UsePushdown;
-        }
-    }
-
-    fn post_filter_fallback_supported(&self) -> bool {
-        let Some(filter) = self.filter.as_ref() else {
-            return false;
-        };
-        self.post_filter_fallback_enabled
-            && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
-            && self.limit.is_none()
-            && self.offset.is_none()
-            && !self.has_virtual_columns()
-            && self.build_post_filter_read_projection(filter).is_some()
-    }
-
-    fn has_virtual_columns(&self) -> bool {
-        self.fields
-            .as_deref()
-            .is_some_and(parquet_field_has_virtual_columns)
-    }
-
     /// Which columns should be cached?
     ///
     /// Returns the columns that are used by the filters *and* then used in the
@@ -1166,192 +1057,10 @@ impl RowGroupReaderBuilder {
     }
 }
 
-fn parquet_field_has_virtual_columns(field: &ParquetField) -> bool {
-    match &field.field_type {
-        ParquetFieldType::Primitive { .. } => false,
-        ParquetFieldType::Group { children } => {
-            children.iter().any(parquet_field_has_virtual_columns)
-        }
-        ParquetFieldType::Virtual(_) => true,
-    }
-}
-
-#[cfg(test)]
-fn resolve_selection_policy_for_projection(
-    plan_builder: ReadPlanBuilder,
-    projection_mask: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
-    total_rows: usize,
-) -> ReadPlanBuilder {
-    resolve_selection_policy_for_expensive_output(
-        plan_builder,
-        projection_mask,
-        offset_index,
-        total_rows,
-        ExpensiveOutputProfile::default(),
-    )
-}
-
-fn resolve_selection_policy_for_expensive_output(
-    plan_builder: ReadPlanBuilder,
-    projection_mask: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
-    total_rows: usize,
-    output_profile: ExpensiveOutputProfile,
-) -> ReadPlanBuilder {
-    let loaded = loaded_ranges_for_projection(
-        plan_builder.selection(),
-        projection_mask,
-        offset_index,
-        total_rows,
-    );
-    let loaded_is_sparse = loaded.as_ref().is_some_and(LoadedRowRanges::is_sparse);
-    let sparse_loaded = loaded.filter(LoadedRowRanges::is_sparse);
-
-    match plan_builder.row_selection_policy() {
-        RowSelectionPolicy::Auto { .. } => {
-            let decision = plan_builder.resolve_selection_strategy_decision();
-            match decision.strategy {
-                RowSelectionStrategy::Mask
-                    if loaded_is_sparse
-                        || should_prefer_selectors_for_expensive_output(
-                            decision.shape,
-                            output_profile,
-                        ) =>
-                {
-                    plan_builder.with_row_selection_policy(RowSelectionPolicy::Selectors)
-                }
-                RowSelectionStrategy::Mask => {
-                    plan_builder.with_row_selection_policy(RowSelectionPolicy::Mask)
-                }
-                RowSelectionStrategy::Selectors => {
-                    plan_builder.with_row_selection_policy(RowSelectionPolicy::Selectors)
-                }
-            }
-        }
-        RowSelectionPolicy::Mask => plan_builder.with_loaded_row_ranges(sparse_loaded),
-        RowSelectionPolicy::Selectors => plan_builder,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ExpensiveOutputProfile {
-    variable_width_columns: usize,
-    uncompressed_bytes_per_row: f64,
-}
-
-impl ExpensiveOutputProfile {
-    fn from_row_group(
-        row_group: &RowGroupMetaData,
-        projection_mask: &ProjectionMask,
-        total_rows: usize,
-    ) -> Self {
-        if total_rows == 0 {
-            return Self::default();
-        }
-
-        let mut variable_width_columns = 0;
-        let mut uncompressed_bytes = 0u64;
-        for leaf_idx in 0..row_group.num_columns() {
-            if !projection_mask.leaf_included(leaf_idx) {
-                continue;
-            }
-
-            let column = row_group.column(leaf_idx);
-            if column.column_type() == PhysicalType::BYTE_ARRAY {
-                variable_width_columns += 1;
-            }
-            uncompressed_bytes += column.uncompressed_size().max(0) as u64;
-        }
-
-        Self {
-            variable_width_columns,
-            uncompressed_bytes_per_row: uncompressed_bytes as f64 / total_rows as f64,
-        }
-    }
-}
-
-fn should_prefer_selectors_for_expensive_output(
-    shape: RowSelectionShape,
-    output_profile: ExpensiveOutputProfile,
-) -> bool {
-    let selected_ratio = shape.selected_ratio();
-    output_profile.variable_width_columns > 0
-        && output_profile.uncompressed_bytes_per_row >= 16.0
-        && selected_ratio > 0.0
-        && selected_ratio < 0.10
-        && shape.average_selected_run_length() <= 4.0
-}
-
-fn loaded_ranges_for_projection(
-    selection: Option<&RowSelection>,
-    projection_mask: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
-    total_rows: usize,
-) -> Option<LoadedRowRanges> {
-    let selection = selection?;
-    let columns = offset_index?;
-    let mut ranges: Option<Vec<Range<usize>>> = None;
-
-    for (leaf_idx, column) in columns.iter().enumerate() {
-        if !projection_mask.leaf_included(leaf_idx) {
-            continue;
-        }
-        let column_ranges = selection.selected_page_row_ranges(column.page_locations(), total_rows);
-        ranges = Some(match ranges {
-            Some(existing) => intersect_ranges(existing, column_ranges),
-            None => column_ranges,
-        });
-    }
-
-    ranges.map(|ranges| LoadedRowRanges::new(coalesce_adjacent_ranges(ranges), total_rows))
-}
-
-fn intersect_ranges(left: Vec<Range<usize>>, right: Vec<Range<usize>>) -> Vec<Range<usize>> {
-    let mut out = Vec::new();
-    let mut left_idx = 0;
-    let mut right_idx = 0;
-
-    while left_idx < left.len() && right_idx < right.len() {
-        let l = &left[left_idx];
-        let r = &right[right_idx];
-        let start = l.start.max(r.start);
-        let end = l.end.min(r.end);
-
-        if start < end {
-            out.push(start..end);
-        }
-
-        if l.end <= r.end {
-            left_idx += 1;
-        } else {
-            right_idx += 1;
-        }
-    }
-
-    out
-}
-
-fn coalesce_adjacent_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
-    let mut out: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
-    for range in ranges {
-        if range.is_empty() {
-            continue;
-        }
-        if let Some(last) = out.last_mut() {
-            if last.end == range.start {
-                last.end = range.end;
-                continue;
-            }
-        }
-        out.push(range);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::selection::LoadedRowRanges;
     use crate::arrow::arrow_reader::{RowSelection, RowSelectionCursor, RowSelector};
     use crate::file::page_index::offset_index::PageLocation;
 
