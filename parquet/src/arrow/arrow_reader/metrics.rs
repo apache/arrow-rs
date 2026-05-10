@@ -205,24 +205,9 @@ impl ArrowReaderMetrics {
         self.load(|inner| &inner.fallback_fragmented_moderate_selectivity_count)
     }
 
-    /// Fallback: number of fragmented high-selectivity materialization triggers
-    pub fn fallback_fragmented_high_selectivity_materialization_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_fragmented_high_selectivity_materialization_count)
-    }
-
-    /// Fallback: number of fragmented high-selectivity output-dominates triggers
-    pub fn fallback_fragmented_high_selectivity_output_dominates_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_fragmented_high_selectivity_output_dominates_count)
-    }
-
-    /// Fallback: number of fragmented high-selectivity cache-miss triggers
-    pub fn fallback_fragmented_high_selectivity_cache_miss_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_fragmented_high_selectivity_cache_miss_count)
-    }
-
-    /// Fallback: number of fragmented high-selectivity cache-rejected triggers
-    pub fn fallback_fragmented_high_selectivity_cache_rejected_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_fragmented_high_selectivity_cache_rejected_count)
+    /// Fallback: number of fragmented high-selectivity triggers
+    pub fn fallback_fragmented_high_selectivity_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.fallback_fragmented_high_selectivity_count)
     }
 
     /// Increments the count of records read from the inner reader
@@ -335,17 +320,8 @@ impl ArrowReaderMetrics {
             FallbackTriggerReason::FragmentedModerateSelectivity => {
                 &inner.fallback_fragmented_moderate_selectivity_count
             }
-            FallbackTriggerReason::FragmentedHighSelectivityMaterialization => {
-                &inner.fallback_fragmented_high_selectivity_materialization_count
-            }
-            FallbackTriggerReason::FragmentedHighSelectivityOutputDominates => {
-                &inner.fallback_fragmented_high_selectivity_output_dominates_count
-            }
-            FallbackTriggerReason::FragmentedHighSelectivityCacheMiss => {
-                &inner.fallback_fragmented_high_selectivity_cache_miss_count
-            }
-            FallbackTriggerReason::FragmentedHighSelectivityCacheRejected => {
-                &inner.fallback_fragmented_high_selectivity_cache_rejected_count
+            FallbackTriggerReason::FragmentedHighSelectivity => {
+                &inner.fallback_fragmented_high_selectivity_count
             }
             FallbackTriggerReason::ObservationIncomplete => {
                 &inner.fallback_observation_incomplete_count
@@ -422,14 +398,8 @@ pub struct ArrowReaderMetricsInner {
     fallback_high_selectivity_no_pruning_count: AtomicUsize,
     /// Number of fragmented moderate-selectivity fallback triggers
     fallback_fragmented_moderate_selectivity_count: AtomicUsize,
-    /// Number of fragmented high-selectivity materialization fallback triggers
-    fallback_fragmented_high_selectivity_materialization_count: AtomicUsize,
-    /// Number of fragmented high-selectivity output-dominates fallback triggers
-    fallback_fragmented_high_selectivity_output_dominates_count: AtomicUsize,
-    /// Number of fragmented high-selectivity cache-miss fallback triggers
-    fallback_fragmented_high_selectivity_cache_miss_count: AtomicUsize,
-    /// Number of fragmented high-selectivity cache-rejected fallback triggers
-    fallback_fragmented_high_selectivity_cache_rejected_count: AtomicUsize,
+    /// Number of fragmented high-selectivity fallback triggers
+    fallback_fragmented_high_selectivity_count: AtomicUsize,
 }
 
 impl ArrowReaderMetricsInner {
@@ -461,10 +431,7 @@ impl ArrowReaderMetricsInner {
             fallback_pushdown_still_preferred_count: AtomicUsize::new(0),
             fallback_high_selectivity_no_pruning_count: AtomicUsize::new(0),
             fallback_fragmented_moderate_selectivity_count: AtomicUsize::new(0),
-            fallback_fragmented_high_selectivity_materialization_count: AtomicUsize::new(0),
-            fallback_fragmented_high_selectivity_output_dominates_count: AtomicUsize::new(0),
-            fallback_fragmented_high_selectivity_cache_miss_count: AtomicUsize::new(0),
-            fallback_fragmented_high_selectivity_cache_rejected_count: AtomicUsize::new(0),
+            fallback_fragmented_high_selectivity_count: AtomicUsize::new(0),
         }
     }
 }

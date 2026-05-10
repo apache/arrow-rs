@@ -835,14 +835,15 @@ impl RowGroupReaderBuilder {
                             );
                         }
 
-                        let filter = self.filter.take().ok_or_else(|| {
-                            ParquetError::General(
-                                "post-filter fallback selected without a row filter".to_string(),
-                            )
-                        })?;
-                        let filter = Arc::new(Mutex::new(filter));
-                        self.post_filter = Some(Arc::clone(&filter));
-                        return self.start_post_filter(row_group_info, filter);
+                        if self.post_filter.is_none() {
+                            let filter = self.filter.take().ok_or_else(|| {
+                                ParquetError::General(
+                                    "post-filter fallback selected without a row filter"
+                                        .to_string(),
+                                )
+                            })?;
+                            self.post_filter = Some(Arc::new(Mutex::new(filter)));
+                        }
                     }
 
                     self.metrics
@@ -1309,15 +1310,26 @@ fn loaded_ranges_for_projection(
 
 fn intersect_ranges(left: Vec<Range<usize>>, right: Vec<Range<usize>>) -> Vec<Range<usize>> {
     let mut out = Vec::new();
-    for l in &left {
-        for r in &right {
-            let start = l.start.max(r.start);
-            let end = l.end.min(r.end);
-            if start < end {
-                out.push(start..end);
-            }
+    let mut left_idx = 0;
+    let mut right_idx = 0;
+
+    while left_idx < left.len() && right_idx < right.len() {
+        let l = &left[left_idx];
+        let r = &right[right_idx];
+        let start = l.start.max(r.start);
+        let end = l.end.min(r.end);
+
+        if start < end {
+            out.push(start..end);
+        }
+
+        if l.end <= r.end {
+            left_idx += 1;
+        } else {
+            right_idx += 1;
         }
     }
+
     out
 }
 
@@ -1498,6 +1510,36 @@ mod tests {
     }
 
     #[test]
+    fn test_loaded_ranges_intersects_many_ranges_across_projected_columns() {
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(10),
+            RowSelector::select(1),
+            RowSelector::skip(39),
+            RowSelector::select(1),
+            RowSelector::skip(39),
+            RowSelector::select(1),
+            RowSelector::skip(9),
+        ]);
+        let offset_index = vec![
+            offset_index_column(&[0, 20, 40, 60, 80]),
+            offset_index_column(&[0, 15, 35, 55, 75]),
+            offset_index_column(&[0, 10, 30, 50, 70, 90]),
+        ];
+
+        let loaded = loaded_ranges_for_projection(
+            Some(&selection),
+            &ProjectionMask::all(),
+            Some(&offset_index),
+            100,
+        );
+
+        assert_eq!(
+            loaded,
+            Some(LoadedRowRanges::new(vec![10..15, 50..55, 90..100], 100))
+        );
+    }
+
+    #[test]
     fn test_auto_expensive_fragmented_output_prefers_selectors() {
         let selection = q38_like_fragmented_selection();
         let plan_builder = ReadPlanBuilder::new(1024)
@@ -1645,6 +1687,21 @@ mod tests {
             ],
             unencoded_byte_array_data_bytes: None,
         }]
+    }
+
+    fn offset_index_column(first_rows: &[i64]) -> OffsetIndexMetaData {
+        OffsetIndexMetaData {
+            page_locations: first_rows
+                .iter()
+                .enumerate()
+                .map(|(idx, first_row_index)| PageLocation {
+                    offset: (idx * 10) as i64,
+                    compressed_page_size: 10,
+                    first_row_index: *first_row_index,
+                })
+                .collect(),
+            unencoded_byte_array_data_bytes: None,
+        }
     }
 
     #[test]

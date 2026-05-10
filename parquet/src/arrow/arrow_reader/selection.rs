@@ -177,10 +177,7 @@ impl RowSelectionShape {
 pub(crate) enum FallbackTriggerReason {
     HighSelectivityNoPruning,
     FragmentedModerateSelectivity,
-    FragmentedHighSelectivityMaterialization,
-    FragmentedHighSelectivityOutputDominates,
-    FragmentedHighSelectivityCacheMiss,
-    FragmentedHighSelectivityCacheRejected,
+    FragmentedHighSelectivity,
     ObservationIncomplete,
     PushdownStillPreferred,
     ForcedPolicy,
@@ -190,11 +187,6 @@ pub(crate) enum FallbackTriggerReason {
 pub(crate) struct FallbackObservation {
     pub(crate) observed_row_groups: usize,
     pub(crate) shape: RowSelectionShape,
-    pub(crate) predicate_evaluate_nanos: usize,
-    pub(crate) output_read_nanos: usize,
-    pub(crate) output_materialize_nanos: usize,
-    pub(crate) cache_miss_count: usize,
-    pub(crate) cache_insert_rejected_count: usize,
 }
 
 impl FallbackObservation {
@@ -227,20 +219,7 @@ impl FallbackObservation {
             return FallbackTriggerReason::PushdownStillPreferred;
         }
 
-        if self.output_materialize_nanos >= self.predicate_evaluate_nanos {
-            return FallbackTriggerReason::FragmentedHighSelectivityMaterialization;
-        }
-        if self.output_materialize_nanos > self.output_read_nanos {
-            return FallbackTriggerReason::FragmentedHighSelectivityOutputDominates;
-        }
-        if self.cache_miss_count > 0 {
-            return FallbackTriggerReason::FragmentedHighSelectivityCacheMiss;
-        }
-        if self.cache_insert_rejected_count > 0 {
-            return FallbackTriggerReason::FragmentedHighSelectivityCacheRejected;
-        }
-
-        FallbackTriggerReason::PushdownStillPreferred
+        FallbackTriggerReason::FragmentedHighSelectivity
     }
 
     #[allow(dead_code)]
@@ -249,10 +228,7 @@ impl FallbackObservation {
             self.trigger_reason(),
             FallbackTriggerReason::HighSelectivityNoPruning
                 | FallbackTriggerReason::FragmentedModerateSelectivity
-                | FallbackTriggerReason::FragmentedHighSelectivityMaterialization
-                | FallbackTriggerReason::FragmentedHighSelectivityOutputDominates
-                | FallbackTriggerReason::FragmentedHighSelectivityCacheMiss
-                | FallbackTriggerReason::FragmentedHighSelectivityCacheRejected
+                | FallbackTriggerReason::FragmentedHighSelectivity
         )
     }
 }

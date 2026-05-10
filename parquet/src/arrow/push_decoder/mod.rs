@@ -1239,7 +1239,7 @@ mod test {
         assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
         assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(4));
         assert_eq!(
-            metrics.fallback_fragmented_high_selectivity_materialization_count(),
+            metrics.fallback_fragmented_high_selectivity_count(),
             Some(1)
         );
         assert!(next_batch_with_data(&mut decoder, data).is_none());
@@ -1327,6 +1327,53 @@ mod test {
         assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
         assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(1));
         assert_eq!(metrics.records_read_from_cache(), Some(100));
+    }
+
+    #[test]
+    fn test_decoder_auto_fallback_with_row_selection_does_not_evaluate_current_row_group_twice() {
+        let data = &FALLBACK_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let predicate_rows = Arc::new(AtomicUsize::new(0));
+        let predicate_rows_for_filter = Arc::clone(&predicate_rows);
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| {
+                predicate_rows_for_filter.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                let scalar_neg_one = Int64Array::new_scalar(-1);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_neg_one)
+            },
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_selection(RowSelection::from(vec![RowSelector::select(400)]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        let batch = next_batch_with_data(&mut decoder, data).unwrap();
+        assert_eq!(
+            predicate_rows.load(Ordering::Relaxed),
+            100,
+            "fallback observation must not re-run the predicate for the same row group"
+        );
+        assert_eq!(batch, TEST_BATCH.slice(0, 100).project(&[2]).unwrap());
+
+        let batch = next_batch_with_data(&mut decoder, data).unwrap();
+        assert_eq!(predicate_rows.load(Ordering::Relaxed), 200);
+        assert_eq!(batch, TEST_BATCH.slice(100, 100).project(&[2]).unwrap());
+
+        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(1));
+        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(1));
     }
 
     #[test]

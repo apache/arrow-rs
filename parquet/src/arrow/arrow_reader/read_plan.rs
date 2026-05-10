@@ -669,16 +669,11 @@ mod tests {
                 selected_run_count: 64,
                 skipped_run_count: 32,
             },
-            predicate_evaluate_nanos: 10,
-            output_read_nanos: 20,
-            output_materialize_nanos: 50,
-            cache_miss_count: 0,
-            cache_insert_rejected_count: 0,
         };
 
         assert_eq!(
             observation.trigger_reason(),
-            FallbackTriggerReason::FragmentedHighSelectivityMaterialization
+            FallbackTriggerReason::FragmentedHighSelectivity
         );
     }
 
@@ -697,11 +692,6 @@ mod tests {
                 selected_run_count: 32,
                 skipped_run_count: 32,
             },
-            predicate_evaluate_nanos: 10,
-            output_read_nanos: 20,
-            output_materialize_nanos: 50,
-            cache_miss_count: 0,
-            cache_insert_rejected_count: 0,
         };
 
         assert_eq!(
@@ -725,11 +715,6 @@ mod tests {
                 selected_run_count: 2,
                 skipped_run_count: 0,
             },
-            predicate_evaluate_nanos: 0,
-            output_read_nanos: 0,
-            output_materialize_nanos: 0,
-            cache_miss_count: 0,
-            cache_insert_rejected_count: 0,
         };
 
         assert_eq!(
@@ -753,11 +738,6 @@ mod tests {
                 selected_run_count: 30,
                 skipped_run_count: 30,
             },
-            predicate_evaluate_nanos: 0,
-            output_read_nanos: 0,
-            output_materialize_nanos: 0,
-            cache_miss_count: 0,
-            cache_insert_rejected_count: 0,
         };
 
         assert_eq!(
@@ -781,11 +761,6 @@ mod tests {
                 selected_run_count: 9,
                 skipped_run_count: 9,
             },
-            predicate_evaluate_nanos: 0,
-            output_read_nanos: 0,
-            output_materialize_nanos: 0,
-            cache_miss_count: 0,
-            cache_insert_rejected_count: 0,
         };
 
         assert_eq!(
@@ -809,11 +784,6 @@ mod tests {
                 selected_run_count: 3_084,
                 skipped_run_count: 3_084,
             },
-            predicate_evaluate_nanos: 0,
-            output_read_nanos: 0,
-            output_materialize_nanos: 0,
-            cache_miss_count: 0,
-            cache_insert_rejected_count: 0,
         };
 
         assert_eq!(
@@ -837,11 +807,6 @@ mod tests {
                 selected_run_count: 4,
                 skipped_run_count: 4,
             },
-            predicate_evaluate_nanos: 10,
-            output_read_nanos: 20,
-            output_materialize_nanos: 50,
-            cache_miss_count: 0,
-            cache_insert_rejected_count: 0,
         };
 
         assert_eq!(
