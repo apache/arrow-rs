@@ -782,11 +782,7 @@ fn projection_names(projection: &[usize]) -> Vec<&'static str> {
 }
 
 fn row_filter_for(filter_type: FilterType, pred_mask: ProjectionMask) -> RowFilter {
-    let filter =
-        ArrowPredicateFn::new(
-            pred_mask,
-            move |batch| Ok(filter_type.filter_batch(&batch)?),
-        );
+    let filter = ArrowPredicateFn::new(pred_mask, move |batch| filter_type.filter_batch(&batch));
     RowFilter::new(vec![Box::new(filter)])
 }
 

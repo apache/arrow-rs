@@ -623,20 +623,28 @@ mod tests {
         builder: ReadPlanBuilder,
         strategy: RowSelectionStrategy,
         reason: RowSelectionStrategyReason,
+        expected_shape: RowSelectionShape,
+    ) {
+        let decision = builder.resolve_selection_strategy_decision();
+        assert_eq!(decision.strategy, strategy);
+        assert_eq!(decision.reason, reason);
+        assert_eq!(decision.shape, expected_shape);
+    }
+
+    fn shape(
         selected_rows: usize,
         skipped_rows: usize,
         selector_count: usize,
         selected_run_count: usize,
         skipped_run_count: usize,
-    ) {
-        let decision = builder.resolve_selection_strategy_decision();
-        assert_eq!(decision.strategy, strategy);
-        assert_eq!(decision.reason, reason);
-        assert_eq!(decision.shape.selected_rows, selected_rows);
-        assert_eq!(decision.shape.skipped_rows, skipped_rows);
-        assert_eq!(decision.shape.selector_count, selector_count);
-        assert_eq!(decision.shape.selected_run_count, selected_run_count);
-        assert_eq!(decision.shape.skipped_run_count, skipped_run_count);
+    ) -> RowSelectionShape {
+        RowSelectionShape {
+            selected_rows,
+            skipped_rows,
+            selector_count,
+            selected_run_count,
+            skipped_run_count,
+        }
     }
 
     #[test]
@@ -825,11 +833,7 @@ mod tests {
             builder,
             RowSelectionStrategy::Mask,
             RowSelectionStrategyReason::ForcedMask,
-            8,
-            2,
-            2,
-            1,
-            1,
+            shape(8, 2, 2, 1, 1),
         );
     }
 
@@ -843,11 +847,7 @@ mod tests {
             builder,
             RowSelectionStrategy::Selectors,
             RowSelectionStrategyReason::ForcedSelectors,
-            8,
-            2,
-            2,
-            1,
-            1,
+            shape(8, 2, 2, 1, 1),
         );
     }
 
@@ -860,11 +860,7 @@ mod tests {
             builder,
             RowSelectionStrategy::Mask,
             RowSelectionStrategyReason::AutoMaskEmptySelection,
-            0,
-            0,
-            0,
-            0,
-            0,
+            shape(0, 0, 0, 0, 0),
         );
     }
 
@@ -877,11 +873,7 @@ mod tests {
             builder,
             RowSelectionStrategy::Mask,
             RowSelectionStrategyReason::AutoMaskShortRuns,
-            8,
-            8,
-            2,
-            1,
-            1,
+            shape(8, 8, 2, 1, 1),
         );
     }
 
@@ -895,11 +887,7 @@ mod tests {
             builder,
             RowSelectionStrategy::Selectors,
             RowSelectionStrategyReason::AutoSelectorLongRuns,
-            3,
-            3,
-            2,
-            1,
-            1,
+            shape(3, 3, 2, 1, 1),
         );
     }
 

@@ -210,9 +210,7 @@ impl FallbackObservation {
         }
 
         let selected_ratio = shape.selected_ratio();
-        if selected_ratio >= Self::FRAGMENTED_MODERATE_SELECTIVITY_MIN_RATIO
-            && selected_ratio < 0.50
-        {
+        if (Self::FRAGMENTED_MODERATE_SELECTIVITY_MIN_RATIO..0.50).contains(&selected_ratio) {
             return FallbackTriggerReason::FragmentedModerateSelectivity;
         }
         if selected_ratio < 0.50 {
@@ -1293,7 +1291,7 @@ impl SparseMaskCursor {
 /// [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan).
 ///
 /// This keeps per-reader state such as the current position and delegates dense
-/// or sparse mask state to [`MaskCursor`].
+/// or sparse mask state to the mask cursor.
 #[derive(Debug)]
 pub enum RowSelectionCursor {
     /// Reading all rows
@@ -1355,10 +1353,10 @@ mod tests {
 
     #[test]
     fn test_loaded_row_ranges_detects_sparse_ranges() {
-        assert!(!LoadedRowRanges::new(vec![0..6], 6).is_sparse());
+        assert!(!LoadedRowRanges::new(std::iter::once(0..6).collect(), 6).is_sparse());
         assert!(!LoadedRowRanges::new(vec![], 0).is_sparse());
         assert!(LoadedRowRanges::new(vec![0..2, 4..6], 6).is_sparse());
-        assert!(LoadedRowRanges::new(vec![1..6], 6).is_sparse());
+        assert!(LoadedRowRanges::new(std::iter::once(1..6).collect(), 6).is_sparse());
     }
 
     #[test]
@@ -1397,7 +1395,7 @@ mod tests {
     fn test_sparse_mask_cursor_errors_selected_rows_after_loaded_ranges() {
         let selection = RowSelection::from(vec![RowSelector::skip(5), RowSelector::select(1)]);
 
-        let loaded = LoadedRowRanges::new(vec![0..2], 6);
+        let loaded = LoadedRowRanges::new(std::iter::once(0..2).collect(), 6);
         let selectors: Vec<RowSelector> = selection.into();
         let mut cursor = SparseMaskCursor::new(selectors, loaded);
 

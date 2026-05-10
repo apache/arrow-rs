@@ -822,16 +822,15 @@ impl RowGroupReaderBuilder {
                                     row_group_info.row_count,
                                 )])
                             });
-                            // The in-flight request may contain chunks loaded
-                            // for a sparse predicate selection. The fallback
-                            // below rebuilds a base/full-selection read plan,
-                            // so do not reuse chunks whose page coverage no
-                            // longer matches the requested rows.
+                            let column_chunks = data_request.into_dense_column_chunks();
+                            // Sparse predicate chunks may not cover the base
+                            // selection. Dense chunks are safe to reuse and
+                            // preserve predicate-cache IO behavior.
                             return self.start_post_selection_filter(
                                 row_group_info,
                                 selection,
                                 cache_info,
-                                None,
+                                column_chunks,
                             );
                         }
 
@@ -1339,11 +1338,11 @@ fn coalesce_adjacent_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
         if range.is_empty() {
             continue;
         }
-        if let Some(last) = out.last_mut()
-            && last.end == range.start
-        {
-            last.end = range.end;
-            continue;
+        if let Some(last) = out.last_mut() {
+            if last.end == range.start {
+                last.end = range.end;
+                continue;
+            }
         }
         out.push(range);
     }

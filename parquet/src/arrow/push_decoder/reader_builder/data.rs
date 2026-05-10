@@ -110,6 +110,18 @@ impl DataRequest {
 
         Ok(in_memory_row_group)
     }
+
+    /// Return previously loaded column chunks if they are all dense.
+    ///
+    /// Sparse chunks may only contain pages for the predicate selection and are
+    /// unsafe to reuse for a fallback read over the base selection.
+    pub fn into_dense_column_chunks(self) -> Option<Vec<Option<Arc<ColumnChunkData>>>> {
+        self.column_chunks
+            .iter()
+            .flatten()
+            .all(|chunk| matches!(chunk.as_ref(), ColumnChunkData::Dense { .. }))
+            .then_some(self.column_chunks)
+    }
 }
 
 /// Builder for [`DataRequest`]

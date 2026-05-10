@@ -1906,7 +1906,7 @@ mod test {
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(data.len() as u64).unwrap();
         push_ranges_to_metadata_decoder_with_data(
             &mut metadata_decoder,
-            vec![0..data.len() as u64],
+            std::iter::once(0..data.len() as u64).collect(),
             data,
         );
         let metadata = metadata_decoder.try_decode().unwrap();
