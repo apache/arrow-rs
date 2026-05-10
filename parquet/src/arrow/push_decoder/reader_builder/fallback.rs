@@ -16,6 +16,26 @@
 // under the License.
 
 //! Runtime post-filter fallback decisions for push decoder row groups.
+//!
+//! The fallback is intentionally adaptive rather than purely static. The first
+//! eligible row group is evaluated with predicate pushdown so the reader can
+//! observe the actual `RowSelection` shape produced by the predicate chain.
+//! Later row groups may then switch to post-filter execution if the observed
+//! shape suggests pushdown is doing extra work without pruning enough rows.
+//!
+//! ```text
+//! Start
+//!   |
+//!   v
+//! Observing -- incomplete observation --> Observing
+//!   |
+//!   +-- pushdown still preferred ------> UsePushdown
+//!   |
+//!   +-- fallback trigger + supported --> UsePostFilter
+//! ```
+//!
+//! Fallback only applies to `Auto`. Explicit `Mask` and `Selectors` are treated
+//! as user intent and are not overridden here.
 
 use super::RowGroupReaderBuilder;
 use crate::arrow::ProjectionMask;
@@ -29,8 +49,11 @@ use crate::arrow::schema::{ParquetField, ParquetFieldType};
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(super) enum RowGroupFallbackState {
+    /// Collect row-selection shape from early row groups before choosing a mode.
     Observing { observation: FallbackObservation },
+    /// Predicate pushdown remains the execution mode for this reader.
     UsePushdown,
+    /// Later row groups should decode once and evaluate predicates after decode.
     UsePostFilter { reason: FallbackTriggerReason },
 }
 
@@ -44,6 +67,13 @@ impl Default for RowGroupFallbackState {
 
 impl RowGroupReaderBuilder {
     pub(super) fn should_use_post_filter_fallback(&self) -> bool {
+        // Keep the runtime switch narrow:
+        //
+        // * `Auto` means the caller allowed the reader to choose.
+        // * `limit` and `offset` are applied during row-group planning; moving
+        //   predicates after decode changes where short-circuiting can happen.
+        // * virtual columns are not read from Parquet pages and need their
+        //   existing projection path.
         matches!(
             self.fallback_state,
             RowGroupFallbackState::UsePostFilter { .. }
@@ -63,6 +93,13 @@ impl RowGroupReaderBuilder {
     }
 
     fn build_post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {
+        // Post-filter execution decodes each row once, so it needs both:
+        //
+        // * output columns, which will be returned to the caller
+        // * predicate columns, which are needed to evaluate the RowFilter
+        //
+        // The final reader projects back to the original output projection
+        // after predicate evaluation.
         let mut read_projection = self.projection.clone();
         read_projection.union(&filter.union_projection()?);
 
@@ -74,6 +111,10 @@ impl RowGroupReaderBuilder {
     }
 
     fn post_filter_supports_projection(&self, projection: &ProjectionMask) -> bool {
+        // The post-filter reader currently projects record batches by parquet
+        // leaf column position. Nested roots can span multiple leaves and need
+        // the existing array-reader projection machinery, so keep fallback to
+        // primitive roots only.
         let schema = self.metadata.file_metadata().schema_descr();
         (0..schema.num_columns()).all(|leaf_idx| {
             !projection.leaf_included(leaf_idx) || schema.get_column_root(leaf_idx).is_primitive()
@@ -95,6 +136,9 @@ impl RowGroupReaderBuilder {
 
         let mut shape = decision.shape;
         if shape.total_rows() == 0 {
+            // `None` selection means the predicate kept the whole row group.
+            // Represent it as one selected run so the fallback classifier can
+            // treat "no pruning" as an observed high-selectivity case.
             shape = RowSelectionShape {
                 selected_rows: row_count,
                 skipped_rows: 0,

@@ -175,14 +175,31 @@ impl RowSelectionShape {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FallbackTriggerReason {
+    /// Predicate pushdown kept almost everything and did not produce useful pruning.
     HighSelectivityNoPruning,
+    /// Fragmented runs with moderate selectivity often pay many small skip/read costs.
     FragmentedModerateSelectivity,
+    /// Fragmented runs with high selectivity usually decode most rows plus pay pushdown overhead.
     FragmentedHighSelectivity,
+    /// Not enough row groups have been observed to classify the scan.
     ObservationIncomplete,
+    /// The observed shape still looks suitable for predicate pushdown.
     PushdownStillPreferred,
+    /// The caller forced a concrete row-selection policy.
     ForcedPolicy,
 }
 
+/// Aggregate row-selection shape observed while deciding whether Auto should
+/// continue predicate pushdown or fall back to post-filter execution.
+///
+/// The classifier looks for shapes where row-level pushdown is unlikely to
+/// recover its own overhead:
+///
+/// ```text
+/// no skipped rows              -> predicate did not prune
+/// tiny selected runs + many runs -> fragmented skip/read pattern
+/// high selected ratio           -> most output rows are decoded anyway
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct FallbackObservation {
     pub(crate) observed_row_groups: usize,
@@ -1145,12 +1162,18 @@ pub struct MaskChunk {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct LoadedRowRanges {
+    /// Absolute row-group ranges for which all projected columns have backing
+    /// page data loaded in memory.
     ranges: Vec<Range<usize>>,
+    /// Total row count of the row group the ranges are relative to.
     total_rows: usize,
 }
 
 impl LoadedRowRanges {
     pub(crate) fn new(ranges: Vec<Range<usize>>, total_rows: usize) -> Self {
+        // Sparse-mask execution indexes masks by absolute row-group position.
+        // Keep loaded ranges sorted and non-overlapping so range containment is
+        // unambiguous and the reader can move forward without rewinding.
         debug_assert!(
             ranges
                 .windows(2)
@@ -1183,8 +1206,11 @@ impl LoadedRowRanges {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct MaskSegment {
+    /// Absolute row-group range to decode from the array reader.
     pub row_range: Range<usize>,
+    /// Starting bit in the absolute row-group mask for this segment.
     pub mask_start: usize,
+    /// Number of mask bits to apply to `row_range`.
     pub mask_len: usize,
 }
 
@@ -1196,8 +1222,11 @@ pub(crate) struct SparseMaskChunk {
 
 #[derive(Debug)]
 pub(crate) struct SparseMaskCursor {
+    /// Boolean mask indexed by absolute row-group position.
     mask: BooleanBuffer,
+    /// Absolute row ranges whose data pages are present for the projection.
     loaded: LoadedRowRanges,
+    /// Current absolute row-group position in `mask`.
     position: usize,
 }
 
@@ -1250,11 +1279,20 @@ impl SparseMaskCursor {
             }
 
             let Some(loaded) = self.loaded.range_containing(cursor) else {
+                // A selected row outside loaded ranges means the read plan asks
+                // Mask to materialize a row whose page data was pruned away.
+                // Returning an internal error is safer than silently producing
+                // incorrect rows.
                 return Err(ParquetError::General(format!(
                     "Internal Error: sparse mask selected row {cursor} outside loaded row ranges"
                 )));
             };
 
+            // Build the largest contiguous selected segment that stays within
+            // the current loaded range and does not exceed the output batch
+            // size. The record batch reader will skip to `row_range.start`,
+            // read exactly `row_range.len()` rows, and then apply this mask
+            // slice to the decoded batch.
             let segment_start = cursor;
             let mut segment_end = cursor;
             while segment_end < loaded.end

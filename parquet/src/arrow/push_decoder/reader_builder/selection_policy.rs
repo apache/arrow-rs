@@ -16,6 +16,26 @@
 // under the License.
 
 //! Row-selection policy resolution for push decoder read plans.
+//!
+//! This module is the final safety gate between the high-level
+//! `RowSelectionPolicy` requested by the caller and the concrete cursor used by
+//! the record batch reader. It handles two independent concerns:
+//!
+//! ```text
+//! Caller policy      Selection/page shape                  Resolved plan
+//! -------------------------------------------------------------------------------
+//! Auto               dense, short/fragmented runs          Mask
+//! Auto               sparse page-loaded ranges             Selectors
+//! Auto               expensive variable-width sparse output Selectors
+//! Mask               dense page-loaded ranges              dense Mask
+//! Mask               sparse page-loaded ranges             SparseMaskCursor
+//! Selectors          any shape                             Selectors
+//! ```
+//!
+//! The distinction between `Auto` and explicit `Mask` matters. `Auto` may
+//! choose selectors to avoid a bad strategy. Explicit `Mask` must be honored,
+//! so sparse page-loaded data is represented explicitly instead of being
+//! silently converted to selectors.
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::selection::{
@@ -50,6 +70,10 @@ pub(super) fn resolve_selection_policy_for_expensive_output(
     total_rows: usize,
     output_profile: ExpensiveOutputProfile,
 ) -> ReadPlanBuilder {
+    // Page pruning can load only the pages that intersect selected rows. If the
+    // projected columns have sparse loaded ranges, a dense mask would try to
+    // decode rows for pages that are not present. Auto avoids that by choosing
+    // selectors; explicit Mask carries the sparse ranges to the reader.
     let loaded = loaded_ranges_for_projection(
         plan_builder.selection(),
         projection_mask,
@@ -126,6 +150,10 @@ fn should_prefer_selectors_for_expensive_output(
     shape: RowSelectionShape,
     output_profile: ExpensiveOutputProfile,
 ) -> bool {
+    // Sparse, low-selectivity output over variable-width columns can be worse
+    // with masks because masks decode and then filter many values that selectors
+    // can skip. This is intentionally narrow; most fragmented selections remain
+    // good candidates for masks.
     let selected_ratio = shape.selected_ratio();
     output_profile.variable_width_columns > 0
         && output_profile.uncompressed_bytes_per_row >= 16.0
@@ -141,6 +169,16 @@ pub(super) fn loaded_ranges_for_projection(
     offset_index: Option<&[OffsetIndexMetaData]>,
     total_rows: usize,
 ) -> Option<LoadedRowRanges> {
+    // Loaded ranges are row ranges backed by page data for all projected
+    // columns. When projections include multiple columns, a row is safe for
+    // sparse-mask decoding only if every projected column loaded the page that
+    // contains that row. Therefore projected-column ranges are intersected.
+    //
+    // ```text
+    // column A pages loaded:  [0..50) [80..100)
+    // column B pages loaded:  [20..70) [80..100)
+    // usable loaded ranges:   [20..50) [80..100)
+    // ```
     let selection = selection?;
     let columns = offset_index?;
     let mut ranges: Option<Vec<Range<usize>>> = None;

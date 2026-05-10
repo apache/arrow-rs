@@ -16,6 +16,27 @@
 // under the License.
 
 //! Post-decode filtering support for parquet row-filter fallback.
+//!
+//! Normal predicate pushdown decodes predicate columns first, builds a
+//! `RowSelection`, and then decodes output columns for selected rows. The
+//! fallback path in this module instead decodes the union of predicate and
+//! output columns once and applies predicates after decode.
+//!
+//! ```text
+//! read projection = output columns UNION predicate columns
+//!        |
+//!        v
+//! decode RecordBatch
+//!        |
+//!        +-- predicate 1 --> filter batch
+//!        +-- predicate 2 --> filter batch
+//!        |
+//!        v
+//! project original output columns
+//! ```
+//!
+//! This is profitable for shapes where row-level pushdown has high overhead
+//! and little pruning, especially fragmented high-selectivity selections.
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::{RowFilter, RowSelection};
@@ -44,6 +65,9 @@ impl PostFilterState {
         read_projection: &ProjectionMask,
         output_projection: &ProjectionMask,
     ) -> Result<Self> {
+        // Projection indices are computed once when constructing the reader.
+        // Each predicate sees only the columns it requested, while the caller
+        // receives only the original output projection after all predicates run.
         let filter_guard = filter.lock().map_err(|_| {
             ParquetError::General("post-filter predicate state was poisoned".to_string())
         })?;
@@ -80,6 +104,9 @@ impl PostFilterState {
             ParquetError::General("post-filter predicate state was poisoned".to_string())
         })?;
 
+        // Apply predicates in the same order as RowFilter pushdown. Each
+        // predicate is evaluated against the currently surviving rows, so later
+        // predicates do not do work for rows already rejected by earlier ones.
         for (predicate_idx, (predicate, projection_indices)) in filter
             .predicates
             .iter_mut()
@@ -130,6 +157,10 @@ impl PostSelectionFilterState {
     }
 
     pub(super) fn apply(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        // This path is not predicate post-filtering. It is used after pushdown
+        // has already computed a final RowSelection for the current row group,
+        // but fallback chooses to decode the base selection and apply that
+        // already-computed selection after decode.
         let input_rows = batch.num_rows();
         let end = self.position.saturating_add(input_rows);
         if end > self.mask.len() {
@@ -185,6 +216,14 @@ fn projection_indices(
     read_projection: &ProjectionMask,
     target_projection: &ProjectionMask,
 ) -> Result<Vec<usize>> {
+    // Convert parquet leaf positions to RecordBatch column positions after the
+    // larger read projection has been decoded. For example:
+    //
+    // ```text
+    // parquet leaves:   a b c d
+    // read projection:  a   c d      => batch columns [a, c, d]
+    // target:               c        => target index [1]
+    // ```
     let mut indices = Vec::new();
     let mut read_idx = 0;
 
