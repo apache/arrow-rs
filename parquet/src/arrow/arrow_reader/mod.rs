@@ -18,13 +18,16 @@
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, RecordBatch, RecordBatchReader};
+use arrow_array::{Array, BooleanArray, RecordBatch, RecordBatchReader};
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef};
+use arrow_select::concat::concat_batches;
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
+use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
@@ -1238,7 +1241,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .with_offset(offset)
             .with_limit(limit)
             .build_limited()
-            .build();
+            .build_with_metrics(&metrics);
 
         Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
     }
@@ -1340,8 +1343,196 @@ impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 /// [`Bytes`]: bytes::Bytes
 pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
+    array_reader_position: usize,
     schema: SchemaRef,
     read_plan: ReadPlan,
+    post_filter: Option<PostFilterState>,
+    post_selection_filter: Option<PostSelectionFilterState>,
+    buffered_batches: Option<VecDeque<RecordBatch>>,
+}
+
+#[derive(Debug)]
+struct PostFilterState {
+    filter: Arc<Mutex<RowFilter>>,
+    predicate_projection_indices: Vec<Vec<usize>>,
+    predicate_projection_schemas: Vec<SchemaRef>,
+    output_projection_indices: Vec<usize>,
+    output_schema: SchemaRef,
+}
+
+impl PostFilterState {
+    fn try_new(
+        filter: Arc<Mutex<RowFilter>>,
+        parquet_schema: &SchemaDescriptor,
+        read_schema: &Schema,
+        read_projection: &ProjectionMask,
+        output_projection: &ProjectionMask,
+    ) -> Result<Self> {
+        let filter_guard = filter.lock().map_err(|_| {
+            ParquetError::General("post-filter predicate state was poisoned".to_string())
+        })?;
+
+        let predicate_projection_indices = filter_guard
+            .predicates
+            .iter()
+            .map(|predicate| {
+                projection_indices(parquet_schema, read_projection, predicate.projection())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        drop(filter_guard);
+
+        let predicate_projection_schemas = predicate_projection_indices
+            .iter()
+            .map(|indices| read_schema.project(indices).map(SchemaRef::new))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let output_projection_indices =
+            projection_indices(parquet_schema, read_projection, output_projection)?;
+        let output_schema = SchemaRef::new(read_schema.project(&output_projection_indices)?);
+
+        Ok(Self {
+            filter,
+            predicate_projection_indices,
+            predicate_projection_schemas,
+            output_projection_indices,
+            output_schema,
+        })
+    }
+
+    fn apply(&mut self, mut batch: RecordBatch) -> Result<RecordBatch> {
+        let mut filter = self.filter.lock().map_err(|_| {
+            ParquetError::General("post-filter predicate state was poisoned".to_string())
+        })?;
+
+        for (predicate_idx, (predicate, projection_indices)) in filter
+            .predicates
+            .iter_mut()
+            .zip(self.predicate_projection_indices.iter())
+            .enumerate()
+        {
+            let input_rows = batch.num_rows();
+            let predicate_batch = project_record_batch(
+                &batch,
+                projection_indices,
+                Arc::clone(&self.predicate_projection_schemas[predicate_idx]),
+            )?;
+            let predicate_filter = predicate.evaluate(predicate_batch)?;
+
+            if predicate_filter.len() != input_rows {
+                return Err(general_err!(
+                    "ArrowPredicate predicate returned {} rows, expected {input_rows}",
+                    predicate_filter.len()
+                ));
+            }
+
+            batch = filter_record_batch(&batch, &predicate_filter)?;
+            if batch.num_rows() == 0 {
+                break;
+            }
+        }
+
+        Ok(project_record_batch(
+            &batch,
+            &self.output_projection_indices,
+            Arc::clone(&self.output_schema),
+        )?)
+    }
+}
+
+#[inline(always)]
+fn project_record_batch(
+    batch: &RecordBatch,
+    indices: &[usize],
+    schema: SchemaRef,
+) -> std::result::Result<RecordBatch, ArrowError> {
+    if indices.len() == batch.num_columns() && indices.iter().copied().eq(0..batch.num_columns()) {
+        debug_assert_eq!(batch.schema_ref().as_ref(), schema.as_ref());
+        return Ok(batch.clone());
+    }
+
+    let columns = indices
+        .iter()
+        .map(|idx| {
+            batch.columns().get(*idx).cloned().ok_or_else(|| {
+                ArrowError::SchemaError(format!(
+                    "project index {} out of bounds, max field {}",
+                    idx,
+                    batch.num_columns()
+                ))
+            })
+        })
+        .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
+
+    unsafe {
+        // The indices and schema are produced from the same valid read schema
+        // at construction time, and filtering preserves column lengths.
+        Ok(RecordBatch::new_unchecked(
+            schema,
+            columns,
+            batch.num_rows(),
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct PostSelectionFilterState {
+    mask: BooleanBuffer,
+    position: usize,
+}
+
+impl PostSelectionFilterState {
+    fn new(selection: RowSelection) -> Self {
+        Self {
+            mask: selection.boolean_mask(),
+            position: 0,
+        }
+    }
+
+    fn apply(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        let input_rows = batch.num_rows();
+        let end = self.position.saturating_add(input_rows);
+        if end > self.mask.len() {
+            return Err(general_err!(
+                "post-selection filter exceeded selection length: end {end}, selection length {}",
+                self.mask.len()
+            ));
+        }
+
+        let filter = BooleanArray::from(self.mask.slice(self.position, input_rows));
+        self.position = end;
+        Ok(filter_record_batch(&batch, &filter)?)
+    }
+}
+
+fn projection_indices(
+    parquet_schema: &SchemaDescriptor,
+    read_projection: &ProjectionMask,
+    target_projection: &ProjectionMask,
+) -> Result<Vec<usize>> {
+    let mut indices = Vec::new();
+    let mut read_idx = 0;
+
+    for leaf_idx in 0..parquet_schema.num_columns() {
+        if read_projection.leaf_included(leaf_idx) {
+            let root = parquet_schema.get_column_root(leaf_idx);
+            if !root.is_primitive() {
+                return Err(general_err!(
+                    "post-filter fallback does not support nested read column {}",
+                    root.name()
+                ));
+            }
+            if target_projection.leaf_included(leaf_idx) {
+                indices.push(read_idx);
+            }
+            read_idx += 1;
+        } else if target_projection.leaf_included(leaf_idx) {
+            return Err(general_err!(
+                "post-filter target projection includes leaf column {leaf_idx} not present in read projection"
+            ));
+        }
+    }
+
+    Ok(indices)
 }
 
 impl Debug for ParquetRecordBatchReader {
@@ -1350,6 +1541,12 @@ impl Debug for ParquetRecordBatchReader {
             .field("array_reader", &"...")
             .field("schema", &self.schema)
             .field("read_plan", &self.read_plan)
+            .field("post_filter", &self.post_filter)
+            .field("post_selection_filter", &self.post_selection_filter)
+            .field(
+                "buffered_batches",
+                &self.buffered_batches.as_ref().map(|b| b.len()),
+            )
             .finish()
     }
 }
@@ -1371,6 +1568,33 @@ impl ParquetRecordBatchReader {
     /// Returns `Result<Option<..>>` rather than `Option<Result<..>>` to
     /// simplify error handling with `?`
     fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
+        if let Some(buffered_batches) = self.buffered_batches.as_mut() {
+            return Ok(buffered_batches.pop_front());
+        }
+
+        loop {
+            let Some(batch) = self.next_inner_decoded()? else {
+                return Ok(None);
+            };
+
+            let batch = match self.post_filter.as_mut() {
+                Some(post_filter) => post_filter.apply(batch)?,
+                None => batch,
+            };
+            let batch = match self.post_selection_filter.as_mut() {
+                Some(post_selection_filter) => post_selection_filter.apply(batch)?,
+                None => batch,
+            };
+
+            if batch.num_rows() == 0 {
+                continue;
+            }
+
+            return Ok(Some(batch));
+        }
+    }
+
+    fn next_inner_decoded(&mut self) -> Result<Option<RecordBatch>> {
         let mut read_records = 0;
         let batch_size = self.batch_size();
         if batch_size == 0 {
@@ -1378,6 +1602,102 @@ impl ParquetRecordBatchReader {
         }
         match self.read_plan.row_selection_cursor_mut() {
             RowSelectionCursor::Mask(mask_cursor) => {
+                if mask_cursor.is_sparse() {
+                    let sparse_cursor = mask_cursor.sparse_mut().unwrap();
+
+                    while !sparse_cursor.is_empty() {
+                        let Some(mask_chunk) = sparse_cursor.next_sparse_mask_chunk(batch_size)?
+                        else {
+                            return Ok(None);
+                        };
+                        let mut filtered_batches = Vec::new();
+
+                        for segment in mask_chunk.segments {
+                            if segment.row_range.start < self.array_reader_position {
+                                return Err(general_err!(
+                                    "sparse mask segment starts before current reader position - segment start {}, current position {}",
+                                    segment.row_range.start,
+                                    self.array_reader_position
+                                ));
+                            }
+
+                            if segment.row_range.start > self.array_reader_position {
+                                let to_skip = segment.row_range.start - self.array_reader_position;
+                                let skipped = self.array_reader.skip_records(to_skip)?;
+                                if skipped != to_skip {
+                                    return Err(general_err!(
+                                        "failed to skip rows, expected {}, got {}",
+                                        to_skip,
+                                        skipped
+                                    ));
+                                }
+                                self.array_reader_position += skipped;
+                            }
+
+                            let to_read = segment.row_range.len();
+                            if to_read == 0 {
+                                continue;
+                            }
+
+                            let read = self.array_reader.read_records(to_read)?;
+                            if read == 0 {
+                                return Err(general_err!(
+                                    "reached end of column while expecting {} rows",
+                                    to_read
+                                ));
+                            }
+                            if read != to_read {
+                                return Err(general_err!(
+                                    "insufficient rows read from array reader - expected {}, got {}",
+                                    to_read,
+                                    read
+                                ));
+                            }
+                            self.array_reader_position += read;
+
+                            let mask = sparse_cursor.mask_values_for(&segment)?;
+                            let selected_rows = mask.true_count();
+
+                            let array = self.array_reader.consume_batch()?;
+                            // The column reader exposes the projection as a struct array; convert this
+                            // into a record batch before applying the boolean filter mask.
+                            let struct_array = array.as_struct_opt().ok_or_else(|| {
+                                ArrowError::ParquetError(
+                                    "Struct array reader should return struct array".to_string(),
+                                )
+                            })?;
+
+                            let filtered_batch =
+                                filter_record_batch(&RecordBatch::from(struct_array), &mask)?;
+
+                            if filtered_batch.num_rows() != selected_rows {
+                                return Err(general_err!(
+                                    "filtered rows mismatch selection - expected {}, got {}",
+                                    selected_rows,
+                                    filtered_batch.num_rows()
+                                ));
+                            }
+
+                            if filtered_batch.num_rows() == 0 {
+                                continue;
+                            }
+
+                            filtered_batches.push(filtered_batch);
+                        }
+
+                        match filtered_batches.len() {
+                            0 => continue,
+                            1 => return Ok(filtered_batches.pop()),
+                            _ => {
+                                let schema = filtered_batches[0].schema();
+                                return Ok(Some(concat_batches(&schema, &filtered_batches)?));
+                            }
+                        }
+                    }
+
+                    return Ok(None);
+                }
+
                 // Stream the record batch reader using contiguous segments of the selection
                 // mask, avoiding the need to materialize intermediate `RowSelector` ranges.
                 while !mask_cursor.is_empty() {
@@ -1394,6 +1714,7 @@ impl ParquetRecordBatchReader {
                                 skipped
                             ));
                         }
+                        self.array_reader_position += skipped;
                     }
 
                     if mask_chunk.chunk_rows == 0 {
@@ -1419,6 +1740,7 @@ impl ParquetRecordBatchReader {
                             read
                         ));
                     }
+                    self.array_reader_position += read;
 
                     let array = self.array_reader.consume_batch()?;
                     // The column reader exposes the projection as a struct array; convert this
@@ -1460,6 +1782,7 @@ impl ParquetRecordBatchReader {
                                 skipped
                             ));
                         }
+                        self.array_reader_position += skipped;
                         continue;
                     }
 
@@ -1482,12 +1805,16 @@ impl ParquetRecordBatchReader {
                     };
                     match self.array_reader.read_records(to_read)? {
                         0 => break,
-                        rec => read_records += rec,
+                        rec => {
+                            read_records += rec;
+                            self.array_reader_position += rec;
+                        }
                     };
                 }
             }
             RowSelectionCursor::All => {
-                self.array_reader.read_records(batch_size)?;
+                let read = self.array_reader.read_records(batch_size)?;
+                self.array_reader_position += read;
             }
         };
 
@@ -1501,6 +1828,21 @@ impl ParquetRecordBatchReader {
         } else {
             None
         })
+    }
+
+    pub(crate) fn materialize_post_filter(&mut self) -> Result<()> {
+        if self.post_filter.is_none() || self.buffered_batches.is_some() {
+            return Ok(());
+        }
+
+        let mut buffered_batches = VecDeque::new();
+        while let Some(batch) = self.next_inner()? {
+            buffered_batches.push_back(batch);
+        }
+        self.post_filter = None;
+        self.buffered_batches = Some(buffered_batches);
+
+        Ok(())
     }
 }
 
@@ -1547,8 +1889,12 @@ impl ParquetRecordBatchReader {
 
         Ok(Self {
             array_reader,
+            array_reader_position: 0,
             schema: Arc::new(Schema::new(levels.fields.clone())),
             read_plan,
+            post_filter: None,
+            post_selection_filter: None,
+            buffered_batches: None,
         })
     }
 
@@ -1563,9 +1909,66 @@ impl ParquetRecordBatchReader {
 
         Self {
             array_reader,
+            array_reader_position: 0,
             schema: Arc::new(schema),
             read_plan,
+            post_filter: None,
+            post_selection_filter: None,
+            buffered_batches: None,
         }
+    }
+
+    pub(crate) fn new_post_selection_filter(
+        array_reader: Box<dyn ArrayReader>,
+        read_plan: ReadPlan,
+        selection: RowSelection,
+    ) -> Self {
+        let schema = match array_reader.get_data_type() {
+            ArrowType::Struct(fields) => Schema::new(fields.clone()),
+            _ => unreachable!("Struct array reader's data type is not struct!"),
+        };
+
+        Self {
+            array_reader,
+            array_reader_position: 0,
+            schema: Arc::new(schema),
+            read_plan,
+            post_filter: None,
+            post_selection_filter: Some(PostSelectionFilterState::new(selection)),
+            buffered_batches: None,
+        }
+    }
+
+    pub(crate) fn new_post_filter(
+        array_reader: Box<dyn ArrayReader>,
+        read_plan: ReadPlan,
+        filter: Arc<Mutex<RowFilter>>,
+        parquet_schema: &SchemaDescriptor,
+        read_projection: &ProjectionMask,
+        output_projection: &ProjectionMask,
+    ) -> Result<Self> {
+        let read_schema = match array_reader.get_data_type() {
+            ArrowType::Struct(fields) => Schema::new(fields.clone()),
+            _ => unreachable!("Struct array reader's data type is not struct!"),
+        };
+        let post_filter = PostFilterState::try_new(
+            filter,
+            parquet_schema,
+            &read_schema,
+            read_projection,
+            output_projection,
+        )?;
+        let schema = Arc::clone(&post_filter.output_schema);
+
+        Ok(Self {
+            array_reader,
+            array_reader_position: 0,
+            schema,
+            read_plan,
+            post_filter: Some(post_filter),
+            post_selection_filter: None,
+            buffered_batches: None,
+        })
     }
 
     #[inline(always)]
@@ -1588,6 +1991,7 @@ pub(crate) mod tests {
     use rand::{Rng, RngCore, SeedableRng, random, rng};
     use tempfile::tempfile;
 
+    use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
         ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
@@ -1636,6 +2040,43 @@ pub(crate) mod tests {
 
         // Verify that the schema was correctly parsed
         assert_eq!(original_schema.fields(), reader.schema().fields());
+    }
+
+    #[test]
+    fn sync_reader_records_row_selection_metrics_after_limit_offset() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c0",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..10)) as ArrayRef],
+        )
+        .unwrap();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let metrics = ArrowReaderMetrics::enabled();
+        let _reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer))
+            .unwrap()
+            .with_metrics(metrics.clone())
+            .with_offset(3)
+            .with_limit(4)
+            .build()
+            .unwrap();
+
+        assert_eq!(metrics.row_selection_selected_rows(), Some(4));
+        assert_eq!(metrics.row_selection_skipped_rows(), Some(3));
+        assert_eq!(metrics.row_selection_selector_count(), Some(2));
+        assert_eq!(metrics.row_selection_mask_plan_count(), Some(1));
+        assert_eq!(
+            metrics.row_selection_auto_mask_short_run_plan_count(),
+            Some(1)
+        );
     }
 
     #[test]

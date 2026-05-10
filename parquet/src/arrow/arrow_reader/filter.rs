@@ -190,6 +190,14 @@ impl RowFilter {
     pub fn new(predicates: Vec<Box<dyn ArrowPredicate>>) -> Self {
         Self { predicates }
     }
+    /// Returns the union of all predicate projections, if there are any predicates
+    pub(crate) fn union_projection(&self) -> Option<crate::arrow::ProjectionMask> {
+        let mut projection = self.predicates.first()?.projection().clone();
+        for predicate in self.predicates.iter().skip(1) {
+            projection.union(predicate.projection());
+        }
+        Some(projection)
+    }
     /// Returns the inner predicates
     pub fn predicates(&self) -> &Vec<Box<dyn ArrowPredicate>> {
         &self.predicates

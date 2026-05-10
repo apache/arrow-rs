@@ -415,9 +415,10 @@ impl ParquetDecoderState {
                 Self::ReadingRowGroup { .. } => current_state = next_state,
                 // have a reader ready, so return it and set ourself to ReadingRowGroup
                 Self::DecodingRowGroup {
-                    record_batch_reader,
+                    mut record_batch_reader,
                     remaining_row_groups,
                 } => {
+                    record_batch_reader.materialize_post_filter()?;
                     let result = DecodeResult::Data(*record_batch_reader);
                     let next_state = Self::ReadingRowGroup {
                         remaining_row_groups,
@@ -602,7 +603,11 @@ impl ParquetDecoderState {
 mod test {
     use super::*;
     use crate::DecodeResult;
-    use crate::arrow::arrow_reader::{ArrowPredicateFn, RowFilter, RowSelection, RowSelector};
+    use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+    use crate::arrow::arrow_reader::{
+        ArrowPredicateFn, ParquetRecordBatchReader, RowFilter, RowSelection, RowSelectionPolicy,
+        RowSelector,
+    };
     use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::errors::ParquetError;
@@ -611,11 +616,13 @@ mod test {
     use arrow::compute::kernels::cmp::{gt, lt};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int64Type;
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringViewArray};
+    use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringViewArray};
     use arrow_select::concat::concat_batches;
+    use arrow_select::filter::filter_record_batch;
     use bytes::Bytes;
     use std::fmt::Debug;
     use std::ops::Range;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, LazyLock};
 
     /// Test decoder struct size (as they are copied around on each transition, they
@@ -1055,6 +1062,243 @@ mod test {
     }
 
     #[test]
+    fn test_decoder_auto_fallback_uses_post_filter_after_observation() {
+        let data = &FALLBACK_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let predicate_rows = Arc::new(AtomicUsize::new(0));
+        let predicate_rows_for_filter = Arc::clone(&predicate_rows);
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| {
+                predicate_rows_for_filter.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                let scalar_neg_one = Int64Array::new_scalar(-1);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_neg_one)
+            },
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+        assert_eq!(predicate_rows.load(Ordering::Relaxed), 100);
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            TEST_BATCH.slice(0, 100).project(&[2]).unwrap()
+        );
+        assert!(reader.next().is_none());
+
+        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+        assert_eq!(predicate_rows.load(Ordering::Relaxed), 200);
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            TEST_BATCH.slice(100, 100).project(&[2]).unwrap()
+        );
+        assert!(reader.next().is_none());
+
+        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+        assert_eq!(
+            predicate_rows.load(Ordering::Relaxed),
+            300,
+            "fallback should evaluate predicates before returning the reader to preserve row-group order"
+        );
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            TEST_BATCH.slice(200, 100).project(&[2]).unwrap()
+        );
+        assert_eq!(predicate_rows.load(Ordering::Relaxed), 300);
+        assert!(reader.next().is_none());
+
+        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+        assert_eq!(predicate_rows.load(Ordering::Relaxed), 400);
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            TEST_BATCH.slice(300, 100).project(&[2]).unwrap()
+        );
+        assert_eq!(predicate_rows.load(Ordering::Relaxed), 400);
+        assert!(reader.next().is_none());
+
+        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(4));
+        assert_eq!(
+            metrics.fallback_high_selectivity_no_pruning_count(),
+            Some(1)
+        );
+        assert!(next_reader_with_data(&mut decoder, data).is_none());
+    }
+
+    #[test]
+    fn test_decoder_auto_fallback_post_filter_applies_fragmented_filter() {
+        let data = &FALLBACK_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let predicate_rows = Arc::new(AtomicUsize::new(0));
+        let predicate_rows_for_filter = Arc::clone(&predicate_rows);
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| {
+                predicate_rows_for_filter.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                Ok(not_multiple_of_three_filter(&batch))
+            },
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..2 {
+            let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                predicate_rows.load(Ordering::Relaxed),
+                (row_group_idx + 1) * 100
+            );
+            assert_eq!(
+                reader.next().unwrap().unwrap(),
+                expected_c_not_multiple_of_three(row_group_idx * 100, 100)
+            );
+            assert!(reader.next().is_none());
+        }
+
+        for row_group_idx in 2..4 {
+            let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                predicate_rows.load(Ordering::Relaxed),
+                (row_group_idx + 1) * 100,
+                "fallback should evaluate predicates before returning the reader to preserve row-group order"
+            );
+            assert_eq!(
+                reader.next().unwrap().unwrap(),
+                expected_c_not_multiple_of_three(row_group_idx * 100, 100)
+            );
+            assert_eq!(
+                predicate_rows.load(Ordering::Relaxed),
+                (row_group_idx + 1) * 100
+            );
+            assert!(reader.next().is_none());
+        }
+
+        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(4));
+        assert_eq!(
+            metrics.fallback_fragmented_high_selectivity_materialization_count(),
+            Some(1)
+        );
+        assert!(next_reader_with_data(&mut decoder, data).is_none());
+    }
+
+    #[test]
+    fn test_decoder_auto_fallback_records_fragmented_moderate_selectivity() {
+        let data = &FALLBACK_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let predicate_rows = Arc::new(AtomicUsize::new(0));
+        let predicate_rows_for_filter = Arc::clone(&predicate_rows);
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| {
+                predicate_rows_for_filter.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                Ok(multiple_of_ten_filter(&batch))
+            },
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        for row_group_idx in 0..4 {
+            let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+            assert_eq!(
+                predicate_rows.load(Ordering::Relaxed),
+                (row_group_idx + 1) * 100
+            );
+            assert_eq!(
+                reader.next().unwrap().unwrap(),
+                expected_c_multiple_of_ten(row_group_idx * 100, 100)
+            );
+            assert_eq!(
+                predicate_rows.load(Ordering::Relaxed),
+                (row_group_idx + 1) * 100
+            );
+            assert!(reader.next().is_none());
+        }
+
+        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(4));
+        assert_eq!(
+            metrics.fallback_fragmented_moderate_selectivity_count(),
+            Some(1)
+        );
+        assert!(next_reader_with_data(&mut decoder, data).is_none());
+    }
+
+    #[test]
+    fn test_decoder_auto_fallback_current_row_uses_predicate_cache() {
+        let data = &FALLBACK_TEST_FILE_DATA;
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            move |batch: RecordBatch| {
+                let scalar_neg_one = Int64Array::new_scalar(-1);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_neg_one)
+            },
+        );
+
+        let mut decoder = builder
+            .with_batch_size(100)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a", "c"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        let mut reader = next_reader_with_data(&mut decoder, data).unwrap();
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            TEST_BATCH.slice(0, 100).project(&[0, 2]).unwrap()
+        );
+        assert!(reader.next().is_none());
+
+        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(1));
+        assert_eq!(metrics.records_read_from_cache(), Some(100));
+    }
+
+    #[test]
     fn test_decoder_empty_filters() {
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
@@ -1157,6 +1401,50 @@ mod test {
             evaluated <= 190,
             "predicate evaluated {evaluated} rows; expected ≤ 190 (stop within batch containing 11th match)"
         );
+    }
+
+    /// Auto post-filter fallback is disabled for `LIMIT` because the limit is
+    /// applied during row-group planning. Limit scans should therefore avoid
+    /// fallback observation bookkeeping entirely.
+    #[test]
+    fn test_decoder_filter_with_limit_skips_auto_fallback_observation() {
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let row_filter_a = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["a"]),
+            |batch: RecordBatch| {
+                let scalar_neg_one = Int64Array::new_scalar(-1);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &scalar_neg_one)
+            },
+        );
+
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
+            .with_metrics(metrics.clone())
+            .with_limit(10)
+            .build()
+            .unwrap();
+
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(0, 10).project(&[2]).unwrap();
+        assert_eq!(batch, expected);
+        expect_finished(decoder.try_decode());
+
+        assert_eq!(metrics.fallback_observed_row_group_count(), Some(0));
+        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(0));
     }
 
     /// Once the limit has been satisfied by a prior row group, subsequent
@@ -1493,13 +1781,17 @@ mod test {
     /// c      | "string_100".."string_199"     | 2         | 0
     /// c      | "string_200".."string_299"     | 1         | 1
     /// c      | "string_300".."string_399"     | 2         | 1
-    static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
+    static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| write_test_file(200, 100));
+
+    static FALLBACK_TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| write_test_file(100, 50));
+
+    fn write_test_file(max_row_group_row_count: usize, data_page_row_count_limit: usize) -> Bytes {
         let input_batch = &TEST_BATCH;
         let mut output = Vec::new();
 
         let writer_options = WriterProperties::builder()
-            .set_max_row_group_row_count(Some(200))
-            .set_data_page_row_count_limit(100)
+            .set_max_row_group_row_count(Some(max_row_group_row_count))
+            .set_data_page_row_count_limit(data_page_row_count_limit)
             .build();
         let mut writer =
             ArrowWriter::try_new(&mut output, input_batch.schema(), Some(writer_options)).unwrap();
@@ -1515,7 +1807,7 @@ mod test {
         }
         writer.close().unwrap();
         Bytes::from(output)
-    });
+    }
 
     /// Return the length of [`TEST_FILE_DATA`], in bytes
     fn test_file_len() -> u64 {
@@ -1527,17 +1819,18 @@ mod test {
         0..test_file_len()
     }
 
-    /// Return a slice of the test file data from the given range
-    pub fn test_file_slice(range: Range<u64>) -> Bytes {
-        let start: usize = range.start.try_into().unwrap();
-        let end: usize = range.end.try_into().unwrap();
-        TEST_FILE_DATA.slice(start..end)
-    }
-
     /// return the metadata for the test file
     pub fn test_file_parquet_metadata() -> Arc<crate::file::metadata::ParquetMetaData> {
-        let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(test_file_len()).unwrap();
-        push_ranges_to_metadata_decoder(&mut metadata_decoder, vec![test_file_range()]);
+        parquet_metadata_for_data(&TEST_FILE_DATA)
+    }
+
+    fn parquet_metadata_for_data(data: &Bytes) -> Arc<crate::file::metadata::ParquetMetaData> {
+        let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(data.len() as u64).unwrap();
+        push_ranges_to_metadata_decoder_with_data(
+            &mut metadata_decoder,
+            vec![0..data.len() as u64],
+            data,
+        );
         let metadata = metadata_decoder.try_decode().unwrap();
         let DecodeResult::Data(metadata) = metadata else {
             panic!("Expected metadata to be decoded successfully");
@@ -1545,24 +1838,82 @@ mod test {
         Arc::new(metadata)
     }
 
-    /// Push the given ranges to the metadata decoder, simulating reading from a file
-    fn push_ranges_to_metadata_decoder(
+    fn push_ranges_to_metadata_decoder_with_data(
         metadata_decoder: &mut ParquetMetaDataPushDecoder,
         ranges: Vec<Range<u64>>,
+        data: &Bytes,
     ) {
         let data = ranges
             .iter()
-            .map(|range| test_file_slice(range.clone()))
+            .map(|range| data.slice(range.start as usize..range.end as usize))
             .collect::<Vec<_>>();
         metadata_decoder.push_ranges(ranges, data).unwrap();
     }
 
     fn push_ranges_to_decoder(decoder: &mut ParquetPushDecoder, ranges: Vec<Range<u64>>) {
+        push_ranges_to_decoder_with_data(decoder, ranges, &TEST_FILE_DATA);
+    }
+
+    fn push_ranges_to_decoder_with_data(
+        decoder: &mut ParquetPushDecoder,
+        ranges: Vec<Range<u64>>,
+        data: &Bytes,
+    ) {
         let data = ranges
             .iter()
-            .map(|range| test_file_slice(range.clone()))
+            .map(|range| data.slice(range.start as usize..range.end as usize))
             .collect::<Vec<_>>();
         decoder.push_ranges(ranges, data).unwrap();
+    }
+
+    fn not_multiple_of_three_filter(batch: &RecordBatch) -> BooleanArray {
+        let column = batch.column(0).as_primitive::<Int64Type>();
+        BooleanArray::from(
+            (0..batch.num_rows())
+                .map(|idx| column.value(idx) % 3 != 0)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn expected_c_not_multiple_of_three(offset: usize, len: usize) -> RecordBatch {
+        let batch = TEST_BATCH.slice(offset, len);
+        let filter = not_multiple_of_three_filter(&batch);
+        let projected = batch.project(&[2]).unwrap();
+        filter_record_batch(&projected, &filter).unwrap()
+    }
+
+    fn multiple_of_ten_filter(batch: &RecordBatch) -> BooleanArray {
+        let column = batch.column(0).as_primitive::<Int64Type>();
+        BooleanArray::from(
+            (0..batch.num_rows())
+                .map(|idx| column.value(idx) % 10 == 0)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn expected_c_multiple_of_ten(offset: usize, len: usize) -> RecordBatch {
+        let batch = TEST_BATCH.slice(offset, len);
+        let filter = multiple_of_ten_filter(&batch);
+        let projected = batch.project(&[2]).unwrap();
+        filter_record_batch(&projected, &filter).unwrap()
+    }
+
+    fn next_reader_with_data(
+        decoder: &mut ParquetPushDecoder,
+        data: &Bytes,
+    ) -> Option<ParquetRecordBatchReader> {
+        loop {
+            match decoder
+                .try_next_reader()
+                .expect("decoder should produce a reader or request data")
+            {
+                DecodeResult::NeedsData(ranges) => {
+                    push_ranges_to_decoder_with_data(decoder, ranges, data);
+                }
+                DecodeResult::Data(reader) => return Some(reader),
+                DecodeResult::Finished => return None,
+            }
+        }
     }
 
     /// Expect that the [`DecodeResult`] is a [`DecodeResult::Data`] and return the corresponding element

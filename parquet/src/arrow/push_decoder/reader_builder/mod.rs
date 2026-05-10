@@ -22,17 +22,21 @@ use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
+use crate::arrow::arrow_reader::selection::{
+    FallbackObservation, FallbackTriggerReason, LoadedRowRanges, RowGroupExecutionMode,
+    RowSelectionShape, RowSelectionStrategy, RowSelectionStrategyDecision,
+};
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
-    RowSelectionPolicy,
+    RowSelectionPolicy, RowSelector,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
-use crate::arrow::schema::ParquetField;
+use crate::arrow::schema::{ParquetField, ParquetFieldType};
+use crate::basic::Type as PhysicalType;
 use crate::errors::ParquetError;
-use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
@@ -40,7 +44,7 @@ use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
 use std::ops::Range;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 /// The current row group being read and the read plan
 #[derive(Debug)]
@@ -48,6 +52,7 @@ struct RowGroupInfo {
     row_group_idx: usize,
     row_count: usize,
     plan_builder: ReadPlanBuilder,
+    base_selection: Option<RowSelection>,
 }
 
 /// This is the inner state machine for reading a single row group.
@@ -77,6 +82,21 @@ enum RowGroupDecoderState {
         /// Any cached filter results
         cache_info: Option<CacheInfo>,
     },
+    /// Needs data to read the row group once and apply the filter after decode.
+    WaitingOnPostFilterData {
+        row_group_info: RowGroupInfo,
+        data_request: DataRequest,
+        read_projection: ProjectionMask,
+        filter: Arc<Mutex<RowFilter>>,
+    },
+    /// Needs data to read the row group once and apply an already-computed
+    /// fallback selection after decode.
+    WaitingOnPostSelectionData {
+        row_group_info: RowGroupInfo,
+        data_request: DataRequest,
+        selection: RowSelection,
+        cache_info: Option<CacheInfo>,
+    },
     /// Needs data to proceed with reading the output
     WaitingOnData {
         row_group_info: RowGroupInfo,
@@ -86,6 +106,22 @@ enum RowGroupDecoderState {
     },
     /// Finished (or not yet started) reading this group
     Finished,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+enum RowGroupFallbackState {
+    Observing { observation: FallbackObservation },
+    UsePushdown,
+    UsePostFilter { reason: FallbackTriggerReason },
+}
+
+impl Default for RowGroupFallbackState {
+    fn default() -> Self {
+        Self::Observing {
+            observation: FallbackObservation::default(),
+        }
+    }
 }
 
 /// Result of a state transition
@@ -144,6 +180,9 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Optional filter
     filter: Option<RowFilter>,
 
+    /// Shared filter state used once Auto fallback switches to post-filter.
+    post_filter: Option<Arc<Mutex<RowFilter>>>,
+
     /// Limit to apply to remaining row groups (decremented as rows are read)
     limit: Option<usize>,
 
@@ -160,6 +199,10 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// Strategy for materialising row selections
     row_selection_policy: RowSelectionPolicy,
+
+    /// Row-group-local fallback state used by Auto policy.
+    #[allow(dead_code)]
+    fallback_state: RowGroupFallbackState,
 
     /// Current state of the decoder.
     ///
@@ -193,11 +236,13 @@ impl RowGroupReaderBuilder {
             metadata,
             fields,
             filter,
+            post_filter: None,
             limit,
             offset,
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
+            fallback_state: RowGroupFallbackState::default(),
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -247,13 +292,14 @@ impl RowGroupReaderBuilder {
             )));
         }
         let plan_builder = ReadPlanBuilder::new(self.batch_size)
-            .with_selection(selection)
+            .with_selection(selection.clone())
             .with_row_selection_policy(self.row_selection_policy);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
             row_count,
             plan_builder,
+            base_selection: selection,
         };
 
         self.state = Some(RowGroupDecoderState::Start { row_group_info });
@@ -325,6 +371,10 @@ impl RowGroupReaderBuilder {
 
                 let column_chunks = None; // no prior column chunks
 
+                if let Some(filter) = self.post_filter.as_ref().cloned() {
+                    return self.start_post_filter(row_group_info, filter);
+                }
+
                 let Some(filter) = self.filter.take() else {
                     // no filter, start trying to read data immediately
                     return Ok(NextState::again(RowGroupDecoderState::StartData {
@@ -341,6 +391,16 @@ impl RowGroupReaderBuilder {
                         cache_info: None,
                     }));
                 };
+
+                if self.should_use_post_filter_fallback() {
+                    if self.post_filter_read_projection(&filter).is_some() {
+                        let filter = Arc::new(Mutex::new(filter));
+                        self.post_filter = Some(Arc::clone(&filter));
+                        return self.start_post_filter(row_group_info, filter);
+                    }
+
+                    self.fallback_state = RowGroupFallbackState::UsePushdown;
+                }
 
                 // we have predicates to evaluate
                 let cache_projection =
@@ -371,6 +431,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    base_selection,
                 } = row_group_info;
 
                 // If nothing is selected, we are done with this row group
@@ -405,6 +466,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    base_selection,
                 };
 
                 NextState::again(RowGroupDecoderState::WaitingOnFilterData {
@@ -437,6 +499,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     mut plan_builder,
+                    base_selection,
                 } = row_group_info;
 
                 let predicate = filter_info.current();
@@ -457,20 +520,17 @@ impl RowGroupReaderBuilder {
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
-                // Reset to original policy before each predicate so the override
-                // can detect page skipping for THIS predicate's columns.
-                // Without this reset, a prior predicate's override (e.g. Mask)
-                // carries forward and the check returns early, missing unfetched
-                // pages for subsequent predicates.
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
-
-                // Prepare to evaluate the filter.
-                // Note: first update the selection strategy to properly handle any pages
-                // pruned during fetch
-                plan_builder = override_selector_strategy_if_needed(
+                plan_builder = resolve_selection_policy_for_expensive_output(
                     plan_builder,
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
+                    row_count,
+                    ExpensiveOutputProfile::from_row_group(
+                        self.metadata.row_group(row_group_idx),
+                        predicate.projection(),
+                        row_count,
+                    ),
                 );
 
                 // When this is the final predicate in the chain and an output
@@ -495,6 +555,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    base_selection,
                 };
 
                 // Take back the column chunks that were read
@@ -531,6 +592,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    base_selection,
                 } = row_group_info;
 
                 // Compute the number of rows in the selection before applying limit and offset
@@ -586,17 +648,23 @@ impl RowGroupReaderBuilder {
                 .build();
 
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
-
-                plan_builder = override_selector_strategy_if_needed(
+                plan_builder = resolve_selection_policy_for_expensive_output(
                     plan_builder,
                     &self.projection,
                     self.row_group_offset_index(row_group_idx),
+                    row_count,
+                    ExpensiveOutputProfile::from_row_group(
+                        self.metadata.row_group(row_group_idx),
+                        &self.projection,
+                        row_count,
+                    ),
                 );
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    base_selection,
                 };
 
                 NextState::again(RowGroupDecoderState::WaitingOnData {
@@ -605,12 +673,170 @@ impl RowGroupReaderBuilder {
                     cache_info,
                 })
             }
+            RowGroupDecoderState::WaitingOnPostFilterData {
+                row_group_info,
+                data_request,
+                read_projection,
+                filter,
+            } => {
+                let needed_ranges = data_request.needed_ranges(&self.buffers);
+                if !needed_ranges.is_empty() {
+                    return Ok(NextState::result(
+                        RowGroupDecoderState::WaitingOnPostFilterData {
+                            row_group_info,
+                            data_request,
+                            read_projection,
+                            filter,
+                        },
+                        DecodeResult::NeedsData(needed_ranges),
+                    ));
+                }
+
+                let RowGroupInfo {
+                    row_group_idx,
+                    row_count,
+                    plan_builder,
+                    base_selection: _,
+                } = row_group_info;
+
+                let row_group = data_request.try_into_in_memory_row_group(
+                    row_group_idx,
+                    row_count,
+                    &self.metadata,
+                    &read_projection,
+                    &mut self.buffers,
+                )?;
+
+                let plan = plan_builder.build_with_metrics(&self.metrics);
+                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_batch_size(self.batch_size)
+                    .with_parquet_metadata(&self.metadata)
+                    .build_array_reader(self.fields.as_deref(), &read_projection)?;
+
+                let reader = ParquetRecordBatchReader::new_post_filter(
+                    array_reader,
+                    plan,
+                    filter,
+                    self.metadata.file_metadata().schema_descr(),
+                    &read_projection,
+                    &self.projection,
+                )?;
+
+                self.metrics
+                    .record_fallback_row_group(RowGroupExecutionMode::PostFilter);
+
+                NextState::result(RowGroupDecoderState::Finished, DecodeResult::Data(reader))
+            }
+            RowGroupDecoderState::WaitingOnPostSelectionData {
+                row_group_info,
+                data_request,
+                selection,
+                cache_info,
+            } => {
+                let needed_ranges = data_request.needed_ranges(&self.buffers);
+                if !needed_ranges.is_empty() {
+                    return Ok(NextState::result(
+                        RowGroupDecoderState::WaitingOnPostSelectionData {
+                            row_group_info,
+                            data_request,
+                            selection,
+                            cache_info,
+                        },
+                        DecodeResult::NeedsData(needed_ranges),
+                    ));
+                }
+
+                let RowGroupInfo {
+                    row_group_idx,
+                    row_count,
+                    plan_builder,
+                    base_selection: _,
+                } = row_group_info;
+
+                let row_group = data_request.try_into_in_memory_row_group(
+                    row_group_idx,
+                    row_count,
+                    &self.metadata,
+                    &self.projection,
+                    &mut self.buffers,
+                )?;
+
+                let plan = plan_builder.build_with_metrics(&self.metrics);
+                let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_batch_size(self.batch_size)
+                    .with_parquet_metadata(&self.metadata);
+                let array_reader = if let Some(cache_info) = cache_info.as_ref() {
+                    let cache_options: CacheOptions = cache_info.builder().consumer();
+                    array_reader_builder
+                        .with_cache_options(Some(&cache_options))
+                        .build_array_reader(self.fields.as_deref(), &self.projection)
+                } else {
+                    array_reader_builder
+                        .build_array_reader(self.fields.as_deref(), &self.projection)
+                }?;
+
+                let reader = ParquetRecordBatchReader::new_post_selection_filter(
+                    array_reader,
+                    plan,
+                    selection,
+                );
+
+                self.metrics
+                    .record_fallback_row_group(RowGroupExecutionMode::PostFilter);
+
+                NextState::result(RowGroupDecoderState::Finished, DecodeResult::Data(reader))
+            }
             // Waiting on data to proceed with reading the output
             RowGroupDecoderState::WaitingOnData {
                 row_group_info,
                 data_request,
                 cache_info,
             } => {
+                if cache_info.is_some()
+                    && matches!(self.fallback_state, RowGroupFallbackState::Observing { .. })
+                    && self.post_filter_fallback_supported()
+                {
+                    let decision = row_group_info
+                        .plan_builder
+                        .resolve_selection_strategy_decision();
+                    let fallback_selection = row_group_info.plan_builder.selection().cloned();
+                    self.observe_fallback_candidate(decision, row_group_info.row_count);
+
+                    if matches!(
+                        self.fallback_state,
+                        RowGroupFallbackState::UsePostFilter { .. }
+                    ) {
+                        if row_group_info.base_selection.is_none() {
+                            let selection = fallback_selection.unwrap_or_else(|| {
+                                RowSelection::from(vec![RowSelector::select(
+                                    row_group_info.row_count,
+                                )])
+                            });
+                            let column_chunks = data_request.into_column_chunks();
+                            return self.start_post_selection_filter(
+                                row_group_info,
+                                selection,
+                                cache_info,
+                                Some(column_chunks),
+                            );
+                        }
+
+                        let filter = self.filter.take().ok_or_else(|| {
+                            ParquetError::General(
+                                "post-filter fallback selected without a row filter".to_string(),
+                            )
+                        })?;
+                        let filter = Arc::new(Mutex::new(filter));
+                        self.post_filter = Some(Arc::clone(&filter));
+                        return self.start_post_filter(row_group_info, filter);
+                    }
+
+                    self.metrics
+                        .record_fallback_row_group(RowGroupExecutionMode::Pushdown(
+                            decision.strategy,
+                        ));
+                }
+
                 let needed_ranges = data_request.needed_ranges(&self.buffers);
                 if !needed_ranges.is_empty() {
                     // still need data
@@ -629,6 +855,7 @@ impl RowGroupReaderBuilder {
                     row_group_idx,
                     row_count,
                     plan_builder,
+                    base_selection: _,
                 } = row_group_info;
 
                 let row_group = data_request.try_into_in_memory_row_group(
@@ -639,7 +866,7 @@ impl RowGroupReaderBuilder {
                     &mut self.buffers,
                 )?;
 
-                let plan = plan_builder.build();
+                let plan = plan_builder.build_with_metrics(&self.metrics);
 
                 // if we have any cached results, connect them up
                 let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
@@ -664,6 +891,223 @@ impl RowGroupReaderBuilder {
             }
         };
         Ok(result)
+    }
+
+    fn start_post_filter(
+        &mut self,
+        row_group_info: RowGroupInfo,
+        filter: Arc<Mutex<RowFilter>>,
+    ) -> Result<NextState, ParquetError> {
+        let RowGroupInfo {
+            row_group_idx,
+            row_count,
+            base_selection,
+            ..
+        } = row_group_info;
+
+        let mut plan_builder = ReadPlanBuilder::new(self.batch_size)
+            .with_selection(base_selection)
+            .with_row_selection_policy(self.row_selection_policy);
+
+        if !plan_builder.selects_any() {
+            return Ok(NextState::result(
+                RowGroupDecoderState::Finished,
+                DecodeResult::Finished,
+            ));
+        }
+
+        let read_projection = {
+            let filter = filter.lock().map_err(|_| {
+                ParquetError::General("post-filter predicate state was poisoned".to_string())
+            })?;
+            self.post_filter_read_projection(&filter).ok_or_else(|| {
+                ParquetError::General(
+                    "post-filter fallback selected an unsupported projection".to_string(),
+                )
+            })?
+        };
+
+        let data_request = DataRequestBuilder::new(
+            row_group_idx,
+            row_count,
+            self.batch_size,
+            &self.metadata,
+            &read_projection,
+        )
+        .with_selection(plan_builder.selection())
+        .build();
+
+        plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+        plan_builder = resolve_selection_policy_for_expensive_output(
+            plan_builder,
+            &read_projection,
+            self.row_group_offset_index(row_group_idx),
+            row_count,
+            ExpensiveOutputProfile::from_row_group(
+                self.metadata.row_group(row_group_idx),
+                &read_projection,
+                row_count,
+            ),
+        );
+
+        let row_group_info = RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection: None,
+        };
+
+        Ok(NextState::again(
+            RowGroupDecoderState::WaitingOnPostFilterData {
+                row_group_info,
+                data_request,
+                read_projection,
+                filter,
+            },
+        ))
+    }
+
+    fn start_post_selection_filter(
+        &mut self,
+        row_group_info: RowGroupInfo,
+        selection: RowSelection,
+        cache_info: Option<CacheInfo>,
+        column_chunks: Option<Vec<Option<Arc<ColumnChunkData>>>>,
+    ) -> Result<NextState, ParquetError> {
+        let RowGroupInfo {
+            row_group_idx,
+            row_count,
+            base_selection,
+            ..
+        } = row_group_info;
+
+        let plan_builder = ReadPlanBuilder::new(self.batch_size)
+            .with_selection(base_selection)
+            .with_row_selection_policy(self.row_selection_policy);
+
+        let data_request = DataRequestBuilder::new(
+            row_group_idx,
+            row_count,
+            self.batch_size,
+            &self.metadata,
+            &self.projection,
+        )
+        .with_selection(plan_builder.selection())
+        .with_column_chunks(column_chunks)
+        .build();
+
+        let row_group_info = RowGroupInfo {
+            row_group_idx,
+            row_count,
+            plan_builder,
+            base_selection: None,
+        };
+
+        Ok(NextState::again(
+            RowGroupDecoderState::WaitingOnPostSelectionData {
+                row_group_info,
+                data_request,
+                selection,
+                cache_info,
+            },
+        ))
+    }
+
+    fn should_use_post_filter_fallback(&self) -> bool {
+        matches!(
+            self.fallback_state,
+            RowGroupFallbackState::UsePostFilter { .. }
+        ) && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
+            && self.limit.is_none()
+            && self.offset.is_none()
+            && !self.has_virtual_columns()
+    }
+
+    fn post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {
+        if !self.should_use_post_filter_fallback() {
+            return None;
+        }
+
+        self.build_post_filter_read_projection(filter)
+    }
+
+    fn build_post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {
+        let mut read_projection = self.projection.clone();
+        read_projection.union(&filter.union_projection()?);
+
+        if self.post_filter_supports_projection(&read_projection) {
+            Some(read_projection)
+        } else {
+            None
+        }
+    }
+
+    fn post_filter_supports_projection(&self, projection: &ProjectionMask) -> bool {
+        let schema = self.metadata.file_metadata().schema_descr();
+        (0..schema.num_columns()).all(|leaf_idx| {
+            !projection.leaf_included(leaf_idx) || schema.get_column_root(leaf_idx).is_primitive()
+        })
+    }
+
+    fn observe_fallback_candidate(
+        &mut self,
+        decision: RowSelectionStrategyDecision,
+        row_count: usize,
+    ) {
+        if !matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. }) {
+            return;
+        }
+
+        let RowGroupFallbackState::Observing { observation } = &mut self.fallback_state else {
+            return;
+        };
+
+        let mut shape = decision.shape;
+        if shape.total_rows() == 0 {
+            shape = RowSelectionShape {
+                selected_rows: row_count,
+                skipped_rows: 0,
+                selector_count: 1,
+                selected_run_count: 1,
+                skipped_run_count: 0,
+            };
+        }
+
+        observation.observed_row_groups += 1;
+        observation.shape.add_assign(shape);
+        self.metrics.record_fallback_observed_row_group();
+
+        let reason = observation.trigger_reason();
+        if matches!(reason, FallbackTriggerReason::ObservationIncomplete) {
+            self.metrics.record_fallback_trigger(reason);
+            return;
+        }
+
+        let should_fallback = observation.should_fallback();
+        self.metrics.record_fallback_trigger(reason);
+
+        if should_fallback && self.post_filter_fallback_supported() {
+            self.fallback_state = RowGroupFallbackState::UsePostFilter { reason };
+        } else {
+            self.fallback_state = RowGroupFallbackState::UsePushdown;
+        }
+    }
+
+    fn post_filter_fallback_supported(&self) -> bool {
+        let Some(filter) = self.filter.as_ref() else {
+            return false;
+        };
+        matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
+            && self.limit.is_none()
+            && self.offset.is_none()
+            && !self.has_virtual_columns()
+            && self.build_post_filter_read_projection(filter).is_some()
+    }
+
+    fn has_virtual_columns(&self) -> bool {
+        self.fields
+            .as_deref()
+            .is_some_and(parquet_field_has_virtual_columns)
     }
 
     /// Which columns should be cached?
@@ -706,64 +1150,490 @@ impl RowGroupReaderBuilder {
     }
 }
 
-/// Override the selection strategy if needed.
-///
-/// Some pages can be skipped during row-group construction if they are not read
-/// by the selections. This means that the data pages for those rows are never
-/// loaded and definition/repetition levels are never read. When using
-/// `RowSelections` selection works because `skip_records()` handles this
-/// case and skips the page accordingly.
-///
-/// However, with the current mask design, all values must be read and decoded
-/// and then a mask filter is applied. Thus if any pages are skipped during
-/// row-group construction, the data pages are missing and cannot be decoded.
-///
-/// A simple example:
-/// * the page size is 2, the mask is 100001, row selection should be read(1) skip(4) read(1)
-/// * the `ColumnChunkData` would be page1(10), page2(skipped), page3(01)
-///
-/// Using the row selection to skip(4), page2 won't be read at all, so in this
-/// case we can't decode all the rows and apply a mask. To correctly apply the
-/// bit mask, we need all 6 values be read, but page2 is not in memory.
-fn override_selector_strategy_if_needed(
+fn parquet_field_has_virtual_columns(field: &ParquetField) -> bool {
+    match &field.field_type {
+        ParquetFieldType::Primitive { .. } => false,
+        ParquetFieldType::Group { children } => {
+            children.iter().any(parquet_field_has_virtual_columns)
+        }
+        ParquetFieldType::Virtual(_) => true,
+    }
+}
+
+#[cfg(test)]
+fn resolve_selection_policy_for_projection(
     plan_builder: ReadPlanBuilder,
     projection_mask: &ProjectionMask,
     offset_index: Option<&[OffsetIndexMetaData]>,
+    total_rows: usize,
 ) -> ReadPlanBuilder {
-    // override only applies to Auto policy, If the policy is already Mask or Selectors, respect that
-    let RowSelectionPolicy::Auto { .. } = plan_builder.row_selection_policy() else {
-        return plan_builder;
-    };
+    resolve_selection_policy_for_expensive_output(
+        plan_builder,
+        projection_mask,
+        offset_index,
+        total_rows,
+        ExpensiveOutputProfile::default(),
+    )
+}
 
-    let preferred_strategy = plan_builder.resolve_selection_strategy();
+fn resolve_selection_policy_for_expensive_output(
+    plan_builder: ReadPlanBuilder,
+    projection_mask: &ProjectionMask,
+    offset_index: Option<&[OffsetIndexMetaData]>,
+    total_rows: usize,
+    output_profile: ExpensiveOutputProfile,
+) -> ReadPlanBuilder {
+    let loaded = loaded_ranges_for_projection(
+        plan_builder.selection(),
+        projection_mask,
+        offset_index,
+        total_rows,
+    );
+    let loaded_is_sparse = loaded.as_ref().is_some_and(LoadedRowRanges::is_sparse);
+    let sparse_loaded = loaded.filter(LoadedRowRanges::is_sparse);
 
-    let force_selectors = matches!(preferred_strategy, RowSelectionStrategy::Mask)
-        && plan_builder.selection().is_some_and(|selection| {
-            selection.should_force_selectors(projection_mask, offset_index)
+    match plan_builder.row_selection_policy() {
+        RowSelectionPolicy::Auto { .. } => {
+            let decision = plan_builder.resolve_selection_strategy_decision();
+            match decision.strategy {
+                RowSelectionStrategy::Mask
+                    if loaded_is_sparse
+                        || should_prefer_selectors_for_expensive_output(
+                            decision.shape,
+                            output_profile,
+                        ) =>
+                {
+                    plan_builder.with_row_selection_policy(RowSelectionPolicy::Selectors)
+                }
+                RowSelectionStrategy::Mask => {
+                    plan_builder.with_row_selection_policy(RowSelectionPolicy::Mask)
+                }
+                RowSelectionStrategy::Selectors => {
+                    plan_builder.with_row_selection_policy(RowSelectionPolicy::Selectors)
+                }
+            }
+        }
+        RowSelectionPolicy::Mask => plan_builder.with_loaded_row_ranges(sparse_loaded),
+        RowSelectionPolicy::Selectors => plan_builder,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ExpensiveOutputProfile {
+    variable_width_columns: usize,
+    uncompressed_bytes_per_row: f64,
+}
+
+impl ExpensiveOutputProfile {
+    fn from_row_group(
+        row_group: &RowGroupMetaData,
+        projection_mask: &ProjectionMask,
+        total_rows: usize,
+    ) -> Self {
+        if total_rows == 0 {
+            return Self::default();
+        }
+
+        let mut variable_width_columns = 0;
+        let mut uncompressed_bytes = 0u64;
+        for leaf_idx in 0..row_group.num_columns() {
+            if !projection_mask.leaf_included(leaf_idx) {
+                continue;
+            }
+
+            let column = row_group.column(leaf_idx);
+            if column.column_type() == PhysicalType::BYTE_ARRAY {
+                variable_width_columns += 1;
+            }
+            uncompressed_bytes += column.uncompressed_size().max(0) as u64;
+        }
+
+        Self {
+            variable_width_columns,
+            uncompressed_bytes_per_row: uncompressed_bytes as f64 / total_rows as f64,
+        }
+    }
+}
+
+fn should_prefer_selectors_for_expensive_output(
+    shape: RowSelectionShape,
+    output_profile: ExpensiveOutputProfile,
+) -> bool {
+    let selected_ratio = shape.selected_ratio();
+    output_profile.variable_width_columns > 0
+        && output_profile.uncompressed_bytes_per_row >= 16.0
+        && selected_ratio > 0.0
+        && selected_ratio < 0.10
+        && shape.average_selected_run_length() <= 4.0
+}
+
+fn loaded_ranges_for_projection(
+    selection: Option<&RowSelection>,
+    projection_mask: &ProjectionMask,
+    offset_index: Option<&[OffsetIndexMetaData]>,
+    total_rows: usize,
+) -> Option<LoadedRowRanges> {
+    let selection = selection?;
+    let columns = offset_index?;
+    let mut ranges: Option<Vec<Range<usize>>> = None;
+
+    for (leaf_idx, column) in columns.iter().enumerate() {
+        if !projection_mask.leaf_included(leaf_idx) {
+            continue;
+        }
+        let column_ranges = selection.selected_page_row_ranges(column.page_locations(), total_rows);
+        ranges = Some(match ranges {
+            Some(existing) => intersect_ranges(existing, column_ranges),
+            None => column_ranges,
         });
+    }
 
-    let resolved_strategy = if force_selectors {
-        RowSelectionStrategy::Selectors
-    } else {
-        preferred_strategy
-    };
+    ranges.map(|ranges| LoadedRowRanges::new(coalesce_adjacent_ranges(ranges), total_rows))
+}
 
-    // override the plan builder strategy with the resolved one
-    let new_policy = match resolved_strategy {
-        RowSelectionStrategy::Mask => RowSelectionPolicy::Mask,
-        RowSelectionStrategy::Selectors => RowSelectionPolicy::Selectors,
-    };
+fn intersect_ranges(left: Vec<Range<usize>>, right: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    for l in &left {
+        for r in &right {
+            let start = l.start.max(r.start);
+            let end = l.end.min(r.end);
+            if start < end {
+                out.push(start..end);
+            }
+        }
+    }
+    out
+}
 
-    plan_builder.with_row_selection_policy(new_policy)
+fn coalesce_adjacent_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    let mut out: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if range.is_empty() {
+            continue;
+        }
+        if let Some(last) = out.last_mut()
+            && last.end == range.start
+        {
+            last.end = range.end;
+            continue;
+        }
+        out.push(range);
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::{RowSelection, RowSelectionCursor, RowSelector};
+    use crate::file::page_index::offset_index::PageLocation;
+
+    #[test]
+    fn test_resolve_selection_policy_preserves_mask_choice() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(99),
+            RowSelector::select(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+
+        assert_eq!(
+            resolve_selection_policy_for_projection(
+                plan_builder,
+                &ProjectionMask::all(),
+                None,
+                101
+            )
+            .row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+    }
+
+    #[test]
+    fn test_resolve_selection_policy_preserves_selector_choice() {
+        let selection = RowSelection::from(vec![RowSelector::select(128)]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1 });
+
+        assert_eq!(
+            resolve_selection_policy_for_projection(
+                plan_builder,
+                &ProjectionMask::all(),
+                None,
+                128
+            )
+            .row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_resolve_selection_policy_respects_explicit_policy() {
+        let selection = RowSelection::from(vec![RowSelector::select(1), RowSelector::skip(1)]);
+        let mask_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection.clone()))
+            .with_row_selection_policy(RowSelectionPolicy::Mask);
+        let selector_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Selectors);
+
+        assert_eq!(
+            resolve_selection_policy_for_projection(mask_builder, &ProjectionMask::all(), None, 2)
+                .row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+        assert_eq!(
+            resolve_selection_policy_for_projection(
+                selector_builder,
+                &ProjectionMask::all(),
+                None,
+                2
+            )
+            .row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_auto_sparse_loaded_ranges_force_selectors() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(4),
+            RowSelector::select(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let offset_index = sparse_test_offset_index();
+
+        let plan_builder = resolve_selection_policy_for_projection(
+            plan_builder,
+            &ProjectionMask::all(),
+            Some(&offset_index),
+            6,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_auto_dense_loaded_ranges_preserve_mask() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(1),
+            RowSelector::select(1),
+            RowSelector::skip(1),
+            RowSelector::select(1),
+            RowSelector::skip(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let offset_index = sparse_test_offset_index();
+
+        let plan_builder = resolve_selection_policy_for_projection(
+            plan_builder,
+            &ProjectionMask::all(),
+            Some(&offset_index),
+            6,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+    }
+
+    #[test]
+    fn test_explicit_mask_keeps_sparse_loaded_ranges() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(4),
+            RowSelector::select(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Mask);
+        let offset_index = sparse_test_offset_index();
+
+        let plan_builder = resolve_selection_policy_for_projection(
+            plan_builder,
+            &ProjectionMask::all(),
+            Some(&offset_index),
+            6,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+
+        let mut plan = plan_builder.build();
+        let RowSelectionCursor::Mask(cursor) = plan.row_selection_cursor_mut() else {
+            panic!("expected mask cursor");
+        };
+        assert!(cursor.is_sparse());
+    }
+
+    #[test]
+    fn test_auto_expensive_fragmented_output_prefers_selectors() {
+        let selection = q38_like_fragmented_selection();
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let profile = ExpensiveOutputProfile {
+            variable_width_columns: 1,
+            uncompressed_bytes_per_row: 64.0,
+        };
+
+        let plan_builder = resolve_selection_policy_for_expensive_output(
+            plan_builder,
+            &ProjectionMask::all(),
+            None,
+            7_800,
+            profile,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_auto_expensive_fragmented_output_prefers_selectors_without_selector_count_gate() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(12),
+            RowSelector::select(1),
+            RowSelector::skip(12),
+            RowSelector::select(1),
+            RowSelector::skip(12),
+            RowSelector::select(1),
+            RowSelector::skip(12),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let profile = ExpensiveOutputProfile {
+            variable_width_columns: 1,
+            uncompressed_bytes_per_row: 64.0,
+        };
+
+        let plan_builder = resolve_selection_policy_for_expensive_output(
+            plan_builder,
+            &ProjectionMask::all(),
+            None,
+            52,
+            profile,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Selectors
+        );
+    }
+
+    #[test]
+    fn test_auto_cheap_fragmented_output_keeps_mask() {
+        let selection = q38_like_fragmented_selection();
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let profile = ExpensiveOutputProfile {
+            variable_width_columns: 1,
+            uncompressed_bytes_per_row: 8.0,
+        };
+
+        let plan_builder = resolve_selection_policy_for_expensive_output(
+            plan_builder,
+            &ProjectionMask::all(),
+            None,
+            7_800,
+            profile,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+    }
+
+    #[test]
+    fn test_auto_moderate_selectivity_expensive_output_keeps_mask() {
+        let selection = q26_like_fragmented_selection();
+        let plan_builder = ReadPlanBuilder::new(1024)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 });
+        let profile = ExpensiveOutputProfile {
+            variable_width_columns: 1,
+            uncompressed_bytes_per_row: 64.0,
+        };
+
+        let plan_builder = resolve_selection_policy_for_expensive_output(
+            plan_builder,
+            &ProjectionMask::all(),
+            None,
+            7_200,
+            profile,
+        );
+
+        assert_eq!(
+            plan_builder.row_selection_policy(),
+            &RowSelectionPolicy::Mask
+        );
+    }
+
+    fn q38_like_fragmented_selection() -> RowSelection {
+        let mut selectors = Vec::new();
+        for _ in 0..600 {
+            selectors.push(RowSelector::select(1));
+            selectors.push(RowSelector::skip(12));
+        }
+        RowSelection::from(selectors)
+    }
+
+    fn q26_like_fragmented_selection() -> RowSelection {
+        let mut selectors = Vec::new();
+        for _ in 0..600 {
+            selectors.push(RowSelector::select(2));
+            selectors.push(RowSelector::skip(10));
+        }
+        RowSelection::from(selectors)
+    }
+
+    fn sparse_test_offset_index() -> Vec<OffsetIndexMetaData> {
+        vec![OffsetIndexMetaData {
+            page_locations: vec![
+                PageLocation {
+                    offset: 0,
+                    compressed_page_size: 10,
+                    first_row_index: 0,
+                },
+                PageLocation {
+                    offset: 10,
+                    compressed_page_size: 10,
+                    first_row_index: 2,
+                },
+                PageLocation {
+                    offset: 20,
+                    compressed_page_size: 10,
+                    first_row_index: 4,
+                },
+            ],
+            unencoded_byte_array_data_bytes: None,
+        }]
+    }
 
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 256);
     }
 }

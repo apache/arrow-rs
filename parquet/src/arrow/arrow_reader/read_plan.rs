@@ -19,8 +19,11 @@
 //! from a Parquet file
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::arrow::arrow_reader::selection::RowSelectionPolicy;
-use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::selection::{
+    LoadedRowRanges, RowSelectionPolicy, RowSelectionShape, RowSelectionStrategy,
+    RowSelectionStrategyDecision, RowSelectionStrategyReason,
+};
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
@@ -29,6 +32,12 @@ use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
+
+const HIGH_SELECTED_RATIO_NUMERATOR: usize = 7;
+const HIGH_SELECTED_RATIO_DENOMINATOR: usize = 8;
+const FRAGMENTED_SELECTED_RUN_LIMIT: usize = 4;
+const CLUSTERED_SELECTED_RUN_MULTIPLIER: usize = 4;
+const CLUSTERED_SKIPPED_RUN_MULTIPLIER: usize = 4;
 
 /// Options for [`ReadPlanBuilder::with_predicate_options`].
 pub struct PredicateOptions<'a> {
@@ -84,6 +93,8 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Policy to use when materializing the row selection
     row_selection_policy: RowSelectionPolicy,
+    /// Row ranges already loaded by page pruning
+    loaded_row_ranges: Option<LoadedRowRanges>,
 }
 
 impl ReadPlanBuilder {
@@ -93,6 +104,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
+            loaded_row_ranges: None,
         }
     }
 
@@ -107,6 +119,11 @@ impl ReadPlanBuilder {
     /// Defaults to [`RowSelectionPolicy::Auto`]
     pub fn with_row_selection_policy(mut self, policy: RowSelectionPolicy) -> Self {
         self.row_selection_policy = policy;
+        self
+    }
+
+    pub(crate) fn with_loaded_row_ranges(mut self, loaded: Option<LoadedRowRanges>) -> Self {
+        self.loaded_row_ranges = loaded;
         self
     }
 
@@ -147,36 +164,35 @@ impl ReadPlanBuilder {
     /// Returns the [`RowSelectionStrategy`] for this plan.
     ///
     /// Guarantees to return either `Selectors` or `Mask`, never `Auto`.
+    #[cfg(test)]
     pub(crate) fn resolve_selection_strategy(&self) -> RowSelectionStrategy {
+        self.resolve_selection_strategy_decision().strategy
+    }
+
+    pub(crate) fn resolve_selection_strategy_decision(&self) -> RowSelectionStrategyDecision {
+        let shape = RowSelectionShape::from_selection(self.selection.as_ref());
+
         match self.row_selection_policy {
-            RowSelectionPolicy::Selectors => RowSelectionStrategy::Selectors,
-            RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
+            RowSelectionPolicy::Selectors => RowSelectionStrategyDecision::new(
+                RowSelectionStrategy::Selectors,
+                RowSelectionStrategyReason::ForcedSelectors,
+                shape,
+            ),
+            RowSelectionPolicy::Mask => RowSelectionStrategyDecision::new(
+                RowSelectionStrategy::Mask,
+                RowSelectionStrategyReason::ForcedMask,
+                shape,
+            ),
             RowSelectionPolicy::Auto { threshold, .. } => {
-                let selection = match self.selection.as_ref() {
-                    Some(selection) => selection,
-                    None => return RowSelectionStrategy::Selectors,
-                };
-
-                // total_rows: total number of rows selected / skipped
-                // effective_count: number of non-empty selectors
-                let (total_rows, effective_count) =
-                    selection.iter().fold((0usize, 0usize), |(rows, count), s| {
-                        if s.row_count > 0 {
-                            (rows + s.row_count, count + 1)
-                        } else {
-                            (rows, count)
-                        }
-                    });
-
-                if effective_count == 0 {
-                    return RowSelectionStrategy::Mask;
+                if self.selection.is_none() {
+                    return RowSelectionStrategyDecision::new(
+                        RowSelectionStrategy::Selectors,
+                        RowSelectionStrategyReason::AutoSelectorLongRuns,
+                        shape,
+                    );
                 }
 
-                if total_rows < effective_count.saturating_mul(threshold) {
-                    RowSelectionStrategy::Mask
-                } else {
-                    RowSelectionStrategy::Selectors
-                }
+                resolve_auto_selection_strategy(threshold, shape)
             }
         }
     }
@@ -293,25 +309,43 @@ impl ReadPlanBuilder {
             self.selection = Some(RowSelection::from(vec![]));
         }
 
+        self.build_with_metrics(&ArrowReaderMetrics::disabled())
+    }
+
+    /// Create a final `ReadPlan` and record row-selection planning metrics.
+    pub(crate) fn build_with_metrics(mut self, metrics: &ArrowReaderMetrics) -> ReadPlan {
+        // If selection is empty, truncate
+        if !self.selects_any() {
+            self.selection = Some(RowSelection::from(vec![]));
+        }
+
         // Preferred strategy must not be Auto
-        let selection_strategy = self.resolve_selection_strategy();
+        let selection_strategy_decision = self.resolve_selection_strategy_decision();
+        let selection_strategy = selection_strategy_decision.strategy;
 
         let Self {
             batch_size,
             selection,
             row_selection_policy: _,
+            loaded_row_ranges,
         } = self;
 
         let selection = selection.map(|s| s.trim());
+        if matches!(metrics, ArrowReaderMetrics::Enabled(_)) && selection.is_some() {
+            let shape = RowSelectionShape::from_selection(selection.as_ref());
+            metrics.record_row_selection(selection_strategy_decision.with_shape(shape));
+        }
 
         let row_selection_cursor = selection
             .map(|s| {
-                let trimmed = s.trim();
-                let selectors: Vec<RowSelector> = trimmed.into();
+                let selectors: Vec<RowSelector> = s.into();
                 match selection_strategy {
-                    RowSelectionStrategy::Mask => {
-                        RowSelectionCursor::new_mask_from_selectors(selectors)
-                    }
+                    RowSelectionStrategy::Mask => match loaded_row_ranges {
+                        Some(loaded) => {
+                            RowSelectionCursor::new_sparse_mask_from_selectors(selectors, loaded)
+                        }
+                        None => RowSelectionCursor::new_mask_from_selectors(selectors),
+                    },
                     RowSelectionStrategy::Selectors => RowSelectionCursor::new_selectors(selectors),
                 }
             })
@@ -322,6 +356,111 @@ impl ReadPlanBuilder {
             row_selection_cursor,
         }
     }
+}
+
+fn resolve_auto_selection_strategy(
+    threshold: usize,
+    shape: RowSelectionShape,
+) -> RowSelectionStrategyDecision {
+    if shape.selector_count == 0 || shape.selected_rows == 0 {
+        return RowSelectionStrategyDecision::new(
+            RowSelectionStrategy::Mask,
+            RowSelectionStrategyReason::AutoMaskEmptySelection,
+            shape,
+        );
+    }
+
+    if clustered_selection_at_or_above_threshold(shape, threshold) {
+        return RowSelectionStrategyDecision::new(
+            RowSelectionStrategy::Selectors,
+            RowSelectionStrategyReason::AutoSelectorClusteredSelection,
+            shape,
+        );
+    }
+
+    if shape.skipped_rows > 0
+        && selected_ratio_at_least(
+            shape,
+            HIGH_SELECTED_RATIO_NUMERATOR,
+            HIGH_SELECTED_RATIO_DENOMINATOR,
+        )
+    {
+        return RowSelectionStrategyDecision::new(
+            RowSelectionStrategy::Mask,
+            RowSelectionStrategyReason::AutoMaskHighSelectedRatio,
+            shape,
+        );
+    }
+
+    if shape.selected_run_count > 1
+        && shape.average_selected_run_length() <= FRAGMENTED_SELECTED_RUN_LIMIT as f64
+        && selection_density_at_or_above_threshold(shape, threshold)
+    {
+        return RowSelectionStrategyDecision::new(
+            RowSelectionStrategy::Mask,
+            RowSelectionStrategyReason::AutoMaskFragmentedSelection,
+            shape,
+        );
+    }
+
+    if shape.selected_run_count > 0
+        && shape.average_selected_run_length()
+            >= threshold.saturating_mul(CLUSTERED_SELECTED_RUN_MULTIPLIER) as f64
+        && shape.average_skipped_run_length() > 0.0
+        && shape.selected_ratio() <= 0.5
+    {
+        return RowSelectionStrategyDecision::new(
+            RowSelectionStrategy::Selectors,
+            RowSelectionStrategyReason::AutoSelectorClusteredSelection,
+            shape,
+        );
+    }
+
+    if shape.total_rows() < shape.selector_count.saturating_mul(threshold) {
+        RowSelectionStrategyDecision::new(
+            RowSelectionStrategy::Mask,
+            RowSelectionStrategyReason::AutoMaskShortRuns,
+            shape,
+        )
+    } else {
+        RowSelectionStrategyDecision::new(
+            RowSelectionStrategy::Selectors,
+            RowSelectionStrategyReason::AutoSelectorLongRuns,
+            shape,
+        )
+    }
+}
+
+fn selected_ratio_at_least(shape: RowSelectionShape, numerator: usize, denominator: usize) -> bool {
+    (shape.selected_rows as u128) * (denominator as u128)
+        >= (shape.total_rows() as u128) * (numerator as u128)
+}
+
+fn selection_density_at_or_above_threshold(shape: RowSelectionShape, threshold: usize) -> bool {
+    (shape.total_rows() as u128) <= (shape.selector_count as u128) * (threshold as u128)
+}
+
+fn clustered_selection_at_or_above_threshold(shape: RowSelectionShape, threshold: usize) -> bool {
+    average_run_length_at_least(
+        shape.selected_rows,
+        shape.selected_run_count,
+        threshold,
+        CLUSTERED_SELECTED_RUN_MULTIPLIER,
+    ) && average_run_length_at_least(
+        shape.skipped_rows,
+        shape.skipped_run_count,
+        threshold,
+        CLUSTERED_SKIPPED_RUN_MULTIPLIER,
+    )
+}
+
+fn average_run_length_at_least(
+    rows: usize,
+    runs: usize,
+    threshold: usize,
+    multiplier: usize,
+) -> bool {
+    runs > 0 && (rows as u128) >= (runs as u128) * (threshold as u128) * (multiplier as u128)
 }
 
 /// Builder for [`ReadPlan`] that applies a limit and offset to the read plan
@@ -480,6 +619,346 @@ mod tests {
         ReadPlanBuilder::new(1024).with_selection(Some(selection))
     }
 
+    fn assert_strategy_decision(
+        builder: ReadPlanBuilder,
+        strategy: RowSelectionStrategy,
+        reason: RowSelectionStrategyReason,
+        selected_rows: usize,
+        skipped_rows: usize,
+        selector_count: usize,
+        selected_run_count: usize,
+        skipped_run_count: usize,
+    ) {
+        let decision = builder.resolve_selection_strategy_decision();
+        assert_eq!(decision.strategy, strategy);
+        assert_eq!(decision.reason, reason);
+        assert_eq!(decision.shape.selected_rows, selected_rows);
+        assert_eq!(decision.shape.skipped_rows, skipped_rows);
+        assert_eq!(decision.shape.selector_count, selector_count);
+        assert_eq!(decision.shape.selected_run_count, selected_run_count);
+        assert_eq!(decision.shape.skipped_run_count, skipped_run_count);
+    }
+
+    #[test]
+    fn row_group_execution_modes_cover_pushdown_and_post_filter() {
+        use crate::arrow::arrow_reader::selection::{RowGroupExecutionMode, RowSelectionStrategy};
+
+        assert_eq!(
+            RowGroupExecutionMode::Pushdown(RowSelectionStrategy::Mask).to_string(),
+            "Pushdown(Mask)"
+        );
+        assert_eq!(
+            RowGroupExecutionMode::Pushdown(RowSelectionStrategy::Selectors).to_string(),
+            "Pushdown(Selectors)"
+        );
+        assert_eq!(RowGroupExecutionMode::PostFilter.to_string(), "PostFilter");
+    }
+
+    #[test]
+    fn fallback_classifier_triggers_for_fragmented_high_selectivity() {
+        use crate::arrow::arrow_reader::selection::{
+            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+        };
+
+        let observation = FallbackObservation {
+            observed_row_groups: 2,
+            shape: RowSelectionShape {
+                selected_rows: 128,
+                skipped_rows: 64,
+                selector_count: 96,
+                selected_run_count: 64,
+                skipped_run_count: 32,
+            },
+            predicate_evaluate_nanos: 10,
+            output_read_nanos: 20,
+            output_materialize_nanos: 50,
+            cache_miss_count: 0,
+            cache_insert_rejected_count: 0,
+        };
+
+        assert_eq!(
+            observation.trigger_reason(),
+            FallbackTriggerReason::FragmentedHighSelectivityMaterialization
+        );
+    }
+
+    #[test]
+    fn fallback_classifier_waits_for_observation_window() {
+        use crate::arrow::arrow_reader::selection::{
+            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+        };
+
+        let observation = FallbackObservation {
+            observed_row_groups: 0,
+            shape: RowSelectionShape {
+                selected_rows: 64,
+                skipped_rows: 64,
+                selector_count: 64,
+                selected_run_count: 32,
+                skipped_run_count: 32,
+            },
+            predicate_evaluate_nanos: 10,
+            output_read_nanos: 20,
+            output_materialize_nanos: 50,
+            cache_miss_count: 0,
+            cache_insert_rejected_count: 0,
+        };
+
+        assert_eq!(
+            observation.trigger_reason(),
+            FallbackTriggerReason::ObservationIncomplete
+        );
+    }
+
+    #[test]
+    fn fallback_classifier_triggers_for_high_selectivity_without_pruning() {
+        use crate::arrow::arrow_reader::selection::{
+            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+        };
+
+        let observation = FallbackObservation {
+            observed_row_groups: 2,
+            shape: RowSelectionShape {
+                selected_rows: 200,
+                skipped_rows: 0,
+                selector_count: 2,
+                selected_run_count: 2,
+                skipped_run_count: 0,
+            },
+            predicate_evaluate_nanos: 0,
+            output_read_nanos: 0,
+            output_materialize_nanos: 0,
+            cache_miss_count: 0,
+            cache_insert_rejected_count: 0,
+        };
+
+        assert_eq!(
+            observation.trigger_reason(),
+            FallbackTriggerReason::HighSelectivityNoPruning
+        );
+    }
+
+    #[test]
+    fn fallback_classifier_triggers_for_fragmented_moderate_selectivity() {
+        use crate::arrow::arrow_reader::selection::{
+            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+        };
+
+        let observation = FallbackObservation {
+            observed_row_groups: 2,
+            shape: RowSelectionShape {
+                selected_rows: 30,
+                skipped_rows: 170,
+                selector_count: 60,
+                selected_run_count: 30,
+                skipped_run_count: 30,
+            },
+            predicate_evaluate_nanos: 0,
+            output_read_nanos: 0,
+            output_materialize_nanos: 0,
+            cache_miss_count: 0,
+            cache_insert_rejected_count: 0,
+        };
+
+        assert_eq!(
+            observation.trigger_reason(),
+            FallbackTriggerReason::FragmentedModerateSelectivity
+        );
+    }
+
+    #[test]
+    fn fallback_classifier_triggers_for_fragmented_near_ten_percent_selectivity() {
+        use crate::arrow::arrow_reader::selection::{
+            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+        };
+
+        let observation = FallbackObservation {
+            observed_row_groups: 1,
+            shape: RowSelectionShape {
+                selected_rows: 9,
+                skipped_rows: 91,
+                selector_count: 18,
+                selected_run_count: 9,
+                skipped_run_count: 9,
+            },
+            predicate_evaluate_nanos: 0,
+            output_read_nanos: 0,
+            output_materialize_nanos: 0,
+            cache_miss_count: 0,
+            cache_insert_rejected_count: 0,
+        };
+
+        assert_eq!(
+            observation.trigger_reason(),
+            FallbackTriggerReason::FragmentedModerateSelectivity
+        );
+    }
+
+    #[test]
+    fn fallback_classifier_keeps_q38_like_low_selectivity_fragmented_pushdown() {
+        use crate::arrow::arrow_reader::selection::{
+            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+        };
+
+        let observation = FallbackObservation {
+            observed_row_groups: 1,
+            shape: RowSelectionShape {
+                selected_rows: 4_870,
+                skipped_rows: 57_698,
+                selector_count: 6_168,
+                selected_run_count: 3_084,
+                skipped_run_count: 3_084,
+            },
+            predicate_evaluate_nanos: 0,
+            output_read_nanos: 0,
+            output_materialize_nanos: 0,
+            cache_miss_count: 0,
+            cache_insert_rejected_count: 0,
+        };
+
+        assert_eq!(
+            observation.trigger_reason(),
+            FallbackTriggerReason::PushdownStillPreferred
+        );
+    }
+
+    #[test]
+    fn fallback_classifier_keeps_low_selectivity_fragmented_pushdown() {
+        use crate::arrow::arrow_reader::selection::{
+            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+        };
+
+        let observation = FallbackObservation {
+            observed_row_groups: 1,
+            shape: RowSelectionShape {
+                selected_rows: 4,
+                skipped_rows: 196,
+                selector_count: 8,
+                selected_run_count: 4,
+                skipped_run_count: 4,
+            },
+            predicate_evaluate_nanos: 10,
+            output_read_nanos: 20,
+            output_materialize_nanos: 50,
+            cache_miss_count: 0,
+            cache_insert_rejected_count: 0,
+        };
+
+        assert_eq!(
+            observation.trigger_reason(),
+            FallbackTriggerReason::PushdownStillPreferred
+        );
+    }
+
+    #[test]
+    fn selection_strategy_decision_records_forced_mask() {
+        let selection = RowSelection::from(vec![RowSelector::skip(2), RowSelector::select(8)]);
+        let builder =
+            builder_with_selection(selection).with_row_selection_policy(RowSelectionPolicy::Mask);
+
+        assert_strategy_decision(
+            builder,
+            RowSelectionStrategy::Mask,
+            RowSelectionStrategyReason::ForcedMask,
+            8,
+            2,
+            2,
+            1,
+            1,
+        );
+    }
+
+    #[test]
+    fn selection_strategy_decision_records_forced_selectors() {
+        let selection = RowSelection::from(vec![RowSelector::skip(2), RowSelector::select(8)]);
+        let builder = builder_with_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Selectors);
+
+        assert_strategy_decision(
+            builder,
+            RowSelectionStrategy::Selectors,
+            RowSelectionStrategyReason::ForcedSelectors,
+            8,
+            2,
+            2,
+            1,
+            1,
+        );
+    }
+
+    #[test]
+    fn selection_strategy_decision_records_auto_empty_selection() {
+        let selection = RowSelection::from(vec![]);
+        let builder = builder_with_selection(selection);
+
+        assert_strategy_decision(
+            builder,
+            RowSelectionStrategy::Mask,
+            RowSelectionStrategyReason::AutoMaskEmptySelection,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+    }
+
+    #[test]
+    fn selection_strategy_decision_records_auto_short_runs() {
+        let selection = RowSelection::from(vec![RowSelector::select(8), RowSelector::skip(8)]);
+        let builder = builder_with_selection(selection);
+
+        assert_strategy_decision(
+            builder,
+            RowSelectionStrategy::Mask,
+            RowSelectionStrategyReason::AutoMaskShortRuns,
+            8,
+            8,
+            2,
+            1,
+            1,
+        );
+    }
+
+    #[test]
+    fn selection_strategy_decision_records_auto_long_runs() {
+        let selection = RowSelection::from(vec![RowSelector::select(3), RowSelector::skip(3)]);
+        let builder = builder_with_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1 });
+
+        assert_strategy_decision(
+            builder,
+            RowSelectionStrategy::Selectors,
+            RowSelectionStrategyReason::AutoSelectorLongRuns,
+            3,
+            3,
+            2,
+            1,
+            1,
+        );
+    }
+
+    #[test]
+    fn build_metrics_records_structured_strategy_decision_shape() {
+        let metrics = ArrowReaderMetrics::enabled();
+        let selection = RowSelection::from(vec![RowSelector::select(8), RowSelector::skip(4)]);
+        let builder = builder_with_selection(selection);
+
+        builder.build_with_metrics(&metrics);
+
+        assert_eq!(metrics.row_selection_selected_rows(), Some(8));
+        assert_eq!(metrics.row_selection_skipped_rows(), Some(0));
+        assert_eq!(metrics.row_selection_selector_count(), Some(1));
+        assert_eq!(metrics.row_selection_selected_run_count(), Some(1));
+        assert_eq!(metrics.row_selection_skipped_run_count(), Some(0));
+        assert_eq!(metrics.row_selection_mask_plan_count(), Some(1));
+        assert_eq!(metrics.row_selection_selector_plan_count(), Some(0));
+        assert_eq!(
+            metrics.row_selection_auto_mask_short_run_plan_count(),
+            Some(1)
+        );
+    }
+
     #[test]
     fn preferred_selection_strategy_prefers_mask_by_default() {
         let selection = RowSelection::from(vec![RowSelector::select(8)]);
@@ -492,12 +971,166 @@ mod tests {
 
     #[test]
     fn preferred_selection_strategy_prefers_selectors_when_threshold_small() {
-        let selection = RowSelection::from(vec![RowSelector::select(8)]);
+        let selection = RowSelection::from(vec![RowSelector::select(3), RowSelector::skip(3)]);
         let builder = builder_with_selection(selection)
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1 });
         assert_eq!(
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors
+        );
+    }
+
+    #[test]
+    fn auto_strategy_prefers_mask_for_fragmented_selected_rows_at_threshold_boundary() {
+        let selectors: Vec<RowSelector> = (0..64)
+            .flat_map(|_| [RowSelector::select(1), RowSelector::skip(63)])
+            .collect();
+        let builder = builder_with_selection(RowSelection::from(selectors));
+
+        let decision = builder.resolve_selection_strategy_decision();
+
+        assert_eq!(decision.strategy, RowSelectionStrategy::Mask);
+        assert_eq!(
+            decision.reason,
+            RowSelectionStrategyReason::AutoMaskFragmentedSelection
+        );
+        assert_eq!(decision.shape.selected_run_count, 64);
+        assert_eq!(decision.shape.average_selected_run_length(), 1.0);
+    }
+
+    #[test]
+    fn auto_strategy_prefers_mask_for_high_selected_ratio() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(900),
+            RowSelector::skip(25),
+            RowSelector::select(75),
+        ]);
+        let builder = builder_with_selection(selection);
+
+        let decision = builder.resolve_selection_strategy_decision();
+
+        assert_eq!(decision.strategy, RowSelectionStrategy::Mask);
+        assert_eq!(
+            decision.reason,
+            RowSelectionStrategyReason::AutoMaskHighSelectedRatio
+        );
+    }
+
+    #[test]
+    fn auto_strategy_prefers_selectors_for_clustered_high_selected_ratio() {
+        let selectors: Vec<RowSelector> = (0..10)
+            .flat_map(|_| [RowSelector::select(9000), RowSelector::skip(1000)])
+            .collect();
+        let selection = RowSelection::from(selectors);
+        let builder = builder_with_selection(selection);
+
+        let decision = builder.resolve_selection_strategy_decision();
+
+        assert_eq!(decision.strategy, RowSelectionStrategy::Selectors);
+        assert_eq!(
+            decision.reason,
+            RowSelectionStrategyReason::AutoSelectorClusteredSelection
+        );
+    }
+
+    #[test]
+    fn auto_strategy_prefers_selectors_for_clustered_long_selected_runs() {
+        let selection =
+            RowSelection::from(vec![RowSelector::skip(9000), RowSelector::select(1000)]);
+        let builder = builder_with_selection(selection);
+
+        let decision = builder.resolve_selection_strategy_decision();
+
+        assert_eq!(decision.strategy, RowSelectionStrategy::Selectors);
+        assert_eq!(
+            decision.reason,
+            RowSelectionStrategyReason::AutoSelectorClusteredSelection
+        );
+    }
+
+    #[test]
+    fn auto_strategy_prefers_selectors_for_long_single_selected_run_with_no_skips() {
+        let selection = RowSelection::from(vec![RowSelector::select(1024)]);
+        let builder = builder_with_selection(selection);
+
+        let decision = builder.resolve_selection_strategy_decision();
+
+        assert_eq!(decision.strategy, RowSelectionStrategy::Selectors);
+        assert_eq!(
+            decision.reason,
+            RowSelectionStrategyReason::AutoSelectorLongRuns
+        );
+    }
+
+    #[test]
+    fn auto_strategy_prefers_selectors_for_tiny_runs_separated_by_huge_skip() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(4),
+            RowSelector::skip(100_000),
+            RowSelector::select(4),
+        ]);
+        let builder = builder_with_selection(selection);
+
+        let decision = builder.resolve_selection_strategy_decision();
+
+        assert_eq!(decision.strategy, RowSelectionStrategy::Selectors);
+        assert_eq!(
+            decision.reason,
+            RowSelectionStrategyReason::AutoSelectorLongRuns
+        );
+    }
+
+    #[test]
+    fn auto_strategy_prefers_selectors_for_huge_half_selected_ratio_without_saturation() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(usize::MAX / 2),
+            RowSelector::skip(usize::MAX / 2),
+        ]);
+        let builder = builder_with_selection(selection);
+
+        let decision = builder.resolve_selection_strategy_decision();
+
+        assert_eq!(decision.strategy, RowSelectionStrategy::Selectors);
+        assert_eq!(
+            decision.reason,
+            RowSelectionStrategyReason::AutoSelectorClusteredSelection
+        );
+    }
+
+    #[test]
+    fn build_metrics_records_shape_aware_strategy_reasons() {
+        let metrics = ArrowReaderMetrics::enabled();
+        let fragmented_selectors: Vec<RowSelector> = (0..64)
+            .flat_map(|_| [RowSelector::select(1), RowSelector::skip(63)])
+            .collect();
+
+        builder_with_selection(RowSelection::from(fragmented_selectors))
+            .build_with_metrics(&metrics);
+        builder_with_selection(RowSelection::from(vec![
+            RowSelector::select(900),
+            RowSelector::skip(25),
+            RowSelector::select(75),
+        ]))
+        .build_with_metrics(&metrics);
+        builder_with_selection(RowSelection::from(vec![
+            RowSelector::skip(9000),
+            RowSelector::select(1000),
+        ]))
+        .build_with_metrics(&metrics);
+
+        assert_eq!(metrics.row_selection_mask_plan_count(), Some(2));
+        assert_eq!(metrics.row_selection_selector_plan_count(), Some(1));
+        assert_eq!(
+            metrics.row_selection_auto_mask_fragmented_plan_count(),
+            Some(1)
+        );
+        assert_eq!(
+            metrics.row_selection_auto_mask_high_ratio_plan_count(),
+            Some(1)
+        );
+        assert_eq!(
+            metrics.row_selection_auto_selector_clustered_plan_count(),
+            Some(1)
         );
     }
 

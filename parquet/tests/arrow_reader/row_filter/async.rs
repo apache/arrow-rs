@@ -24,8 +24,8 @@ use arrow::{
     datatypes::{Int32Type, TimestampNanosecondType},
 };
 use arrow_array::{
-    ArrayRef, BooleanArray, Int8Array, Int32Array, Int64Array, RecordBatch, Scalar, StringArray,
-    StructArray,
+    ArrayRef, BooleanArray, Int8Array, Int32Array, Int64Array, ListArray, RecordBatch, Scalar,
+    StringArray, StructArray,
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
@@ -526,19 +526,133 @@ async fn test_predicate_pushdown_with_skipped_pages() {
     }
 }
 
-/// Regression test: when multiple predicates are used, the first predicate's
-/// override of the selection strategy (to Mask) must NOT carry forward to
-/// subsequent predicates. Each predicate must get a fresh Auto policy so the
-/// override can detect page skipping for that predicate's specific columns.
-///
-/// Scenario:
-/// - Dense initial RowSelection (alternating select/skip) covers all pages → Auto resolves to Mask
-/// - Predicate 1 evaluates on column A, narrows selection to skip middle pages
-/// - Predicate 2's column B is fetched sparsely with the narrowed selection (missing middle pages)
-/// - Without the fix, the override for predicate 2 returns early (policy=Mask, not Auto),
-///   so Mask is used and tries to read missing pages → "Invalid offset" error
+/// Regression test for explicit mask predicate pushdown attempting to read skipped pages.
+/// Related issue: https://github.com/apache/arrow-rs/issues/9239
 #[tokio::test]
-async fn test_multi_predicate_mask_policy_carryover() {
+async fn test_explicit_mask_predicate_pushdown_with_skipped_pages() {
+    use arrow_array::TimestampNanosecondArray;
+    use arrow_schema::TimeUnit;
+
+    const TIME_IN_RANGE_START: i64 = 1_704_092_400_000_000_000;
+    const TIME_IN_RANGE_END: i64 = 1_704_110_400_000_000_000;
+    const TIME_BEFORE_RANGE: i64 = 1_704_078_000_000_000_000;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
+        Field::new("tag", DataType::Utf8, false),
+    ]));
+
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(300))
+        .set_data_page_row_count_limit(33)
+        .build();
+
+    let mut buffer = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+
+    for _ in 0..2 {
+        for (tag_idx, tag) in ["a", "b", "c"].iter().enumerate() {
+            let times: Vec<i64> = (0..100)
+                .map(|j| {
+                    let row_idx = tag_idx * 100 + j;
+                    if row_idx % 2 == 0 {
+                        TIME_IN_RANGE_START + (j as i64 * 1_000_000)
+                    } else {
+                        TIME_BEFORE_RANGE + (j as i64 * 1_000_000)
+                    }
+                })
+                .collect();
+            let tags: Vec<&str> = (0..100).map(|_| *tag).collect();
+
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(TimestampNanosecondArray::from(times)) as ArrayRef,
+                    Arc::new(StringArray::from(tags)) as ArrayRef,
+                ],
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.flush().unwrap();
+    }
+    writer.close().unwrap();
+    let buffer = Bytes::from(buffer);
+
+    for policy in [
+        PageIndexPolicy::Skip,
+        PageIndexPolicy::Optional,
+        PageIndexPolicy::Required,
+    ] {
+        let reader = TestReader::new(buffer.clone());
+        let options = ArrowReaderOptions::default().with_page_index_policy(policy);
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
+            .await
+            .unwrap();
+
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let num_row_groups = builder.metadata().num_row_groups();
+
+        let mut selectors = Vec::new();
+        for _ in 0..num_row_groups {
+            selectors.push(RowSelector::select(100));
+            selectors.push(RowSelector::skip(100));
+            selectors.push(RowSelector::select(100));
+        }
+        let selection = RowSelection::from(selectors);
+
+        let time_gte_predicate =
+            ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
+                let col = batch.column(0).as_primitive::<TimestampNanosecondType>();
+                Ok(BooleanArray::from_iter(
+                    col.iter().map(|t| t.map(|v| v >= TIME_IN_RANGE_START)),
+                ))
+            });
+
+        let time_lt_predicate =
+            ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
+                let col = batch.column(0).as_primitive::<TimestampNanosecondType>();
+                Ok(BooleanArray::from_iter(
+                    col.iter().map(|t| t.map(|v| v < TIME_IN_RANGE_END)),
+                ))
+            });
+
+        let row_filter = RowFilter::new(vec![
+            Box::new(time_gte_predicate),
+            Box::new(time_lt_predicate),
+        ]);
+        let projection = ProjectionMask::roots(&schema_descr, [1]);
+
+        let stream = builder
+            .with_row_filter(row_filter)
+            .with_row_selection(selection)
+            .with_projection(projection)
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .build()
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+        let batch = concat_batches(&batches[0].schema(), &batches).unwrap();
+        assert_eq!(batch.num_columns(), 1);
+        let expected = StringArray::from_iter_values(
+            std::iter::repeat_n("a", 50)
+                .chain(std::iter::repeat_n("c", 50))
+                .chain(std::iter::repeat_n("a", 50))
+                .chain(std::iter::repeat_n("c", 50)),
+        );
+        assert_eq!(batch.column(0).as_string(), &expected);
+    }
+}
+
+/// Regression test: Auto falls back to selectors when an earlier predicate
+/// prunes away whole pages. Explicit Mask still exercises sparse loaded ranges
+/// in the tests below.
+#[tokio::test]
+async fn test_auto_sparse_pages_fall_back_to_selectors_across_predicates() {
     // 300 rows, 1 row group, 100 rows per page (3 pages)
     let num_rows = 300usize;
     let rows_per_page = 100;
@@ -620,12 +734,13 @@ async fn test_multi_predicate_mask_policy_carryover() {
         .with_row_filter(row_filter)
         .with_row_selection(selection)
         .with_projection(projection)
+        .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1024 })
         .with_max_predicate_cache_size(0)
         .build()
         .unwrap();
 
-    // Without the fix, this panics with:
-    // "Invalid offset in sparse column chunk data: ..., no matching page found."
+    // This exercises Auto after page pruning. Without the Auto sparse-page gate,
+    // the second predicate would use a sparse mask and can regress heavily.
     let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
     let batch = concat_batches(&batches[0].schema(), &batches).unwrap();
 
@@ -633,4 +748,203 @@ async fn test_multi_predicate_mask_policy_carryover() {
     // That's even-indexed rows in [0,100) with value<250 → rows 0,2,4,...,98 (50 rows)
     // Plus even-indexed rows in [200,250) with value<250 → rows 200,202,...,248 (25 rows)
     assert_eq!(batch.num_rows(), 75);
+    assert_eq!(batch.num_columns(), 2);
+
+    let expected_filter_col = Int32Array::from(vec![0; 75]);
+    assert_eq!(
+        batch.column(0).as_primitive::<Int32Type>(),
+        &expected_filter_col
+    );
+
+    let expected_values =
+        Int32Array::from_iter_values((0..100).step_by(2).chain((200..250).step_by(2)));
+    assert_eq!(
+        batch.column(1).as_primitive::<Int32Type>(),
+        &expected_values
+    );
+}
+
+#[tokio::test]
+async fn test_explicit_mask_final_projection_with_sparse_pages() {
+    let num_rows = 300usize;
+    let rows_per_page = 100;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("filter_col", DataType::Int32, false),
+        Field::new("value_col", DataType::Int32, false),
+    ]));
+
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(num_rows))
+        .set_data_page_row_count_limit(rows_per_page)
+        .set_write_batch_size(rows_per_page)
+        .set_dictionary_enabled(false)
+        .build();
+
+    let filter_values: Vec<i32> = (0..num_rows as i32)
+        .map(|i| if (100..200).contains(&i) { 1 } else { 0 })
+        .collect();
+    let value_values: Vec<i32> = (0..num_rows as i32).collect();
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(filter_values)) as ArrayRef,
+            Arc::new(Int32Array::from(value_values)) as ArrayRef,
+        ],
+    )
+    .unwrap();
+
+    let mut buffer = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let buffer = Bytes::from(buffer);
+
+    let reader = TestReader::new(buffer);
+    let options = ArrowReaderOptions::default().with_page_index_policy(PageIndexPolicy::Required);
+    let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
+        .await
+        .unwrap();
+
+    let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+    let selectors: Vec<RowSelector> = (0..num_rows / 2)
+        .flat_map(|_| vec![RowSelector::select(1), RowSelector::skip(1)])
+        .collect();
+    let selection = RowSelection::from(selectors);
+
+    let pred1 = ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
+        let col = batch.column(0).as_primitive::<Int32Type>();
+        Ok(BooleanArray::from_iter(
+            col.iter().map(|v| v.map(|val| val == 0)),
+        ))
+    });
+
+    let pred2 = ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [1]), |batch| {
+        let col = batch.column(0).as_primitive::<Int32Type>();
+        Ok(BooleanArray::from_iter(
+            col.iter().map(|v| v.map(|val| val < 250)),
+        ))
+    });
+
+    let row_filter = RowFilter::new(vec![Box::new(pred1), Box::new(pred2)]);
+    let projection = ProjectionMask::roots(&schema_descr, [0, 1]);
+
+    let stream = builder
+        .with_row_filter(row_filter)
+        .with_row_selection(selection)
+        .with_projection(projection)
+        .with_row_selection_policy(RowSelectionPolicy::Mask)
+        .with_max_predicate_cache_size(0)
+        .build()
+        .unwrap();
+
+    let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+    let batch = concat_batches(&batches[0].schema(), &batches).unwrap();
+
+    assert_eq!(batch.num_rows(), 75);
+    assert_eq!(batch.num_columns(), 2);
+    assert_eq!(batch.schema().field(0).name(), "filter_col");
+    assert_eq!(batch.schema().field(1).name(), "value_col");
+
+    let expected_filter_col = Int32Array::from(vec![0; 75]);
+    assert_eq!(
+        batch.column(0).as_primitive::<Int32Type>(),
+        &expected_filter_col
+    );
+
+    let expected_values =
+        Int32Array::from_iter_values((0..100).step_by(2).chain((200..250).step_by(2)));
+    assert_eq!(
+        batch.column(1).as_primitive::<Int32Type>(),
+        &expected_values
+    );
+}
+
+#[tokio::test]
+async fn test_explicit_mask_list_projection_with_sparse_pages() {
+    let num_rows = 300usize;
+    let rows_per_page = 100;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("filter_col", DataType::Int32, false),
+        Field::new(
+            "list_col",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        ),
+    ]));
+
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(num_rows))
+        .set_data_page_row_count_limit(rows_per_page)
+        .set_write_batch_size(rows_per_page)
+        .set_dictionary_enabled(false)
+        .build();
+
+    let filter_values: Vec<i32> = (0..num_rows as i32)
+        .map(|i| if (100..200).contains(&i) { 1 } else { 0 })
+        .collect();
+    let list_values = ListArray::from_iter_primitive::<Int32Type, _, _>(
+        (0..num_rows as i32).map(|i| Some(vec![Some(i), Some(i + 1000)])),
+    );
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(filter_values)) as ArrayRef,
+            Arc::new(list_values) as ArrayRef,
+        ],
+    )
+    .unwrap();
+
+    let mut buffer = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let buffer = Bytes::from(buffer);
+
+    let reader = TestReader::new(buffer);
+    let options = ArrowReaderOptions::default().with_page_index_policy(PageIndexPolicy::Required);
+    let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
+        .await
+        .unwrap();
+
+    let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+    let pred = ArrowPredicateFn::new(ProjectionMask::roots(&schema_descr, [0]), |batch| {
+        let col = batch.column(0).as_primitive::<Int32Type>();
+        Ok(BooleanArray::from_iter(
+            col.iter().map(|v| v.map(|val| val == 0)),
+        ))
+    });
+    let row_filter = RowFilter::new(vec![Box::new(pred)]);
+    let projection = ProjectionMask::roots(&schema_descr, [1]);
+
+    let stream = builder
+        .with_row_filter(row_filter)
+        .with_projection(projection)
+        .with_row_selection_policy(RowSelectionPolicy::Mask)
+        .build()
+        .unwrap();
+
+    let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+    let batch = concat_batches(&batches[0].schema(), &batches).unwrap();
+
+    assert_eq!(batch.num_rows(), 200);
+    assert_eq!(batch.num_columns(), 1);
+
+    let expected_indices = (0..100).chain(200..300);
+    let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+        expected_indices.map(|i| Some(vec![Some(i), Some(i + 1000)])),
+    );
+    assert_eq!(
+        batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap(),
+        &expected
+    );
 }

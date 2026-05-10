@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::ProjectionMask;
 use crate::errors::ParquetError;
-use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
+use crate::file::page_index::offset_index::PageLocation;
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::SlicesIterator;
@@ -58,6 +57,242 @@ pub(crate) enum RowSelectionStrategy {
     Selectors,
     /// Use a boolean mask to materialise the selection
     Mask,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RowGroupExecutionMode {
+    Pushdown(RowSelectionStrategy),
+    PostFilter,
+}
+
+impl std::fmt::Display for RowGroupExecutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pushdown(RowSelectionStrategy::Mask) => f.write_str("Pushdown(Mask)"),
+            Self::Pushdown(RowSelectionStrategy::Selectors) => f.write_str("Pushdown(Selectors)"),
+            Self::PostFilter => f.write_str("PostFilter"),
+        }
+    }
+}
+
+/// Why a final row-selection read plan used masks or selectors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RowSelectionStrategyReason {
+    /// The caller explicitly requested masks.
+    ForcedMask,
+    /// The caller explicitly requested selectors.
+    ForcedSelectors,
+    /// Auto chose masks because the selection has no non-empty selectors.
+    AutoMaskEmptySelection,
+    /// Auto chose masks because average selector length is below the threshold.
+    AutoMaskShortRuns,
+    /// Auto chose masks because selected rows are fragmented into many short runs.
+    AutoMaskFragmentedSelection,
+    /// Auto chose masks because most rows are selected and selector skipping is unlikely to pay off.
+    AutoMaskHighSelectedRatio,
+    /// Auto chose selectors because selected rows are clustered into long runs.
+    AutoSelectorClusteredSelection,
+    /// Auto chose selectors because average selector length reaches the threshold.
+    AutoSelectorLongRuns,
+}
+
+/// Shape summary for a [`RowSelection`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RowSelectionShape {
+    pub(crate) selected_rows: usize,
+    pub(crate) skipped_rows: usize,
+    pub(crate) selector_count: usize,
+    pub(crate) selected_run_count: usize,
+    pub(crate) skipped_run_count: usize,
+}
+
+impl RowSelectionShape {
+    pub(crate) fn from_selection(selection: Option<&RowSelection>) -> Self {
+        let Some(selection) = selection else {
+            return Self::default();
+        };
+
+        selection
+            .iter()
+            .fold(Self::default(), |mut shape, selector| {
+                if selector.row_count == 0 {
+                    return shape;
+                }
+
+                shape.selector_count += 1;
+                if selector.skip {
+                    shape.skipped_rows += selector.row_count;
+                    shape.skipped_run_count += 1;
+                } else {
+                    shape.selected_rows += selector.row_count;
+                    shape.selected_run_count += 1;
+                }
+                shape
+            })
+    }
+
+    pub(crate) fn total_rows(self) -> usize {
+        self.selected_rows + self.skipped_rows
+    }
+
+    pub(crate) fn selected_ratio(self) -> f64 {
+        let total = self.total_rows();
+        if total == 0 {
+            0.0
+        } else {
+            self.selected_rows as f64 / total as f64
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn run_density(self) -> f64 {
+        let total = self.total_rows();
+        if total == 0 {
+            0.0
+        } else {
+            self.selector_count as f64 / total as f64
+        }
+    }
+
+    pub(crate) fn average_selected_run_length(self) -> f64 {
+        average_run_length(self.selected_rows, self.selected_run_count)
+    }
+
+    pub(crate) fn average_skipped_run_length(self) -> f64 {
+        average_run_length(self.skipped_rows, self.skipped_run_count)
+    }
+
+    pub(crate) fn add_assign(&mut self, other: Self) {
+        self.selected_rows += other.selected_rows;
+        self.skipped_rows += other.skipped_rows;
+        self.selector_count += other.selector_count;
+        self.selected_run_count += other.selected_run_count;
+        self.skipped_run_count += other.skipped_run_count;
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FallbackTriggerReason {
+    HighSelectivityNoPruning,
+    FragmentedModerateSelectivity,
+    FragmentedHighSelectivityMaterialization,
+    FragmentedHighSelectivityOutputDominates,
+    FragmentedHighSelectivityCacheMiss,
+    FragmentedHighSelectivityCacheRejected,
+    ObservationIncomplete,
+    PushdownStillPreferred,
+    ForcedPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct FallbackObservation {
+    pub(crate) observed_row_groups: usize,
+    pub(crate) shape: RowSelectionShape,
+    pub(crate) predicate_evaluate_nanos: usize,
+    pub(crate) output_read_nanos: usize,
+    pub(crate) output_materialize_nanos: usize,
+    pub(crate) cache_miss_count: usize,
+    pub(crate) cache_insert_rejected_count: usize,
+}
+
+impl FallbackObservation {
+    pub(crate) const OBSERVATION_ROW_GROUPS: usize = 1;
+    const FRAGMENTED_MODERATE_SELECTIVITY_MIN_RATIO: f64 = 0.08;
+
+    pub(crate) fn trigger_reason(self) -> FallbackTriggerReason {
+        if self.observed_row_groups < Self::OBSERVATION_ROW_GROUPS {
+            return FallbackTriggerReason::ObservationIncomplete;
+        }
+
+        let shape = self.shape;
+        if shape.total_rows() > 0 && shape.skipped_rows == 0 && shape.selected_ratio() >= 0.95 {
+            return FallbackTriggerReason::HighSelectivityNoPruning;
+        }
+
+        let fragmented = shape.average_selected_run_length() <= 4.0 && shape.run_density() >= 0.01;
+
+        if !fragmented {
+            return FallbackTriggerReason::PushdownStillPreferred;
+        }
+
+        let selected_ratio = shape.selected_ratio();
+        if selected_ratio >= Self::FRAGMENTED_MODERATE_SELECTIVITY_MIN_RATIO
+            && selected_ratio < 0.50
+        {
+            return FallbackTriggerReason::FragmentedModerateSelectivity;
+        }
+        if selected_ratio < 0.50 {
+            return FallbackTriggerReason::PushdownStillPreferred;
+        }
+
+        if self.output_materialize_nanos >= self.predicate_evaluate_nanos {
+            return FallbackTriggerReason::FragmentedHighSelectivityMaterialization;
+        }
+        if self.output_materialize_nanos > self.output_read_nanos {
+            return FallbackTriggerReason::FragmentedHighSelectivityOutputDominates;
+        }
+        if self.cache_miss_count > 0 {
+            return FallbackTriggerReason::FragmentedHighSelectivityCacheMiss;
+        }
+        if self.cache_insert_rejected_count > 0 {
+            return FallbackTriggerReason::FragmentedHighSelectivityCacheRejected;
+        }
+
+        FallbackTriggerReason::PushdownStillPreferred
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn should_fallback(self) -> bool {
+        matches!(
+            self.trigger_reason(),
+            FallbackTriggerReason::HighSelectivityNoPruning
+                | FallbackTriggerReason::FragmentedModerateSelectivity
+                | FallbackTriggerReason::FragmentedHighSelectivityMaterialization
+                | FallbackTriggerReason::FragmentedHighSelectivityOutputDominates
+                | FallbackTriggerReason::FragmentedHighSelectivityCacheMiss
+                | FallbackTriggerReason::FragmentedHighSelectivityCacheRejected
+        )
+    }
+}
+
+/// Fully resolved decision for materializing a [`RowSelection`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RowSelectionStrategyDecision {
+    pub(crate) strategy: RowSelectionStrategy,
+    pub(crate) reason: RowSelectionStrategyReason,
+    pub(crate) shape: RowSelectionShape,
+}
+
+impl RowSelectionStrategyDecision {
+    pub(crate) fn new(
+        strategy: RowSelectionStrategy,
+        reason: RowSelectionStrategyReason,
+        shape: RowSelectionShape,
+    ) -> Self {
+        Self {
+            strategy,
+            reason,
+            shape,
+        }
+    }
+
+    pub(crate) fn with_shape(self, shape: RowSelectionShape) -> Self {
+        Self { shape, ..self }
+    }
+
+    pub(crate) fn uses_mask(self) -> bool {
+        matches!(self.strategy, RowSelectionStrategy::Mask)
+    }
+}
+
+fn average_run_length(rows: usize, runs: usize) -> f64 {
+    if runs == 0 {
+        0.0
+    } else {
+        rows as f64 / runs as f64
+    }
 }
 
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
@@ -250,37 +485,33 @@ impl RowSelection {
         ranges
     }
 
-    /// Returns true if this selection would skip any data pages within the provided columns
-    fn selection_skips_any_page(
+    pub(crate) fn selected_page_row_ranges(
         &self,
-        projection: &ProjectionMask,
-        columns: &[OffsetIndexMetaData],
-    ) -> bool {
-        columns.iter().enumerate().any(|(leaf_idx, column)| {
-            if !projection.leaf_included(leaf_idx) {
-                return false;
-            }
+        page_locations: &[PageLocation],
+        total_rows: usize,
+    ) -> Vec<Range<usize>> {
+        let selected_byte_ranges = self.scan_ranges(page_locations);
+        page_locations
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, page)| {
+                let start = page.offset as u64;
+                let end = start + page.compressed_page_size as u64;
+                let page_is_selected = selected_byte_ranges
+                    .iter()
+                    .any(|range| range.start == start && range.end == end);
+                if !page_is_selected {
+                    return None;
+                }
 
-            let locations = column.page_locations();
-            if locations.is_empty() {
-                return false;
-            }
-
-            let ranges = self.scan_ranges(locations);
-            !ranges.is_empty() && ranges.len() < locations.len()
-        })
-    }
-
-    /// Returns true if selectors should be forced, preventing mask materialisation
-    pub(crate) fn should_force_selectors(
-        &self,
-        projection: &ProjectionMask,
-        offset_index: Option<&[OffsetIndexMetaData]>,
-    ) -> bool {
-        match offset_index {
-            Some(columns) => self.selection_skips_any_page(projection, columns),
-            None => false,
-        }
+                let row_start = page.first_row_index as usize;
+                let row_end = page_locations
+                    .get(idx + 1)
+                    .map(|next| next.first_row_index as usize)
+                    .unwrap_or(total_rows);
+                Some(row_start..row_end)
+            })
+            .collect()
     }
 
     /// Splits off the first `row_count` from this [`RowSelection`]
@@ -428,6 +659,10 @@ impl RowSelection {
     /// Returns `true` if this [`RowSelection`] selects any rows
     pub fn selects_any(&self) -> bool {
         self.selectors.iter().any(|x| !x.skip)
+    }
+
+    pub(crate) fn boolean_mask(&self) -> BooleanBuffer {
+        boolean_mask_from_selectors(&self.selectors)
     }
 
     /// Trims this [`RowSelection`] removing any trailing skips
@@ -767,27 +1002,51 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
 /// or selections. For example, selecting every other row.
 #[derive(Debug)]
 pub struct MaskCursor {
-    mask: BooleanBuffer,
-    /// Current absolute offset into the selection
-    position: usize,
+    inner: MaskCursorInner,
+}
+
+#[derive(Debug)]
+enum MaskCursorInner {
+    Dense {
+        mask: BooleanBuffer,
+        /// Current absolute offset into the selection
+        position: usize,
+    },
+    Sparse(SparseMaskCursor),
 }
 
 impl MaskCursor {
     /// Returns `true` when no further rows remain
     pub fn is_empty(&self) -> bool {
-        self.position >= self.mask.len()
+        match &self.inner {
+            MaskCursorInner::Dense { mask, position } => *position >= mask.len(),
+            MaskCursorInner::Sparse(cursor) => cursor.is_empty(),
+        }
+    }
+
+    pub(crate) fn is_sparse(&self) -> bool {
+        matches!(self.inner, MaskCursorInner::Sparse(_))
+    }
+
+    pub(crate) fn sparse_mut(&mut self) -> Option<&mut SparseMaskCursor> {
+        match &mut self.inner {
+            MaskCursorInner::Sparse(cursor) => Some(cursor),
+            MaskCursorInner::Dense { .. } => None,
+        }
     }
 
     /// Advance through the mask representation, producing the next chunk summary
     pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
-        let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
-            let mask = &self.mask;
+        let MaskCursorInner::Dense { mask, position } = &mut self.inner else {
+            return None;
+        };
 
-            if self.position >= mask.len() {
+        let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
+            if *position >= mask.len() {
                 return None;
             }
 
-            let start_position = self.position;
+            let start_position = *position;
             let mut cursor = start_position;
             let mut initial_skip = 0;
 
@@ -814,7 +1073,7 @@ impl MaskCursor {
             (initial_skip, chunk_rows, selected_rows, mask_start, cursor)
         };
 
-        self.position = end_position;
+        *position = end_position;
 
         Some(MaskChunk {
             initial_skip,
@@ -826,13 +1085,19 @@ impl MaskCursor {
 
     /// Materialise the boolean values for a mask-backed chunk
     pub fn mask_values_for(&self, chunk: &MaskChunk) -> Result<BooleanArray, ParquetError> {
-        if chunk.mask_start.saturating_add(chunk.chunk_rows) > self.mask.len() {
+        let MaskCursorInner::Dense { mask, .. } = &self.inner else {
+            return Err(ParquetError::General(
+                "Internal Error: dense mask chunk requested from sparse mask cursor".to_string(),
+            ));
+        };
+
+        if chunk.mask_start.saturating_add(chunk.chunk_rows) > mask.len() {
             return Err(ParquetError::General(
                 "Internal Error: MaskChunk exceeds mask length".to_string(),
             ));
         }
         Ok(BooleanArray::from(
-            self.mask.slice(chunk.mask_start, chunk.chunk_rows),
+            mask.slice(chunk.mask_start, chunk.chunk_rows),
         ))
     }
 }
@@ -885,11 +1150,155 @@ pub struct MaskChunk {
     pub mask_start: usize,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct LoadedRowRanges {
+    ranges: Vec<Range<usize>>,
+    total_rows: usize,
+}
+
+impl LoadedRowRanges {
+    pub(crate) fn new(ranges: Vec<Range<usize>>, total_rows: usize) -> Self {
+        debug_assert!(
+            ranges
+                .windows(2)
+                .all(|window| window[0].end <= window[1].start),
+            "loaded row ranges must be sorted and non-overlapping"
+        );
+        debug_assert!(
+            ranges
+                .iter()
+                .all(|range| range.start <= range.end && range.end <= total_rows),
+            "loaded row ranges must be valid within total_rows"
+        );
+        Self { ranges, total_rows }
+    }
+
+    pub(crate) fn is_sparse(&self) -> bool {
+        match self.ranges.as_slice() {
+            [] => self.total_rows != 0,
+            [range] => range.start != 0 || range.end != self.total_rows,
+            _ => true,
+        }
+    }
+
+    fn range_containing(&self, row: usize) -> Option<&Range<usize>> {
+        self.ranges
+            .iter()
+            .find(|range| range.start <= row && row < range.end)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct MaskSegment {
+    pub row_range: Range<usize>,
+    pub mask_start: usize,
+    pub mask_len: usize,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct SparseMaskChunk {
+    pub segments: Vec<MaskSegment>,
+    pub selected_rows: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct SparseMaskCursor {
+    mask: BooleanBuffer,
+    loaded: LoadedRowRanges,
+    position: usize,
+}
+
+impl SparseMaskCursor {
+    pub(crate) fn new(selectors: Vec<RowSelector>, loaded: LoadedRowRanges) -> Self {
+        Self {
+            mask: boolean_mask_from_selectors(&selectors),
+            loaded,
+            position: 0,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.position >= self.mask.len() || self.position >= self.loaded.total_rows
+    }
+
+    pub(crate) fn mask_values_for(
+        &self,
+        segment: &MaskSegment,
+    ) -> Result<BooleanArray, ParquetError> {
+        if segment.mask_start.saturating_add(segment.mask_len) > self.mask.len() {
+            return Err(ParquetError::General(
+                "Internal Error: sparse mask segment exceeds mask length".to_string(),
+            ));
+        }
+        Ok(BooleanArray::from(
+            self.mask.slice(segment.mask_start, segment.mask_len),
+        ))
+    }
+
+    pub(crate) fn next_sparse_mask_chunk(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Option<SparseMaskChunk>, ParquetError> {
+        if self.is_empty() {
+            return Ok(None);
+        }
+
+        let mut selected_rows = 0usize;
+        let mut segments = Vec::new();
+        let mut cursor = self.position;
+
+        while cursor < self.mask.len()
+            && cursor < self.loaded.total_rows
+            && selected_rows < batch_size
+        {
+            if !self.mask.value(cursor) {
+                cursor += 1;
+                continue;
+            }
+
+            let Some(loaded) = self.loaded.range_containing(cursor) else {
+                return Err(ParquetError::General(format!(
+                    "Internal Error: sparse mask selected row {cursor} outside loaded row ranges"
+                )));
+            };
+
+            let segment_start = cursor;
+            let mut segment_end = cursor;
+            while segment_end < loaded.end
+                && segment_end < self.mask.len()
+                && selected_rows < batch_size
+                && self.mask.value(segment_end)
+            {
+                selected_rows += 1;
+                segment_end += 1;
+            }
+
+            segments.push(MaskSegment {
+                row_range: segment_start..segment_end,
+                mask_start: segment_start,
+                mask_len: segment_end - segment_start,
+            });
+            cursor = segment_end;
+        }
+
+        self.position = cursor;
+        if segments.is_empty() {
+            self.position = self.mask.len().min(self.loaded.total_rows);
+            return Ok(None);
+        }
+
+        Ok(Some(SparseMaskChunk {
+            segments,
+            selected_rows,
+        }))
+    }
+}
+
 /// Cursor for iterating a [`RowSelection`] during execution within a
 /// [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan).
 ///
-/// This keeps per-reader state such as the current position and delegates the
-/// actual storage strategy to the internal `RowSelectionBacking`.
+/// This keeps per-reader state such as the current position and delegates dense
+/// or sparse mask state to [`MaskCursor`].
 #[derive(Debug)]
 pub enum RowSelectionCursor {
     /// Reading all rows
@@ -904,8 +1313,20 @@ impl RowSelectionCursor {
     /// Create a [`MaskCursor`] cursor backed by a bitmask, from an existing set of selectors
     pub(crate) fn new_mask_from_selectors(selectors: Vec<RowSelector>) -> Self {
         Self::Mask(MaskCursor {
-            mask: boolean_mask_from_selectors(&selectors),
-            position: 0,
+            inner: MaskCursorInner::Dense {
+                mask: boolean_mask_from_selectors(&selectors),
+                position: 0,
+            },
+        })
+    }
+
+    /// Create a [`SparseMaskCursor`] from the provided selectors and loaded row ranges
+    pub(crate) fn new_sparse_mask_from_selectors(
+        selectors: Vec<RowSelector>,
+        loaded: LoadedRowRanges,
+    ) -> Self {
+        Self::Mask(MaskCursor {
+            inner: MaskCursorInner::Sparse(SparseMaskCursor::new(selectors, loaded)),
         })
     }
 
@@ -936,6 +1357,78 @@ fn boolean_mask_from_selectors(selectors: &[RowSelector]) -> BooleanBuffer {
 mod tests {
     use super::*;
     use rand::{Rng, rng};
+
+    #[test]
+    fn test_loaded_row_ranges_detects_sparse_ranges() {
+        assert!(!LoadedRowRanges::new(vec![0..6], 6).is_sparse());
+        assert!(!LoadedRowRanges::new(vec![], 0).is_sparse());
+        assert!(LoadedRowRanges::new(vec![0..2, 4..6], 6).is_sparse());
+        assert!(LoadedRowRanges::new(vec![1..6], 6).is_sparse());
+    }
+
+    #[test]
+    fn test_sparse_mask_cursor_skips_unloaded_ranges() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(4),
+            RowSelector::select(1),
+        ]);
+
+        let loaded = LoadedRowRanges::new(vec![0..2, 4..6], 6);
+        let selectors: Vec<RowSelector> = selection.into();
+        let mut cursor = SparseMaskCursor::new(selectors, loaded);
+
+        let chunk = cursor.next_sparse_mask_chunk(1024).unwrap().unwrap();
+        assert_eq!(chunk.selected_rows, 2);
+        assert_eq!(
+            chunk.segments,
+            vec![
+                MaskSegment {
+                    row_range: 0..1,
+                    mask_start: 0,
+                    mask_len: 1,
+                },
+                MaskSegment {
+                    row_range: 5..6,
+                    mask_start: 5,
+                    mask_len: 1,
+                },
+            ]
+        );
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn test_sparse_mask_cursor_errors_selected_rows_after_loaded_ranges() {
+        let selection = RowSelection::from(vec![RowSelector::skip(5), RowSelector::select(1)]);
+
+        let loaded = LoadedRowRanges::new(vec![0..2], 6);
+        let selectors: Vec<RowSelector> = selection.into();
+        let mut cursor = SparseMaskCursor::new(selectors, loaded);
+
+        let err = cursor.next_sparse_mask_chunk(1024).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("sparse mask selected row 5 outside loaded row ranges"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_sparse_mask_cursor_exhausts_empty_loaded_ranges() {
+        let selection = RowSelection::from(vec![RowSelector::select(6)]);
+
+        let loaded = LoadedRowRanges::new(vec![], 6);
+        let selectors: Vec<RowSelector> = selection.into();
+        let mut cursor = SparseMaskCursor::new(selectors, loaded);
+
+        let err = cursor.next_sparse_mask_chunk(1024).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("sparse mask selected row 0 outside loaded row ranges"),
+            "{err}"
+        );
+    }
 
     #[test]
     fn test_from_filters() {
@@ -1535,6 +2028,37 @@ mod tests {
 
         // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
         assert_eq!(ranges, vec![10..20, 20..30, 30..40]);
+    }
+
+    #[test]
+    fn test_selected_page_row_ranges() {
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(4),
+            RowSelector::select(1),
+        ]);
+        let pages = vec![
+            PageLocation {
+                offset: 0,
+                compressed_page_size: 10,
+                first_row_index: 0,
+            },
+            PageLocation {
+                offset: 10,
+                compressed_page_size: 10,
+                first_row_index: 2,
+            },
+            PageLocation {
+                offset: 20,
+                compressed_page_size: 10,
+                first_row_index: 4,
+            },
+        ];
+
+        assert_eq!(
+            selection.selected_page_row_ranges(&pages, 6),
+            vec![0..2, 4..6]
+        );
     }
 
     #[test]

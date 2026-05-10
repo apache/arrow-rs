@@ -54,6 +54,10 @@ impl DataRequest {
             .collect()
     }
 
+    pub(super) fn into_column_chunks(self) -> Vec<Option<Arc<ColumnChunkData>>> {
+        self.column_chunks
+    }
+
     /// Returns the chunks from the buffers that satisfy this request
     fn get_chunks(&self, buffers: &PushBuffers) -> Result<Vec<Bytes>, ParquetError> {
         self.ranges
