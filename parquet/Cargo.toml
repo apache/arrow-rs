@@ -289,5 +289,10 @@ required-features = ["arrow"]
 name = "bloom_filter"
 harness = false
 
+[[bench]]
+name = "arrow_reader_peak_memory"
+required-features = ["arrow", "test_common", "experimental"]
+harness = false
+
 [lib]
 bench = false
