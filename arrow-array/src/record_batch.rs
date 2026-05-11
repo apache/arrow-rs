@@ -221,7 +221,7 @@ macro_rules! record_batch {
 ///     ("c", Utf8, ["alpha", "beta", "gamma"])
 /// );
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RecordBatch {
     schema: SchemaRef,
     columns: Vec<Arc<dyn Array>>,
@@ -234,8 +234,34 @@ pub struct RecordBatch {
     /// Per-batch custom metadata
     ///
     /// This corresponds to the `custom_metadata` field on the IPC `Message`
-    /// flatbuffer, allowing per-batch metadata separate from schema-level metadata.
-    custom_metadata: HashMap<String, String>,
+    /// flatbuffer, allowing per-batch metadata separate from schema-level
+    /// metadata. Stored as `Option<Arc<...>>` so that a `RecordBatch` without
+    /// custom metadata adds only a pointer's worth of overhead, and clones
+    /// share the map.
+    custom_metadata: Option<Arc<HashMap<String, String>>>,
+}
+
+// Custom equality: a batch built with an empty metadata map compares equal to
+// one built without any metadata at all. This is also reachable via
+// `custom_metadata_mut().clear()`, so we collapse the two forms here rather
+// than letting the derived impl surface the distinction.
+impl PartialEq for RecordBatch {
+    fn eq(&self, other: &Self) -> bool {
+        if self.row_count != other.row_count || self.schema != other.schema {
+            return false;
+        }
+        if self.columns != other.columns {
+            return false;
+        }
+        match (
+            self.custom_metadata.as_deref(),
+            other.custom_metadata.as_deref(),
+        ) {
+            (None, None) => true,
+            (Some(m), None) | (None, Some(m)) => m.is_empty(),
+            (Some(a), Some(b)) => a == b,
+        }
+    }
 }
 
 impl RecordBatch {
@@ -296,7 +322,7 @@ impl RecordBatch {
             schema,
             columns,
             row_count,
-            custom_metadata: HashMap::new(),
+            custom_metadata: None,
         }
     }
 
@@ -324,7 +350,7 @@ impl RecordBatch {
             schema,
             columns,
             row_count: 0,
-            custom_metadata: HashMap::new(),
+            custom_metadata: None,
         }
     }
 
@@ -399,7 +425,7 @@ impl RecordBatch {
             schema,
             columns,
             row_count,
-            custom_metadata: HashMap::new(),
+            custom_metadata: None,
         })
     }
 
@@ -411,15 +437,25 @@ impl RecordBatch {
         (self.schema, self.columns, self.row_count)
     }
 
-    /// Return the schema, columns, row count and custom metadata of this [`RecordBatch`]
+    /// Return the schema, columns, row count and custom metadata of this [`RecordBatch`].
+    ///
+    /// The returned metadata is `None` if this batch has no custom metadata.
+    /// If the batch uniquely owns its metadata (the common case), the map is
+    /// returned without cloning; otherwise it is cloned out of the shared
+    /// reference.
     pub fn into_parts_with_custom_metadata(
         self,
-    ) -> (SchemaRef, Vec<ArrayRef>, usize, HashMap<String, String>) {
+    ) -> (
+        SchemaRef,
+        Vec<ArrayRef>,
+        usize,
+        Option<HashMap<String, String>>,
+    ) {
         (
             self.schema,
             self.columns,
             self.row_count,
-            self.custom_metadata,
+            self.custom_metadata.map(Arc::unwrap_or_clone),
         )
     }
 
@@ -477,22 +513,39 @@ impl RecordBatch {
         &mut schema.metadata
     }
 
-    /// Returns a reference to the per-batch custom metadata.
+    /// Returns the per-batch custom metadata, or `None` if not set.
     ///
-    /// This metadata corresponds to the `custom_metadata` field on the IPC
-    /// `Message` flatbuffer, separate from schema-level metadata.
-    pub fn custom_metadata(&self) -> &HashMap<String, String> {
-        &self.custom_metadata
+    /// This corresponds to the `custom_metadata` field on the IPC `Message`
+    /// flatbuffer, separate from schema-level metadata.
+    pub fn custom_metadata(&self) -> Option<&HashMap<String, String>> {
+        self.custom_metadata.as_deref()
     }
 
-    /// Returns a mutable reference to the per-batch custom metadata.
+    /// Returns a mutable reference to the per-batch custom metadata, allocating
+    /// an empty map on first access.
+    ///
+    /// Cheap if this [`RecordBatch`] uniquely owns the metadata; otherwise the
+    /// underlying map is cloned via [`Arc::make_mut`]. An empty map left after
+    /// clearing entries still reports as `Some(_)` from
+    /// [`Self::custom_metadata`]; two batches that differ only in this respect
+    /// still compare equal.
     pub fn custom_metadata_mut(&mut self) -> &mut HashMap<String, String> {
-        &mut self.custom_metadata
+        Arc::make_mut(
+            self.custom_metadata
+                .get_or_insert_with(|| Arc::new(HashMap::new())),
+        )
     }
 
     /// Sets the per-batch custom metadata, returning `self`.
+    ///
+    /// An empty map is normalized to "no metadata", so a batch built with an
+    /// empty map compares equal to one built without calling this method.
     pub fn with_custom_metadata(mut self, metadata: HashMap<String, String>) -> Self {
-        self.custom_metadata = metadata;
+        self.custom_metadata = if metadata.is_empty() {
+            None
+        } else {
+            Some(Arc::new(metadata))
+        };
         self
     }
 
@@ -516,12 +569,13 @@ impl RecordBatch {
             // Since we're starting from a valid RecordBatch and project
             // creates a strict subset of the original, there's no need to
             // redo the validation checks in `try_new_with_options`.
-            Ok(RecordBatch::new_unchecked(
+            let mut projected = RecordBatch::new_unchecked(
                 SchemaRef::new(projected_schema),
                 batch_fields,
                 self.row_count,
-            )
-            .with_custom_metadata(self.custom_metadata.clone()))
+            );
+            projected.custom_metadata = self.custom_metadata.clone();
+            Ok(projected)
         }
     }
 
@@ -617,8 +671,10 @@ impl RecordBatch {
             }
         }
         let custom_metadata = self.custom_metadata.clone();
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
-            .map(|b| b.with_custom_metadata(custom_metadata))
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).map(|mut b| {
+            b.custom_metadata = custom_metadata;
+            b
+        })
     }
 
     /// Returns the number of columns in the record batch.
@@ -913,7 +969,7 @@ impl From<StructArray> for RecordBatch {
             schema: Arc::new(Schema::new(fields)),
             row_count,
             columns,
-            custom_metadata: HashMap::new(),
+            custom_metadata: None,
         }
     }
 }
@@ -1846,12 +1902,12 @@ mod tests {
     #[test]
     fn test_with_custom_metadata() {
         let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
-        assert!(batch.custom_metadata().is_empty());
+        assert!(batch.custom_metadata().is_none());
 
         let mut metadata = HashMap::new();
         metadata.insert("key".to_string(), "value".to_string());
         let batch = batch.with_custom_metadata(metadata.clone());
-        assert_eq!(batch.custom_metadata(), &metadata);
+        assert_eq!(batch.custom_metadata(), Some(&metadata));
     }
 
     #[test]
@@ -1861,7 +1917,7 @@ mod tests {
             .custom_metadata_mut()
             .insert("key".to_string(), "value".to_string());
         assert_eq!(
-            batch.custom_metadata().get("key"),
+            batch.custom_metadata().and_then(|m| m.get("key")),
             Some(&"value".to_string())
         );
     }
@@ -1874,7 +1930,7 @@ mod tests {
         let batch = batch.with_custom_metadata(metadata.clone());
 
         let sliced = batch.slice(0, 2);
-        assert_eq!(sliced.custom_metadata(), &metadata);
+        assert_eq!(sliced.custom_metadata(), Some(&metadata));
     }
 
     #[test]
@@ -1888,7 +1944,7 @@ mod tests {
         let batch = batch.with_custom_metadata(metadata.clone());
 
         let projected = batch.project(&[0]).unwrap();
-        assert_eq!(projected.custom_metadata(), &metadata);
+        assert_eq!(projected.custom_metadata(), Some(&metadata));
     }
 
     #[test]
@@ -1902,7 +1958,7 @@ mod tests {
         assert_eq!(schema.fields().len(), 1);
         assert_eq!(columns.len(), 1);
         assert_eq!(row_count, 3);
-        assert_eq!(custom_metadata, metadata);
+        assert_eq!(custom_metadata, Some(metadata));
     }
 
     #[test]
@@ -1918,5 +1974,31 @@ mod tests {
         metadata.insert("k".to_string(), "v".to_string());
         let batch1 = batch1.with_custom_metadata(metadata);
         assert_ne!(batch1, batch2);
+    }
+
+    #[test]
+    fn test_empty_custom_metadata_normalized_to_none() {
+        // A batch built with an empty map compares equal to one with no
+        // metadata, and the setter normalizes the empty map away.
+        let batch1 = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let batch2 = record_batch!(("a", Int32, [1, 2, 3]))
+            .unwrap()
+            .with_custom_metadata(HashMap::new());
+        assert_eq!(batch1, batch2);
+        assert!(batch2.custom_metadata().is_none());
+    }
+
+    #[test]
+    fn test_equality_after_mut_clear() {
+        // `custom_metadata_mut().clear()` cannot normalize the Option back to
+        // None, so it leaves an empty `Some` in place. PartialEq must still
+        // treat this as equal to a batch with no metadata.
+        let mut metadata = HashMap::new();
+        metadata.insert("k".to_string(), "v".to_string());
+        let no_meta = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let mut cleared = no_meta.clone().with_custom_metadata(metadata);
+        cleared.custom_metadata_mut().clear();
+        assert!(cleared.custom_metadata().is_some_and(|m| m.is_empty()));
+        assert_eq!(no_meta, cleared);
     }
 }

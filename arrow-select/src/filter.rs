@@ -395,12 +395,14 @@ impl FilterPredicate {
 
         // SAFETY: we know that the set of filtered arrays will match the schema of the original
         // record batch
-        let custom_metadata = record_batch.custom_metadata().clone();
+        let custom_metadata = record_batch.custom_metadata().cloned();
         unsafe {
-            Ok(
-                RecordBatch::new_unchecked(record_batch.schema(), filtered_arrays, self.count)
-                    .with_custom_metadata(custom_metadata),
-            )
+            let mut batch =
+                RecordBatch::new_unchecked(record_batch.schema(), filtered_arrays, self.count);
+            if let Some(m) = custom_metadata {
+                batch = batch.with_custom_metadata(m);
+            }
+            Ok(batch)
         }
     }
 

@@ -1116,9 +1116,11 @@ pub fn take_record_batch(
         .iter()
         .map(|c| take(c, indices, None))
         .collect::<Result<Vec<_>, _>>()?;
-    let custom_metadata = record_batch.custom_metadata().clone();
-    RecordBatch::try_new(record_batch.schema(), columns)
-        .map(|b| b.with_custom_metadata(custom_metadata))
+    let custom_metadata = record_batch.custom_metadata().cloned();
+    RecordBatch::try_new(record_batch.schema(), columns).map(|b| match custom_metadata {
+        Some(m) => b.with_custom_metadata(m),
+        None => b,
+    })
 }
 
 #[cfg(test)]

@@ -79,12 +79,9 @@ pub fn flight_data_to_arrow_batch(
                 None,
                 &message.version(),
             )
-            .map(|rb| {
-                if custom_metadata.is_empty() {
-                    rb
-                } else {
-                    rb.with_custom_metadata(custom_metadata)
-                }
+            .map(|rb| match custom_metadata {
+                Some(m) => rb.with_custom_metadata(m),
+                None => rb,
             })
         })?
 }

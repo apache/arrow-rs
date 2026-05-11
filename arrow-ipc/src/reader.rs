@@ -49,17 +49,20 @@ use DataType::*;
 
 /// Extract `custom_metadata` key-value pairs from an IPC [`Message`].
 ///
-/// Returns an empty [`HashMap`] if the message has no custom metadata.
-pub fn message_custom_metadata(message: &crate::Message) -> HashMap<String, String> {
-    let mut metadata = HashMap::new();
-    if let Some(list) = message.custom_metadata() {
-        for kv in list {
-            if let (Some(k), Some(v)) = (kv.key(), kv.value()) {
-                metadata.insert(k.to_string(), v.to_string());
-            }
+/// Returns `None` if the message has no custom metadata.
+pub fn message_custom_metadata(message: &crate::Message) -> Option<HashMap<String, String>> {
+    let list = message.custom_metadata()?;
+    let mut metadata = HashMap::with_capacity(list.len());
+    for kv in list {
+        if let (Some(k), Some(v)) = (kv.key(), kv.value()) {
+            metadata.insert(k.to_string(), v.to_string());
         }
     }
-    metadata
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(metadata)
+    }
 }
 
 /// Read a buffer based on offset and length
@@ -486,7 +489,7 @@ pub struct RecordBatchDecoder<'a> {
     /// See [`FileDecoder::with_skip_validation`] for details.
     skip_validation: UnsafeFlag,
     /// Per-batch custom metadata to attach to the decoded RecordBatch
-    custom_metadata: HashMap<String, String>,
+    custom_metadata: Option<HashMap<String, String>>,
 }
 
 impl<'a> RecordBatchDecoder<'a> {
@@ -523,7 +526,7 @@ impl<'a> RecordBatchDecoder<'a> {
             projection: None,
             require_alignment: false,
             skip_validation: UnsafeFlag::new(),
-            custom_metadata: HashMap::new(),
+            custom_metadata: None,
         })
     }
 
@@ -563,7 +566,10 @@ impl<'a> RecordBatchDecoder<'a> {
     }
 
     /// Set per-batch custom metadata to attach to the decoded [`RecordBatch`]
-    pub(crate) fn with_custom_metadata(mut self, custom_metadata: HashMap<String, String>) -> Self {
+    pub(crate) fn with_custom_metadata(
+        mut self,
+        custom_metadata: Option<HashMap<String, String>>,
+    ) -> Self {
         self.custom_metadata = custom_metadata;
         self
     }
@@ -578,7 +584,7 @@ impl<'a> RecordBatchDecoder<'a> {
             .collect();
 
         let options = RecordBatchOptions::new().with_row_count(Some(self.batch.length() as usize));
-        let custom_metadata = std::mem::take(&mut self.custom_metadata);
+        let custom_metadata = self.custom_metadata.take();
 
         let schema = Arc::clone(&self.schema);
         let batch = if let Some(projection) = self.projection {
@@ -635,12 +641,9 @@ impl<'a> RecordBatchDecoder<'a> {
             }
         };
 
-        batch.map(|b| {
-            if custom_metadata.is_empty() {
-                b
-            } else {
-                b.with_custom_metadata(custom_metadata)
-            }
+        batch.map(|b| match custom_metadata {
+            Some(m) => b.with_custom_metadata(m),
+            None => b,
         })
     }
 
