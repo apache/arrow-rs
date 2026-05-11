@@ -46,7 +46,7 @@ small_decimals = []
 avro_custom_types = ["dep:arrow-select"]
 
 # Enable async APIs
-async = ["futures", "tokio", "tokio-util", "async-stream"]
+async = ["futures", "tokio", "tokio-stream", "tokio-util", "async-stream"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
 
