@@ -781,6 +781,45 @@ where
         RunArrayIter::new(self)
     }
 }
+/// An array that can be downcast to a [`RunArray`] of any run end type and any value type.
+///
+/// This can be used to efficiently implement kernels for all possible run end
+/// types without needing to create specialized implementations for each key type.
+pub trait AnyRunEndArray: Array {
+    /// Returns the run ends of this array as a primitive array.
+    fn run_ends(&self) -> ArrayRef;
+
+    /// Returns the values of this array.
+    fn values(&self) -> &dyn Array;
+
+    /// Returns a new run-end encoded array with the given values, preserving the
+    /// existing run ends.
+    fn with_values(&self, values: ArrayRef) -> ArrayRef;
+}
+
+impl<R: RunEndIndexType> AnyRunEndArray for RunArray<R> {
+    fn run_ends(&self) -> ArrayRef {
+        let data = unsafe {
+            ArrayDataBuilder::new(R::DATA_TYPE)
+                .len(self.run_ends.values().len())
+                .buffers(vec![self.run_ends.inner().inner().clone()])
+                .build_unchecked()
+        };
+        Arc::new(PrimitiveArray::<R>::from(data))
+    }
+
+    fn values(&self) -> &dyn Array {
+        self.values.as_ref()
+    }
+
+    fn with_values(&self, values: ArrayRef) -> ArrayRef {
+        Arc::new(Self {
+            data_type: self.data_type.clone(),
+            run_ends: self.run_ends.clone(),
+            values,
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {
