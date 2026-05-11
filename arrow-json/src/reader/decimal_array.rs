@@ -16,29 +16,31 @@
 // under the License.
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 
-use arrow_array::Array;
+use arrow_array::ArrayRef;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::DecimalType;
 use arrow_cast::parse::parse_decimal;
-use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
-use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{ArrayDecoder, DecoderContext};
 
 pub struct DecimalArrayDecoder<D: DecimalType> {
     precision: u8,
     scale: i8,
+    ignore_type_conflicts: bool,
     // Invariant and Send
     phantom: PhantomData<fn(D) -> D>,
 }
 
 impl<D: DecimalType> DecimalArrayDecoder<D> {
-    pub fn new(precision: u8, scale: i8) -> Self {
+    pub fn new(ctx: &DecoderContext, precision: u8, scale: i8) -> Self {
         Self {
             precision,
             scale,
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             phantom: PhantomData,
         }
     }
@@ -48,55 +50,58 @@ impl<D> ArrayDecoder for DecimalArrayDecoder<D>
 where
     D: DecimalType,
 {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut builder = PrimitiveBuilder::<D>::with_capacity(pos.len());
 
+        #[allow(unused)] // initial value overwritten without ever being read
+        let mut anchor = String::default();
         for p in pos {
-            match tape.get(*p) {
-                TapeElement::Null => builder.append_null(),
-                TapeElement::String(idx) => {
-                    let s = tape.get_string(idx);
-                    let value = parse_decimal::<D>(s, self.precision, self.scale)?;
-                    builder.append_value(value)
+            let value = match tape.get(*p) {
+                TapeElement::Null => {
+                    builder.append_null();
+                    continue;
                 }
-                TapeElement::Number(idx) => {
-                    let s = tape.get_string(idx);
-                    let value = parse_decimal::<D>(s, self.precision, self.scale)?;
-                    builder.append_value(value)
-                }
+                TapeElement::String(idx) | TapeElement::Number(idx) => tape.get_string(idx),
                 TapeElement::I64(high) => match tape.get(*p + 1) {
                     TapeElement::I32(low) => {
-                        let val = (((high as i64) << 32) | (low as u32) as i64).to_string();
-                        let value = parse_decimal::<D>(&val, self.precision, self.scale)?;
-                        builder.append_value(value)
+                        anchor = (((high as i64) << 32) | (low as u32) as i64).to_string();
+                        anchor.as_str()
                     }
                     _ => unreachable!(),
                 },
                 TapeElement::I32(val) => {
-                    let s = val.to_string();
-                    let value = parse_decimal::<D>(&s, self.precision, self.scale)?;
-                    builder.append_value(value)
+                    anchor = val.to_string();
+                    anchor.as_str()
                 }
                 TapeElement::F64(high) => match tape.get(*p + 1) {
                     TapeElement::F32(low) => {
-                        let val = f64::from_bits(((high as u64) << 32) | low as u64).to_string();
-                        let value = parse_decimal::<D>(&val, self.precision, self.scale)?;
-                        builder.append_value(value)
+                        anchor = f64::from_bits(((high as u64) << 32) | low as u64).to_string();
+                        anchor.as_str()
                     }
                     _ => unreachable!(),
                 },
                 TapeElement::F32(val) => {
-                    let s = f32::from_bits(val).to_string();
-                    let value = parse_decimal::<D>(&s, self.precision, self.scale)?;
-                    builder.append_value(value)
+                    anchor = f32::from_bits(val).to_string();
+                    anchor.as_str()
+                }
+                _ if self.ignore_type_conflicts => {
+                    builder.append_null();
+                    continue;
                 }
                 _ => return Err(tape.error(*p, "decimal")),
+            };
+
+            match parse_decimal::<D>(value, self.precision, self.scale) {
+                Ok(value) => builder.append_value(value),
+                Err(_) if self.ignore_type_conflicts => builder.append_null(),
+                Err(e) => return Err(e),
             }
         }
 
-        Ok(builder
-            .finish()
-            .with_precision_and_scale(self.precision, self.scale)?
-            .into_data())
+        Ok(Arc::new(
+            builder
+                .finish()
+                .with_precision_and_scale(self.precision, self.scale)?,
+        ))
     }
 }

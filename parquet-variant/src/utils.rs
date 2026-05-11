@@ -146,10 +146,6 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
     }
 }
 
-pub(crate) fn fits_precision<const N: u32>(n: impl Into<i64>) -> bool {
-    n.into().unsigned_abs().leading_zeros() >= (i64::BITS - N)
-}
-
 /// Parse a path string into a vector of [`VariantPathElement`].
 ///
 /// # Syntax
@@ -288,17 +284,4 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
     };
 
     Ok((element, end + 1))
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_fits_precision() {
-        assert!(fits_precision::<10>(1023));
-        assert!(!fits_precision::<10>(1024));
-        assert!(fits_precision::<10>(-1023));
-        assert!(!fits_precision::<10>(-1024));
-    }
 }

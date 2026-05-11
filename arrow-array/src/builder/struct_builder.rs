@@ -135,6 +135,10 @@ impl ArrayBuilder for StructBuilder {
         Arc::new(self.finish_cloned())
     }
 
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        Arc::new(self.finish_preserve_values())
+    }
+
     /// Returns the builder as a non-mutable `Any` reference.
     ///
     /// This is most useful when one wants to call non-mutable APIs on a specific builder
@@ -265,6 +269,23 @@ impl StructBuilder {
         StructArray::new(self.fields.clone(), arrays, nulls)
     }
 
+    fn finish_preserve_values(&mut self) -> StructArray {
+        self.validate_content();
+        if self.fields.is_empty() {
+            return StructArray::new_empty_fields(self.len(), self.null_buffer_builder.finish());
+        }
+
+        let arrays = self
+            .field_builders
+            .iter_mut()
+            .map(|f| f.finish_preserve_values())
+            .collect();
+
+        let nulls = self.null_buffer_builder.finish();
+
+        StructArray::new(self.fields.clone(), arrays, nulls)
+    }
+
     /// Constructs and validates contents in the builder to ensure that
     /// - fields and field_builders are of equal length
     /// - the number of items in individual field_builders are equal to self.len()
@@ -304,7 +325,7 @@ mod tests {
     use arrow_data::ArrayData;
     use arrow_schema::Field;
 
-    use crate::{array::Array, types::ArrowDictionaryKeyType};
+    use crate::{array::Array, builder::tests::PreserveValuesMock, types::ArrowDictionaryKeyType};
 
     #[test]
     fn test_struct_array_builder() {
@@ -521,6 +542,33 @@ mod tests {
 
         assert_eq!(15, arr.len());
         assert_eq!(0, builder.len());
+    }
+
+    #[test]
+    fn test_struct_array_builder_finish_preserve_values() {
+        let fields = vec![Field::new("mock", DataType::Int32, false)];
+        let field_builders = vec![Box::new(PreserveValuesMock::default()) as Box<dyn ArrayBuilder>];
+
+        let mut builder = StructBuilder::new(fields, field_builders);
+        builder
+            .field_builder::<PreserveValuesMock>(0)
+            .unwrap()
+            .inner
+            .append_value(1);
+        builder.append(true);
+
+        assert_eq!(1, builder.len());
+
+        let arr = builder.finish_preserve_values();
+
+        assert_eq!(1, arr.len());
+        assert_eq!(
+            1,
+            builder
+                .field_builder::<PreserveValuesMock>(0)
+                .unwrap()
+                .called
+        );
     }
 
     #[test]

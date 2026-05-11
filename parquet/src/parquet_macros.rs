@@ -464,7 +464,10 @@ macro_rules! __thrift_read_field {
         $crate::parquet_thrift::OrderedF64::read_thrift(&mut *$prot)?
     };
     ($prot:tt, $field_ident:tt, bool) => {
-        $field_ident.bool_val.unwrap()
+        $field_ident.bool_val.ok_or_else(|| general_err!(
+            "Expected bool field but got thrift type {:?}",
+            $field_ident.field_type
+        ))?
     };
     ($prot:tt, $field_ident:tt, $field_type:ident) => {
         $field_type::read_thrift(&mut *$prot)?

@@ -81,4 +81,9 @@ $ flight_sql_client --host example.com statement-query "SELECT 1;"
 +----------+
 ```
 
+## Security
+
+See the [Security Policy] for information on the security model and how to report vulnerabilities.
+
 [apache arrow flightsql]: https://arrow.apache.org/docs/format/FlightSql.html
+[security policy]: https://github.com/apache/arrow-rs/blob/main/SECURITY.md

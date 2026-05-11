@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::{BinaryViewBuilder, FixedSizeBinaryBuilder, GenericBinaryBuilder};
-use arrow_array::{Array, GenericStringArray, OffsetSizeTrait};
-use arrow_data::ArrayData;
-use arrow_schema::ArrowError;
 use std::io::Write;
 use std::marker::PhantomData;
+use std::sync::Arc;
+
+use arrow_array::builder::{BinaryViewBuilder, FixedSizeBinaryBuilder, GenericBinaryBuilder};
+use arrow_array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow_schema::ArrowError;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
@@ -87,7 +88,7 @@ pub struct BinaryArrayDecoder<O: OffsetSizeTrait> {
 }
 
 impl<O: OffsetSizeTrait> ArrayDecoder for BinaryArrayDecoder<O> {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let data_capacity = estimate_data_capacity(tape, pos)?;
 
         if O::from_usize(data_capacity).is_none() {
@@ -113,7 +114,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for BinaryArrayDecoder<O> {
             }
         }
 
-        Ok(builder.finish().into_data())
+        Ok(Arc::new(builder.finish()))
     }
 }
 
@@ -129,7 +130,7 @@ impl FixedSizeBinaryArrayDecoder {
 }
 
 impl ArrayDecoder for FixedSizeBinaryArrayDecoder {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut builder = FixedSizeBinaryBuilder::with_capacity(pos.len(), self.len);
         // Preallocate for the decoded byte width (FixedSizeBinary len), not the hex string length.
         let mut scratch = Vec::with_capacity(self.len as usize);
@@ -148,7 +149,7 @@ impl ArrayDecoder for FixedSizeBinaryArrayDecoder {
             }
         }
 
-        Ok(builder.finish().into_data())
+        Ok(Arc::new(builder.finish()))
     }
 }
 
@@ -156,7 +157,7 @@ impl ArrayDecoder for FixedSizeBinaryArrayDecoder {
 pub struct BinaryViewDecoder {}
 
 impl ArrayDecoder for BinaryViewDecoder {
-    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let data_capacity = estimate_data_capacity(tape, pos)?;
         let mut builder = BinaryViewBuilder::with_capacity(data_capacity);
         let mut scratch = Vec::new();
@@ -175,7 +176,7 @@ impl ArrayDecoder for BinaryViewDecoder {
             }
         }
 
-        Ok(builder.finish().into_data())
+        Ok(Arc::new(builder.finish()))
     }
 }
 

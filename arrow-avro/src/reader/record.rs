@@ -2458,7 +2458,7 @@ impl<'a> ProjectorBuilder<'a> {
             .writer_fields
             .iter()
             .map(|field| match field {
-                ResolvedField::ToReader(index) => Ok(FieldProjection::ToReader(*index)),
+                ResolvedField::ToReader(index, _) => Ok(FieldProjection::ToReader(*index)),
                 ResolvedField::Skip(datatype) => {
                     let skipper = Skipper::from_avro(datatype)?;
                     Ok(FieldProjection::Skip(skipper))
@@ -2568,12 +2568,27 @@ impl Skipper {
             Codec::Uuid => Self::UuidString, // encoded as string
             Codec::Enum(_) => Self::Enum,
             Codec::List(item) => Self::List(Box::new(Skipper::from_avro(item)?)),
-            Codec::Struct(fields) => Self::Struct(
-                fields
-                    .iter()
-                    .map(|f| Skipper::from_avro(f.data_type()))
-                    .collect::<Result<_, _>>()?,
-            ),
+            Codec::Struct(fields) => {
+                if let Some(ResolutionInfo::Record(rec)) = dt.resolution.as_ref() {
+                    Self::Struct(
+                        rec.writer_fields
+                            .iter()
+                            .map(|wf| match wf {
+                                ResolvedField::ToReader(_, wdt) | ResolvedField::Skip(wdt) => {
+                                    Skipper::from_avro(wdt)
+                                }
+                            })
+                            .collect::<Result<_, _>>()?,
+                    )
+                } else {
+                    Self::Struct(
+                        fields
+                            .iter()
+                            .map(|f| Skipper::from_avro(f.data_type()))
+                            .collect::<Result<_, _>>()?,
+                    )
+                }
+            }
             Codec::Map(values) => Self::Map(Box::new(Skipper::from_avro(values)?)),
             Codec::Interval => Self::DurationFixed12,
             Codec::Union(encodings, _, _) => {

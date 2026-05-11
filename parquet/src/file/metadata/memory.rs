@@ -18,7 +18,7 @@
 //! Memory calculations for [`ParquetMetadata::memory_size`]
 //!
 //! [`ParquetMetadata::memory_size`]: crate::file::metadata::ParquetMetaData::memory_size
-use crate::basic::{BoundaryOrder, ColumnOrder, Compression, Encoding, PageType};
+use crate::basic::{BoundaryOrder, ColumnOrder, CompressionCodec, Encoding, PageType};
 use crate::data_type::private::ParquetValueType;
 use crate::file::metadata::{
     ColumnChunkMetaData, FileMetaData, KeyValue, PageEncodingStats, ParquetPageEncodingStats,
@@ -206,7 +206,7 @@ impl HeapSize for SortingColumn {
         0 // no heap allocations
     }
 }
-impl HeapSize for Compression {
+impl HeapSize for CompressionCodec {
     fn heap_size(&self) -> usize {
         0 // no heap allocations
     }

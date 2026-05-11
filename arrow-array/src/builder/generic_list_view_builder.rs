@@ -71,6 +71,10 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> ArrayBuilder
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
     }
+
+    fn finish_preserve_values(&mut self) -> ArrayRef {
+        Arc::new(self.finish_preserve_values())
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListViewBuilder<OffsetSize, T> {
@@ -216,6 +220,23 @@ where
         GenericListViewArray::new(field, offsets, sizes, values, nulls)
     }
 
+    fn finish_preserve_values(&mut self) -> GenericListViewArray<OffsetSize> {
+        let values = self.values_builder.finish_preserve_values();
+        let nulls = self.null_buffer_builder.finish();
+        let offsets = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
+        self.current_offset = OffsetSize::zero();
+
+        // Safety: Safe by construction
+        let offsets = ScalarBuffer::from(offsets);
+        let sizes = Buffer::from_vec(std::mem::take(&mut self.sizes_builder));
+        let sizes = ScalarBuffer::from(sizes);
+        let field = match &self.field {
+            Some(f) => f.clone(),
+            None => Arc::new(Field::new("item", values.data_type().clone(), true)),
+        };
+        GenericListViewArray::new(field, offsets, sizes, values, nulls)
+    }
+
     /// Returns the current offsets buffer as a slice
     pub fn offsets_slice(&self) -> &[OffsetSize] {
         self.offsets_builder.as_slice()
@@ -245,7 +266,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{Int32Builder, ListViewBuilder, make_builder};
+    use crate::builder::{Int32Builder, ListViewBuilder, make_builder, tests::PreserveValuesMock};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Array, Int32Array};
@@ -702,5 +723,18 @@ mod tests {
         let mut builder = ListViewBuilder::new(Int32Builder::new()).with_field(field.clone());
         builder.append_value([Some(1)]);
         builder.finish();
+    }
+
+    #[test]
+    fn test_finish_preserve_values() {
+        let mut builder = ListViewBuilder::new(PreserveValuesMock::default());
+
+        builder.values().inner.append_value(1);
+        builder.append(true);
+
+        let arr = builder.finish_preserve_values();
+
+        assert_eq!(1, arr.len());
+        assert_eq!(1, builder.values().called);
     }
 }

@@ -186,6 +186,66 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_take(&values, &indices))
     });
 
+    let values = create_primitive_list_array::<i32, Int32Type>(512, 0.0, 0.0, 20);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take list i32 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_list_array::<i32, Int32Type>(1024, 0.0, 0.0, 20);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take list i32 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_list_array::<i32, Int32Type>(1024, 0.5, 0.0, 20);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take list i32 null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_list_array::<i32, Int32Type>(1024, 0.0, 0.0, 202);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take list i32 null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_list_array::<i32, Int32Type>(1024, 0.5, 0.5, 20);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take list i32 null values null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_list_view_array::<i32, Int32Type>(512, 0.0, 0.0, 20);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take listview i32 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_list_view_array::<i32, Int32Type>(1024, 0.0, 0.0, 20);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take listview i32 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_list_view_array::<i32, Int32Type>(1024, 0.5, 0.0, 20);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take listview i32 null values 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_list_view_array::<i32, Int32Type>(1024, 0.0, 0.0, 20);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take listview i32 null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_primitive_list_view_array::<i32, Int32Type>(1024, 0.5, 0.5, 20);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function("take listview i32 null values null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
     let values = create_primitive_run_array::<Int32Type, Int32Type>(1024, 512);
     let indices = create_random_index(1024, 0.0);
     c.bench_function(

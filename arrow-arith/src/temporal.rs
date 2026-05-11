@@ -17,12 +17,14 @@
 
 //! Defines temporal kernels for time and date related functions.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use cast::as_primitive_array;
 use chrono::{Datelike, TimeZone, Timelike, Utc};
 
+use arrow_array::ree_map;
 use arrow_array::temporal_conversions::{
     MICROSECONDS, MICROSECONDS_IN_DAY, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
     NANOSECONDS_IN_DAY, SECONDS_IN_DAY, date32_to_datetime, date64_to_datetime,
@@ -80,6 +82,59 @@ pub enum DatePart {
 impl std::fmt::Display for DatePart {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+/// Parses a string into a [`DatePart`].
+///
+/// Matching is case-insensitive. The accepted names follow PostgreSQL's
+/// `EXTRACT` / `date_part` conventions (see
+/// <https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-EXTRACT>)
+/// and are aligned with the alias set accepted by `arrow-cast`'s
+/// `IntervalUnit::from_str` (plurals, short forms like `y`, `mon`, `ms`,
+/// `us`) so the two parsers round-trip on the names they share.
+///
+/// Names that do not map one-to-one onto a [`DatePart`] variant are
+/// intentionally not recognized:
+/// - `epoch` — a derived computation, not a date part.
+/// - `century`, `decade`, `millennium` — no matching [`DatePart`] variant.
+/// - `timezone`, `timezone_hour`, `timezone_minute` — not modeled by
+///   [`DatePart`].
+/// - `isodow` — PostgreSQL's `isodow` returns `1..=7` (Mon=1), but the
+///   closest variant ([`DatePart::DayOfWeekMonday0`]) returns `0..=6`.
+///   Accepting it here would silently shift the value range; callers that
+///   need the PostgreSQL semantic should map the alias themselves and
+///   add `1` to the extracted value.
+impl FromStr for DatePart {
+    type Err = ArrowError;
+
+    fn from_str(s: &str) -> Result<Self, ArrowError> {
+        Ok(match s.to_lowercase().as_str() {
+            "y" | "yr" | "yrs" | "year" | "years" => Self::Year,
+            "isoyear" => Self::YearISO,
+            "qtr" | "quarter" | "quarters" => Self::Quarter,
+            "mon" | "mons" | "month" | "months" => Self::Month,
+            "w" | "week" | "weeks" => Self::Week,
+            "isoweek" => Self::WeekISO,
+            "d" | "day" | "days" => Self::Day,
+            "dow" | "dayofweek" => Self::DayOfWeekSunday0,
+            "doy" | "dayofyear" => Self::DayOfYear,
+            "h" | "hr" | "hrs" | "hour" | "hours" => Self::Hour,
+            "m" | "min" | "mins" | "minute" | "minutes" => Self::Minute,
+            "s" | "sec" | "secs" | "second" | "seconds" => Self::Second,
+            "ms" | "msec" | "msecs" | "msecond" | "mseconds" | "millisecond" | "milliseconds" => {
+                Self::Millisecond
+            }
+            "us" | "usec" | "usecs" | "usecond" | "useconds" | "microsecond" | "microseconds" => {
+                Self::Microsecond
+            }
+            "nanosecond" | "nanoseconds" => Self::Nanosecond,
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Unknown date part: {s}"
+                )));
+            }
+        })
     }
 }
 
@@ -194,6 +249,15 @@ pub fn date_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef, ArrowErr
             let new_array = array.with_values(values);
             Ok(new_array)
         }
+        DataType::RunEndEncoded(k, _) => match k.data_type() {
+            DataType::Int16 => ree_map!(array, Int16Type, |a| date_part(a, part)),
+            DataType::Int32 => ree_map!(array, Int32Type, |a| date_part(a, part)),
+            DataType::Int64 => ree_map!(array, Int64Type, |a| date_part(a, part)),
+            _ => Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid run-end type: {:?}",
+                k.data_type()
+            ))),
+        },
         t => return_compute_error_with!(format!("{part} does not support"), t),
     )
 }
@@ -2039,5 +2103,122 @@ mod tests {
         assert_eq!(2015, actual.value(0));
         assert_eq!(2015, actual.value(1));
         assert_eq!(2016, actual.value(2));
+    }
+
+    #[test]
+    fn test_ree_timestamp_year() {
+        let vals: TimestampSecondArray =
+            vec![Some(1514764800), Some(1550636625), Some(1550636625)].into();
+        let run_ends = Int32Array::from(vec![1, 2, 3]);
+        let ree = RunArray::try_new(&run_ends, &vals).unwrap();
+
+        let b = date_part(&ree, DatePart::Year).unwrap();
+        let ree_result = b.as_run_opt::<Int32Type>().unwrap();
+        let values = ree_result.values().as_primitive::<Int32Type>();
+        assert_eq!(2018, values.value(0));
+        assert_eq!(2019, values.value(1));
+        assert_eq!(2019, values.value(2));
+    }
+
+    #[test]
+    fn test_ree_date64_month() {
+        let vals: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), Some(1550636625000)].into();
+        let run_ends = Int64Array::from(vec![2, 4]);
+        let ree = RunArray::try_new(&run_ends, &vals).unwrap();
+
+        let b = date_part(&ree, DatePart::Month).unwrap();
+        let ree_result = b.as_run_opt::<Int64Type>().unwrap();
+        let values = ree_result.values().as_primitive::<Int32Type>();
+        assert_eq!(1, values.value(0));
+        assert_eq!(2, values.value(1));
+    }
+
+    #[test]
+    fn test_date_part_from_str() {
+        let cases = [
+            ("y", DatePart::Year),
+            ("yr", DatePart::Year),
+            ("year", DatePart::Year),
+            ("years", DatePart::Year),
+            ("YEAR", DatePart::Year),
+            ("isoyear", DatePart::YearISO),
+            ("qtr", DatePart::Quarter),
+            ("quarter", DatePart::Quarter),
+            ("quarters", DatePart::Quarter),
+            ("mon", DatePart::Month),
+            ("mons", DatePart::Month),
+            ("month", DatePart::Month),
+            ("MONTHS", DatePart::Month),
+            ("w", DatePart::Week),
+            ("week", DatePart::Week),
+            ("isoweek", DatePart::WeekISO),
+            ("d", DatePart::Day),
+            ("day", DatePart::Day),
+            ("dow", DatePart::DayOfWeekSunday0),
+            ("DayOfWeek", DatePart::DayOfWeekSunday0),
+            ("doy", DatePart::DayOfYear),
+            ("DayOfYear", DatePart::DayOfYear),
+            ("h", DatePart::Hour),
+            ("hr", DatePart::Hour),
+            ("hour", DatePart::Hour),
+            // Pin the famous `m`/`mon` ambiguity: `m` resolves to Minute,
+            // matching `arrow-cast`'s `IntervalUnit::from_str`. Use `mon`
+            // (or `month`) for Month.
+            ("m", DatePart::Minute),
+            ("min", DatePart::Minute),
+            ("mins", DatePart::Minute),
+            ("minute", DatePart::Minute),
+            ("s", DatePart::Second),
+            ("sec", DatePart::Second),
+            ("second", DatePart::Second),
+            ("ms", DatePart::Millisecond),
+            ("msec", DatePart::Millisecond),
+            ("mseconds", DatePart::Millisecond),
+            ("millisecond", DatePart::Millisecond),
+            ("us", DatePart::Microsecond),
+            ("usec", DatePart::Microsecond),
+            ("useconds", DatePart::Microsecond),
+            ("microsecond", DatePart::Microsecond),
+            ("nanosecond", DatePart::Nanosecond),
+            ("nanoseconds", DatePart::Nanosecond),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                DatePart::from_str(input).unwrap(),
+                expected,
+                "parsing {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_date_part_from_str_unknown() {
+        // Names intentionally rejected — see the FromStr doc comment for why.
+        // `isodow` is here because mapping it to `DayOfWeekMonday0` would
+        // silently shift the value range vs. PostgreSQL's `isodow` (1..=7).
+        let unknown = [
+            "epoch",
+            "century",
+            "decade",
+            "millennium",
+            "timezone",
+            "timezone_hour",
+            "timezone_minute",
+            "isodow",
+            // Whitespace is not trimmed — pin this so the behavior doesn't
+            // change silently. Callers should trim before parsing.
+            " year ",
+            "year ",
+            "",
+            "nope",
+        ];
+        for s in unknown {
+            let err = DatePart::from_str(s).unwrap_err();
+            assert!(
+                matches!(err, ArrowError::InvalidArgumentError(_)),
+                "expected InvalidArgumentError for {s:?}, got: {err}"
+            );
+        }
     }
 }
