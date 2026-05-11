@@ -424,7 +424,6 @@ fn test_roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever() {
         ],
     );
 
-    // TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
     roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever(
         AES_256_FOOTER_KEY,
         AES_256_FOOTER_KEY_NAME,
@@ -471,14 +470,14 @@ fn test_roundtrip_non_uniform_encryption_plaintext_footer_with_key_retriever() {
                 AES_256_KEY_NAMES[5],
             ),
             (
+                AES_256_COLUMN_NAMES[6],
+                AES_256_COLUMN_KEYS[6],
+                AES_256_KEY_NAMES[6],
+            ),
+            (
                 AES_256_COLUMN_NAMES[7],
                 AES_256_COLUMN_KEYS[7],
                 AES_256_KEY_NAMES[7],
-            ),
-            (
-                AES_256_COLUMN_NAMES[8],
-                AES_256_COLUMN_KEYS[8],
-                AES_256_KEY_NAMES[6],
             ),
         ],
     );
@@ -809,21 +808,11 @@ fn test_write_non_uniform_encryption() {
         AES_128_COLUMN_NAME_KEYS,
     );
 
-    // TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
     write_non_uniform_encryption(
         AES_256_FOOTER_KEY,
         AES_256_COLUMN_NAMES.to_vec(),
         AES_256_COLUMN_KEYS.iter().map(|&s| s.to_vec()).collect(),
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-            (AES_256_COLUMN_NAMES[8], AES_256_COLUMN_KEYS[8]),
-        ],
+        AES_256_COLUMN_NAME_KEYS,
     );
 }
 
@@ -1204,29 +1193,10 @@ fn test_write_non_uniform_encryption_column_missmatch() {
         AES_128_COLUMN_NAME_KEYS,
     );
 
-    // TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
     write_non_uniform_encryption_column_missmatch(
         AES_256_FOOTER_KEY,
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-            (AES_256_COLUMN_NAMES[8], AES_256_COLUMN_KEYS[8]),
-        ],
-        &[
-            (AES_256_COLUMN_NAMES[0], AES_256_COLUMN_KEYS[0]),
-            (AES_256_COLUMN_NAMES[1], AES_256_COLUMN_KEYS[1]),
-            (AES_256_COLUMN_NAMES[2], AES_256_COLUMN_KEYS[2]),
-            (AES_256_COLUMN_NAMES[3], AES_256_COLUMN_KEYS[3]),
-            (AES_256_COLUMN_NAMES[4], AES_256_COLUMN_KEYS[4]),
-            (AES_256_COLUMN_NAMES[5], AES_256_COLUMN_KEYS[5]),
-            (AES_256_COLUMN_NAMES[7], AES_256_COLUMN_KEYS[7]),
-            (AES_256_COLUMN_NAMES[8], AES_256_COLUMN_KEYS[8]),
-        ],
+        AES_256_COLUMN_NAME_KEYS,
+        AES_256_COLUMN_NAME_KEYS,
     );
 }
 

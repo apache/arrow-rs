@@ -55,19 +55,17 @@ pub(crate) const AES_256_FOOTER_KEY_NAME: &str = "kf";
 pub(crate) const AES_256_KEY_NAMES: [&str; 8] =
     ["kc1", "kc2", "kc3", "kc4", "kc5", "kc6", "kc7", "kc8"];
 
-// TODO: Update the test files with 3-level list schema structure to avoid 'int64_field.list.int64_field' column name
-pub(crate) const AES_256_COLUMN_NAMES: [&str; 9] = [
+pub(crate) const AES_256_COLUMN_NAMES: [&str; 8] = [
     "double_field",
     "float_field",
     "boolean_field",
     "int32_field",
     "ba_field",
     "flba_field",
-    "int64_field",
+    "int64_field.list.element",
     "int96_field",
-    "int64_field.list.int64_field",
 ];
-pub(crate) const AES_256_COLUMN_KEYS: [&[u8]; 9] = [
+pub(crate) const AES_256_COLUMN_KEYS: [&[u8]; 8] = [
     b"12345678901234567890123456789012",
     b"12345678901234567890123456789013",
     b"12345678901234567890123456789014",
@@ -76,7 +74,6 @@ pub(crate) const AES_256_COLUMN_KEYS: [&[u8]; 9] = [
     b"12345678901234567890123456789017",
     b"12345678901234567890123456789018",
     b"12345678901234567890123456789019",
-    b"12345678901234567890123456789018",
 ];
 
 pub(crate) const AES_256_COLUMN_NAME_KEYS: &[(&str, &[u8]); 8] = &[
