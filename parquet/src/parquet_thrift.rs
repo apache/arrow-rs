@@ -367,22 +367,23 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         let field_delta = (field_type & 0xf0) >> 4;
         let field_type = FieldType::try_from(field_type & 0xf)?;
 
-        match (field_type, field_delta) {
-            (FieldType::Stop, _) => Ok(FieldIdentifier {
+        match field_type {
+            FieldType::Stop => Ok(FieldIdentifier {
                 field_type: FieldType::Stop,
                 id: 0,
             }),
-            (field_type, 0) => {
-                let id = self.read_full_field_id()?;
-                Ok(FieldIdentifier { field_type, id })
-            }
-            (field_type, field_delta) => {
-                let id = last_field_id.checked_add(field_delta as i16).ok_or(
-                    ThriftProtocolError::FieldDeltaOverflow {
-                        field_delta,
-                        last_field_id,
-                    },
-                )?;
+            _ => {
+                let id = if field_delta != 0 {
+                    last_field_id.checked_add(field_delta as i16).ok_or(
+                        ThriftProtocolError::FieldDeltaOverflow {
+                            field_delta,
+                            last_field_id,
+                        },
+                    )?
+                } else {
+                    self.read_full_field_id()?
+                };
+
                 Ok(FieldIdentifier { field_type, id })
             }
         }
