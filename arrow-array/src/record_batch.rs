@@ -36,6 +36,14 @@ pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
     fn schema(&self) -> SchemaRef;
 }
 
+/// Shared per-batch custom metadata.
+///
+/// This is the type stored inside a [`RecordBatch`] and accepted by
+/// [`RecordBatch::with_custom_metadata`]. Cloning is cheap (an [`Arc`]
+/// refcount bump), so the same metadata map can be attached to many batches
+/// without copying the underlying [`HashMap`].
+pub type CustomMetadata = Arc<HashMap<String, String>>;
+
 impl<R: RecordBatchReader + ?Sized> RecordBatchReader for Box<R> {
     fn schema(&self) -> SchemaRef {
         self.as_ref().schema()
@@ -238,7 +246,7 @@ pub struct RecordBatch {
     /// metadata. Stored as `Option<Arc<...>>` so that a `RecordBatch` without
     /// custom metadata adds only a pointer's worth of overhead, and clones
     /// share the map.
-    custom_metadata: Option<Arc<HashMap<String, String>>>,
+    custom_metadata: Option<CustomMetadata>,
 }
 
 // Custom equality: a batch built with an empty metadata map compares equal to
@@ -250,17 +258,18 @@ impl PartialEq for RecordBatch {
         if self.row_count != other.row_count || self.schema != other.schema {
             return false;
         }
-        if self.columns != other.columns {
-            return false;
-        }
-        match (
+        let metadata_eq = match (
             self.custom_metadata.as_deref(),
             other.custom_metadata.as_deref(),
         ) {
             (None, None) => true,
             (Some(m), None) | (None, Some(m)) => m.is_empty(),
             (Some(a), Some(b)) => a == b,
+        };
+        if !metadata_eq {
+            return false;
         }
+        self.columns == other.columns
     }
 }
 
@@ -439,23 +448,17 @@ impl RecordBatch {
 
     /// Return the schema, columns, row count and custom metadata of this [`RecordBatch`].
     ///
-    /// The returned metadata is `None` if this batch has no custom metadata.
-    /// If the batch uniquely owns its metadata (the common case), the map is
-    /// returned without cloning; otherwise it is cloned out of the shared
-    /// reference.
+    /// The returned metadata is `None` if this batch has no custom metadata,
+    /// otherwise it is the shared [`Arc`] held by this batch. Callers that need
+    /// an owned `HashMap` can use [`Arc::unwrap_or_clone`].
     pub fn into_parts_with_custom_metadata(
         self,
-    ) -> (
-        SchemaRef,
-        Vec<ArrayRef>,
-        usize,
-        Option<HashMap<String, String>>,
-    ) {
+    ) -> (SchemaRef, Vec<ArrayRef>, usize, Option<CustomMetadata>) {
         (
             self.schema,
             self.columns,
             self.row_count,
-            self.custom_metadata.map(Arc::unwrap_or_clone),
+            self.custom_metadata,
         )
     }
 
@@ -538,13 +541,17 @@ impl RecordBatch {
 
     /// Sets the per-batch custom metadata, returning `self`.
     ///
+    /// Takes an [`Arc`] so the same metadata map can be shared across many
+    /// [`RecordBatch`]es without cloning. Callers with a fresh `HashMap`
+    /// can wrap it via [`Arc::new`].
+    ///
     /// An empty map is normalized to "no metadata", so a batch built with an
     /// empty map compares equal to one built without calling this method.
-    pub fn with_custom_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+    pub fn with_custom_metadata(mut self, metadata: CustomMetadata) -> Self {
         self.custom_metadata = if metadata.is_empty() {
             None
         } else {
-            Some(Arc::new(metadata))
+            Some(metadata)
         };
         self
     }
@@ -1906,7 +1913,7 @@ mod tests {
 
         let mut metadata = HashMap::new();
         metadata.insert("key".to_string(), "value".to_string());
-        let batch = batch.with_custom_metadata(metadata.clone());
+        let batch = batch.with_custom_metadata(Arc::new(metadata.clone()));
         assert_eq!(batch.custom_metadata(), Some(&metadata));
     }
 
@@ -1927,7 +1934,7 @@ mod tests {
         let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
         let mut metadata = HashMap::new();
         metadata.insert("k".to_string(), "v".to_string());
-        let batch = batch.with_custom_metadata(metadata.clone());
+        let batch = batch.with_custom_metadata(Arc::new(metadata.clone()));
 
         let sliced = batch.slice(0, 2);
         assert_eq!(sliced.custom_metadata(), Some(&metadata));
@@ -1941,7 +1948,7 @@ mod tests {
 
         let mut metadata = HashMap::new();
         metadata.insert("k".to_string(), "v".to_string());
-        let batch = batch.with_custom_metadata(metadata.clone());
+        let batch = batch.with_custom_metadata(Arc::new(metadata.clone()));
 
         let projected = batch.project(&[0]).unwrap();
         assert_eq!(projected.custom_metadata(), Some(&metadata));
@@ -1952,13 +1959,13 @@ mod tests {
         let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
         let mut metadata = HashMap::new();
         metadata.insert("k".to_string(), "v".to_string());
-        let batch = batch.with_custom_metadata(metadata.clone());
+        let batch = batch.with_custom_metadata(Arc::new(metadata.clone()));
 
         let (schema, columns, row_count, custom_metadata) = batch.into_parts_with_custom_metadata();
         assert_eq!(schema.fields().len(), 1);
         assert_eq!(columns.len(), 1);
         assert_eq!(row_count, 3);
-        assert_eq!(custom_metadata, Some(metadata));
+        assert_eq!(custom_metadata.as_deref(), Some(&metadata));
     }
 
     #[test]
@@ -1972,7 +1979,7 @@ mod tests {
         // Different metadata -> not equal
         let mut metadata = HashMap::new();
         metadata.insert("k".to_string(), "v".to_string());
-        let batch1 = batch1.with_custom_metadata(metadata);
+        let batch1 = batch1.with_custom_metadata(Arc::new(metadata));
         assert_ne!(batch1, batch2);
     }
 
@@ -1983,7 +1990,7 @@ mod tests {
         let batch1 = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
         let batch2 = record_batch!(("a", Int32, [1, 2, 3]))
             .unwrap()
-            .with_custom_metadata(HashMap::new());
+            .with_custom_metadata(Arc::new(HashMap::new()));
         assert_eq!(batch1, batch2);
         assert!(batch2.custom_metadata().is_none());
     }
@@ -1996,7 +2003,7 @@ mod tests {
         let mut metadata = HashMap::new();
         metadata.insert("k".to_string(), "v".to_string());
         let no_meta = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
-        let mut cleared = no_meta.clone().with_custom_metadata(metadata);
+        let mut cleared = no_meta.clone().with_custom_metadata(Arc::new(metadata));
         cleared.custom_metadata_mut().clear();
         assert!(cleared.custom_metadata().is_some_and(|m| m.is_empty()));
         assert_eq!(no_meta, cleared);

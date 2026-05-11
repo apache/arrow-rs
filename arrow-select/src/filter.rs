@@ -400,7 +400,7 @@ impl FilterPredicate {
             let mut batch =
                 RecordBatch::new_unchecked(record_batch.schema(), filtered_arrays, self.count);
             if let Some(m) = custom_metadata {
-                batch = batch.with_custom_metadata(m);
+                batch = batch.with_custom_metadata(Arc::new(m));
             }
             Ok(batch)
         }

@@ -80,7 +80,7 @@ pub fn flight_data_to_arrow_batch(
                 &message.version(),
             )
             .map(|rb| match custom_metadata {
-                Some(m) => rb.with_custom_metadata(m),
+                Some(m) => rb.with_custom_metadata(Arc::new(m)),
                 None => rb,
             })
         })?

@@ -4330,8 +4330,8 @@ mod tests {
         assert_eq!(read_batch, batch2);
     }
 
-    fn map_of<I: IntoIterator<Item = (String, String)>>(items: I) -> HashMap<String, String> {
-        items.into_iter().collect()
+    fn map_of<I: IntoIterator<Item = (String, String)>>(items: I) -> CustomMetadata {
+        Arc::new(items.into_iter().collect())
     }
 
     #[test]
@@ -4446,11 +4446,15 @@ mod tests {
         let read_batches: Vec<_> = reader.map(|b| b.unwrap()).collect();
         assert_eq!(read_batches.len(), 2);
         assert_eq!(
-            read_batches[0].custom_metadata().and_then(|m| m.get("batch_index")),
+            read_batches[0]
+                .custom_metadata()
+                .and_then(|m| m.get("batch_index")),
             Some(&"0".to_string())
         );
         assert_eq!(
-            read_batches[1].custom_metadata().and_then(|m| m.get("batch_index")),
+            read_batches[1]
+                .custom_metadata()
+                .and_then(|m| m.get("batch_index")),
             Some(&"1".to_string())
         );
     }
@@ -4483,7 +4487,9 @@ mod tests {
 
         // Batch 0
         assert_eq!(
-            batches[0].custom_metadata().and_then(|m| m.get("batch_index")),
+            batches[0]
+                .custom_metadata()
+                .and_then(|m| m.get("batch_index")),
             Some(&"0".to_string())
         );
         assert_eq!(
@@ -4494,7 +4500,9 @@ mod tests {
 
         // Batch 1
         assert_eq!(
-            batches[1].custom_metadata().and_then(|m| m.get("batch_index")),
+            batches[1]
+                .custom_metadata()
+                .and_then(|m| m.get("batch_index")),
             Some(&"1".to_string())
         );
         assert_eq!(

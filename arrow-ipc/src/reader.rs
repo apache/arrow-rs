@@ -642,7 +642,7 @@ impl<'a> RecordBatchDecoder<'a> {
         };
 
         batch.map(|b| match custom_metadata {
-            Some(m) => b.with_custom_metadata(m),
+            Some(m) => b.with_custom_metadata(Arc::new(m)),
             None => b,
         })
     }
