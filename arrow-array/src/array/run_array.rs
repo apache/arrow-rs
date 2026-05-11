@@ -30,25 +30,6 @@ use crate::{
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
 };
 
-/// Recursively applies a function to the values of a RunEndEncoded array, preserving the run structure.
-///
-/// # Example
-///
-/// ```ignore
-/// let result = ree_recurse!(array, Int32Type, my_function)?;
-/// ```
-///
-/// This macro is useful for implementing functions that should work on the logical values
-/// of a REE array while preserving the run-end encoding structure.
-#[macro_export]
-macro_rules! ree_map {
-    ($array:expr, $run_type:ty, $func:expr) => {{
-        let ree = $array.as_run_opt::<$run_type>().unwrap();
-        let inner_values = $func(ree.values().as_ref())?;
-        Ok(std::sync::Arc::new(ree.with_values(inner_values)))
-    }};
-}
-
 /// An array of [run-end encoded values].
 ///
 /// This encoding is variation on [run-length encoding (RLE)] and is good for representing
@@ -790,7 +771,7 @@ pub trait AnyRunEndArray: Array {
     fn run_ends(&self) -> ArrayRef;
 
     /// Returns the values of this array.
-    fn values(&self) -> &dyn Array;
+    fn values(&self) -> Arc<dyn Array>;
 
     /// Returns a new run-end encoded array with the given values, preserving the
     /// existing run ends.
@@ -808,8 +789,8 @@ impl<R: RunEndIndexType> AnyRunEndArray for RunArray<R> {
         Arc::new(PrimitiveArray::<R>::from(data))
     }
 
-    fn values(&self) -> &dyn Array {
-        self.values.as_ref()
+    fn values(&self) -> Arc<dyn Array> {
+        self.values.clone()
     }
 
     fn with_values(&self, values: ArrayRef) -> ArrayRef {
