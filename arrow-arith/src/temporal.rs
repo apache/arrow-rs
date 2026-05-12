@@ -63,10 +63,10 @@ pub enum DatePart {
     DayOfWeekSunday0,
     /// Day of the week, in range `0..=6`, where Monday is `0`
     DayOfWeekMonday0,
-    /// ISO day of the week, in range `1..=7`, where Monday is `1`
-    DayOfWeekMonday1,
     /// Day of the week, in range `1..=7`, where Sunday is `1`
     DayOfWeekSunday1,
+    /// ISO day of the week, in range `1..=7`, where Monday is `1`
+    DayOfWeekMonday1,
     /// Day of year, in range `1..=366`
     DayOfYear,
     /// Hour of the day, in range `0..=23`
@@ -117,8 +117,8 @@ impl FromStr for DatePart {
             "isoweek" => Self::WeekISO,
             "d" | "day" | "days" => Self::Day,
             "dow" | "dayofweek" => Self::DayOfWeekSunday0,
-            "isodow" => Self::DayOfWeekMonday1,
             "dayofweek1" => Self::DayOfWeekSunday1,
+            "isodow" => Self::DayOfWeekMonday1,
             "doy" | "dayofyear" => Self::DayOfYear,
             "h" | "hr" | "hrs" | "hour" | "hours" => Self::Hour,
             "m" | "min" | "mins" | "minute" | "minutes" => Self::Minute,
@@ -159,8 +159,8 @@ where
         DatePart::Day => |d| d.day() as i32,
         DatePart::DayOfWeekSunday0 => |d| d.num_days_from_sunday(),
         DatePart::DayOfWeekMonday0 => |d| d.num_days_from_monday(),
-        DatePart::DayOfWeekMonday1 => |d| d.num_days_from_monday() + 1,
         DatePart::DayOfWeekSunday1 => |d| d.num_days_from_sunday() + 1,
+        DatePart::DayOfWeekMonday1 => |d| d.num_days_from_monday() + 1,
         DatePart::DayOfYear => |d| d.ordinal() as i32,
         DatePart::Hour => |d| d.hour() as i32,
         DatePart::Minute => |d| d.minute() as i32,
@@ -503,8 +503,8 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalYearMonthType> {
             | DatePart::Day
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
-            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfWeekSunday1
+            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfYear
             | DatePart::Hour
             | DatePart::Minute
@@ -541,8 +541,8 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalDayTimeType> {
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
-            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfWeekSunday1
+            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfYear => {
                 return_compute_error_with!(format!("{part} does not support"), self.data_type())
             }
@@ -585,8 +585,8 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
             | DatePart::YearISO
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
-            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfWeekSunday1
+            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfYear => {
                 return_compute_error_with!(format!("{part} does not support"), self.data_type())
             }
@@ -619,8 +619,8 @@ impl ExtractDatePartExt for PrimitiveArray<DurationSecondType> {
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
-            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfWeekSunday1
+            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfYear => {
                 return_compute_error_with!(format!("{part} does not support"), self.data_type())
             }
@@ -653,8 +653,8 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMillisecondType> {
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
-            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfWeekSunday1
+            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfYear => {
                 return_compute_error_with!(format!("{part} does not support"), self.data_type())
             }
@@ -687,8 +687,8 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMicrosecondType> {
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
-            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfWeekSunday1
+            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfYear => {
                 return_compute_error_with!(format!("{part} does not support"), self.data_type())
             }
@@ -721,8 +721,8 @@ impl ExtractDatePartExt for PrimitiveArray<DurationNanosecondType> {
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
-            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfWeekSunday1
+            | DatePart::DayOfWeekMonday1
             | DatePart::DayOfYear => {
                 return_compute_error_with!(format!("{part} does not support"), self.data_type())
             }
@@ -1003,26 +1003,6 @@ mod tests {
     }
 
     #[test]
-    fn test_temporal_array_date64_isodow() {
-        //1514764800000 -> 2018-01-01 (Monday)
-        //1550636625000 -> 2019-02-20 (Wednesday)
-        //1483228800000 -> 2017-01-01 (Sunday)
-        let a: PrimitiveArray<Date64Type> = vec![
-            Some(1514764800000),
-            None,
-            Some(1550636625000),
-            Some(1483228800000),
-        ]
-        .into();
-
-        let b = date_part_primitive(&a, DatePart::DayOfWeekMonday1).unwrap();
-        assert_eq!(1, b.value(0));
-        assert!(!b.is_valid(1));
-        assert_eq!(3, b.value(2));
-        assert_eq!(7, b.value(3));
-    }
-
-    #[test]
     fn test_temporal_array_date64_dayofweek1() {
         //1514764800000 -> 2018-01-01 (Monday)
         //1550636625000 -> 2019-02-20 (Wednesday)
@@ -1040,6 +1020,26 @@ mod tests {
         assert!(!b.is_valid(1));
         assert_eq!(4, b.value(2));
         assert_eq!(1, b.value(3));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_isodow() {
+        //1514764800000 -> 2018-01-01 (Monday)
+        //1550636625000 -> 2019-02-20 (Wednesday)
+        //1483228800000 -> 2017-01-01 (Sunday)
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(1514764800000),
+            None,
+            Some(1550636625000),
+            Some(1483228800000),
+        ]
+        .into();
+
+        let b = date_part_primitive(&a, DatePart::DayOfWeekMonday1).unwrap();
+        assert_eq!(1, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(3, b.value(2));
+        assert_eq!(7, b.value(3));
     }
 
     #[test]
@@ -1643,8 +1643,8 @@ mod tests {
                 DatePart::Day,
                 DatePart::DayOfWeekSunday0,
                 DatePart::DayOfWeekMonday0,
-                DatePart::DayOfWeekMonday1,
                 DatePart::DayOfWeekSunday1,
+                DatePart::DayOfWeekMonday1,
                 DatePart::DayOfYear,
             ];
 
@@ -1878,8 +1878,8 @@ mod tests {
                 DatePart::WeekISO,
                 DatePart::DayOfWeekSunday0,
                 DatePart::DayOfWeekMonday0,
-                DatePart::DayOfWeekMonday1,
                 DatePart::DayOfWeekSunday1,
+                DatePart::DayOfWeekMonday1,
                 DatePart::DayOfYear,
             ];
 
@@ -2027,8 +2027,8 @@ mod tests {
                 DatePart::WeekISO,
                 DatePart::DayOfWeekSunday0,
                 DatePart::DayOfWeekMonday0,
-                DatePart::DayOfWeekMonday1,
                 DatePart::DayOfWeekSunday1,
+                DatePart::DayOfWeekMonday1,
                 DatePart::DayOfYear,
             ];
 
@@ -2226,10 +2226,10 @@ mod tests {
             ("day", DatePart::Day),
             ("dow", DatePart::DayOfWeekSunday0),
             ("DayOfWeek", DatePart::DayOfWeekSunday0),
-            ("isodow", DatePart::DayOfWeekMonday1),
-            ("ISODOW", DatePart::DayOfWeekMonday1),
             ("dayofweek1", DatePart::DayOfWeekSunday1),
             ("DAYOFWEEK1", DatePart::DayOfWeekSunday1),
+            ("isodow", DatePart::DayOfWeekMonday1),
+            ("ISODOW", DatePart::DayOfWeekMonday1),
             ("doy", DatePart::DayOfYear),
             ("DayOfYear", DatePart::DayOfYear),
             ("h", DatePart::Hour),
