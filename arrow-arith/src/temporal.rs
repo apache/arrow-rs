@@ -1636,8 +1636,10 @@ mod tests {
             let invalid_parts = [
                 DatePart::Quarter,
                 DatePart::Year,
+                DatePart::YearISO,
                 DatePart::Month,
                 DatePart::Week,
+                DatePart::WeekISO,
                 DatePart::Day,
                 DatePart::DayOfWeekSunday0,
                 DatePart::DayOfWeekMonday0,
@@ -1872,6 +1874,8 @@ mod tests {
         fn ensure_returns_error(array: &dyn Array) {
             let invalid_parts = [
                 DatePart::Quarter,
+                DatePart::YearISO,
+                DatePart::WeekISO,
                 DatePart::DayOfWeekSunday0,
                 DatePart::DayOfWeekMonday0,
                 DatePart::DayOfWeekMonday1,
@@ -2017,8 +2021,10 @@ mod tests {
         fn ensure_returns_error(array: &dyn Array) {
             let invalid_parts = [
                 DatePart::Year,
+                DatePart::YearISO,
                 DatePart::Quarter,
                 DatePart::Month,
+                DatePart::WeekISO,
                 DatePart::DayOfWeekSunday0,
                 DatePart::DayOfWeekMonday0,
                 DatePart::DayOfWeekMonday1,
