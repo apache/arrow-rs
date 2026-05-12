@@ -245,15 +245,22 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// assert_eq!(new_run_array.run_ends().values(), &[2, 3, 5]);
     /// ```
     pub fn with_values(&self, values: ArrayRef) -> Self {
-        assert_eq!(values.len(), self.values().len());
+        assert_eq!(values.len(), self.values.len());
         let (run_ends_field, values_field) = match &self.data_type {
-            DataType::RunEndEncoded(r, v) => (r, v),
+            DataType::RunEndEncoded(r, v) => (
+                r,
+                Arc::new(
+                    v.as_ref()
+                        .clone()
+                        .with_data_type(values.data_type().clone()),
+                ),
+            ),
             _ => unreachable!("RunArray should have type RunEndEncoded"),
         };
-        let data_type =
-            DataType::RunEndEncoded(Arc::clone(run_ends_field), Arc::clone(values_field));
+        let dt = DataType::RunEndEncoded(Arc::clone(run_ends_field), Arc::clone(&values_field));
+
         Self {
-            data_type,
+            data_type: dt,
             run_ends: self.run_ends.clone(),
             values,
         }
@@ -813,25 +820,7 @@ impl<R: RunEndIndexType> AnyRunEndArray for RunArray<R> {
     }
 
     fn with_values(&self, values: ArrayRef) -> ArrayRef {
-        assert_eq!(values.len(), self.values.len());
-        let (run_ends_field, values_field) = match &self.data_type {
-            DataType::RunEndEncoded(r, v) => (
-                r,
-                Arc::new(
-                    v.as_ref()
-                        .clone()
-                        .with_data_type(values.data_type().clone()),
-                ),
-            ),
-            _ => unreachable!("RunArray should have type RunEndEncoded"),
-        };
-        let dt = DataType::RunEndEncoded(Arc::clone(run_ends_field), Arc::clone(&values_field));
-
-        Arc::new(Self {
-            data_type: dt,
-            run_ends: self.run_ends.clone(),
-            values,
-        })
+        Arc::new(RunArray::<R>::with_values(self, values))
     }
 }
 
