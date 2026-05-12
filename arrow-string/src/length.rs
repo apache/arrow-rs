@@ -59,7 +59,7 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         return Ok(d.with_values(lengths));
     }
     if let Some(ree) = array.as_any_ree_opt() {
-        let lengths = length(ree.values().as_ref())?;
+        let lengths = length(ree.values())?;
         return Ok(ree.with_values(lengths));
     }
     match array.data_type() {
@@ -139,7 +139,7 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         return Ok(d.with_values(lengths));
     }
     if let Some(ree) = array.as_any_ree_opt() {
-        let lengths = bit_length(ree.values().as_ref())?;
+        let lengths = bit_length(ree.values())?;
         return Ok(ree.with_values(lengths));
     }
 

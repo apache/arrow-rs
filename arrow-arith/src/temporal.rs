@@ -250,7 +250,7 @@ pub fn date_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef, ArrowErr
         }
         DataType::RunEndEncoded(_, _) => {
             let array = array.as_any_ree();
-            let values = date_part(array.values().as_ref(), part)?;
+            let values = date_part(array.values(), part)?;
             let new_array = array.with_values(values);
             Ok(new_array)
         }

@@ -813,12 +813,19 @@ impl<R: RunEndIndexType> AnyRunEndArray for RunArray<R> {
     }
 
     fn with_values(&self, values: ArrayRef) -> ArrayRef {
-        debug_assert_eq!(values.len(), self.values.len());
+        assert_eq!(values.len(), self.values.len());
         let (run_ends_field, values_field) = match &self.data_type {
-            DataType::RunEndEncoded(r, v) => (r, v),
+            DataType::RunEndEncoded(r, v) => (
+                r,
+                Arc::new(
+                    v.as_ref()
+                        .clone()
+                        .with_data_type(values.data_type().clone()),
+                ),
+            ),
             _ => unreachable!("RunArray should have type RunEndEncoded"),
         };
-        let dt = DataType::RunEndEncoded(Arc::clone(run_ends_field), Arc::clone(values_field));
+        let dt = DataType::RunEndEncoded(Arc::clone(run_ends_field), Arc::clone(&values_field));
 
         Arc::new(Self {
             data_type: dt,
