@@ -364,29 +364,28 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         // - the type
         // - the field delta and the type
         let field_type = self.read_byte()?;
+        if field_type & 0xf == 0 {
+            return Ok(FieldIdentifier {
+                field_type: FieldType::Stop,
+                id: 0,
+            });
+        }
+
         let field_delta = (field_type & 0xf0) >> 4;
         let field_type = FieldType::try_from(field_type & 0xf)?;
 
-        match field_type {
-            FieldType::Stop => Ok(FieldIdentifier {
-                field_type: FieldType::Stop,
-                id: 0,
-            }),
-            _ => {
-                let id = if field_delta != 0 {
-                    last_field_id.checked_add(field_delta as i16).ok_or(
-                        ThriftProtocolError::FieldDeltaOverflow {
-                            field_delta,
-                            last_field_id,
-                        },
-                    )?
-                } else {
-                    self.read_full_field_id()?
-                };
+        let id = if field_delta != 0 {
+            last_field_id.checked_add(field_delta as i16).ok_or(
+                ThriftProtocolError::FieldDeltaOverflow {
+                    field_delta,
+                    last_field_id,
+                },
+            )?
+        } else {
+            self.read_full_field_id()?
+        };
 
-                Ok(FieldIdentifier { field_type, id })
-            }
-        }
+        Ok(FieldIdentifier { field_type, id })
     }
 
     /// This is a specialized version of [`Self::read_field_begin`], solely for use in parsing
