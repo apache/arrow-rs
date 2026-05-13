@@ -45,7 +45,6 @@ use crate::column::writer::LevelDataRef;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
-use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
@@ -152,6 +151,13 @@ enum LevelInfoBuilder {
     /// A struct array
     Struct(Vec<LevelInfoBuilder>, LevelContext, Option<NullBuffer>),
 }
+
+/// Minimum sub-range length before the bulk-fill fast path in `write_leaf`
+/// becomes profitable for null-heavy leaf columns. Below this, per-call
+/// slice + popcount overhead regresses list/struct paths that call
+/// `write_leaf` many times with tiny ranges. Picked via threshold sweep;
+/// see <https://github.com/apache/arrow-rs/pull/9967> for the rationale.
+const BULK_FILL_MIN_LEN: usize = 64;
 
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
@@ -645,30 +651,11 @@ impl LevelInfoBuilder {
             match &info.logical_nulls {
                 Some(nulls) => {
                     assert!(range.end <= nulls.len());
-                    // Bulk-fill fast path. Gated on:
-                    //   - `len >= 64`: per-call slice/popcount/iterator overhead only
-                    //     amortizes on sizable sub-ranges. List/struct paths call
-                    //     write_leaf many times with tiny ranges (avg list length 1-5);
-                    //     paying any per-call popcount there would regress them. A
-                    //     threshold sweep at T={0,16,32,64,128,256} on Ryzen 9 9950X
-                    //     shows the regression floor settles by T=32 and the choice of
-                    //     64 gives ~12x margin over avg list length without losing the
-                    //     flat-primitive wins.
-                    //   - `nulls.null_count() * 2 >= nulls.len()`: cached `null_count()`
-                    //     is O(1), so this check is free. We use the buffer-level density
-                    //     as a heuristic for the sub-range; for full-array writes (the
-                    //     primary target — flat primitive columns) it's exact.
-                    // Note: even when this gate skips the fast path, evaluating the gate
-                    // itself across high-frequency call sites (~10K calls in some list
-                    // benchmarks) is a small structural cost (~+1-2% on list-sparse
-                    // cases). It's the price of having any gate at all on this hot path;
-                    // reducing it further would require hoisting the decision into the
-                    // caller. The wins on the targeted shapes (-35% sparse-primitive,
-                    // -66% all-null primitive) far outweigh it.
-                    if len >= 64 && nulls.null_count() * 2 >= nulls.len() {
-                        // Bulk-fill the null level (vectorized memset) and overwrite
-                        // only the non-null positions. Correct for any null distribution
-                        // in the range; the gate above only controls when it's profitable.
+                    // Bulk-fill is profitable only on null-heavy ranges long enough to
+                    // amortize the slice/popcount cost; see `BULK_FILL_MIN_LEN` and the
+                    // PR description for the threshold sweep. The gate uses the cached
+                    // buffer-wide `null_count` (O(1)) to stay cheap on the cold path.
+                    if len >= BULK_FILL_MIN_LEN && nulls.null_count() * 2 >= nulls.len() {
                         let range_nulls = nulls.slice(range.start, len);
                         let valid_in_range = len - range_nulls.null_count();
                         let null_def_level = max_def_level - 1;
@@ -685,21 +672,14 @@ impl LevelInfoBuilder {
                         info.non_null_indices
                             .extend(range_nulls.valid_indices().map(|i| i + range.start));
                     } else {
-                        let bits = nulls.inner();
-                        info.def_levels.extend_from_iter(range.clone().map(|i| {
-                            // Safety: range.end was asserted to be in bounds earlier
-                            let valid = unsafe { bits.value_unchecked(i) };
-                            max_def_level - (!valid as i16)
-                        }));
-                        info.non_null_indices.reserve(len);
-                        info.non_null_indices.extend(
-                            BitIndexIterator::new(
-                                bits.inner(),
-                                bits.offset() + range.start,
-                                len,
-                            )
-                            .map(|i| i + range.start),
+                        let range_nulls = nulls.slice(range.start, len);
+                        info.def_levels.extend_from_iter(
+                            range_nulls
+                                .iter()
+                                .map(|valid| max_def_level - (!valid as i16)),
                         );
+                        info.non_null_indices
+                            .extend(range_nulls.valid_indices().map(|i| i + range.start));
                     }
                 }
                 None => {
