@@ -1,7 +1,21 @@
+//! Rewrite variable-length arrays so that null entries point to empty offset
+//! ranges, while preserving the original null mask.
+//!
+//! Some variable-length array types (`Binary`, `Utf8`, `List`, `Map`, ...) can
+//! legally hold null entries whose offsets still reference real bytes/values
+//! in the underlying buffer. Iterating the child values exposes that data,
+//! which is rarely what callers want. This module provides:
+//!
+//! * [`has_non_empty_nulls`] - cheap check for whether the array contains
+//!   any such null entries.
+//! * [`cleanup_non_empty_nulls`] - produces an equivalent array where every
+//!   null entry has a zero-length offset range.
+
 use std::sync::Arc;
 
 use arrow_array::{
-    Array, ArrayRef, GenericByteArray, GenericListArray, MapArray, OffsetSizeTrait, UInt32Array, cast::AsArray, make_array, new_null_array, types::ByteArrayType
+    Array, ArrayRef, GenericByteArray, GenericListArray, MapArray, OffsetSizeTrait, UInt32Array,
+    cast::AsArray, make_array, new_null_array, types::ByteArrayType,
 };
 use arrow_buffer::{Buffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
@@ -12,16 +26,20 @@ use arrow_schema::{ArrowError, DataType};
 ///
 /// This should be called before [`cleanup_non_empty_nulls`] to avoid unnecessary work.
 pub fn has_non_empty_nulls(array: &dyn Array) -> Result<bool, ArrowError> {
-  Ok(match array.data_type() {
-    DataType::Binary => array.as_binary::<i32>().has_non_empty_nulls(),
-    DataType::LargeBinary => array.as_binary::<i64>().has_non_empty_nulls(),
-    DataType::Utf8 => array.as_string::<i32>().has_non_empty_nulls(),
-    DataType::LargeUtf8 => array.as_string::<i64>().has_non_empty_nulls(),
-    DataType::List(_) => array.as_list::<i32>().has_non_empty_nulls(),
-    DataType::LargeList(_) => array.as_list::<i64>().has_non_empty_nulls(),
-    DataType::Map(_, _) => array.as_map().has_non_empty_nulls(),
-    dt => return Err(ArrowError::InvalidArgumentError(format!("data type {dt:?} is not supported")))
-  })
+    Ok(match array.data_type() {
+        DataType::Binary => array.as_binary::<i32>().has_non_empty_nulls(),
+        DataType::LargeBinary => array.as_binary::<i64>().has_non_empty_nulls(),
+        DataType::Utf8 => array.as_string::<i32>().has_non_empty_nulls(),
+        DataType::LargeUtf8 => array.as_string::<i64>().has_non_empty_nulls(),
+        DataType::List(_) => array.as_list::<i32>().has_non_empty_nulls(),
+        DataType::LargeList(_) => array.as_list::<i64>().has_non_empty_nulls(),
+        DataType::Map(_, _) => array.as_map().has_non_empty_nulls(),
+        dt => {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "data type {dt:?} is not supported"
+            )));
+        }
+    })
 }
 
 /// Create a new list/map/bytes array with the same nulls as the original list/map/bytes array but all the nulls
@@ -33,25 +51,27 @@ pub fn has_non_empty_nulls(array: &dyn Array) -> Result<bool, ArrowError> {
 /// This is useful when wanting to go over the list/map/bytes values
 /// and not wanting to deal with values that are not used by the list/map/bytes.
 pub fn cleanup_non_empty_nulls(array: ArrayRef) -> Result<ArrayRef, ArrowError> {
-  match array.data_type() {
-    DataType::Binary => array.as_binary::<i32>().cleanup_non_empty_nulls(),
-    DataType::LargeBinary => array.as_binary::<i64>().cleanup_non_empty_nulls(),
-    DataType::Utf8 => array.as_string::<i32>().cleanup_non_empty_nulls(),
-    DataType::LargeUtf8 => array.as_string::<i64>().cleanup_non_empty_nulls(),
-    DataType::List(_) => array.as_list::<i32>().cleanup_non_empty_nulls(),
-    DataType::LargeList(_) => array.as_list::<i64>().cleanup_non_empty_nulls(),
-    DataType::Map(_, _) => array.as_map().cleanup_non_empty_nulls(),
-    dt => Err(ArrowError::InvalidArgumentError(format!("data type {dt:?} is not supported")))
-  }
+    match array.data_type() {
+        DataType::Binary => array.as_binary::<i32>().cleanup_non_empty_nulls(),
+        DataType::LargeBinary => array.as_binary::<i64>().cleanup_non_empty_nulls(),
+        DataType::Utf8 => array.as_string::<i32>().cleanup_non_empty_nulls(),
+        DataType::LargeUtf8 => array.as_string::<i64>().cleanup_non_empty_nulls(),
+        DataType::List(_) => array.as_list::<i32>().cleanup_non_empty_nulls(),
+        DataType::LargeList(_) => array.as_list::<i64>().cleanup_non_empty_nulls(),
+        DataType::Map(_, _) => array.as_map().cleanup_non_empty_nulls(),
+        dt => Err(ArrowError::InvalidArgumentError(format!(
+            "data type {dt:?} is not supported"
+        ))),
+    }
 }
 
 /// Helper trait to make it easier to implement the cleanup nulls for variable length with offsets
 trait VariableLengthArrayExt<OffsetSize: OffsetSizeTrait>: Array + Clone + Sized + 'static {
     /// Get the offsets of the variable length array.
     fn get_offsets(&self) -> &OffsetBuffer<OffsetSize>;
-    
+
     fn has_non_empty_nulls(&self) -> bool {
-      self.get_offsets().has_non_empty_nulls(self.nulls())
+        self.get_offsets().has_non_empty_nulls(self.nulls())
     }
 
     /// Create a new list/map/bytes array with the same nulls as the original list/map/bytes array but all the nulls
@@ -86,7 +106,7 @@ trait VariableLengthArrayExt<OffsetSize: OffsetSizeTrait>: Array + Clone + Sized
                 });
 
                 // SAFETY: upper bound is trusted because `iter` is just map over `nulls`
-                unsafe {Buffer::from_trusted_len_iter(iter) }
+                unsafe { Buffer::from_trusted_len_iter(iter) }
             };
 
             let cleanup_array = crate::take::take(
@@ -99,14 +119,14 @@ trait VariableLengthArrayExt<OffsetSize: OffsetSizeTrait>: Array + Clone + Sized
             )?;
 
             let array_data_with_correct_nulls = {
-              let builder = cleanup_array
-                  .into_data()
-                  .into_builder()
-                  .nulls(self.nulls().cloned());
-              unsafe {
+                let builder = cleanup_array
+                    .into_data()
+                    .into_builder()
+                    .nulls(self.nulls().cloned());
+                unsafe {
                     // This is safe as we are only updating the nulls
-                builder.build_unchecked()
-            }
+                    builder.build_unchecked()
+                }
             };
 
             let array = make_array(array_data_with_correct_nulls);
@@ -377,8 +397,7 @@ mod tests {
         // Slicing to [2, 5) excludes the problematic null at index 1.
         let values = Buffer::from(b"foobarbazqux".as_slice());
         // offsets:    0   3       6      9    9   12
-        let offsets =
-            OffsetBuffer::<i32>::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 9, 9, 12]));
+        let offsets = OffsetBuffer::<i32>::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 9, 9, 12]));
         let nulls = NullBuffer::from(vec![true, false, true, false, true]);
         let binary = BinaryArray::new(offsets, values, Some(nulls));
         let full: ArrayRef = Arc::new(binary);
@@ -402,8 +421,7 @@ mod tests {
     fn cleanup_when_non_empty_nulls_outside_sliced_list() {
         // Same idea as the binary slice test, but for a `ListArray`.
         let list_values = UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let offsets =
-            OffsetBuffer::<i32>::new(ScalarBuffer::<i32>::from(vec![0, 2, 5, 7, 7, 9]));
+        let offsets = OffsetBuffer::<i32>::new(ScalarBuffer::<i32>::from(vec![0, 2, 5, 7, 7, 9]));
         let nulls = NullBuffer::from(vec![true, false, true, false, true]);
         let list_field = Arc::new(Field::new("item", list_values.data_type().clone(), false));
         let list = GenericListArray::<i32>::new(
@@ -586,7 +604,9 @@ mod tests {
         // The null at index 1 originally referenced [4, 5, 6, 7]; those values
         // should no longer appear in the underlying child array.
         assert_eq!(
-            cleaned.values().as_primitive::<arrow_array::types::UInt32Type>(),
+            cleaned
+                .values()
+                .as_primitive::<arrow_array::types::UInt32Type>(),
             &UInt32Array::from(vec![1, 2, 3, 8, 9]),
         );
     }
@@ -608,7 +628,9 @@ mod tests {
         let cleaned = cleaned.as_list::<i32>();
 
         assert_eq!(
-            cleaned.values().as_primitive::<arrow_array::types::UInt32Type>(),
+            cleaned
+                .values()
+                .as_primitive::<arrow_array::types::UInt32Type>(),
             &UInt32Array::from(vec![1, 2, 3, 8, 9]),
         );
     }
