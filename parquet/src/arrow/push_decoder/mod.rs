@@ -1802,6 +1802,162 @@ mod test {
         expect_finished(decoder.try_next_reader());
     }
 
+    /// Mirror of [`Self::test_swap_strategy_preserves_buffered_bytes`] in the
+    /// opposite direction: start with a narrow projection, drain RG0, then
+    /// widen the projection to add columns "b" and "c". Because the entire
+    /// file was prefetched, bytes for the newly-added columns are already
+    /// buffered and the next row group decodes without another `NeedsData`.
+    #[test]
+    fn test_swap_strategy_expands_projection_between_row_groups() {
+        let metadata = test_file_parquet_metadata();
+        let schema_descr = metadata.file_metadata().schema_descr_ptr();
+
+        let builder = ParquetPushDecoderBuilder::try_new_decoder(metadata)
+            .unwrap()
+            .with_batch_size(1024);
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
+            .build()
+            .unwrap();
+
+        // Prefetch the whole file up front.
+        decoder
+            .push_range(test_file_range(), TEST_FILE_DATA.clone())
+            .unwrap();
+
+        // RG0 with narrow projection — just column "a".
+        let reader0 = expect_data(decoder.try_next_reader());
+        let batches0: Vec<_> = reader0.collect::<Result<_, _>>().unwrap();
+        let batch0 = concat_batches(&batches0[0].schema(), &batches0).unwrap();
+        let expected0 = TEST_BATCH.slice(0, 200).project(&[0]).unwrap();
+        assert_eq!(batch0, expected0);
+
+        // At the boundary, widen to all three columns.
+        assert!(decoder.can_swap_strategy());
+        decoder
+            .swap_strategy(
+                StrategySwap::new()
+                    .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b", "c"])),
+            )
+            .unwrap();
+
+        // Bytes for "b" and "c" in RG1 were part of the prefetch, so no
+        // further data should be requested.
+        let reader1 = expect_data(decoder.try_next_reader());
+        let batches1: Vec<_> = reader1.collect::<Result<_, _>>().unwrap();
+        let batch1 = concat_batches(&TEST_BATCH.schema(), &batches1).unwrap();
+        assert_eq!(batch1, TEST_BATCH.slice(200, 200));
+        expect_finished(decoder.try_next_reader());
+    }
+
+    /// Drive the decoder incrementally (no prefetch). Start with a narrow
+    /// projection, drain RG0 by satisfying its `NeedsData`, then widen the
+    /// projection to add columns "b" and "c". The post-swap `NeedsData`
+    /// for RG1 must request bytes for *all three* columns, not just the
+    /// originally-projected "a". The expected ranges are hardcoded
+    /// because `TEST_BATCH` and the writer settings are static; this
+    /// pins the layout cleanly without a parallel reference decoder.
+    #[test]
+    fn test_swap_strategy_expand_projection_requests_new_bytes() {
+        let metadata = test_file_parquet_metadata();
+        let schema_descr = metadata.file_metadata().schema_descr_ptr();
+
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(metadata)
+            .unwrap()
+            .with_batch_size(1024)
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
+            .build()
+            .unwrap();
+
+        // RG0: incrementally satisfy the narrow request.
+        let ranges_rg0 = expect_needs_data(decoder.try_next_reader());
+        // For a narrow ("a"-only) projection, RG0 is a single contiguous range.
+        assert_eq!(ranges_rg0, vec![4..1860]);
+        push_ranges_to_decoder(&mut decoder, ranges_rg0);
+
+        let reader0 = expect_data(decoder.try_next_reader());
+        let batches0: Vec<_> = reader0.collect::<Result<_, _>>().unwrap();
+        let batch0 = concat_batches(&batches0[0].schema(), &batches0).unwrap();
+        let expected0 = TEST_BATCH.slice(0, 200).project(&[0]).unwrap();
+        assert_eq!(batch0, expected0);
+        // RG0's "a" pages have been consumed; no surviving buffer.
+        assert_eq!(decoder.buffered_bytes(), 0);
+
+        // Widen the projection at the boundary.
+        assert!(decoder.can_swap_strategy());
+        decoder
+            .swap_strategy(
+                StrategySwap::new()
+                    .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b", "c"])),
+            )
+            .unwrap();
+
+        // Post-swap RG1 request covers RG1's "a", "b", and "c" column
+        // chunks: ~1.8KiB each for "a" and "b", ~7.5KiB for the
+        // StringView column "c". Total 11168 bytes — far more than the
+        // 1856 bytes the narrow projection asked for in RG0.
+        let ranges_rg1 = expect_needs_data(decoder.try_next_reader());
+        assert_eq!(ranges_rg1, vec![11062..12918, 12918..14774, 14774..22230]);
+        push_ranges_to_decoder(&mut decoder, ranges_rg1);
+
+        let reader1 = expect_data(decoder.try_next_reader());
+        let batches1: Vec<_> = reader1.collect::<Result<_, _>>().unwrap();
+        let batch1 = concat_batches(&TEST_BATCH.schema(), &batches1).unwrap();
+        assert_eq!(batch1, TEST_BATCH.slice(200, 200));
+        expect_finished(decoder.try_next_reader());
+    }
+
+    /// Drive the decoder incrementally (no prefetch). Start with the full
+    /// projection, drain RG0 by satisfying its `NeedsData`, then narrow
+    /// the projection to just column "a". The post-swap `NeedsData` for
+    /// RG1 must request bytes for *only* column "a" — the same single
+    /// range a narrow projection would have asked for, not the three
+    /// ranges a wide projection would.
+    #[test]
+    fn test_swap_strategy_narrow_projection_skips_unneeded_bytes() {
+        let metadata = test_file_parquet_metadata();
+        let schema_descr = metadata.file_metadata().schema_descr_ptr();
+
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(metadata)
+            .unwrap()
+            .with_batch_size(1024)
+            .build()
+            .unwrap();
+
+        // RG0 with default (full) projection — three columns; three ranges.
+        let ranges_rg0 = expect_needs_data(decoder.try_next_reader());
+        assert_eq!(ranges_rg0, vec![4..1860, 1860..3716, 3716..11062]);
+        push_ranges_to_decoder(&mut decoder, ranges_rg0);
+
+        let reader0 = expect_data(decoder.try_next_reader());
+        let batches0: Vec<_> = reader0.collect::<Result<_, _>>().unwrap();
+        let batch0 = concat_batches(&TEST_BATCH.schema(), &batches0).unwrap();
+        assert_eq!(batch0, TEST_BATCH.slice(0, 200));
+        assert_eq!(decoder.buffered_bytes(), 0);
+
+        // Narrow the projection at the boundary.
+        assert!(decoder.can_swap_strategy());
+        decoder
+            .swap_strategy(
+                StrategySwap::new().with_projection(ProjectionMask::columns(&schema_descr, ["a"])),
+            )
+            .unwrap();
+
+        // Post-swap RG1 request asks for column "a" only — a single
+        // 1856-byte range, not the three column-chunk ranges the wide
+        // projection would have produced.
+        let ranges_rg1 = expect_needs_data(decoder.try_next_reader());
+        assert_eq!(ranges_rg1, vec![11062..12918]);
+        push_ranges_to_decoder(&mut decoder, ranges_rg1);
+
+        let reader1 = expect_data(decoder.try_next_reader());
+        let batches1: Vec<_> = reader1.collect::<Result<_, _>>().unwrap();
+        let batch1 = concat_batches(&batches1[0].schema(), &batches1).unwrap();
+        let expected1 = TEST_BATCH.slice(200, 200).project(&[0]).unwrap();
+        assert_eq!(batch1, expected1);
+        expect_finished(decoder.try_next_reader());
+    }
+
     /// Returns a batch with 400 rows, with 3 columns: "a", "b", "c"
     ///
     /// Note c is a different types (so the data page sizes will be different)
