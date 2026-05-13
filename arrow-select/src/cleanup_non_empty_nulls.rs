@@ -76,7 +76,7 @@ trait VariableLengthArrayExt<OffsetSize: OffsetSizeTrait>: Array + Clone + Sized
             .map(|index| index as u32);
 
         if let Some(index_of_empty_value) = index_of_empty_value_to_reuse {
-            let buffer = unsafe {
+            let buffer = {
                 let iter = nulls.iter().enumerate().map(|(i, is_valid)| {
                     if is_valid {
                         i as u32
@@ -86,7 +86,7 @@ trait VariableLengthArrayExt<OffsetSize: OffsetSizeTrait>: Array + Clone + Sized
                 });
 
                 // SAFETY: upper bound is trusted because `iter` is just map over `nulls`
-                Buffer::from_trusted_len_iter(iter)
+                unsafe {Buffer::from_trusted_len_iter(iter) }
             };
 
             let cleanup_array = crate::take::take(
@@ -98,13 +98,15 @@ trait VariableLengthArrayExt<OffsetSize: OffsetSizeTrait>: Array + Clone + Sized
                 }),
             )?;
 
-            let array_data_with_correct_nulls = unsafe {
-                cleanup_array
-                    .into_data()
-                    .into_builder()
-                    .nulls(self.nulls().cloned())
+            let array_data_with_correct_nulls = {
+              let builder = cleanup_array
+                  .into_data()
+                  .into_builder()
+                  .nulls(self.nulls().cloned());
+              unsafe {
                     // This is safe as we are only updating the nulls
-                    .build_unchecked()
+                builder.build_unchecked()
+            }
             };
 
             let array = make_array(array_data_with_correct_nulls);
@@ -519,7 +521,6 @@ mod tests {
 
     #[test]
     fn binary_cleanup_when_all_nulls_point_to_non_empty_and_no_empty_exists() {
-        // No zero-length entry anywhere, so cleanup must use the interleave path.
         let values = Buffer::from(b"foobarbaz".as_slice());
         let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 3, 3]);
         let input_nulls = NullBuffer::from(vec![true, false, true]);
@@ -567,8 +568,7 @@ mod tests {
     // Cleanup must drop the child values that were only reachable through nulls.
 
     #[test]
-    fn list_cleanup_slices_underlying_values_take_path() {
-        // An empty entry exists, so cleanup uses the `take` kernel.
+    fn list_cleanup_slices_underlying_values_with_empty_entry() {
         let list_values = UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
         let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 0, 2]);
         let input_nulls = NullBuffer::from(vec![true, false, true, true]);
