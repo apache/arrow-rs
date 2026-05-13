@@ -660,6 +660,50 @@ mod tests {
         );
     }
 
+    // ===== Cleanup does not recurse into inner arrays =====
+
+    #[test]
+    fn list_cleanup_does_not_recurse_into_inner_string_nulls() {
+        // Inner string: the null at index 1 points to the bytes "bar"
+        // (a non-empty null at the inner level).
+        let inner_values = Buffer::from(b"foobarbazqux".as_slice());
+        let inner_offsets =
+            OffsetBuffer::<i32>::new(ScalarBuffer::<i32>::from(vec![0, 3, 6, 9, 9, 12]));
+        let inner_nulls = NullBuffer::from(vec![true, false, true, true, true]);
+        let inner = StringArray::new(inner_offsets, inner_values, Some(inner_nulls));
+        assert!(
+            has_non_empty_nulls(&inner).unwrap(),
+            "sanity: inner string has a non-empty null"
+        );
+
+        // Outer list wrapping the inner string. Index 1 is an outer null whose
+        // offsets still cover real entries; index 2 is an empty entry so cleanup
+        // can use it as the substitute for the cleaned-up outer null.
+        let outer_offsets = OffsetBuffer::<i32>::from_lengths(vec![2, 2, 0, 1]);
+        let outer_nulls = NullBuffer::from(vec![true, false, true, true]);
+        let list_field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let list: ArrayRef = Arc::new(GenericListArray::<i32>::new(
+            list_field,
+            outer_offsets,
+            Arc::new(inner),
+            Some(outer_nulls),
+        ));
+        assert!(has_non_empty_nulls(list.as_ref()).unwrap());
+
+        let cleaned = cleanup_non_empty_nulls(list).unwrap();
+
+        // Outer list is fully cleaned at its own level.
+        assert!(!has_non_empty_nulls(cleaned.as_ref()).unwrap());
+
+        // The inner string array still has a non-empty null - cleanup did not
+        // recurse into it.
+        let inner_after = cleaned.as_list::<i32>().values().as_string::<i32>();
+        assert!(
+            has_non_empty_nulls(inner_after).unwrap(),
+            "inner non-empty nulls must be preserved"
+        );
+    }
+
     // ===== Empty arrays (length 0) =====
     // Cleanup is a no-op and `has_non_empty_nulls` is false.
 
