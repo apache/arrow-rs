@@ -592,8 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn list_cleanup_slices_underlying_values_interleave_path() {
-        // No empty entry exists, so cleanup falls back to `interleave`.
+    fn list_cleanup_slices_underlying_values_without_empty_entry() {
         let list_values = UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
         let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 2]);
         let input_nulls = NullBuffer::from(vec![true, false, true]);
@@ -615,8 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn map_cleanup_slices_underlying_entries_take_path() {
-        // An empty entry exists at index 2, so cleanup uses the `take` kernel.
+    fn map_cleanup_slices_underlying_entries_with_empty_entry() {
         let keys = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
         let values = Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80, 90]);
         let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 0, 2]);
@@ -638,8 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn map_cleanup_slices_underlying_entries_interleave_path() {
-        // No empty entry, so cleanup falls back to `interleave`.
+    fn map_cleanup_slices_underlying_entries_without_empty_entry() {
         let keys = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
         let values = Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80, 90]);
         let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 2]);
