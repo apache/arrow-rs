@@ -136,7 +136,8 @@ fn create_string_dictionary_bench_batch(
         true_density,
     )?)
 }
-fn create_string_ree_bench_batch(
+fn create_ree_bench_batch(
+    value_dt: DataType,
     size: usize,
     null_density: f32,
     true_density: f32,
@@ -145,7 +146,7 @@ fn create_string_ree_bench_batch(
         "_1",
         DataType::RunEndEncoded(
             Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new("values", value_dt, true)),
         ),
         true,
     )];
@@ -424,8 +425,11 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
     let batch = create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_non_null", batch));
 
-    let batch = create_string_ree_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
+    let batch = create_ree_bench_batch(DataType::Utf8, BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_ree", batch));
+
+    let batch = create_ree_bench_batch(DataType::Int32, BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("int32_ree", batch));
 
     let batch = create_float_bench_batch_with_nans(BATCH_SIZE, 0.5).unwrap();
     batches.push(("float_with_nans", batch));

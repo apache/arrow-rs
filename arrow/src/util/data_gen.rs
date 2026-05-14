@@ -729,13 +729,11 @@ mod tests {
         let run_ends = ree.run_ends().values();
         let num_runs = run_ends.len();
 
-        // Run-ends are strictly increasing and the last one equals total size.
         for w in run_ends.windows(2) {
             assert!(w[0] < w[1]);
         }
         assert_eq!(*run_ends.last().unwrap() as usize, size);
 
-        // Values array has one entry per run.
         assert_eq!(ree.values().len(), num_runs);
     }
 
