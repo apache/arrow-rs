@@ -136,6 +136,27 @@ fn create_string_dictionary_bench_batch(
         true_density,
     )?)
 }
+fn create_string_ree_bench_batch(
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<RecordBatch> {
+    let fields = vec![Field::new(
+        "_1",
+        DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        ),
+        true,
+    )];
+    let schema = Schema::new(fields);
+    Ok(create_random_batch(
+        Arc::new(schema),
+        size,
+        null_density,
+        true_density,
+    )?)
+}
 
 fn create_string_bench_batch_non_null(
     size: usize,
@@ -363,8 +384,10 @@ fn write_batch_with_option(
 
     bench.iter(|| {
         let mut file = Empty::default();
-        let mut writer =
-            ArrowWriter::try_new(&mut file, batch.schema(), Some(props.clone())).unwrap();
+        let Ok(mut writer) = ArrowWriter::try_new(&mut file, batch.schema(), Some(props.clone()))
+        else {
+            return;
+        };
         writer.write(black_box(batch)).unwrap();
         black_box(writer.close()).unwrap();
     });
@@ -400,6 +423,9 @@ fn create_batches() -> Vec<(&'static str, RecordBatch)> {
 
     let batch = create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
     batches.push(("string_non_null", batch));
+
+    let batch = create_string_ree_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("string_ree", batch));
 
     let batch = create_float_bench_batch_with_nans(BATCH_SIZE, 0.5).unwrap();
     batches.push(("float_with_nans", batch));
