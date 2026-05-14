@@ -969,21 +969,25 @@ mod tests {
 
     #[test]
     fn should_not_defer_when_fragmentation_not_increased() {
-        let builder =
-            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(40),
             RowSelector::skip(20),
             RowSelector::select(40),
         ]);
 
-        assert!(!builder.evaluate_deferral(&absolute, 100, 3, SelectionRunStats::default()).should_defer);
+        assert!(
+            !builder
+                .evaluate_deferral(&absolute, 100, 3, SelectionRunStats::default())
+                .should_defer
+        );
     }
 
     #[test]
     fn should_not_defer_when_both_non_deferral_gates_pass() {
-        let builder =
-            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(50),
             RowSelector::skip(100),
@@ -991,26 +995,34 @@ mod tests {
             RowSelector::skip(10),
         ]);
 
-        assert!(!builder.evaluate_deferral(&absolute, 210, 1, SelectionRunStats::default()).should_defer);
+        assert!(
+            !builder
+                .evaluate_deferral(&absolute, 210, 1, SelectionRunStats::default())
+                .should_defer
+        );
     }
 
     #[test]
     fn should_defer_when_only_selectivity_gate_fails() {
-        let builder =
-            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(1000),
             RowSelector::skip(100),
             RowSelector::select(1000),
         ]);
 
-        assert!(builder.evaluate_deferral(&absolute, 2100, 1, SelectionRunStats::default()).should_defer);
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 2100, 1, SelectionRunStats::default())
+                .should_defer
+        );
     }
 
     #[test]
     fn should_defer_when_only_long_skip_share_gate_fails() {
-        let builder =
-            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(20),
             RowSelector::skip(60),
@@ -1018,13 +1030,17 @@ mod tests {
             RowSelector::skip(20),
         ]);
 
-        assert!(builder.evaluate_deferral(&absolute, 120, 1, SelectionRunStats::default()).should_defer);
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 120, 1, SelectionRunStats::default())
+                .should_defer
+        );
     }
 
     #[test]
     fn should_defer_when_both_non_deferral_gates_fail() {
-        let builder =
-            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(500),
             RowSelector::skip(50),
@@ -1032,13 +1048,17 @@ mod tests {
             RowSelector::skip(10),
         ]);
 
-        assert!(builder.evaluate_deferral(&absolute, 1060, 1, SelectionRunStats::default()).should_defer);
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 1060, 1, SelectionRunStats::default())
+                .should_defer
+        );
     }
 
     #[test]
     fn long_run_threshold_counts_exactly_100_rows_as_long() {
-        let builder =
-            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(10),
             RowSelector::skip(100),
@@ -1046,13 +1066,17 @@ mod tests {
             RowSelector::skip(20),
         ]);
 
-        assert!(!builder.evaluate_deferral(&absolute, 140, 1, SelectionRunStats::default()).should_defer);
+        assert!(
+            !builder
+                .evaluate_deferral(&absolute, 140, 1, SelectionRunStats::default())
+                .should_defer
+        );
     }
 
     #[test]
     fn should_defer_when_absolute_gates_pass_but_delta_selectivity_is_too_small() {
-        let builder =
-            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(400),
             RowSelector::skip(100),
@@ -1066,13 +1090,17 @@ mod tests {
             ..SelectionRunStats::default()
         };
 
-        assert!(builder.evaluate_deferral(&absolute, 1000, 1, current_stats).should_defer);
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 1000, 1, current_stats)
+                .should_defer
+        );
     }
 
     #[test]
     fn should_defer_when_absolute_gates_pass_but_delta_long_skip_share_is_too_small() {
-        let builder =
-            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+        let builder = ReadPlanBuilder::new(1024)
+            .with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(50),
             RowSelector::skip(100),
@@ -1082,7 +1110,11 @@ mod tests {
         // Absolute long-skip-share is high, but this predicate adds only short skips.
         let current = RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(100)]);
 
-        assert!(builder.evaluate_deferral(&absolute, 210, 1, stats(&current)).should_defer);
+        assert!(
+            builder
+                .evaluate_deferral(&absolute, 210, 1, stats(&current))
+                .should_defer
+        );
     }
 
     #[test]
