@@ -511,6 +511,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             FieldType::I64 => self.skip_vlq().map(|_| ()),
             FieldType::Double => self.skip_bytes(8).map(|_| ()),
             FieldType::Binary => self.skip_binary().map(|_| ()),
+            // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct
             FieldType::Struct => {
                 loop {
                     let field_ident = self.read_field_begin(0)?;
@@ -522,6 +523,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
                 Ok(())
             }
             // lists and sets are encoded the same
+            // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
             FieldType::List | FieldType::Set => {
                 let list_ident = self.read_list_begin()?;
                 let element_type = FieldType::from(list_ident.element_type);
@@ -530,6 +532,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
                 }
                 Ok(())
             }
+            // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#map
             FieldType::Map => {
                 let size = i32::try_from(self.read_vlq()?)?;
                 if size > 0 {
@@ -543,6 +546,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
                 }
                 Ok(())
             }
+            // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#universal-unique-identifier-encoding
             FieldType::Uuid => self.skip_bytes(16).map(|_| ()),
             _ => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
         }
