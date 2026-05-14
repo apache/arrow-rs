@@ -651,12 +651,14 @@ impl LevelInfoBuilder {
             match &info.logical_nulls {
                 Some(nulls) => {
                     assert!(range.end <= nulls.len());
+                    let range_nulls = nulls.slice(range.start, len);
                     // Bulk-fill is profitable only on null-heavy ranges long enough to
                     // amortize the slice/popcount cost; see `BULK_FILL_MIN_LEN` and the
                     // PR description for the threshold sweep. The gate uses the cached
-                    // buffer-wide `null_count` (O(1)) to stay cheap on the cold path.
+                    // buffer-wide `null_count` (O(1)) to stay cheap on the cold path;
+                    // `range_nulls.null_count()` is paid only inside the fast path,
+                    // where bulk-fill needs it anyway.
                     if len >= BULK_FILL_MIN_LEN && nulls.null_count() * 2 >= nulls.len() {
-                        let range_nulls = nulls.slice(range.start, len);
                         let valid_in_range = len - range_nulls.null_count();
                         let null_def_level = max_def_level - 1;
                         let buf = info
@@ -669,18 +671,15 @@ impl LevelInfoBuilder {
                             buf[base + i] = max_def_level;
                         }
                         info.non_null_indices.reserve(valid_in_range);
-                        info.non_null_indices
-                            .extend(range_nulls.valid_indices().map(|i| i + range.start));
                     } else {
-                        let range_nulls = nulls.slice(range.start, len);
                         info.def_levels.extend_from_iter(
                             range_nulls
                                 .iter()
                                 .map(|valid| max_def_level - (!valid as i16)),
                         );
-                        info.non_null_indices
-                            .extend(range_nulls.valid_indices().map(|i| i + range.start));
                     }
+                    info.non_null_indices
+                        .extend(range_nulls.valid_indices().map(|i| i + range.start));
                 }
                 None => {
                     info.append_def_level_run(max_def_level, len);
