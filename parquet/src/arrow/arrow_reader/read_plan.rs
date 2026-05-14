@@ -513,20 +513,6 @@ impl ReadPlanBuilder {
         self.predicate_index += 1;
     }
 
-    /// Returns true when the predicate result should be deferred instead of
-    /// kept in the main selection.
-    #[cfg(test)]
-    fn should_defer_selection(
-        &self,
-        absolute: &RowSelection,
-        row_count: usize,
-        current_selectors: usize,
-        current_stats: SelectionRunStats,
-    ) -> bool {
-        self.evaluate_deferral(absolute, row_count, current_selectors, current_stats)
-            .should_defer
-    }
-
     fn evaluate_deferral(
         &self,
         absolute: &RowSelection,
@@ -991,7 +977,7 @@ mod tests {
             RowSelector::select(40),
         ]);
 
-        assert!(!builder.should_defer_selection(&absolute, 100, 3, SelectionRunStats::default()));
+        assert!(!builder.evaluate_deferral(&absolute, 100, 3, SelectionRunStats::default()).should_defer);
     }
 
     #[test]
@@ -1005,7 +991,7 @@ mod tests {
             RowSelector::skip(10),
         ]);
 
-        assert!(!builder.should_defer_selection(&absolute, 210, 1, SelectionRunStats::default()));
+        assert!(!builder.evaluate_deferral(&absolute, 210, 1, SelectionRunStats::default()).should_defer);
     }
 
     #[test]
@@ -1018,7 +1004,7 @@ mod tests {
             RowSelector::select(1000),
         ]);
 
-        assert!(builder.should_defer_selection(&absolute, 2100, 1, SelectionRunStats::default()));
+        assert!(builder.evaluate_deferral(&absolute, 2100, 1, SelectionRunStats::default()).should_defer);
     }
 
     #[test]
@@ -1032,7 +1018,7 @@ mod tests {
             RowSelector::skip(20),
         ]);
 
-        assert!(builder.should_defer_selection(&absolute, 120, 1, SelectionRunStats::default()));
+        assert!(builder.evaluate_deferral(&absolute, 120, 1, SelectionRunStats::default()).should_defer);
     }
 
     #[test]
@@ -1046,7 +1032,7 @@ mod tests {
             RowSelector::skip(10),
         ]);
 
-        assert!(builder.should_defer_selection(&absolute, 1060, 1, SelectionRunStats::default()));
+        assert!(builder.evaluate_deferral(&absolute, 1060, 1, SelectionRunStats::default()).should_defer);
     }
 
     #[test]
@@ -1060,7 +1046,7 @@ mod tests {
             RowSelector::skip(20),
         ]);
 
-        assert!(!builder.should_defer_selection(&absolute, 140, 1, SelectionRunStats::default()));
+        assert!(!builder.evaluate_deferral(&absolute, 140, 1, SelectionRunStats::default()).should_defer);
     }
 
     #[test]
@@ -1080,7 +1066,7 @@ mod tests {
             ..SelectionRunStats::default()
         };
 
-        assert!(builder.should_defer_selection(&absolute, 1000, 1, current_stats));
+        assert!(builder.evaluate_deferral(&absolute, 1000, 1, current_stats).should_defer);
     }
 
     #[test]
@@ -1096,7 +1082,7 @@ mod tests {
         // Absolute long-skip-share is high, but this predicate adds only short skips.
         let current = RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(100)]);
 
-        assert!(builder.should_defer_selection(&absolute, 210, 1, stats(&current)));
+        assert!(builder.evaluate_deferral(&absolute, 210, 1, stats(&current)).should_defer);
     }
 
     #[test]
