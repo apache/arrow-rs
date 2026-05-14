@@ -35,8 +35,8 @@ use crate::file::{
 };
 use crate::{
     basic::{
-        ColumnOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType,
-        Repetition, Type,
+        ColumnOrder, CompressionCodec, ConvertedType, Encoding, EncodingMask, LogicalType,
+        PageType, Repetition, Type,
     },
     data_type::{ByteArray, FixedLenByteArray, Int96},
     errors::{ParquetError, Result},
@@ -51,7 +51,7 @@ use crate::{
     parquet_thrift::{
         ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
         ThriftCompactOutputProtocol, ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
-        read_thrift_vec,
+        read_thrift_vec, validate_list_type,
     },
     schema::types::{
         ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
@@ -387,6 +387,9 @@ fn read_encoding_stats_as_mask<'a>(
     // read the vector of stats, setting mask bits for data pages
     let mut mask = 0i32;
     let list_ident = prot.read_list_begin()?;
+    // check for PageEncodingStats struct
+    validate_list_type(ElementType::Struct, &list_ident)?;
+
     for _ in 0..list_ident.size {
         let pes = PageEncodingStats::read_thrift(prot)?;
         match pes.page_type {
@@ -460,7 +463,7 @@ fn read_column_metadata<'a>(
             }
             // 3: path_in_schema is redundant
             4 => {
-                column.compression = Compression::read_thrift(&mut *prot)?;
+                column.compression = CompressionCodec::read_thrift(&mut *prot)?;
                 seen_mask |= COL_META_CODEC;
             }
             5 => {
@@ -652,6 +655,8 @@ fn read_row_group(
         match field_ident.id {
             1 => {
                 let list_ident = prot.read_list_begin()?;
+                // check for list of struct
+                validate_list_type(ElementType::Struct, &list_ident)?;
                 if schema_descr.num_columns() != list_ident.size as usize {
                     return Err(general_err!(
                         "Column count mismatch. Schema has {} columns while Row Group has {}",
@@ -801,6 +806,8 @@ pub(crate) fn parquet_metadata_from_bytes(
                 }
                 let schema_descr = schema_descr.as_ref().unwrap();
                 let list_ident = prot.read_list_begin()?;
+                // check for list of struct
+                validate_list_type(ElementType::Struct, &list_ident)?;
                 let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
 
                 // Read row groups and handle ordinal assignment
@@ -1333,10 +1340,15 @@ pub(super) fn serialize_column_meta_data<W: Write>(
         .encodings()
         .collect::<Vec<_>>()
         .write_thrift_field(w, 2, 1)?;
-    let path = column_chunk.column_descr.path().parts();
-    let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
-    path.write_thrift_field(w, 3, 2)?;
-    column_chunk.compression.write_thrift_field(w, 4, 3)?;
+    if w.write_path_in_schema() {
+        let path = column_chunk.column_descr.path().parts();
+        let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
+        path.write_thrift_field(w, 3, 2)?;
+        column_chunk.compression.write_thrift_field(w, 4, 3)?;
+    } else {
+        column_chunk.compression.write_thrift_field(w, 4, 2)?;
+    }
+
     column_chunk.num_values.write_thrift_field(w, 5, 4)?;
     column_chunk
         .total_uncompressed_size
@@ -1406,6 +1418,8 @@ pub(super) fn serialize_column_meta_data<W: Write>(
 pub(super) struct FileMeta<'a> {
     pub(super) file_metadata: &'a crate::file::metadata::FileMetaData,
     pub(super) row_groups: &'a Vec<RowGroupMetaData>,
+    // If true, then write the `path_in_schema` field in the ColumnMetaData struct.
+    pub(super) write_path_in_schema: bool,
 }
 
 // struct FileMetaData {
@@ -1425,6 +1439,8 @@ impl<'a> WriteThrift for FileMeta<'a> {
     // needed for last_field_id w/o encryption
     #[allow(unused_assignments)]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.set_write_path_in_schema(self.write_path_in_schema);
+
         self.file_metadata
             .version
             .write_thrift_field(writer, 1, 0)?;

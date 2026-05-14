@@ -30,7 +30,7 @@ use crate::file::metadata::ParquetMetaData;
 use crate::util::push_buffers::PushBuffers;
 use arrow_array::RecordBatch;
 use bytes::Bytes;
-use reader_builder::RowGroupReaderBuilder;
+use reader_builder::{RowBudget, RowGroupReaderBuilder};
 use remaining::RemainingRowGroups;
 use std::ops::Range;
 use std::sync::Arc;
@@ -181,6 +181,9 @@ impl ParquetPushDecoderBuilder {
         // If no row groups were specified, read all of them
         let row_groups =
             row_groups.unwrap_or_else(|| (0..parquet_metadata.num_row_groups()).collect());
+        let has_predicates = filter
+            .as_ref()
+            .is_some_and(|filter| !filter.predicates.is_empty());
 
         // Prepare to build RowGroup readers
         let file_len = 0; // not used in push decoder
@@ -191,8 +194,6 @@ impl ParquetPushDecoderBuilder {
             Arc::clone(&parquet_metadata),
             fields,
             filter,
-            limit,
-            offset,
             metrics,
             max_predicate_cache_size,
             buffers,
@@ -204,6 +205,8 @@ impl ParquetPushDecoderBuilder {
             parquet_metadata,
             row_groups,
             selection,
+            RowBudget::new(offset, limit),
+            has_predicates,
             row_group_reader_builder,
         );
 
@@ -1400,6 +1403,28 @@ mod test {
         assert_eq!(batch1, expected1);
 
         expect_finished(decoder.try_decode());
+    }
+
+    #[test]
+    fn test_decoder_try_next_reader_offset_limit() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_offset(225)
+            .with_limit(20)
+            .build()
+            .unwrap();
+
+        let ranges = expect_needs_data(decoder.try_next_reader());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let reader = expect_data(decoder.try_next_reader());
+        let batches = reader
+            .map(|batch| batch.expect("expected decoded batch"))
+            .collect::<Vec<_>>();
+        let output = concat_batches(&TEST_BATCH.schema(), &batches).unwrap();
+        assert_eq!(output, TEST_BATCH.slice(225, 20));
+
+        expect_finished(decoder.try_next_reader());
     }
 
     #[test]
