@@ -112,6 +112,23 @@ struct DeferralDecision {
     delta_long_skip_share: f64,
 }
 
+impl DeferralDecision {
+    /// Decision used by the all-selected fast path: predicate accepted every
+    /// row, no selection was materialized, all stats are zero.
+    fn all_selected_fast_path() -> Self {
+        Self {
+            should_defer: false,
+            reason: FilterDeferralDecisionReason::AllSelectedFastPath,
+            current_stats: SelectionRunStats::default(),
+            absolute_stats: SelectionRunStats::default(),
+            absolute_skip_selectivity: 0.0,
+            absolute_long_skip_share: 0.0,
+            delta_skip_selectivity: 0.0,
+            delta_long_skip_share: 0.0,
+        }
+    }
+}
+
 /// Options for [`ReadPlanBuilder::with_predicate_options`].
 pub struct PredicateOptions<'a> {
     array_reader: Box<dyn ArrayReader>,
@@ -421,25 +438,12 @@ impl ReadPlanBuilder {
         // and keeps selection as None which enables coalesced page fetches.
         let all_selected = filters.iter().all(|f| f.true_count() == f.len());
         if all_selected && self.selection.is_none() {
-            self.metrics
-                .record_filter_selectivity_stat(FilterSelectivityStat {
-                    predicate_index: self.predicate_index,
-                    row_count,
-                    current_selector_count: 0,
-                    absolute_selector_count: 0,
-                    current_skipped_rows: 0,
-                    absolute_skipped_rows: 0,
-                    current_long_skip_rows: 0,
-                    absolute_long_skip_rows: 0,
-                    absolute_skip_selectivity: 0.0,
-                    absolute_long_skip_share: 0.0,
-                    delta_skip_selectivity: 0.0,
-                    delta_long_skip_share: 0.0,
-                    long_skip_share_threshold: self.long_skip_share_threshold,
-                    deferred: false,
-                    decision_reason: FilterDeferralDecisionReason::AllSelectedFastPath,
-                });
-            self.predicate_index += 1;
+            self.record_predicate_stat(
+                row_count,
+                0,
+                0,
+                &DeferralDecision::all_selected_fast_path(),
+            );
             return Ok(self);
         }
         let raw = RowSelection::from_filters(&filters);
@@ -461,12 +465,39 @@ impl ReadPlanBuilder {
             self.evaluate_deferral(&absolute, row_count, current_selectors, current_stats);
         let should_defer = decision.should_defer;
 
+        self.record_predicate_stat(
+            row_count,
+            current_selectors,
+            absolute.selector_count(),
+            &decision,
+        );
+
+        if should_defer {
+            self.deferred_selection = Some(match self.deferred_selection.take() {
+                Some(existing) => existing.intersection(&absolute),
+                None => absolute,
+            });
+        } else {
+            self.selection = Some(absolute);
+        }
+
+        Ok(self)
+    }
+
+    /// Emit a per-predicate selectivity stat and advance `predicate_index`.
+    fn record_predicate_stat(
+        &mut self,
+        row_count: usize,
+        current_selectors: usize,
+        absolute_selectors: usize,
+        decision: &DeferralDecision,
+    ) {
         self.metrics
             .record_filter_selectivity_stat(FilterSelectivityStat {
                 predicate_index: self.predicate_index,
                 row_count,
                 current_selector_count: current_selectors,
-                absolute_selector_count: absolute.selector_count(),
+                absolute_selector_count: absolute_selectors,
                 current_skipped_rows: decision.current_stats.skipped_rows,
                 absolute_skipped_rows: decision.absolute_stats.skipped_rows,
                 current_long_skip_rows: decision.current_stats.long_skip_rows,
@@ -476,23 +507,10 @@ impl ReadPlanBuilder {
                 delta_skip_selectivity: decision.delta_skip_selectivity,
                 delta_long_skip_share: decision.delta_long_skip_share,
                 long_skip_share_threshold: self.long_skip_share_threshold,
-                deferred: should_defer,
+                deferred: decision.should_defer,
                 decision_reason: decision.reason,
             });
         self.predicate_index += 1;
-
-        if should_defer {
-            // Defer: accumulate into deferred_selection, leave self.selection unchanged
-            self.deferred_selection = Some(match self.deferred_selection.take() {
-                Some(existing) => existing.intersection(&absolute),
-                None => absolute,
-            });
-        } else {
-            // Apply normally
-            self.selection = Some(absolute);
-        }
-
-        Ok(self)
     }
 
     /// Returns true when the predicate result should be deferred instead of
