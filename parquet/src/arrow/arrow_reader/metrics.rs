@@ -66,7 +66,7 @@ pub struct FilterSelectivityStat {
     pub delta_skip_selectivity: f64,
     /// Incremental long-skipped/skipped ratio contributed by this predicate.
     pub delta_long_skip_share: f64,
-    /// Threshold supplied via `with_scatter_threshold`.
+    /// Threshold supplied via `with_long_skip_share_threshold`.
     pub long_skip_share_threshold: Option<f64>,
     /// Whether this predicate result was deferred.
     pub deferred: bool,

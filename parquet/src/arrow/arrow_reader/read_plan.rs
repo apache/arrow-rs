@@ -180,7 +180,7 @@ pub struct ReadPlanBuilder {
     /// (`long_skip_rows / skipped_rows`).
     ///
     /// `None` disables deferral (predicate results always stay in the main selection).
-    scatter_threshold: Option<f64>,
+    long_skip_share_threshold: Option<f64>,
     /// Accumulated deferred selections, merged via `intersection` at build time.
     deferred_selection: Option<RowSelection>,
 }
@@ -194,7 +194,7 @@ impl ReadPlanBuilder {
             row_selection_policy: RowSelectionPolicy::default(),
             metrics: ArrowReaderMetrics::disabled(),
             predicate_index: 0,
-            scatter_threshold: None,
+            long_skip_share_threshold: None,
             deferred_selection: None,
         }
     }
@@ -224,7 +224,7 @@ impl ReadPlanBuilder {
         &self.row_selection_policy
     }
 
-    /// Set the scatter threshold for filter deferral.
+    /// Set the long-skip-share threshold for filter deferral.
     ///
     /// Deferral is considered only when a predicate increases selector
     /// fragmentation. In that case, the result is deferred unless:
@@ -245,8 +245,8 @@ impl ReadPlanBuilder {
     /// build time, so correctness is preserved.
     ///
     /// `None` disables deferral (predicate results always stay in the main selection).
-    pub fn with_scatter_threshold(mut self, threshold: Option<f64>) -> Self {
-        self.scatter_threshold = threshold;
+    pub fn with_long_skip_share_threshold(mut self, threshold: Option<f64>) -> Self {
+        self.long_skip_share_threshold = threshold;
         self
     }
 
@@ -365,7 +365,7 @@ impl ReadPlanBuilder {
             row_selection_policy: self.row_selection_policy,
             metrics: ArrowReaderMetrics::disabled(),
             predicate_index: 0,
-            scatter_threshold: None,
+            long_skip_share_threshold: None,
             deferred_selection: None,
         };
 
@@ -447,7 +447,7 @@ impl ReadPlanBuilder {
                     absolute_long_skip_share: 0.0,
                     delta_skip_selectivity: 0.0,
                     delta_long_skip_share: 0.0,
-                    long_skip_share_threshold: self.scatter_threshold,
+                    long_skip_share_threshold: self.long_skip_share_threshold,
                     deferred: false,
                     decision_reason: FilterDeferralDecisionReason::AllSelectedFastPath,
                 });
@@ -487,7 +487,7 @@ impl ReadPlanBuilder {
                 absolute_long_skip_share: decision.absolute_long_skip_share,
                 delta_skip_selectivity: decision.delta_skip_selectivity,
                 delta_long_skip_share: decision.delta_long_skip_share,
-                long_skip_share_threshold: self.scatter_threshold,
+                long_skip_share_threshold: self.long_skip_share_threshold,
                 deferred: should_defer,
                 decision_reason: decision.reason,
             });
@@ -550,7 +550,7 @@ impl ReadPlanBuilder {
             delta_long_skip_rows as f64 / delta_skipped_rows as f64
         };
 
-        let Some(long_skip_share_threshold) = self.scatter_threshold else {
+        let Some(long_skip_share_threshold) = self.long_skip_share_threshold else {
             return DeferralDecision {
                 should_defer: false,
                 reason: FilterDeferralDecisionReason::ThresholdDisabled,
@@ -640,7 +640,7 @@ impl ReadPlanBuilder {
             row_selection_policy: _,
             metrics: _,
             predicate_index: _,
-            scatter_threshold: _,
+            long_skip_share_threshold: _,
             deferred_selection: _,
         } = self;
 
@@ -864,7 +864,7 @@ mod tests {
             row_selection_policy: RowSelectionPolicy::default(),
             metrics: ArrowReaderMetrics::disabled(),
             predicate_index: 0,
-            scatter_threshold: None,
+            long_skip_share_threshold: None,
             deferred_selection: Some(deferred),
         }
     }
@@ -919,20 +919,20 @@ mod tests {
     }
 
     #[test]
-    fn test_scatter_threshold_setter() {
+    fn test_long_skip_share_threshold_setter() {
         let builder = ReadPlanBuilder::new(1024);
-        assert!(builder.scatter_threshold.is_none());
+        assert!(builder.long_skip_share_threshold.is_none());
         assert!(builder.deferred_selection.is_none());
 
-        let builder = builder.with_scatter_threshold(Some(0.9));
-        assert_eq!(builder.scatter_threshold, Some(0.9));
+        let builder = builder.with_long_skip_share_threshold(Some(0.9));
+        assert_eq!(builder.long_skip_share_threshold, Some(0.9));
     }
 
     #[test]
     fn test_no_deferred_when_threshold_disabled() {
         // Without threshold, deferred_selection should always remain None
         let builder = ReadPlanBuilder::new(1024);
-        assert!(builder.scatter_threshold.is_none());
+        assert!(builder.long_skip_share_threshold.is_none());
         assert!(builder.deferred_selection.is_none());
     }
 
@@ -978,7 +978,7 @@ mod tests {
     #[test]
     fn test_should_not_defer_when_fragmentation_not_increased() {
         let builder =
-            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(40),
             RowSelector::skip(20),
@@ -991,7 +991,7 @@ mod tests {
     #[test]
     fn test_should_not_defer_when_both_non_deferral_gates_pass() {
         let builder =
-            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(50),
             RowSelector::skip(100),
@@ -1005,7 +1005,7 @@ mod tests {
     #[test]
     fn test_should_defer_when_only_selectivity_gate_fails() {
         let builder =
-            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(1000),
             RowSelector::skip(100),
@@ -1018,7 +1018,7 @@ mod tests {
     #[test]
     fn test_should_defer_when_only_long_skip_share_gate_fails() {
         let builder =
-            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(20),
             RowSelector::skip(60),
@@ -1032,7 +1032,7 @@ mod tests {
     #[test]
     fn test_should_defer_when_both_non_deferral_gates_fail() {
         let builder =
-            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(500),
             RowSelector::skip(50),
@@ -1046,7 +1046,7 @@ mod tests {
     #[test]
     fn test_long_run_threshold_counts_exactly_100_rows_as_long() {
         let builder =
-            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(10),
             RowSelector::skip(100),
@@ -1060,7 +1060,7 @@ mod tests {
     #[test]
     fn test_should_defer_when_absolute_gates_pass_but_delta_selectivity_is_too_small() {
         let builder =
-            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(400),
             RowSelector::skip(100),
@@ -1080,7 +1080,7 @@ mod tests {
     #[test]
     fn test_should_defer_when_absolute_gates_pass_but_delta_long_skip_share_is_too_small() {
         let builder =
-            ReadPlanBuilder::new(1024).with_scatter_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
+            ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
             RowSelector::select(50),
             RowSelector::skip(100),

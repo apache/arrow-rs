@@ -143,7 +143,7 @@ pub struct ArrowReaderBuilder<T> {
 
     pub(crate) max_predicate_cache_size: usize,
 
-    pub(crate) scatter_threshold: Option<f64>,
+    pub(crate) long_skip_share_threshold: Option<f64>,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -162,7 +162,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("limit", &self.limit)
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
-            .field("scatter_threshold", &self.scatter_threshold)
+            .field("long_skip_share_threshold", &self.long_skip_share_threshold)
             .finish()
     }
 }
@@ -184,7 +184,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
-            scatter_threshold: None,
+            long_skip_share_threshold: None,
         }
     }
 
@@ -438,7 +438,7 @@ impl<T> ArrowReaderBuilder<T> {
         }
     }
 
-    /// Set a scatter threshold for filter deferral.
+    /// Set the long-skip-share threshold for filter deferral.
     ///
     /// Deferral is considered only when a predicate increases selector
     /// fragmentation. In that case, the result is deferred unless:
@@ -462,9 +462,9 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// [`RowFilter`]: crate::arrow::arrow_reader::RowFilter
     /// [`RowSelection::intersection`]: crate::arrow::arrow_reader::RowSelection::intersection
-    pub fn with_scatter_threshold(self, threshold: Option<f64>) -> Self {
+    pub fn with_long_skip_share_threshold(self, threshold: Option<f64>) -> Self {
         Self {
-            scatter_threshold: threshold,
+            long_skip_share_threshold: threshold,
             ..self
         }
     }
@@ -1226,7 +1226,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
-            scatter_threshold,
+            long_skip_share_threshold,
         } = self;
 
         // Try to avoid allocate large buffer
@@ -1244,7 +1244,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .with_selection(selection)
             .with_metrics(metrics.clone())
             .with_row_selection_policy(row_selection_policy)
-            .with_scatter_threshold(scatter_threshold);
+            .with_long_skip_share_threshold(long_skip_share_threshold);
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {

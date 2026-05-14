@@ -254,7 +254,7 @@ pub(crate) struct RowGroupReaderBuilder {
     row_selection_policy: RowSelectionPolicy,
 
     /// Scatter threshold for filter deferral
-    scatter_threshold: Option<f64>,
+    long_skip_share_threshold: Option<f64>,
 
     /// Current state of the decoder.
     ///
@@ -279,7 +279,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
-        scatter_threshold: Option<f64>,
+        long_skip_share_threshold: Option<f64>,
     ) -> Self {
         Self {
             batch_size,
@@ -290,7 +290,7 @@ impl RowGroupReaderBuilder {
             metrics,
             max_predicate_cache_size,
             row_selection_policy,
-            scatter_threshold,
+            long_skip_share_threshold,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -349,7 +349,7 @@ impl RowGroupReaderBuilder {
             .with_selection(selection)
             .with_metrics(self.metrics.clone())
             .with_row_selection_policy(self.row_selection_policy)
-            .with_scatter_threshold(self.scatter_threshold);
+            .with_long_skip_share_threshold(self.long_skip_share_threshold);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
