@@ -156,6 +156,7 @@ pub(crate) enum FieldType {
     Set = 10,
     Map = 11,
     Struct = 12,
+    Uuid = 13,
 }
 
 impl TryFrom<u8> for FieldType {
@@ -175,25 +176,27 @@ impl TryFrom<u8> for FieldType {
             10 => Ok(Self::Set),
             11 => Ok(Self::Map),
             12 => Ok(Self::Struct),
+            13 => Ok(Self::Uuid),
             _ => Err(ThriftProtocolError::InvalidFieldType(value)),
         }
     }
 }
 
-impl TryFrom<ElementType> for FieldType {
-    type Error = ThriftProtocolError;
-    fn try_from(value: ElementType) -> std::result::Result<Self, Self::Error> {
+impl From<ElementType> for FieldType {
+    fn from(value: ElementType) -> Self {
         match value {
-            ElementType::Bool => Ok(Self::BooleanTrue),
-            ElementType::Byte => Ok(Self::Byte),
-            ElementType::I16 => Ok(Self::I16),
-            ElementType::I32 => Ok(Self::I32),
-            ElementType::I64 => Ok(Self::I64),
-            ElementType::Double => Ok(Self::Double),
-            ElementType::Binary => Ok(Self::Binary),
-            ElementType::List => Ok(Self::List),
-            ElementType::Struct => Ok(Self::Struct),
-            _ => Err(ThriftProtocolError::InvalidFieldType(value as u8)),
+            ElementType::Bool => Self::BooleanTrue,
+            ElementType::Byte => Self::Byte,
+            ElementType::I16 => Self::I16,
+            ElementType::I32 => Self::I32,
+            ElementType::I64 => Self::I64,
+            ElementType::Double => Self::Double,
+            ElementType::Binary => Self::Binary,
+            ElementType::List => Self::List,
+            ElementType::Set => Self::Set,
+            ElementType::Map => Self::Map,
+            ElementType::Struct => Self::Struct,
+            ElementType::Uuid => Self::Uuid,
         }
     }
 }
@@ -212,6 +215,7 @@ pub(crate) enum ElementType {
     Set = 10,
     Map = 11,
     Struct = 12,
+    Uuid = 13,
 }
 
 impl TryFrom<u8> for ElementType {
@@ -234,6 +238,7 @@ impl TryFrom<u8> for ElementType {
             10 => Ok(Self::Set),
             11 => Ok(Self::Map),
             12 => Ok(Self::Struct),
+            13 => Ok(Self::Uuid),
             _ => Err(ThriftProtocolError::InvalidElementType(value)),
         }
     }
@@ -507,26 +512,38 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             FieldType::Double => self.skip_bytes(8).map(|_| ()),
             FieldType::Binary => self.skip_binary().map(|_| ()),
             FieldType::Struct => {
-                let mut last_field_id = 0i16;
                 loop {
-                    let field_ident = self.read_field_begin(last_field_id)?;
+                    let field_ident = self.read_field_begin(0)?;
                     if field_ident.field_type == FieldType::Stop {
                         break;
                     }
                     self.skip_till_depth(field_ident.field_type, depth - 1)?;
-                    last_field_id = field_ident.id;
                 }
                 Ok(())
             }
-            FieldType::List => {
+            // lists and sets are encoded the same
+            FieldType::List | FieldType::Set => {
                 let list_ident = self.read_list_begin()?;
+                let element_type = FieldType::from(list_ident.element_type);
                 for _ in 0..list_ident.size {
-                    let element_type = FieldType::try_from(list_ident.element_type)?;
                     self.skip_till_depth(element_type, depth - 1)?;
                 }
                 Ok(())
             }
-            // no list or map types in parquet format
+            FieldType::Map => {
+                let size = i32::try_from(self.read_vlq()?)?;
+                if size > 0 {
+                    let kv = self.read_byte()?;
+                    let key_type = FieldType::from(ElementType::try_from(kv >> 4)?);
+                    let val_type = FieldType::from(ElementType::try_from(kv & 0xf)?);
+                    for _ in 0..size {
+                        self.skip_till_depth(key_type, depth - 1)?;
+                        self.skip_till_depth(val_type, depth - 1)?;
+                    }
+                }
+                Ok(())
+            }
+            FieldType::Uuid => self.skip_bytes(16).map(|_| ()),
             _ => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
         }
     }
