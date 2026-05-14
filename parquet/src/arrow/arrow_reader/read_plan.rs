@@ -862,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_deferred_no_prior_selection() {
+    fn merge_deferred_no_prior_selection() {
         // Deferred selection with no main selection: result = deferred
         let deferred = RowSelection::from(vec![RowSelector::select(90), RowSelector::skip(10)]);
         let mut builder = builder_with_deferred(None, deferred);
@@ -874,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_deferred_with_prior_selection() {
+    fn merge_deferred_with_prior_selection() {
         // Main selects first 50, deferred selects rows 0..40 and 50..100
         // Intersection should select rows 0..40 (first 40 of 100)
         let main_sel = RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]);
@@ -890,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_deferred_in_build() {
+    fn merge_deferred_in_build() {
         // Verify that build() merges deferred before creating the ReadPlan
         let deferred = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
         let builder = builder_with_deferred(None, deferred);
@@ -900,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_deferred_in_build_limited() {
+    fn merge_deferred_in_build_limited() {
         // Verify that build_limited() merges deferred before applying offset/limit
         let deferred = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
         let builder = builder_with_deferred(None, deferred);
@@ -911,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn test_long_skip_share_threshold_setter() {
+    fn long_skip_share_threshold_setter() {
         let builder = ReadPlanBuilder::new(1024);
         assert!(builder.long_skip_share_threshold.is_none());
         assert!(builder.deferred_selection.is_none());
@@ -921,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_deferred_when_threshold_disabled() {
+    fn no_deferred_when_threshold_disabled() {
         // Without threshold, deferred_selection should always remain None
         let builder = ReadPlanBuilder::new(1024);
         assert!(builder.long_skip_share_threshold.is_none());
@@ -929,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_deferred_selections_intersected() {
+    fn multiple_deferred_selections_intersected() {
         // Two deferred selections should be intersected
         let deferred1 = RowSelection::from(vec![RowSelector::select(80), RowSelector::skip(20)]);
         let deferred2 = RowSelection::from(vec![
@@ -947,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn test_selection_run_stats_tracks_skip_selectivity_and_long_skip_share() {
+    fn selection_run_stats_tracks_skip_selectivity_and_long_skip_share() {
         let selection = RowSelection::from(vec![
             RowSelector::select(4),
             RowSelector::skip(3),
@@ -968,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_not_defer_when_fragmentation_not_increased() {
+    fn should_not_defer_when_fragmentation_not_increased() {
         let builder =
             ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
@@ -981,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_not_defer_when_both_non_deferral_gates_pass() {
+    fn should_not_defer_when_both_non_deferral_gates_pass() {
         let builder =
             ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
@@ -995,7 +995,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_defer_when_only_selectivity_gate_fails() {
+    fn should_defer_when_only_selectivity_gate_fails() {
         let builder =
             ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
@@ -1008,7 +1008,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_defer_when_only_long_skip_share_gate_fails() {
+    fn should_defer_when_only_long_skip_share_gate_fails() {
         let builder =
             ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
@@ -1022,7 +1022,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_defer_when_both_non_deferral_gates_fail() {
+    fn should_defer_when_both_non_deferral_gates_fail() {
         let builder =
             ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
@@ -1036,7 +1036,7 @@ mod tests {
     }
 
     #[test]
-    fn test_long_run_threshold_counts_exactly_100_rows_as_long() {
+    fn long_run_threshold_counts_exactly_100_rows_as_long() {
         let builder =
             ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
@@ -1050,7 +1050,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_defer_when_absolute_gates_pass_but_delta_selectivity_is_too_small() {
+    fn should_defer_when_absolute_gates_pass_but_delta_selectivity_is_too_small() {
         let builder =
             ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
@@ -1070,7 +1070,7 @@ mod tests {
     }
 
     #[test]
-    fn test_should_defer_when_absolute_gates_pass_but_delta_long_skip_share_is_too_small() {
+    fn should_defer_when_absolute_gates_pass_but_delta_long_skip_share_is_too_small() {
         let builder =
             ReadPlanBuilder::new(1024).with_long_skip_share_threshold(Some(TEST_LONG_SKIP_SHARE_THRESHOLD));
         let absolute = RowSelection::from(vec![
