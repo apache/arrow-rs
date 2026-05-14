@@ -521,6 +521,15 @@ impl BitWriter {
 /// MAX_VLQ_BYTE_LEN = 5 for i32, and MAX_VLQ_BYTE_LEN = 10 for i64
 pub const MAX_VLQ_BYTE_LEN: usize = 10;
 
+/// Reads bit packed values from an in-memory buffer.
+///
+/// `BitReader` is the dual of [`BitWriter`] and reads values that are either
+/// byte aligned or packed at arbitrary bit widths. It is primarily used by the
+/// Parquet RLE/bit-packing hybrid decoder.
+///
+/// Reads advance an internal cursor; once the buffer is exhausted, the
+/// `get_*` methods return `None` rather than panicking. To rewind, use
+/// [`BitReader::reset`] with the same (or a different) buffer.
 pub struct BitReader {
     /// The byte buffer to read from, passed in by client
     buffer: Bytes,
@@ -544,9 +553,9 @@ pub struct BitReader {
     bit_offset: usize,
 }
 
-/// Utility class to read bit/byte stream. This class can read bits or bytes that are
-/// either byte aligned or not.
 impl BitReader {
+    /// Creates a new [`BitReader`] that reads from `buffer`, starting at
+    /// bit offset 0.
     pub fn new(buffer: Bytes) -> Self {
         BitReader {
             buffer,
@@ -556,6 +565,11 @@ impl BitReader {
         }
     }
 
+    /// Resets this reader to read from the start of `buffer`, discarding any
+    /// previous buffer and position.
+    ///
+    /// This is useful for reusing the same `BitReader` instance across
+    /// multiple input buffers without allocation.
     pub fn reset(&mut self, buffer: Bytes) {
         self.buffer = buffer;
         self.buffered_values = 0;
@@ -563,15 +577,24 @@ impl BitReader {
         self.bit_offset = 0;
     }
 
-    /// Gets the current byte offset
+    /// Returns the current byte offset, rounded up to the next whole byte.
+    ///
+    /// This is the index of the next byte that a byte-aligned
+    /// read (such as [`BitReader::get_aligned`]) would consume.
     #[inline]
     pub fn get_byte_offset(&self) -> usize {
         self.byte_offset + ceil(self.bit_offset, 8)
     }
 
-    /// Reads a value of type `T` and of size `num_bits`.
+    /// Reads a single bit-packed value of `num_bits` bits as a `T` from the
+    /// stream.
     ///
-    /// Returns `None` if there's not enough data available. `Some` otherwise.
+    /// The value is read as the low `num_bits` bits of `T`. Bits are consumed
+    /// from the stream in little-endian bit order.
+    ///
+    /// Returns `None` if there are fewer than `num_bits` bits left in the
+    /// buffer; otherwise `Some(value)`. On `None` the reader's position is
+    /// left unchanged.
     pub fn get_value<T: FromBitpacked>(&mut self, num_bits: usize) -> Option<T> {
         debug_assert!(num_bits <= 64);
         debug_assert!(num_bits <= size_of::<T>() * 8);
@@ -607,14 +630,21 @@ impl BitReader {
         Some(T::from_u64(v))
     }
 
-    /// Read multiple values from their packed representation where each element is represented
-    /// by `num_bits` bits.
+    /// Reads up to `batch.len()` bit-packed values of `num_bits` each, into
+    /// `batch`.
+    ///
+    /// Equivalent to repeatedly calling [`BitReader::get_value`] with the same
+    /// `num_bits`, but faster because it dispatches to SIMD-friendly
+    /// fixed-width unpacking routines whenever possible.
+    ///
+    /// Returns the number of values actually written to `batch`. This will be
+    /// less than `batch.len()` if the underlying buffer is exhausted before
+    /// `batch` is filled.
     ///
     /// # Panics
     ///
     /// This function panics if
     /// - `num_bits` is larger than the bit-capacity of `T`
-    ///
     pub fn get_batch<T: FromBitpacked>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
         debug_assert!(num_bits <= size_of::<T>() * 8);
 
@@ -756,9 +786,12 @@ impl BitReader {
         values_to_read
     }
 
-    /// Skip num_value values with num_bits bit width
+    /// Skips `num_values` bit-packed values of `num_bits` bits, advancing the
+    /// reader past them without decoding.
     ///
-    /// Return the number of values skipped (up to num_values)
+    /// Returns the number of values actually skipped (up to `num_values`).
+    /// This will be less than `num_values` if the underlying buffer is
+    /// exhausted.
     pub fn skip(&mut self, num_values: usize, num_bits: usize) -> usize {
         debug_assert!(num_bits <= 64);
 
@@ -782,7 +815,11 @@ impl BitReader {
         values_to_read
     }
 
-    /// Reads up to `num_bytes` to `buf` returning the number of bytes read
+    /// Reads up to `num_bytes` bytes from the stream, appending them to `buf`,
+    /// and returns the number of bytes actually appended.
+    ///
+    /// The reader is first advanced to the next byte boundary, so any
+    /// in-progress bit-level read is discarded before the bytes are copied.
     pub(crate) fn get_aligned_bytes(&mut self, buf: &mut Vec<u8>, num_bytes: usize) -> usize {
         // Align to byte offset
         self.byte_offset = self.get_byte_offset();
@@ -797,13 +834,15 @@ impl BitReader {
         to_read
     }
 
-    /// Reads a `num_bytes`-sized value from this buffer and return it.
-    /// `T` needs to be a little-endian native type. The value is assumed to be byte
-    /// aligned so the bit reader will be advanced to the start of the next byte before
-    /// reading the value.
+    /// Reads a `num_bytes`-sized value of type `T` from the stream.
     ///
-    /// Returns `Some` if there's enough bytes left to form a value of `T`.
-    /// Otherwise `None`.
+    /// `T` is interpreted as a little-endian native type. The value is
+    /// assumed to be byte aligned, so the reader is first advanced to the
+    /// start of the next byte before reading.
+    ///
+    /// Returns `Some(value)` if there are at least `num_bytes` bytes left in
+    /// the buffer after byte-alignment, and `None` otherwise. On `None` the
+    /// reader's byte position is still advanced to the alignment boundary.
     pub fn get_aligned<T: FromBytes>(&mut self, num_bytes: usize) -> Option<T> {
         self.byte_offset = self.get_byte_offset();
         self.bit_offset = 0;
@@ -819,10 +858,18 @@ impl BitReader {
         Some(v)
     }
 
-    /// Reads a VLQ encoded (in little endian order) int from the stream.
-    /// The encoded int must start at the beginning of a byte.
+    /// Reads a VLQ-encoded (in little-endian order) integer from the stream.
     ///
-    /// Returns `None` if there's not enough bytes in the stream. `Some` otherwise.
+    /// The encoded integer must start at the beginning of a byte; the reader
+    /// is first advanced to the next byte boundary before decoding.
+    ///
+    /// Returns `Some(value)` on success, or `None` if the buffer is exhausted
+    /// before a complete VLQ value is read.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the encoded integer is longer than [`MAX_VLQ_BYTE_LEN`]
+    /// bytes (bad input).
     pub fn get_vlq_int(&mut self) -> Option<i64> {
         // Align to byte boundary once, then read bytes directly
         self.byte_offset = self.get_byte_offset();
@@ -847,15 +894,21 @@ impl BitReader {
         None
     }
 
-    /// Reads a zigzag-VLQ encoded (in little endian order) int from the stream
-    /// Zigzag-VLQ is a variant of VLQ encoding where negative and positive numbers are
-    /// encoded in a zigzag fashion.
-    /// See: https://developers.google.com/protocol-buffers/docs/encoding
+    /// Reads a zigzag-VLQ-encoded little-endian integer from the
+    /// stream.
     ///
-    /// Note: the encoded int must start at the beginning of a byte.
+    /// Zigzag-VLQ is a variant of VLQ encoding where negative and positive
+    /// numbers are interleaved so that small absolute values produce short
+    /// encodings regardless of sign. See the [Protocol Buffers encoding
+    /// documentation](https://developers.google.com/protocol-buffers/docs/encoding)
+    /// for details.
     ///
-    /// Returns `None` if the number of bytes there's not enough bytes in the stream.
-    /// `Some` otherwise.
+    /// As with [`BitReader::get_vlq_int`], the encoded integer must start at
+    /// the beginning of a byte; the reader is first advanced to the next
+    /// byte boundary before decoding.
+    ///
+    /// Returns `Some(value)` on success, or `None` if the buffer is exhausted
+    /// before a complete value is read.
     #[inline]
     pub fn get_zigzag_vlq_int(&mut self) -> Option<i64> {
         self.get_vlq_int().map(|v| {
@@ -864,7 +917,7 @@ impl BitReader {
         })
     }
 
-    /// Loads up to the the next 8 bytes from `self.buffer` at `self.byte_offset`
+    /// Loads up to the next 8 bytes from `self.buffer` at `self.byte_offset`
     /// into `self.buffered_values`.
     ///
     /// Reads fewer than 8 bytes if there are fewer than 8 bytes left
