@@ -114,10 +114,7 @@ fn compare_primitive<T: ArrowPrimitiveType>(
     left: &dyn Array,
     right: &dyn Array,
     opts: SortOptions,
-) -> DynComparator
-where
-    T::Native: ArrowNativeTypeOp,
-{
+) -> DynComparator {
     let left = left.as_primitive::<T>();
     let right = right.as_primitive::<T>();
     let l_values = left.values().clone();

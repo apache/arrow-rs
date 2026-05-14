@@ -24,21 +24,23 @@ use arrow_schema::ArrowError;
 use itoa;
 use ryu;
 
-use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{ArrayDecoder, DecoderContext};
 
 const TRUE: &str = "true";
 const FALSE: &str = "false";
 
 pub struct StringArrayDecoder<O: OffsetSizeTrait> {
     coerce_primitive: bool,
+    ignore_type_conflicts: bool,
     phantom: PhantomData<O>,
 }
 
 impl<O: OffsetSizeTrait> StringArrayDecoder<O> {
-    pub fn new(coerce_primitive: bool) -> Self {
+    pub fn new(ctx: &DecoderContext) -> Self {
         Self {
-            coerce_primitive,
+            coerce_primitive: ctx.coerce_primitive(),
+            ignore_type_conflicts: ctx.ignore_type_conflicts(),
             phantom: Default::default(),
         }
     }
@@ -73,6 +75,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                     // An arbitrary estimate
                     data_capacity += 10;
                 }
+                _ if self.ignore_type_conflicts => {}
                 _ => {
                     return Err(tape.error(*p, "string"));
                 }
@@ -126,6 +129,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                     }
                     _ => unreachable!(),
                 },
+                _ if self.ignore_type_conflicts => builder.append_null(),
                 _ => unreachable!(),
             }
         }
