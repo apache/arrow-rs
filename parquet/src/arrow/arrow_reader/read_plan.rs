@@ -33,11 +33,21 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
 
+// Fixed gates for the filter-deferral heuristic. They sit alongside the
+// user-tunable knob on
+// [`ArrowReaderBuilder::with_long_skip_share_threshold`], which controls
+// the long-skip-share requirement; these three are intentionally not
+// exposed as a public API to keep the surface area small. Predicate results
+// are kept applied only when every gate is satisfied; otherwise the result
+// is deferred until [`ReadPlanBuilder::build`].
+
 /// Run length at or above this value is treated as "long" for skip-island stats.
 const DEFERRAL_LONG_RUN_THRESHOLD_ROWS: usize = 100;
-/// Minimum skip selectivity required to avoid deferral once fragmentation increases.
+/// Minimum cumulative skip selectivity (`skipped_rows / row_count`) required to
+/// avoid deferral once fragmentation increases.
 const DEFERRAL_SKIP_SELECTIVITY_FLOOR: f64 = 0.10;
-/// Minimum *incremental* skip selectivity required to avoid deferral once
+/// Minimum *incremental* skip selectivity contributed by a single predicate
+/// (`new_skipped_rows / row_count`) required to avoid deferral once
 /// fragmentation increases.
 const DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR: f64 = 0.02;
 
@@ -170,16 +180,10 @@ pub struct ReadPlanBuilder {
     /// Number of predicates evaluated so far.
     predicate_index: usize,
     /// Minimum long-skip-share required for a fragmented predicate result to
-    /// remain applied.
+    /// remain applied; `None` disables deferral. See
+    /// [`ArrowReaderBuilder::with_long_skip_share_threshold`] for semantics.
     ///
-    /// When set, deferral is considered only when a predicate increases
-    /// selector fragmentation. In that case, the result is deferred unless both
-    /// absolute and incremental skip-quality gates are satisfied.
-    ///
-    /// This threshold controls the long-skip-share requirement
-    /// (`long_skip_rows / skipped_rows`).
-    ///
-    /// `None` disables deferral (predicate results always stay in the main selection).
+    /// [`ArrowReaderBuilder::with_long_skip_share_threshold`]: crate::arrow::arrow_reader::ArrowReaderBuilder::with_long_skip_share_threshold
     long_skip_share_threshold: Option<f64>,
     /// Accumulated deferred selections, merged via `intersection` at build time.
     deferred_selection: Option<RowSelection>,
@@ -226,25 +230,9 @@ impl ReadPlanBuilder {
 
     /// Set the long-skip-share threshold for filter deferral.
     ///
-    /// Deferral is considered only when a predicate increases selector
-    /// fragmentation. In that case, the result is deferred unless:
+    /// See [`ArrowReaderBuilder::with_long_skip_share_threshold`] for full semantics.
     ///
-    /// 1. absolute skip selectivity (`skipped_rows / total_rows`) is at least
-    ///    `DEFERRAL_SKIP_SELECTIVITY_FLOOR` (currently `0.10`),
-    /// 2. absolute long-skip share (`long_skip_rows / skipped_rows`) is at least
-    ///    this threshold,
-    /// 3. incremental skip selectivity added by this predicate is at least
-    ///    `DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR` (currently `0.02`), and
-    /// 4. incremental long-skip share added by this predicate is at least this
-    ///    threshold.
-    ///
-    /// For example, `0.75` means at least 75% of skipped rows must be in long
-    /// skip runs to avoid deferral.
-    ///
-    /// The deferred results are merged via [`RowSelection::intersection`] at
-    /// build time, so correctness is preserved.
-    ///
-    /// `None` disables deferral (predicate results always stay in the main selection).
+    /// [`ArrowReaderBuilder::with_long_skip_share_threshold`]: crate::arrow::arrow_reader::ArrowReaderBuilder::with_long_skip_share_threshold
     pub fn with_long_skip_share_threshold(mut self, threshold: Option<f64>) -> Self {
         self.long_skip_share_threshold = threshold;
         self
