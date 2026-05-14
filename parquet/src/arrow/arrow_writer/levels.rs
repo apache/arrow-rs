@@ -45,6 +45,7 @@ use crate::column::writer::LevelDataRef;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
@@ -672,14 +673,17 @@ impl LevelInfoBuilder {
                         info.non_null_indices
                             .extend(range_nulls.valid_indices().map(|i| i + range.start));
                     } else {
-                        let range_nulls = nulls.slice(range.start, len);
-                        info.def_levels.extend_from_iter(
-                            range_nulls
-                                .iter()
-                                .map(|valid| max_def_level - (!valid as i16)),
+                        let bits = nulls.inner();
+                        info.def_levels.extend_from_iter(range.clone().map(|i| {
+                            // Safety: range.end was asserted to be in bounds earlier
+                            let valid = unsafe { bits.value_unchecked(i) };
+                            max_def_level - (!valid as i16)
+                        }));
+                        info.non_null_indices.reserve(len);
+                        info.non_null_indices.extend(
+                            BitIndexIterator::new(bits.inner(), bits.offset() + range.start, len)
+                                .map(|i| i + range.start),
                         );
-                        info.non_null_indices
-                            .extend(range_nulls.valid_indices().map(|i| i + range.start));
                     }
                 }
                 None => {
