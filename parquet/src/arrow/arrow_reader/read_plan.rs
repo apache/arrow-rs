@@ -174,11 +174,11 @@ impl ReadPlanBuilder {
     /// fragmentation. In that case, the result is deferred unless:
     ///
     /// 1. absolute skip selectivity (`skipped_rows / total_rows`) is at least
-    ///    [`DEFERRAL_SKIP_SELECTIVITY_FLOOR`],
+    ///    `DEFERRAL_SKIP_SELECTIVITY_FLOOR` (currently `0.10`),
     /// 2. absolute long-skip share (`long_skip_rows / skipped_rows`) is at least
     ///    this threshold,
     /// 3. incremental skip selectivity added by this predicate is at least
-    ///    [`DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR`], and
+    ///    `DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR` (currently `0.02`), and
     /// 4. incremental long-skip share added by this predicate is at least this
     ///    threshold.
     ///
