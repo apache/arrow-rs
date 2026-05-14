@@ -513,6 +513,23 @@ impl ReadPlanBuilder {
         self.predicate_index += 1;
     }
 
+    /// Decide whether the predicate's result should be deferred or applied,
+    /// and return the supporting stats for metrics.
+    ///
+    /// Short-circuits, in order, before the four-gate test:
+    /// 1. **Threshold disabled** (`long_skip_share_threshold == None`) — never
+    ///    defer; the heuristic is opt-in.
+    /// 2. **Zero row count** — selectivity ratios are undefined, so keep
+    ///    applied.
+    /// 3. **Fragmentation did not increase** (`absolute.selector_count() <=
+    ///    current_selectors`) — deferral only fires when applying the
+    ///    predicate would make the selection more fragmented than it already
+    ///    is.
+    ///
+    /// Only after all three checks pass do the four gates
+    /// (`DEFERRAL_SKIP_SELECTIVITY_FLOOR`, `long_skip_share_threshold`,
+    /// `DEFERRAL_DELTA_SKIP_SELECTIVITY_FLOOR`, `long_skip_share_threshold`)
+    /// determine whether the predicate stays applied.
     fn evaluate_deferral(
         &self,
         absolute: &RowSelection,
