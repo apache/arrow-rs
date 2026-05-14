@@ -1,0 +1,212 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Opt-in CodSpeed benchmarking for pull requests, gated by labels and
+# sharded one job per `[[bench]]` target in each selected crate.
+#
+# Label convention (managed manually on each PR):
+#
+#   bench:all                        # every [[bench]] in the workspace
+#   bench:<crate>                    # every [[bench]] in that crate
+#   bench:<crate> bench:<crate>      # union
+#
+# Where <crate> is a workspace member name, e.g. `bench:arrow`,
+# `bench:parquet`, `bench:arrow-cast`. `bench:all` short-circuits and
+# supersedes any per-crate labels.
+#
+# Topology mirrors codspeed.yml (setup + build run in parallel; bench
+# is a matrix that downloads the build artifact and runs one bench
+# target per shard). The `setup` job additionally filters the matrix
+# by labels.
+#
+# Authorization: only users with write access to the repo can add
+# labels, so the label is itself the authorization gate.
+#
+# Baseline: native `pull_request` event → CodSpeed compares against
+# the base branch's latest CodSpeed report automatically.
+#
+# Fork PR caveat: workflows triggered by `pull_request` from fork PRs
+# do not get an OIDC token. For benches on fork PRs, push the branch
+# to this repo and label it there.
+
+name: codspeed-pr
+
+on:
+  pull_request:
+    types: [labeled, synchronize, opened, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+env:
+  CODSPEED_FEATURES: arrow/test_utils,arrow/csv,arrow/json,arrow/chrono-tz,arrow/prettyprint,arrow-schema/ffi,parquet/arrow,parquet/async,parquet/test_common,parquet/experimental,parquet/object_store
+
+jobs:
+  setup:
+    # Run only if at least one `bench:*` label is currently attached.
+    # The toJSON serialization wraps each label name in double quotes,
+    # so searching for `"bench:` matches only at the start of a label
+    # name.
+    if: contains(toJSON(github.event.pull_request.labels.*.name), '"bench:')
+    name: Generate bench matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+      scope: ${{ steps.gen.outputs.scope }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve crates from labels and emit per-bench-target matrix
+        id: gen
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          # Keep this list in sync with codspeed.yml — bench targets that
+          # currently panic/error at runtime and should not be benched
+          # until fixed in their respective crates.
+          EXCLUDED_BENCHES: |
+            arrow merge_kernels
+            arrow buffer_bit_ops
+            arrow buffer_create
+            arrow sort_kernel
+            arrow string_run_builder
+            arrow primitive_run_accessor
+            arrow-array union_array
+            arrow-cast parse_date
+            parquet row_selection_cursor
+            parquet-variant-compute variant_kernels
+        run: |
+          all_crates="arrow arrow-array arrow-avro arrow-buffer arrow-cast arrow-ipc arrow-json arrow-schema parquet parquet-variant parquet-variant-compute"
+
+          suffixes=$(jq -r '.[] | select(startswith("bench:")) | sub("^bench:"; "")' <<<"$LABELS")
+
+          if echo "$suffixes" | grep -qx "all"; then
+            selected_crates="$all_crates"
+            scope="full workspace (bench:all)"
+          else
+            for pkg in $suffixes; do
+              if ! [[ "$pkg" =~ ^[a-z][a-z0-9_-]*$ ]]; then
+                echo "::error::Invalid bench label suffix 'bench:$pkg'"
+                exit 1
+              fi
+            done
+            selected_crates="$(echo $suffixes | tr '\n' ' ')"
+            scope="$selected_crates"
+          fi
+
+          {
+            for crate in $selected_crates; do
+              if [ ! -f "$crate/Cargo.toml" ]; then
+                echo "::warning::No Cargo.toml found for '$crate' (bench:$crate); skipping"
+                continue
+              fi
+              awk -v crate="$crate" '
+                /^\[\[bench\]\]/ { in_bench=1; next }
+                /^\[/             { in_bench=0 }
+                in_bench && /^name = / {
+                  sub(/^name = "/, ""); sub(/"$/, "");
+                  printf "%s %s\n", crate, $0
+                }
+              ' "$crate/Cargo.toml"
+            done
+          } | grep -vxF -f <(printf '%s\n' "$EXCLUDED_BENCHES" | sed '/^$/d') \
+            | jq -Rcs 'split("\n") | map(select(length>0) | split(" ") | {crate: .[0], bench: .[1]})' > matrix.json
+
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "::notice::Scope: $scope ($(jq length matrix.json) bench shards after excluding known-broken targets)"
+
+  build:
+    # Gate on the same label condition as setup so we don't build when
+    # there are no benches to run.
+    if: contains(toJSON(github.event.pull_request.labels.*.name), '"bench:')
+    name: Build workspace benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Setup Rust toolchain, cache and cargo-codspeed
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: stable
+          cache-target: release
+          bins: cargo-codspeed
+
+      - name: Build benchmarks
+        run: cargo codspeed build --workspace --features "$CODSPEED_FEATURES"
+
+      - name: Pack bench binaries into a tarball
+        # actions/upload-artifact does not preserve Unix executable
+        # bits, so bench binaries downloaded by shards would otherwise
+        # land as 644 and fail with EACCES under `cargo codspeed run`.
+        run: tar -cf codspeed-binaries.tar -C target codspeed
+
+      - name: Upload built bench binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: codspeed-binaries
+          path: codspeed-binaries.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  bench:
+    needs: [setup, build]
+    name: ${{ matrix.config.crate }} / ${{ matrix.config.bench }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJson(needs.setup.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install cargo-codspeed
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: stable
+          bins: cargo-codspeed
+
+      - name: Download built bench binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: codspeed-binaries
+          path: .
+
+      - name: Unpack bench binaries (preserves executable bits)
+        run: |
+          mkdir -p target
+          tar -xf codspeed-binaries.tar -C target
+
+      - name: Run single bench target
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: simulation
+          run: cargo codspeed run -p ${{ matrix.config.crate }} --bench ${{ matrix.config.bench }}

@@ -1,0 +1,193 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Continuous benchmarking on CodSpeed.
+#
+# Runs the full workspace bench suite on every push to main, sharded
+# one job per `[[bench]]` target. Sharding at this granularity is
+# required because both crate-level shards (e.g. parquet alone has 16
+# bench targets producing >1000 benchmarks) and the workspace as a
+# whole exceed CodSpeed's 1000-benchmark per-upload limit. Jobs in the
+# same workflow are auto-aggregated by CodSpeed into one report.
+# https://codspeed.io/docs/features/sharded-benchmarks
+#
+# Topology:
+#
+#   setup ─┐
+#          ├──→ bench (matrix, ~88 jobs)
+#   build ─┘
+#
+# `setup` parses every workspace Cargo.toml's `[[bench]]` entries and
+# emits a {crate, bench} matrix. `build` does the full-workspace
+# `cargo codspeed build` exactly once and uploads
+# `target/codspeed/<mode>/` as an artifact. `bench` shards download the
+# artifact and run a single bench target each via the CodSpeed action;
+# no rebuild per shard.
+#
+# Auth is via GitHub OIDC; the workflow's `id-token` claim is what
+# CodSpeed verifies, so no secret token is required.
+#
+# The `criterion` workspace dependency is renamed to
+# `codspeed-criterion-compat`, so existing `use criterion::*` benches
+# work unmodified; outside of CodSpeed the compat layer falls back to
+# standard criterion behavior.
+
+name: codspeed
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  CODSPEED_FEATURES: arrow/test_utils,arrow/csv,arrow/json,arrow/chrono-tz,arrow/prettyprint,arrow-schema/ffi,parquet/arrow,parquet/async,parquet/test_common,parquet/experimental,parquet/object_store
+
+jobs:
+  setup:
+    name: Generate bench matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Generate matrix of {crate, bench} from workspace Cargo.tomls
+        id: gen
+        env:
+          # Bench targets known to panic / error at runtime as of writing.
+          # These are pre-existing issues in the bench targets themselves,
+          # not the CodSpeed integration; they should be fixed and removed
+          # from this list one by one.
+          #   - arrow / merge_kernels:           panics at arrow-data/src/transform/primitive.rs:31
+          #   - arrow / buffer_bit_ops, buffer_create, sort_kernel,
+          #     string_run_builder, primitive_run_accessor:  fail at runtime
+          #   - arrow-array / union_array, arrow-cast / parse_date:        fail at runtime
+          #   - parquet / row_selection_cursor:                            fails at runtime
+          #   - parquet-variant-compute / variant_kernels:                 intermittent
+          EXCLUDED_BENCHES: |
+            arrow merge_kernels
+            arrow buffer_bit_ops
+            arrow buffer_create
+            arrow sort_kernel
+            arrow string_run_builder
+            arrow primitive_run_accessor
+            arrow-array union_array
+            arrow-cast parse_date
+            parquet row_selection_cursor
+            parquet-variant-compute variant_kernels
+        run: |
+          {
+            for crate in arrow arrow-array arrow-avro arrow-buffer arrow-cast arrow-ipc arrow-json arrow-schema parquet parquet-variant parquet-variant-compute; do
+              awk -v crate="$crate" '
+                /^\[\[bench\]\]/ { in_bench=1; next }
+                /^\[/             { in_bench=0 }
+                in_bench && /^name = / {
+                  sub(/^name = "/, ""); sub(/"$/, "");
+                  printf "%s %s\n", crate, $0
+                }
+              ' "$crate/Cargo.toml"
+            done
+          } | grep -vxF -f <(printf '%s\n' "$EXCLUDED_BENCHES" | sed '/^$/d') \
+            | jq -Rcs 'split("\n") | map(select(length>0) | split(" ") | {crate: .[0], bench: .[1]})' > matrix.json
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+          echo "::notice::Generated $(jq length matrix.json) bench shards (after excluding known-broken targets)"
+
+  build:
+    name: Build workspace benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Setup Rust toolchain, cache and cargo-codspeed
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: stable
+          cache-target: release
+          bins: cargo-codspeed
+
+      - name: Build benchmarks
+        # The --features list enables every feature any workspace bench
+        # target gates behind `required-features`; without these those
+        # benches silently aren't built.
+        run: cargo codspeed build --workspace --features "$CODSPEED_FEATURES"
+
+      - name: Pack bench binaries into a tarball
+        # actions/upload-artifact does not preserve Unix executable
+        # bits, so downloaded bench binaries land as 644 and
+        # `cargo codspeed run` then fails with EACCES. Tar preserves
+        # mode bits, so we wrap the directory before upload.
+        run: tar -cf codspeed-binaries.tar -C target codspeed
+
+      - name: Upload built bench binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: codspeed-binaries
+          path: codspeed-binaries.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  bench:
+    needs: [setup, build]
+    name: ${{ matrix.config.crate }} / ${{ matrix.config.bench }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJson(needs.setup.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install cargo-codspeed
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: stable
+          bins: cargo-codspeed
+
+      - name: Download built bench binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: codspeed-binaries
+          path: .
+
+      - name: Unpack bench binaries (preserves executable bits)
+        run: |
+          mkdir -p target
+          tar -xf codspeed-binaries.tar -C target
+
+      - name: Run single bench target
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: simulation
+          run: cargo codspeed run -p ${{ matrix.config.crate }} --bench ${{ matrix.config.bench }}
