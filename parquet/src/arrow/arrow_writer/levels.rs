@@ -683,6 +683,7 @@ impl LevelInfoBuilder {
                 }
                 None => {
                     info.append_def_level_run(max_def_level, len);
+                    info.non_null_indices.reserve(len);
                     info.non_null_indices.extend(range.clone());
                 }
             }
