@@ -514,6 +514,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct
             FieldType::Struct => {
                 loop {
+                    // we don't need field id for skipping, so always pass 0 for last id
                     let field_ident = self.read_field_begin(0)?;
                     if field_ident.field_type == FieldType::Stop {
                         break;
