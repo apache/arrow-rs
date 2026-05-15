@@ -17,7 +17,7 @@
 
 //! [`VariantArrayBuilder`] implementation
 
-use crate::VariantArray;
+use crate::{VariantArray, shred_variant};
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{
@@ -36,9 +36,6 @@ use std::sync::Arc;
 ///
 /// This builder always creates a `VariantArray` using [`BinaryViewArray`] for both
 /// the metadata and value fields.
-///
-/// # TODO
-/// 1. Support shredding: <https://github.com/apache/arrow-rs/issues/7895>
 ///
 /// ## Example:
 /// ```
@@ -82,6 +79,34 @@ use std::sync::Arc;
 /// let value = variant_array.value(4);
 /// assert_eq!(value, Variant::ShortString(ShortString::try_new("norm").unwrap()));
 /// ```
+///
+/// ## Shredded Example
+///
+/// Use [`Self::build_shredded`] with [`ShreddedSchemaBuilder`] to produce a
+/// shredded [`VariantArray`] where known fields are extracted into typed columns.
+///
+/// ```
+/// # use arrow::array::Array;
+/// # use arrow_schema::DataType;
+/// # use parquet_variant::{Variant, VariantBuilderExt};
+/// # use parquet_variant_compute::{ShreddedSchemaBuilder, VariantArrayBuilder};
+/// let schema = ShreddedSchemaBuilder::default()
+///     .with_path("brand", &DataType::Utf8).unwrap()
+///     .with_path("price", &DataType::Float64).unwrap()
+///     .build();
+///
+/// let mut builder = VariantArrayBuilder::new(3);
+/// builder.new_object().with_field("brand", "Apple").with_field("price", 999.0f64).finish();
+/// builder.new_object().with_field("brand", "Samsung").finish();
+/// builder.append_null();
+///
+/// let arr = builder.build_shredded(&schema).unwrap();
+/// assert_eq!(arr.len(), 3);
+/// assert!(arr.typed_value_field().is_some());
+/// assert!(!arr.is_null(0));
+/// assert!(!arr.is_null(1));
+/// assert!(arr.is_null(2));
+/// ```
 #[derive(Debug)]
 pub struct VariantArrayBuilder {
     /// Nulls
@@ -96,8 +121,7 @@ pub struct VariantArrayBuilder {
     value_offsets: Vec<usize>,
     /// The fields of the final `StructArray`
     ///
-    /// TODO: 1) Add extension type metadata
-    /// TODO: 2) Add support for shredding
+    /// TODO: Add extension type metadata
     fields: Fields,
 }
 
@@ -117,7 +141,7 @@ impl VariantArrayBuilder {
         }
     }
 
-    /// Build the final builder
+    /// Build the final [`VariantArray`] (unshredded).
     pub fn build(self) -> VariantArray {
         let Self {
             mut nulls,
@@ -134,7 +158,6 @@ impl VariantArrayBuilder {
         let value_buffer = value_builder.into_inner();
         let value_array = binary_view_array_from_buffers(value_buffer, value_offsets);
 
-        // The build the final struct array
         let inner = StructArray::new(
             fields,
             vec![
@@ -146,6 +169,13 @@ impl VariantArrayBuilder {
         // TODO add arrow extension type metadata
 
         VariantArray::try_new(&inner).expect("valid VariantArray by construction")
+    }
+
+    /// Build a shredded [`VariantArray`] using `as_type` as the shredding schema.
+    /// Use [`ShreddedSchemaBuilder`] to construct `as_type` for struct schemas.
+    /// Returns `Err` if `as_type` is not a valid variant shredding type.
+    pub fn build_shredded(self, as_type: &DataType) -> Result<VariantArray, ArrowError> {
+        shred_variant(&self.build(), as_type)
     }
 
     /// Appends a null row to the builder.
@@ -471,6 +501,7 @@ fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> Binar
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::ShreddedSchemaBuilder;
     use arrow::array::Array;
     use parquet_variant::{ShortString, Variant};
 
@@ -658,5 +689,191 @@ mod test {
 
         assert_eq!(array.value(2), array2.value(2).get_list_element(0).unwrap());
         assert_eq!(array.value(2), array2.value(2).get_list_element(1).unwrap());
+    }
+
+    #[test]
+    fn build_shredded_primitive_int64() {
+        let mut b = VariantArrayBuilder::new(3);
+        b.append_variant(Variant::Int64(42));
+        b.append_variant(Variant::Int64(100));
+        b.append_null();
+        let arr = b.build_shredded(&DataType::Int64).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 3);
+        assert!(!arr.is_null(0));
+        assert!(!arr.is_null(1));
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn build_shredded_primitive_utf8() {
+        let mut b = VariantArrayBuilder::new(2);
+        b.append_variant(Variant::from("hello"));
+        b.append_null();
+        let arr = b.build_shredded(&DataType::Utf8).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 2);
+        assert!(!arr.is_null(0));
+        assert!(arr.is_null(1));
+    }
+
+    #[test]
+    fn build_shredded_primitive_float64() {
+        let mut b = VariantArrayBuilder::new(2);
+        b.append_variant(Variant::Float(3.14));
+        b.append_null();
+        let arr = b.build_shredded(&DataType::Float64).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn build_shredded_primitive_bool() {
+        let mut b = VariantArrayBuilder::new(2);
+        b.append_variant(Variant::BooleanTrue);
+        b.append_variant(Variant::BooleanFalse);
+        let arr = b.build_shredded(&DataType::Boolean).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn build_shredded_type_mismatch_falls_back_to_value_column() {
+        // Row 0: matches Int64 -> typed_value non-null, value null
+        // Row 1: string, does not match -> value non-null, typed_value null
+        let mut b = VariantArrayBuilder::new(2);
+        b.append_variant(Variant::Int64(7));
+        b.append_variant(Variant::from("not an int"));
+        let arr = b.build_shredded(&DataType::Int64).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 2);
+        assert!(!arr.is_null(0));
+        assert!(!arr.is_null(1));
+    }
+
+    #[test]
+    fn build_shredded_struct_single_field() {
+        let schema = DataType::Struct(vec![Field::new("brand", DataType::Utf8, true)].into());
+        let mut b = VariantArrayBuilder::new(3);
+        b.new_object().with_field("brand", "Apple").finish();
+        b.new_object().with_field("brand", "Samsung").finish();
+        b.append_null();
+        let arr = b.build_shredded(&schema).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 3);
+        assert!(!arr.is_null(0));
+        assert!(!arr.is_null(1));
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn build_shredded_struct_multi_field() {
+        let schema = ShreddedSchemaBuilder::default()
+            .with_path("name", &DataType::Utf8)
+            .unwrap()
+            .with_path("age", &DataType::Int32)
+            .unwrap()
+            .build();
+        let mut b = VariantArrayBuilder::new(2);
+        b.new_object()
+            .with_field("name", "Alice")
+            .with_field("age", 30i32)
+            .finish();
+        b.new_object().with_field("name", "Bob").finish();
+        let arr = b.build_shredded(&schema).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn build_shredded_nested_struct() {
+        let schema = ShreddedSchemaBuilder::default()
+            .with_path("address.city", &DataType::Utf8)
+            .unwrap()
+            .with_path("address.zip", &DataType::Utf8)
+            .unwrap()
+            .build();
+        let mut b = VariantArrayBuilder::new(2);
+        {
+            let mut obj = b.new_object();
+            obj.new_object("address")
+                .with_field("city", "NYC")
+                .with_field("zip", "10001")
+                .finish();
+            obj.finish();
+        }
+        b.append_null();
+        let arr = b.build_shredded(&schema).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 2);
+        assert!(!arr.is_null(0));
+        assert!(arr.is_null(1));
+    }
+
+    #[test]
+    fn build_shredded_list_of_int64() {
+        use arrow_schema::Field as ArrowField;
+        use std::sync::Arc;
+        let list_schema = DataType::List(Arc::new(ArrowField::new("item", DataType::Int64, true)));
+        let mut b = VariantArrayBuilder::new(2);
+        b.new_list()
+            .with_value(Variant::Int64(1))
+            .with_value(Variant::Int64(2))
+            .finish();
+        b.append_null();
+        let arr = b.build_shredded(&list_schema).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 2);
+        assert!(!arr.is_null(0));
+        assert!(arr.is_null(1));
+    }
+
+    #[test]
+    fn build_shredded_extend_then_shred() {
+        let mut b = VariantArrayBuilder::new(4);
+        b.extend([
+            Some(Variant::Int64(1)),
+            None,
+            Some(Variant::Int64(3)),
+            Some(Variant::from("oops")),
+        ]);
+        let arr = b.build_shredded(&DataType::Int64).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 4);
+        assert!(!arr.is_null(0));
+        assert!(arr.is_null(1));
+        assert!(!arr.is_null(2));
+        assert!(!arr.is_null(3));
+    }
+
+    #[test]
+    fn build_shredded_all_nulls() {
+        let mut b = VariantArrayBuilder::new(3);
+        b.append_null();
+        b.append_null();
+        b.append_null();
+        let arr = b.build_shredded(&DataType::Int64).unwrap();
+        assert_eq!(arr.len(), 3);
+        assert!(arr.is_null(0));
+        assert!(arr.is_null(1));
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn build_shredded_invalid_type_returns_err() {
+        let mut b = VariantArrayBuilder::new(1);
+        b.append_variant(Variant::Int64(1));
+        let result = b.build_shredded(&DataType::FixedSizeBinary(17));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_shredded_uuid_fixed_size_binary_16() {
+        let uuid_bytes: Vec<u8> = (0u8..16).collect();
+        let mut b = VariantArrayBuilder::new(1);
+        b.append_variant(Variant::from(uuid_bytes.as_slice()));
+        let arr = b.build_shredded(&DataType::FixedSizeBinary(16)).unwrap();
+        assert!(arr.typed_value_field().is_some());
+        assert_eq!(arr.len(), 1);
     }
 }
