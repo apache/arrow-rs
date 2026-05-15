@@ -1051,7 +1051,8 @@ mod tests {
     #[cfg(feature = "arrow")]
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::basic::{
-        ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
+        ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder,
+        Type, converted_type_for_logical,
     };
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
@@ -1287,7 +1288,7 @@ mod tests {
         let field = Arc::new(
             types::Type::primitive_type_builder("col1", Type::INT32)
                 .with_logical_type(field_logical_type.clone())
-                .with_converted_type(field_logical_type.into())
+                .with_converted_type(converted_type_for_logical(field_logical_type.as_ref()))
                 .build()
                 .unwrap(),
         );

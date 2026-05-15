@@ -1834,14 +1834,14 @@ pub(crate) mod tests {
     fn test_primitive_single_column_reader_test() {
         run_single_column_reader_tests::<BoolType, _, BoolType>(
             2,
-            ConvertedType::NONE,
+            None,
             None,
             |vals| Arc::new(BooleanArray::from_iter(vals.iter().cloned())),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
         );
         run_single_column_reader_tests::<Int32Type, _, Int32Type>(
             2,
-            ConvertedType::NONE,
+            None,
             None,
             |vals| Arc::new(Int32Array::from_iter(vals.iter().cloned())),
             &[
@@ -1853,7 +1853,7 @@ pub(crate) mod tests {
         );
         run_single_column_reader_tests::<Int64Type, _, Int64Type>(
             2,
-            ConvertedType::NONE,
+            None,
             None,
             |vals| Arc::new(Int64Array::from_iter(vals.iter().cloned())),
             &[
@@ -1865,7 +1865,7 @@ pub(crate) mod tests {
         );
         run_single_column_reader_tests::<FloatType, _, FloatType>(
             2,
-            ConvertedType::NONE,
+            None,
             None,
             |vals| Arc::new(Float32Array::from_iter(vals.iter().cloned())),
             &[Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT],
@@ -1876,7 +1876,7 @@ pub(crate) mod tests {
     fn test_unsigned_primitive_single_column_reader_test() {
         run_single_column_reader_tests::<Int32Type, _, Int32Type>(
             2,
-            ConvertedType::UINT_32,
+            Some(ConvertedType::UINT_32),
             Some(ArrowDataType::UInt32),
             |vals| {
                 Arc::new(UInt32Array::from_iter(
@@ -1891,7 +1891,7 @@ pub(crate) mod tests {
         );
         run_single_column_reader_tests::<Int64Type, _, Int64Type>(
             2,
-            ConvertedType::UINT_64,
+            Some(ConvertedType::UINT_64),
             Some(ArrowDataType::UInt64),
             |vals| {
                 Arc::new(UInt64Array::from_iter(
@@ -2199,7 +2199,7 @@ pub(crate) mod tests {
     fn test_fixed_length_binary_column_reader() {
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             20,
-            ConvertedType::NONE,
+            None,
             None,
             |vals| {
                 let mut builder = FixedSizeBinaryBuilder::with_capacity(vals.len(), 20);
@@ -2219,7 +2219,7 @@ pub(crate) mod tests {
     fn test_interval_day_time_column_reader() {
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             12,
-            ConvertedType::INTERVAL,
+            Some(ConvertedType::INTERVAL),
             None,
             |vals| {
                 Arc::new(
@@ -2306,7 +2306,7 @@ pub(crate) mod tests {
         resolutions.iter().for_each(|(arrow_type, converter)| {
             run_single_column_reader_tests::<Int96Type, _, Int96Type>(
                 2,
-                ConvertedType::NONE,
+                None,
                 arrow_type.clone(),
                 converter,
                 encodings,
@@ -2439,7 +2439,7 @@ pub(crate) mod tests {
 
         run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
             2,
-            ConvertedType::NONE,
+            None,
             None,
             |vals| {
                 Arc::new(BinaryArray::from_iter(
@@ -2451,7 +2451,7 @@ pub(crate) mod tests {
 
         run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
             2,
-            ConvertedType::UTF8,
+            Some(ConvertedType::UTF8),
             None,
             string_converter::<i32>,
             encodings,
@@ -2459,7 +2459,7 @@ pub(crate) mod tests {
 
         run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
             2,
-            ConvertedType::UTF8,
+            Some(ConvertedType::UTF8),
             Some(ArrowDataType::Utf8),
             string_converter::<i32>,
             encodings,
@@ -2467,7 +2467,7 @@ pub(crate) mod tests {
 
         run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
             2,
-            ConvertedType::UTF8,
+            Some(ConvertedType::UTF8),
             Some(ArrowDataType::LargeUtf8),
             string_converter::<i64>,
             encodings,
@@ -2486,7 +2486,7 @@ pub(crate) mod tests {
                 single_column_reader_test::<ByteArrayType, _, RandUtf8Gen>(
                     opts,
                     2,
-                    ConvertedType::UTF8,
+                    Some(ConvertedType::UTF8),
                     Some(data_type.clone()),
                     move |vals| {
                         let vals = string_converter::<i32>(vals);
@@ -2511,7 +2511,7 @@ pub(crate) mod tests {
 
             run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
                 2,
-                ConvertedType::UTF8,
+                Some(ConvertedType::UTF8),
                 Some(data_type.clone()),
                 move |vals| {
                     let vals = string_converter::<i32>(vals);
@@ -2527,7 +2527,7 @@ pub(crate) mod tests {
 
             run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
                 2,
-                ConvertedType::UTF8,
+                Some(ConvertedType::UTF8),
                 Some(data_type.clone()),
                 move |vals| {
                     let vals = string_converter::<i64>(vals);
@@ -3162,7 +3162,7 @@ pub(crate) mod tests {
     /// value generator
     fn run_single_column_reader_tests<T, F, G>(
         rand_max: i32,
-        converted_type: ConvertedType,
+        converted_type: Option<ConvertedType>,
         arrow_type: Option<ArrowDataType>,
         converter: F,
         encodings: &[Encoding],
@@ -3312,7 +3312,7 @@ pub(crate) mod tests {
     fn single_column_reader_test<T, F, G>(
         opts: TestOptions,
         rand_max: i32,
-        converted_type: ConvertedType,
+        converted_type: Option<ConvertedType>,
         arrow_type: Option<ArrowDataType>,
         converter: F,
     ) where
@@ -3322,7 +3322,7 @@ pub(crate) mod tests {
     {
         // Print out options to facilitate debugging failures on CI
         println!(
-            "Running type {:?} single_column_reader_test ConvertedType::{}/ArrowType::{:?} with Options: {:?}",
+            "Running type {:?} single_column_reader_test ConvertedType::{:?}/ArrowType::{:?} with Options: {:?}",
             T::get_physical_type(),
             converted_type,
             arrow_type,
@@ -3812,7 +3812,7 @@ pub(crate) mod tests {
         let fields = vec![Arc::new(
             Type::primitive_type_builder("leaf", PhysicalType::BYTE_ARRAY)
                 .with_repetition(Repetition::OPTIONAL)
-                .with_converted_type(ConvertedType::UTF8)
+                .with_converted_type(Some(ConvertedType::UTF8))
                 .build()
                 .unwrap(),
         )];

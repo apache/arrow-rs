@@ -1136,7 +1136,7 @@ mod tests {
     #[test]
     fn test_row_convert_int96() {
         // INT96 value does not depend on logical type
-        let descr = make_column_descr![PhysicalType::INT96, ConvertedType::NONE];
+        let descr = make_column_descr![PhysicalType::INT96, None];
 
         let value = Int96::from(vec![0, 0, 2454923]);
         let row = Field::convert_int96(&descr, value);
@@ -1150,7 +1150,7 @@ mod tests {
     #[test]
     fn test_row_convert_float() {
         // FLOAT value does not depend on logical type
-        let descr = make_column_descr![PhysicalType::FLOAT, ConvertedType::NONE];
+        let descr = make_column_descr![PhysicalType::FLOAT, None];
         let row = Field::convert_float(&descr, 2.31);
         assert_eq!(row, Field::Float(2.31));
     }
@@ -1158,7 +1158,7 @@ mod tests {
     #[test]
     fn test_row_convert_double() {
         // DOUBLE value does not depend on logical type
-        let descr = make_column_descr![PhysicalType::DOUBLE, ConvertedType::NONE];
+        let descr = make_column_descr![PhysicalType::DOUBLE, None];
         let row = Field::convert_double(&descr, 1.56);
         assert_eq!(row, Field::Double(1.56));
     }
@@ -1244,13 +1244,7 @@ mod tests {
         assert_eq!(row.unwrap(), Field::Float16(f16::PI));
 
         // NONE (FIXED_LEN_BYTE_ARRAY)
-        let descr = make_column_descr![
-            PhysicalType::FIXED_LEN_BYTE_ARRAY,
-            ConvertedType::NONE,
-            6,
-            0,
-            0
-        ];
+        let descr = make_column_descr![PhysicalType::FIXED_LEN_BYTE_ARRAY, None, 6, 0, 0];
         let value = ByteArray::from(vec![1, 2, 3, 4, 5, 6]);
         let row = Field::convert_byte_array(&descr, value.clone());
         assert_eq!(row.unwrap(), Field::Bytes(value));

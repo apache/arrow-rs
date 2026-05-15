@@ -29,7 +29,7 @@ use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
 /// Returns a descriptor for a UTF-8 column
 pub fn utf8_column() -> ColumnDescPtr {
     let t = Type::primitive_type_builder("col", PhysicalType::BYTE_ARRAY)
-        .with_converted_type(ConvertedType::UTF8)
+        .with_converted_type(Some(ConvertedType::UTF8))
         .build()
         .unwrap();
 

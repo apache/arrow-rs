@@ -1644,7 +1644,6 @@ mod tests {
 
     #[test]
     fn test_display_converted_type() {
-        assert_eq!(ConvertedType::NONE.to_string(), "NONE");
         assert_eq!(ConvertedType::UTF8.to_string(), "UTF8");
         assert_eq!(ConvertedType::MAP.to_string(), "MAP");
         assert_eq!(ConvertedType::MAP_KEY_VALUE.to_string(), "MAP_KEY_VALUE");
@@ -1679,13 +1678,6 @@ mod tests {
 
     #[test]
     fn test_from_string_into_converted_type() {
-        assert_eq!(
-            ConvertedType::NONE
-                .to_string()
-                .parse::<ConvertedType>()
-                .unwrap(),
-            ConvertedType::NONE
-        );
         assert_eq!(
             ConvertedType::UTF8
                 .to_string()
@@ -2269,7 +2261,7 @@ mod tests {
         fn check_sort_order(types: Vec<LogicalType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(Some(tpe), ConvertedType::NONE, Type::BYTE_ARRAY),
+                    ColumnOrder::get_sort_order(Some(tpe), None, Type::BYTE_ARRAY),
                     expected_order
                 );
             }

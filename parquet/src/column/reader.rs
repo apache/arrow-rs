@@ -1110,7 +1110,7 @@ mod tests {
     fn get_test_int32_type() -> SchemaType {
         SchemaType::primitive_type_builder("a", PhysicalType::INT32)
             .with_repetition(Repetition::REQUIRED)
-            .with_converted_type(ConvertedType::INT_32)
+            .with_converted_type(Some(ConvertedType::INT_32))
             .with_length(-1)
             .build()
             .expect("build() should be OK")
@@ -1120,7 +1120,7 @@ mod tests {
     fn get_test_int64_type() -> SchemaType {
         SchemaType::primitive_type_builder("a", PhysicalType::INT64)
             .with_repetition(Repetition::REQUIRED)
-            .with_converted_type(ConvertedType::INT_64)
+            .with_converted_type(Some(ConvertedType::INT_64))
             .with_length(-1)
             .build()
             .expect("build() should be OK")

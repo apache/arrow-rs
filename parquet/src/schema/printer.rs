@@ -1114,7 +1114,7 @@ mod tests {
 
         let b2 = Type::group_type_builder("b2")
             .with_repetition(Repetition::REPEATED)
-            .with_converted_type(ConvertedType::NONE)
+            .with_converted_type(None)
             .with_fields(vec![Arc::new(b3), Arc::new(b4)])
             .build()
             .unwrap();
