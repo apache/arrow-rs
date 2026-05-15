@@ -1390,7 +1390,7 @@ impl fmt::Display for ColumnOrder {
 /// Such type loss includes:
 /// - Not knowing the decimal scale and precision of `ConvertedType`
 /// - Time and timestamp nanosecond precision, that is not supported in `ConvertedType`.
-pub fn converted_type_for_logical(value: Option<LogicalType>) -> Option<ConvertedType> {
+pub fn converted_type_for_logical(value: Option<&LogicalType>) -> Option<ConvertedType> {
     match value {
         Some(value) => match value {
             LogicalType::String => Some(ConvertedType::UTF8),
@@ -1851,155 +1851,161 @@ mod tests {
 
     #[test]
     fn test_logical_to_converted_type() {
-        let logical_none: Option<LogicalType> = None;
+        let logical_none: Option<&LogicalType> = None;
         assert_eq!(converted_type_for_logical(logical_none), None);
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Decimal {
+            converted_type_for_logical(Some(&LogicalType::Decimal {
                 precision: 20,
                 scale: 5
             })),
             Some(ConvertedType::DECIMAL)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Bson)),
+            converted_type_for_logical(Some(&LogicalType::Bson)),
             Some(ConvertedType::BSON)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Json)),
+            converted_type_for_logical(Some(&LogicalType::Json)),
             Some(ConvertedType::JSON)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::String)),
+            converted_type_for_logical(Some(&LogicalType::String)),
             Some(ConvertedType::UTF8)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Date)),
+            converted_type_for_logical(Some(&LogicalType::Date)),
             Some(ConvertedType::DATE)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Time {
+            converted_type_for_logical(Some(&LogicalType::Time {
                 unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
             Some(ConvertedType::TIME_MILLIS)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Time {
+            converted_type_for_logical(Some(&LogicalType::Time {
                 unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: true,
             })),
             Some(ConvertedType::TIME_MICROS)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Time {
+            converted_type_for_logical(Some(&LogicalType::Time {
                 unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
             None
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Timestamp {
+            converted_type_for_logical(Some(&LogicalType::Timestamp {
                 unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
             Some(ConvertedType::TIMESTAMP_MILLIS)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Timestamp {
+            converted_type_for_logical(Some(&LogicalType::Timestamp {
                 unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: false,
             })),
             Some(ConvertedType::TIMESTAMP_MICROS)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Timestamp {
+            converted_type_for_logical(Some(&LogicalType::Timestamp {
                 unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
             None
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(&LogicalType::Integer {
                 bit_width: 8,
                 is_signed: false
             })),
             Some(ConvertedType::UINT_8)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(&LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true
             })),
             Some(ConvertedType::INT_8)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(&LogicalType::Integer {
                 bit_width: 16,
                 is_signed: false
             })),
             Some(ConvertedType::UINT_16)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(&LogicalType::Integer {
                 bit_width: 16,
                 is_signed: true
             })),
             Some(ConvertedType::INT_16)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(&LogicalType::Integer {
                 bit_width: 32,
                 is_signed: false
             })),
             Some(ConvertedType::UINT_32)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(&LogicalType::Integer {
                 bit_width: 32,
                 is_signed: true
             })),
             Some(ConvertedType::INT_32)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(&LogicalType::Integer {
                 bit_width: 64,
                 is_signed: false
             })),
             Some(ConvertedType::UINT_64)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(&LogicalType::Integer {
                 bit_width: 64,
                 is_signed: true
             })),
             Some(ConvertedType::INT_64)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::List)),
+            converted_type_for_logical(Some(&LogicalType::List)),
             Some(ConvertedType::LIST)
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Map)),
+            converted_type_for_logical(Some(&LogicalType::Map)),
             Some(ConvertedType::MAP)
         );
-        assert_eq!(converted_type_for_logical(Some(LogicalType::Uuid)), None);
+        assert_eq!(converted_type_for_logical(Some(&LogicalType::Uuid)), None);
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Enum)),
+            converted_type_for_logical(Some(&LogicalType::Enum)),
             Some(ConvertedType::ENUM)
         );
-        assert_eq!(converted_type_for_logical(Some(LogicalType::Float16)), None);
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Geometry { crs: None })),
+            converted_type_for_logical(Some(&LogicalType::Float16)),
             None
         );
         assert_eq!(
-            converted_type_for_logical(Some(LogicalType::Geography {
+            converted_type_for_logical(Some(&LogicalType::Geometry { crs: None })),
+            None
+        );
+        assert_eq!(
+            converted_type_for_logical(Some(&LogicalType::Geography {
                 crs: None,
                 algorithm: Some(EdgeInterpolationAlgorithm::default()),
             })),
             None
         );
-        assert_eq!(converted_type_for_logical(Some(LogicalType::Unknown)), None);
+        assert_eq!(
+            converted_type_for_logical(Some(&LogicalType::Unknown)),
+            None
+        );
     }
 
     #[test]
