@@ -38,7 +38,7 @@ use std::ops::Range;
 ///
 /// Thus, the implementation defers to the caller to coalesce subsequent requests
 /// if desired.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct PushBuffers {
     /// the virtual "offset" of this buffers (added to any request)
     offset: u64,
@@ -75,7 +75,11 @@ impl Display for PushBuffers {
 }
 
 impl PushBuffers {
-    /// Create a new Buffers instance with the given file length
+    /// Create a new, empty `PushBuffers` for a file of the given length.
+    ///
+    /// Use [`PushBuffers::default`] when the file length is unknown or
+    /// irrelevant (e.g. the push decoder, which tracks ranges by absolute
+    /// offset and never consults `file_len`).
     pub fn new(file_len: u64) -> Self {
         Self {
             offset: 0,

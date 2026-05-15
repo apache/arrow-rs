@@ -190,35 +190,24 @@ use std::sync::Arc;
 ///     }
 /// }
 /// ```
-pub type ParquetPushDecoderBuilder = ArrowReaderBuilder<NoInput>;
+pub type ParquetPushDecoderBuilder = ArrowReaderBuilder<PushInput>;
 
-/// The `input` slot of a [`ParquetPushDecoderBuilder`].
+/// The `input` of a [`ParquetPushDecoderBuilder`].
 ///
-/// [`ArrowReaderBuilder`] is shared by the sync, async, and push decoders.
-/// The sync and async builders put a real input there — a file or async
-/// reader — to read from. The push decoder has no reader, by design: the
-/// caller pushes bytes in. So its slot instead holds the `PushBuffers` those
-/// pushed bytes accumulate in.
+/// [`ArrowReaderBuilder`] is shared by the sync, async, and push decoders, so
+/// it is generic over an `input`. The sync and async builders read from a
+/// real input — a file or an async reader. The push decoder has no reader, by
+/// design: the caller pushes bytes in. Its input is therefore the buffer
+/// those pushed bytes accumulate in.
 ///
-/// A fresh builder starts with empty buffers.
-/// [`ParquetPushDecoder::into_builder`] threads an existing decoder's buffers
+/// A fresh builder starts with an empty buffer;
+/// [`ParquetPushDecoder::into_builder`] threads an existing decoder's buffer
 /// back through so a rebuilt decoder keeps the bytes it already holds.
-///
-/// The name predates the buffer-carrying behaviour; it still reads as "no
-/// *reader* input".
-#[derive(Debug)]
-pub struct NoInput {
-    /// Bytes pushed into the decoder, awaiting decode.
+#[derive(Debug, Default)]
+pub struct PushInput {
+    /// Bytes pushed into the decoder, awaiting decode. Empty for a fresh
+    /// builder; carried over by [`ParquetPushDecoder::into_builder`].
     buffers: PushBuffers,
-}
-
-impl Default for NoInput {
-    fn default() -> Self {
-        // The file length is unused by the push decoder's buffer tracking.
-        Self {
-            buffers: PushBuffers::new(0),
-        }
-    }
 }
 
 /// Methods for building a ParquetDecoder. See the base [`ArrowReaderBuilder`] for
@@ -254,7 +243,7 @@ impl ParquetPushDecoderBuilder {
     /// See [`ArrowReaderMetadata::try_new`] for how to create the metadata from
     /// the Parquet metadata and reader options.
     pub fn new_with_metadata(arrow_reader_metadata: ArrowReaderMetadata) -> Self {
-        Self::new_builder(NoInput::default(), arrow_reader_metadata)
+        Self::new_builder(PushInput::default(), arrow_reader_metadata)
     }
 
     /// Reuse a [`PushBuffers`] when [`build`](Self::build)ing the decoder so
@@ -266,7 +255,7 @@ impl ParquetPushDecoderBuilder {
     /// [`ParquetPushDecoder::push_ranges`] instead.
     pub(crate) fn with_buffers(self, buffers: PushBuffers) -> Self {
         Self {
-            input: NoInput { buffers },
+            input: PushInput { buffers },
             ..self
         }
     }
@@ -274,7 +263,7 @@ impl ParquetPushDecoderBuilder {
     /// Create a [`ParquetPushDecoder`] with the configured options
     pub fn build(self) -> Result<ParquetPushDecoder, ParquetError> {
         let Self {
-            input: NoInput { buffers },
+            input: PushInput { buffers },
             metadata: parquet_metadata,
             schema,
             fields,
@@ -362,7 +351,7 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
     } = reader_builder;
 
     ArrowReaderBuilder {
-        input: NoInput::default(),
+        input: PushInput::default(),
         metadata,
         schema,
         fields,
