@@ -112,14 +112,84 @@ use std::sync::Arc;
 ///
 /// # Adaptive scans
 ///
-/// The scan strategy is not fixed once [`build`](Self::build) is called. Drive
-/// the decoder with [`ParquetPushDecoder::try_next_reader`] — which returns
-/// once per row group, leaving a clean window between row groups — and at any
-/// such boundary call [`ParquetPushDecoder::into_builder`] to recover a
-/// builder, change any option (projection, row filter, …), and
-/// [`build`](Self::build) a fresh decoder that resumes from the next row group.
-/// This is how a query engine can promote or demote filters based on the
-/// selectivity observed in the row groups decoded so far.
+/// The scan strategy is not fixed once [`build`](Self::build) is called: it
+/// can be changed *while decoding*, at row-group boundaries.
+///
+/// The important API for this is [`ParquetPushDecoder::try_next_reader`].
+/// Unlike [`try_decode`](ParquetPushDecoder::try_decode), which barrels
+/// straight through row-group boundaries, `try_next_reader` returns once per
+/// row group — leaving a clean window *between* row groups. At any such
+/// boundary, [`ParquetPushDecoder::into_builder`] hands back a
+/// `ParquetPushDecoderBuilder` for the row groups not yet decoded. Change any
+/// option on it (projection, row filter, row selection policy, …) and
+/// [`build`](Self::build) a fresh decoder that resumes from the next row
+/// group. This is how a query engine promotes or demotes filters — for
+/// example turning a row filter on or off — based on the selectivity observed
+/// in the row groups decoded so far.
+///
+/// ```
+/// # use std::ops::Range;
+/// # use std::sync::Arc;
+/// # use bytes::Bytes;
+/// # use arrow_array::record_batch;
+/// # use parquet::DecodeResult;
+/// # use parquet::arrow::ProjectionMask;
+/// # use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
+/// # use parquet::arrow::ArrowWriter;
+/// # use parquet::file::metadata::ParquetMetaDataPushDecoder;
+/// # use parquet::file::properties::WriterProperties;
+/// # let file_bytes = {
+/// #   let batch = record_batch!(
+/// #       ("a", Int32, [1, 2, 3, 4, 5, 6]),
+/// #       ("b", Int32, [6, 5, 4, 3, 2, 1])
+/// #   ).unwrap();
+/// #   // Small row groups so the test file has two of them.
+/// #   let props = WriterProperties::builder().set_max_row_group_row_count(Some(3)).build();
+/// #   let mut buffer = vec![];
+/// #   let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+/// #   writer.write(&batch).unwrap();
+/// #   writer.close().unwrap();
+/// #   Bytes::from(buffer)
+/// # };
+/// # let get_range = |r: &Range<u64>| file_bytes.slice(r.start as usize..r.end as usize);
+/// # let file_length = file_bytes.len() as u64;
+/// # let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(file_length).unwrap();
+/// # metadata_decoder.push_ranges(vec![0..file_length], vec![file_bytes.clone()]).unwrap();
+/// # let DecodeResult::Data(parquet_metadata) = metadata_decoder.try_decode().unwrap() else { panic!() };
+/// # let parquet_metadata = Arc::new(parquet_metadata);
+/// let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata)
+///     .unwrap()
+///     .build()
+///     .unwrap();
+///
+/// // Drive the decoder one row group at a time with `try_next_reader`.
+/// loop {
+///     match decoder.try_next_reader().unwrap() {
+///         DecodeResult::NeedsData(ranges) => {
+///             // Fetch and hand over the bytes the decoder asked for.
+///             let data = ranges.iter().map(|r| get_range(r)).collect();
+///             decoder.push_ranges(ranges, data).unwrap();
+///         }
+///         DecodeResult::Data(reader) => {
+///             // Decode this row group's batches.
+///             for batch in reader {
+///                 assert!(batch.unwrap().num_rows() > 0);
+///             }
+///             // We are now at a row-group boundary. Based on whatever stats
+///             // were gathered, optionally change strategy for the row groups
+///             // still to come: drop or promote a row filter, narrow or widen
+///             // the projection, etc.
+///             if decoder.is_at_row_group_boundary() && decoder.row_groups_remaining() > 0 {
+///                 let builder = decoder.into_builder().unwrap();
+///                 // e.g. column "b" turned out not to be needed.
+///                 let projection = ProjectionMask::columns(builder.parquet_schema(), ["a"]);
+///                 decoder = builder.with_projection(projection).build().unwrap();
+///             }
+///         }
+///         DecodeResult::Finished => break,
+///     }
+/// }
+/// ```
 pub type ParquetPushDecoderBuilder = ArrowReaderBuilder<NoInput>;
 
 /// The `input` slot of a [`ParquetPushDecoderBuilder`].
