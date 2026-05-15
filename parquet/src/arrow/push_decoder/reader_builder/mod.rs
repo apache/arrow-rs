@@ -324,6 +324,8 @@ impl RowGroupReaderBuilder {
     /// reconstructed. The runtime decode `state` is discarded; `metadata` is
     /// recovered from the frontier instead (see `RemainingRowGroups::into_parts`).
     pub(crate) fn into_parts(self) -> RowGroupReaderBuilderParts {
+        // If a new field is added to `RowGroupReaderBuilder`, it must be added here and in `RowGroupReaderBuilderParts`,
+        // or at least evaluate how it should be handled in the decomposition and reconstruction of the builder.
         let Self {
             batch_size,
             projection,
