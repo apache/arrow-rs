@@ -16,15 +16,13 @@
 // under the License.
 
 use crate::DecodeResult;
-use crate::arrow::ProjectionMask;
-use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, RowFilter, RowSelection, RowSelectionPolicy,
-};
+use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection};
 use crate::arrow::push_decoder::reader_builder::{
-    RowBudget, RowGroupBuildResult, RowGroupReaderBuilder,
+    RowBudget, RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
 };
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
+use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -188,6 +186,14 @@ impl RowGroupFrontier {
 /// work item. [`RowGroupReaderBuilder`] owns decoding for the active row group.
 #[derive(Debug)]
 pub(crate) struct RemainingRowGroups {
+    /// The arrow schema of the decoded output.
+    ///
+    /// Carried only so [`Self::into_parts`] can hand it back to a rebuilt
+    /// [`ParquetPushDecoderBuilder`]; it is not consulted while decoding.
+    ///
+    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    schema: SchemaRef,
+
     /// Cross-row-group scan state for queued work.
     frontier: RowGroupFrontier,
 
@@ -195,8 +201,33 @@ pub(crate) struct RemainingRowGroups {
     row_group_reader_builder: RowGroupReaderBuilder,
 }
 
+/// The builder-configurable state recovered from a [`RemainingRowGroups`] by
+/// [`RemainingRowGroups::into_parts`].
+///
+/// The fields describe the row groups that have *not* yet been decoded, so a
+/// [`ParquetPushDecoderBuilder`] reconstructed from them resumes exactly where
+/// the decoder left off.
+///
+/// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+#[derive(Debug)]
+pub(crate) struct RemainingRowGroupsParts {
+    /// The arrow schema of the decoded output.
+    pub schema: SchemaRef,
+    /// Row groups not yet handed to the reader builder.
+    pub row_groups: Vec<usize>,
+    /// The not-yet-consumed slice of the global row selection.
+    pub selection: Option<RowSelection>,
+    /// Offset still to be skipped before the next readable row group.
+    pub offset: Option<usize>,
+    /// Output rows still permitted across the remaining row groups.
+    pub limit: Option<usize>,
+    /// Builder-configurable parts of the inner row-group reader builder.
+    pub reader_builder: RowGroupReaderBuilderParts,
+}
+
 impl RemainingRowGroups {
     pub fn new(
+        schema: SchemaRef,
         parquet_metadata: Arc<ParquetMetaData>,
         row_groups: Vec<usize>,
         selection: Option<RowSelection>,
@@ -205,6 +236,7 @@ impl RemainingRowGroups {
         row_group_reader_builder: RowGroupReaderBuilder,
     ) -> Self {
         Self {
+            schema,
             frontier: RowGroupFrontier::new(
                 parquet_metadata,
                 row_groups,
@@ -213,6 +245,34 @@ impl RemainingRowGroups {
                 has_predicates,
             ),
             row_group_reader_builder,
+        }
+    }
+
+    /// Decompose into the builder-configurable [`RemainingRowGroupsParts`].
+    ///
+    /// Must be called at a row-group boundary (see
+    /// [`Self::is_at_row_group_boundary`]); the inner reader builder's runtime
+    /// decode state and buffered bytes are discarded.
+    pub(crate) fn into_parts(self) -> RemainingRowGroupsParts {
+        let Self {
+            schema,
+            frontier,
+            row_group_reader_builder,
+        } = self;
+        let RowGroupFrontier {
+            parquet_metadata: _,
+            row_groups,
+            selection,
+            budget,
+            has_predicates: _,
+        } = frontier;
+        RemainingRowGroupsParts {
+            schema,
+            row_groups: Vec::from(row_groups),
+            selection,
+            offset: budget.offset(),
+            limit: budget.limit(),
+            reader_builder: row_group_reader_builder.into_parts(),
         }
     }
 
@@ -241,28 +301,6 @@ impl RemainingRowGroups {
     /// being decoded).
     pub fn row_groups_remaining(&self) -> usize {
         self.frontier.row_groups.len()
-    }
-
-    /// Replace the projection. Must be called when
-    /// [`Self::is_at_row_group_boundary`].
-    pub fn set_projection(&mut self, projection: ProjectionMask) -> Result<(), ParquetError> {
-        self.row_group_reader_builder.set_projection(projection)
-    }
-
-    /// Replace the row filter. Must be called when
-    /// [`Self::is_at_row_group_boundary`].
-    pub fn set_filter(&mut self, filter: Option<RowFilter>) -> Result<(), ParquetError> {
-        self.row_group_reader_builder.set_filter(filter)
-    }
-
-    /// Replace the row selection policy. Must be called when
-    /// [`Self::is_at_row_group_boundary`].
-    pub fn set_row_selection_policy(
-        &mut self,
-        policy: RowSelectionPolicy,
-    ) -> Result<(), ParquetError> {
-        self.row_group_reader_builder
-            .set_row_selection_policy(policy)
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next

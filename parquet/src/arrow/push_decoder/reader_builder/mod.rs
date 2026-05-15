@@ -104,6 +104,16 @@ impl RowBudget {
         matches!(self.limit, Some(0))
     }
 
+    /// The offset still to be skipped before the next readable row group.
+    pub(crate) fn offset(self) -> Option<usize> {
+        self.offset
+    }
+
+    /// The number of output rows still permitted across the remaining row groups.
+    pub(crate) fn limit(self) -> Option<usize> {
+        self.limit
+    }
+
     /// Returns how many selected rows remain after applying this budget.
     pub(crate) fn rows_after(self, rows_before_budget: usize) -> usize {
         let rows_after_offset = rows_before_budget.saturating_sub(self.offset.unwrap_or(0));
@@ -263,6 +273,26 @@ pub(crate) struct RowGroupReaderBuilder {
     buffers: PushBuffers,
 }
 
+/// The builder-configurable parts of a [`RowGroupReaderBuilder`], recovered by
+/// [`RowGroupReaderBuilder::into_parts`].
+///
+/// This is the inverse of [`RowGroupReaderBuilder::new`]: it returns the
+/// fields that originated from a [`ParquetPushDecoderBuilder`], dropping the
+/// runtime decode `state` and the buffered `PushBuffers`.
+///
+/// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+#[derive(Debug)]
+pub(crate) struct RowGroupReaderBuilderParts {
+    pub batch_size: usize,
+    pub projection: ProjectionMask,
+    pub metadata: Arc<ParquetMetaData>,
+    pub fields: Option<Arc<ParquetField>>,
+    pub filter: Option<RowFilter>,
+    pub max_predicate_cache_size: usize,
+    pub metrics: ArrowReaderMetrics,
+    pub row_selection_policy: RowSelectionPolicy,
+}
+
 impl RowGroupReaderBuilder {
     /// Create a new RowGroupReaderBuilder
     #[expect(clippy::too_many_arguments)]
@@ -291,66 +321,49 @@ impl RowGroupReaderBuilder {
         }
     }
 
+    /// Decompose into the builder-configurable [`RowGroupReaderBuilderParts`].
+    ///
+    /// The runtime decode `state` and any buffered bytes are discarded; only
+    /// the configuration that came from the [`ParquetPushDecoderBuilder`] is
+    /// returned.
+    ///
+    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    pub(crate) fn into_parts(self) -> RowGroupReaderBuilderParts {
+        let Self {
+            batch_size,
+            projection,
+            metadata,
+            fields,
+            filter,
+            max_predicate_cache_size,
+            metrics,
+            row_selection_policy,
+            state: _,
+            buffers: _,
+        } = self;
+        RowGroupReaderBuilderParts {
+            batch_size,
+            projection,
+            metadata,
+            fields,
+            filter,
+            max_predicate_cache_size,
+            metrics,
+            row_selection_policy,
+        }
+    }
+
     /// Push new data buffers that can be used to satisfy pending requests
     pub fn push_data(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
         self.buffers.push_ranges(ranges, buffers);
     }
 
     /// True iff the inner state is `Finished`. This is the only state in
-    /// which it is safe to swap projection / filter / row selection policy
+    /// which it is safe to decompose the builder via [`Self::into_parts`],
     /// because no `RowGroupInfo`, `FilterInfo`, or in-flight `DataRequest`
-    /// is referencing the previous values.
+    /// is referencing the row-group-scoped decode state.
     pub(crate) fn is_finished(&self) -> bool {
         matches!(self.state, Some(RowGroupDecoderState::Finished))
-    }
-
-    /// Replace the projection mask used for subsequent row groups.
-    ///
-    /// Must only be called when [`Self::is_finished`]. `PushBuffers` are
-    /// preserved; bytes already fetched for columns that survive into the
-    /// new mask are reused.
-    pub(crate) fn set_projection(
-        &mut self,
-        projection: ProjectionMask,
-    ) -> Result<(), ParquetError> {
-        if !self.is_finished() {
-            return Err(ParquetError::General(
-                "RowGroupReaderBuilder::set_projection: state must be Finished".to_string(),
-            ));
-        }
-        self.projection = projection;
-        Ok(())
-    }
-
-    /// Replace the row filter used for subsequent row groups.
-    ///
-    /// Must only be called when [`Self::is_finished`]. Pass `None` to clear
-    /// the filter, `Some(filter)` to install a new one.
-    pub(crate) fn set_filter(&mut self, filter: Option<RowFilter>) -> Result<(), ParquetError> {
-        if !self.is_finished() {
-            return Err(ParquetError::General(
-                "RowGroupReaderBuilder::set_filter: state must be Finished".to_string(),
-            ));
-        }
-        self.filter = filter;
-        Ok(())
-    }
-
-    /// Replace the row selection policy used for subsequent row groups.
-    ///
-    /// Must only be called when [`Self::is_finished`].
-    pub(crate) fn set_row_selection_policy(
-        &mut self,
-        policy: RowSelectionPolicy,
-    ) -> Result<(), ParquetError> {
-        if !self.is_finished() {
-            return Err(ParquetError::General(
-                "RowGroupReaderBuilder::set_row_selection_policy: state must be Finished"
-                    .to_string(),
-            ));
-        }
-        self.row_selection_policy = policy;
-        Ok(())
     }
 
     /// Returns the total number of buffered bytes available
