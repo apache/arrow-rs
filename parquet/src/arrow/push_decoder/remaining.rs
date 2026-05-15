@@ -186,12 +186,9 @@ impl RowGroupFrontier {
 /// work item. [`RowGroupReaderBuilder`] owns decoding for the active row group.
 #[derive(Debug)]
 pub(crate) struct RemainingRowGroups {
-    /// The arrow schema of the decoded output.
-    ///
-    /// Carried only so [`Self::into_parts`] can hand it back to a rebuilt
-    /// [`ParquetPushDecoderBuilder`]; it is not consulted while decoding.
-    ///
-    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// The arrow schema of the decoded output. Carried only so
+    /// [`Self::into_parts`] can hand it to a rebuilt builder; unused while
+    /// decoding.
     schema: SchemaRef,
 
     /// Cross-row-group scan state for queued work.
@@ -201,18 +198,15 @@ pub(crate) struct RemainingRowGroups {
     row_group_reader_builder: RowGroupReaderBuilder,
 }
 
-/// The builder-configurable state recovered from a [`RemainingRowGroups`] by
-/// [`RemainingRowGroups::into_parts`].
-///
-/// The fields describe the row groups that have *not* yet been decoded, so a
-/// [`ParquetPushDecoderBuilder`] reconstructed from them resumes exactly where
-/// the decoder left off.
-///
-/// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+/// The state recovered from a [`RemainingRowGroups`] by
+/// [`RemainingRowGroups::into_parts`], describing the row groups *not* yet
+/// decoded so a builder reconstructed from it resumes where the decoder left off.
 #[derive(Debug)]
 pub(crate) struct RemainingRowGroupsParts {
     /// The arrow schema of the decoded output.
     pub schema: SchemaRef,
+    /// The Parquet file metadata.
+    pub metadata: Arc<ParquetMetaData>,
     /// Row groups not yet handed to the reader builder.
     pub row_groups: Vec<usize>,
     /// The not-yet-consumed slice of the global row selection.
@@ -252,16 +246,16 @@ impl RemainingRowGroups {
     ///
     /// Must be called at a row-group boundary (see
     /// [`Self::is_at_row_group_boundary`]). The inner reader builder's runtime
-    /// decode state is discarded; its buffered bytes are carried through in
-    /// [`RemainingRowGroupsParts::reader_builder`].
+    /// decode state is discarded; its buffered bytes are carried through.
     pub(crate) fn into_parts(self) -> RemainingRowGroupsParts {
         let Self {
             schema,
             frontier,
             row_group_reader_builder,
         } = self;
+        // `has_predicates` is recomputed by `build()` from the filter.
         let RowGroupFrontier {
-            parquet_metadata: _,
+            parquet_metadata,
             row_groups,
             selection,
             budget,
@@ -269,6 +263,7 @@ impl RemainingRowGroups {
         } = frontier;
         RemainingRowGroupsParts {
             schema,
+            metadata: parquet_metadata,
             row_groups: Vec::from(row_groups),
             selection,
             offset: budget.offset(),

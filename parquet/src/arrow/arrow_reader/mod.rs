@@ -111,11 +111,11 @@ pub struct ArrowReaderBuilder<T> {
     /// The "input" to read parquet data from.
     ///
     /// Note in the case of the [`ParquetPushDecoderBuilder`] there is no
-    /// underlying reader; the input is instead [`PushInput`], the buffer that
+    /// underlying reader; the input is instead [`PushDecoderInput`], the buffer that
     /// caller-pushed bytes accumulate in.
     ///
     /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
-    /// [`PushInput`]: crate::arrow::push_decoder::PushInput
+    /// [`PushDecoderInput`]: crate::arrow::push_decoder::PushDecoderInput
     pub(crate) input: T,
 
     pub(crate) metadata: Arc<ParquetMetaData>,

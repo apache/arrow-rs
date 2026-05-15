@@ -276,16 +276,12 @@ pub(crate) struct RowGroupReaderBuilder {
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
 /// [`RowGroupReaderBuilder::into_parts`].
 ///
-/// This is the inverse of [`RowGroupReaderBuilder::new`]: it returns the
-/// fields that originated from a [`ParquetPushDecoderBuilder`] plus the
-/// [`PushBuffers`], dropping only the runtime decode `state`.
-///
-/// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+/// `metadata` is not included: it is a whole-file property carried alongside
+/// `schema` in `RemainingRowGroupsParts`.
 #[derive(Debug)]
 pub(crate) struct RowGroupReaderBuilderParts {
     pub batch_size: usize,
     pub projection: ProjectionMask,
-    pub metadata: Arc<ParquetMetaData>,
     pub fields: Option<Arc<ParquetField>>,
     pub filter: Option<RowFilter>,
     pub max_predicate_cache_size: usize,
@@ -324,18 +320,14 @@ impl RowGroupReaderBuilder {
         }
     }
 
-    /// Decompose into [`RowGroupReaderBuilderParts`].
-    ///
-    /// The runtime decode `state` is discarded; the configuration that came
-    /// from the [`ParquetPushDecoderBuilder`] and the buffered bytes are
-    /// returned so the builder can be reconstructed.
-    ///
-    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// Decompose into [`RowGroupReaderBuilderParts`] so the builder can be
+    /// reconstructed. The runtime decode `state` is discarded; `metadata` is
+    /// recovered from the frontier instead (see `RemainingRowGroups::into_parts`).
     pub(crate) fn into_parts(self) -> RowGroupReaderBuilderParts {
         let Self {
             batch_size,
             projection,
-            metadata,
+            metadata: _,
             fields,
             filter,
             max_predicate_cache_size,
@@ -347,7 +339,6 @@ impl RowGroupReaderBuilder {
         RowGroupReaderBuilderParts {
             batch_size,
             projection,
-            metadata,
             fields,
             filter,
             max_predicate_cache_size,

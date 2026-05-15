@@ -54,7 +54,7 @@ pub use metadata::*;
 mod store;
 
 use crate::DecodeResult;
-use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder, PushInput};
+use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder, PushDecoderInput};
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -600,7 +600,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
         let decoder = ParquetPushDecoderBuilder {
-            input: PushInput::default(),
+            input: PushDecoderInput::default(),
             metadata,
             schema,
             fields,
