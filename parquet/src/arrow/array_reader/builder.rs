@@ -422,6 +422,20 @@ impl<'a> ArrayReaderBuilder<'a> {
         let page_iterator = self.row_groups.column_chunks(col_idx)?;
         let arrow_type = Some(field.arrow_type.clone());
 
+        // LogicalType::Unknown maps to DataType::Null. In the past it has been assumed
+        // that only INT32 can have this annotation, but this is not required by the Parquet
+        // specification. Since this can only annotate an entirely null column, the data type
+        // used for the NullArrayReader should be irrelevant. It's just needed to read the
+        // repetition and definition level data.
+        if matches!(arrow_type, Some(DataType::Null)) {
+            let reader = Box::new(NullArrayReader::<Int32Type>::new(
+                page_iterator,
+                column_desc,
+                self.batch_size,
+            )?) as _;
+            return Ok(Some(reader));
+        }
+
         let reader = match physical_type {
             PhysicalType::BOOLEAN => Box::new(PrimitiveArrayReader::<BoolType>::new(
                 page_iterator,
@@ -429,22 +443,12 @@ impl<'a> ArrayReaderBuilder<'a> {
                 arrow_type,
                 self.batch_size,
             )?) as _,
-            PhysicalType::INT32 => {
-                if let Some(DataType::Null) = arrow_type {
-                    Box::new(NullArrayReader::<Int32Type>::new(
-                        page_iterator,
-                        column_desc,
-                        self.batch_size,
-                    )?) as _
-                } else {
-                    Box::new(PrimitiveArrayReader::<Int32Type>::new(
-                        page_iterator,
-                        column_desc,
-                        arrow_type,
-                        self.batch_size,
-                    )?) as _
-                }
-            }
+            PhysicalType::INT32 => Box::new(PrimitiveArrayReader::<Int32Type>::new(
+                page_iterator,
+                column_desc,
+                arrow_type,
+                self.batch_size,
+            )?) as _,
             PhysicalType::INT64 => Box::new(PrimitiveArrayReader::<Int64Type>::new(
                 page_iterator,
                 column_desc,

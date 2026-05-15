@@ -345,12 +345,14 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         let column_indexes = std::mem::take(&mut self.column_indexes);
         let offset_indexes = std::mem::take(&mut self.offset_indexes);
 
+        let write_path_in_schema = self.props.write_path_in_schema();
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
             &self.descr,
             row_groups,
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
+            write_path_in_schema,
         );
 
         #[cfg(feature = "encryption")]
@@ -716,7 +718,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
 
         let map_offset = |x| x - src_offset + write_offset as i64;
         let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
-            .set_compression(metadata.compression())
+            .set_compression_codec(metadata.compression_codec())
             .set_encodings_mask(*metadata.encodings_mask())
             .set_total_compressed_size(metadata.compressed_size())
             .set_total_uncompressed_size(metadata.uncompressed_size())
@@ -1595,7 +1597,7 @@ mod tests {
 
             let desc = ColumnDescriptor::new(Arc::new(t), 0, 0, ColumnPath::new(vec![]));
             let meta = ColumnChunkMetaData::builder(Arc::new(desc))
-                .set_compression(codec)
+                .set_compression_codec(codec.into())
                 .set_total_compressed_size(reader.len() as i64)
                 .set_num_values(total_num_values)
                 .build()

@@ -224,39 +224,27 @@ impl ArrayReader for StructArrayReader {
 mod tests {
     use super::*;
     use crate::arrow::array_reader::ListArrayReader;
-    use crate::arrow::array_reader::test_util::InMemoryArrayReader;
+    use crate::arrow::array_reader::test_util::make_int32_page_reader;
     use arrow::buffer::Buffer;
     use arrow::datatypes::Field;
     use arrow_array::cast::AsArray;
-    use arrow_array::{Array, Int32Array, ListArray};
+    use arrow_array::{Array, ListArray};
     use arrow_schema::Fields;
 
     #[test]
     fn test_struct_array_reader() {
-        let array_1 = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        let array_reader_1 = InMemoryArrayReader::new(
-            ArrowType::Int32,
-            array_1.clone(),
-            Some(vec![0, 1, 2, 3, 1]),
-            Some(vec![0, 1, 1, 1, 1]),
-        );
+        let array_reader_1 = make_int32_page_reader(&[4], &[0, 1, 2, 3, 1], &[0, 1, 1, 1, 1], 3, 1);
 
-        let array_2 = Arc::new(Int32Array::from(vec![5, 4, 3, 2, 1]));
-        let array_reader_2 = InMemoryArrayReader::new(
-            ArrowType::Int32,
-            array_2.clone(),
-            Some(vec![0, 1, 3, 1, 2]),
-            Some(vec![0, 1, 1, 1, 1]),
-        );
+        let array_reader_2 = make_int32_page_reader(&[3], &[0, 1, 3, 1, 2], &[0, 1, 1, 1, 1], 3, 1);
 
         let struct_type = ArrowType::Struct(Fields::from(vec![
-            Field::new("f1", array_1.data_type().clone(), true),
-            Field::new("f2", array_2.data_type().clone(), true),
+            Field::new("f1", ArrowType::Int32, true),
+            Field::new("f2", ArrowType::Int32, true),
         ]));
 
         let mut struct_array_reader = StructArrayReader::new(
             struct_type,
-            vec![Box::new(array_reader_1), Box::new(array_reader_2)],
+            vec![array_reader_1, array_reader_2],
             1,
             1,
             true,
@@ -306,28 +294,11 @@ mod tests {
         )];
         let expected = StructArray::from((struct_fields, validity));
 
-        let array = Arc::new(Int32Array::from_iter(vec![
-            Some(1),
-            Some(2),
-            None,
-            None,
-            None,
-            None,
-        ]));
-        let reader = InMemoryArrayReader::new(
-            ArrowType::Int32,
-            array,
-            Some(vec![4, 4, 3, 2, 1, 0]),
-            Some(vec![0, 1, 1, 0, 0, 0]),
-        );
+        let reader =
+            make_int32_page_reader(&[1, 2], &[4, 4, 3, 2, 1, 0], &[0, 1, 1, 0, 0, 0], 4, 1);
 
-        let list_reader = ListArrayReader::<i32>::new(
-            Box::new(reader),
-            expected_l.data_type().clone(),
-            3,
-            1,
-            true,
-        );
+        let list_reader =
+            ListArrayReader::<i32>::new(reader, expected_l.data_type().clone(), 3, 1, true);
 
         let mut struct_reader = StructArrayReader::new(
             expected.data_type().clone(),
