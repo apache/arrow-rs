@@ -1486,7 +1486,7 @@ mod test {
         let converted_type = time.ty.converted_type();
         assert_eq!(
             converted_type.unwrap().to_string(),
-            quote! { ::parquet::basic::ConvertedType::TIMESTAMP_MILLIS }.to_string()
+            quote! { Some(::parquet::basic::ConvertedType::TIMESTAMP_MILLIS) }.to_string()
         );
     }
 }
