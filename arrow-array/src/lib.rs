@@ -248,8 +248,6 @@ pub use scalar::*;
 
 pub mod builder;
 pub mod cast;
-#[doc(hidden)]
-pub mod comparator;
 mod delta;
 #[cfg(feature = "ffi")]
 pub mod ffi;

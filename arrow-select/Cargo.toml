@@ -40,8 +40,15 @@ arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
+arrow-ord-basic = { workspace = true, optional = true }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 ahash = { version = "0.8", default-features = false}
+
+[features]
+# Enables the run-end-encoded `take` fast path that merges adjacent
+# physical indices whose underlying values compare equal. Pulls in
+# `arrow-ord-basic` for the slot-wise comparator.
+run_end_encoded = ["dep:arrow-ord-basic"]
 
 [dev-dependencies]
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }

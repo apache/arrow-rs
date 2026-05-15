@@ -15,11 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Internal comparator factories for comparing arbitrary array slots.
+//! Basic comparator factories shared by Arrow crates that need to compare
+//! arbitrary array slots without pulling in the full [`arrow-ord`] crate.
+//!
+//! The only public surface is [`make_comparator`] (with [`DynComparator`] as the
+//! returned function type). `arrow-ord` re-exports both from here, so its
+//! public API is unchanged.
+//!
+//! This crate exists so that crates such as `arrow-select` can use slot-wise
+//! comparison (e.g. for the run-end-encoded `take` fast path) without taking on
+//! the full ordering kernel suite — which would either create a circular
+//! dependency (`arrow-ord` already depends on `arrow-select`) or force every
+//! downstream user of `arrow-array` to compile the comparator machinery whether
+//! they need it or not.
 
-use crate::cast::AsArray;
-use crate::types::*;
-use crate::*;
+#![deny(rustdoc::broken_intra_doc_links)]
+#![warn(missing_docs)]
+
+use arrow_array::cast::AsArray;
+use arrow_array::types::*;
+use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_schema::{ArrowError, DataType, SortOptions};
 use std::{cmp::Ordering, collections::HashMap};

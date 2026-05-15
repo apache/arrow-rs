@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "arrow-ord"
+name = "arrow-ord-basic"
 version = { workspace = true }
-description = "Ordering kernels for arrow arrays"
+description = "Basic comparator/ordering building blocks for Apache Arrow, shared by crates that need slot-wise comparison without pulling in the full arrow-ord kernels"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
@@ -29,7 +29,7 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
-name = "arrow_ord"
+name = "arrow_ord_basic"
 bench = false
 
 [package.metadata.docs.rs]
@@ -39,10 +39,4 @@ all-features = true
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
-arrow-ord-basic = { workspace = true }
 arrow-schema = { workspace = true }
-arrow-select = { workspace = true }
-
-[dev-dependencies]
-half = { version = "2.1", default-features = false, features = ["num-traits"] }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng"] }

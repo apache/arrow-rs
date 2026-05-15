@@ -17,7 +17,7 @@
 
 //! Contains functions and function factories to compare arrays.
 
-pub use arrow_array::comparator::{DynComparator, make_comparator};
+pub use arrow_ord_basic::{DynComparator, make_comparator};
 
 #[cfg(test)]
 use arrow_array::types::*;
