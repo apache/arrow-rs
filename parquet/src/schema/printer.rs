@@ -278,7 +278,7 @@ fn print_timeunit(unit: &TimeUnit) -> &str {
 #[inline]
 fn print_logical_and_converted(
     logical_type: Option<&LogicalType>,
-    converted_type: ConvertedType,
+    converted_type: Option<ConvertedType>,
     precision: i32,
     scale: i32,
 ) -> String {
@@ -342,23 +342,25 @@ fn print_logical_and_converted(
         None => {
             // Also print converted type if it is available
             match converted_type {
-                ConvertedType::NONE => String::new(),
-                decimal @ ConvertedType::DECIMAL => {
-                    // For decimal type we should print precision and scale if they
-                    // are > 0, e.g. DECIMAL(9,2) -
-                    // DECIMAL(9) - DECIMAL
-                    let precision_scale = match (precision, scale) {
-                        (p, s) if p > 0 && s > 0 => {
-                            format!("({p},{s})")
-                        }
-                        (p, 0) if p > 0 => format!("({p})"),
-                        _ => String::new(),
-                    };
-                    format!("{decimal}{precision_scale}")
-                }
-                other_converted_type => {
-                    format!("{other_converted_type}")
-                }
+                None => String::new(),
+                Some(converted_type) => match converted_type {
+                    decimal @ ConvertedType::DECIMAL => {
+                        // For decimal type we should print precision and scale if they
+                        // are > 0, e.g. DECIMAL(9,2) -
+                        // DECIMAL(9) - DECIMAL
+                        let precision_scale = match (precision, scale) {
+                            (p, s) if p > 0 && s > 0 => {
+                                format!("({p},{s})")
+                            }
+                            (p, 0) if p > 0 => format!("({p})"),
+                            _ => String::new(),
+                        };
+                        format!("{decimal}{precision_scale}")
+                    }
+                    other_converted_type => {
+                        format!("{other_converted_type}")
+                    }
+                },
             }
         }
     }
@@ -478,7 +480,7 @@ mod tests {
             (
                 Type::primitive_type_builder("field", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_converted_type(ConvertedType::INT_32)
+                    .with_converted_type(Some(ConvertedType::INT_32))
                     .build()
                     .unwrap(),
                 "REQUIRED INT32 field (INT_32);",
@@ -486,7 +488,7 @@ mod tests {
             (
                 Type::primitive_type_builder("field", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_converted_type(ConvertedType::INT_32)
+                    .with_converted_type(Some(ConvertedType::INT_32))
                     .with_id(Some(42))
                     .build()
                     .unwrap(),
@@ -524,7 +526,7 @@ mod tests {
         id: Option<i32>,
         physical_type: PhysicalType,
         logical_type: Option<LogicalType>,
-        converted_type: ConvertedType,
+        converted_type: Option<ConvertedType>,
         repetition: Repetition,
     ) -> Result<Type> {
         Type::primitive_type_builder(name, physical_type)
@@ -547,7 +549,7 @@ mod tests {
                         bit_width: 32,
                         is_signed: true,
                     }),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -562,7 +564,7 @@ mod tests {
                         bit_width: 8,
                         is_signed: false,
                     }),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::OPTIONAL,
                 )
                 .unwrap(),
@@ -577,7 +579,7 @@ mod tests {
                         bit_width: 16,
                         is_signed: true,
                     }),
-                    ConvertedType::INT_16,
+                    Some(ConvertedType::INT_16),
                     Repetition::REPEATED,
                 )
                 .unwrap(),
@@ -592,7 +594,7 @@ mod tests {
                         bit_width: 16,
                         is_signed: true,
                     }),
-                    ConvertedType::INT_16,
+                    Some(ConvertedType::INT_16),
                     Repetition::REPEATED,
                 )
                 .unwrap(),
@@ -604,7 +606,7 @@ mod tests {
                     None,
                     PhysicalType::INT64,
                     None,
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REPEATED,
                 )
                 .unwrap(),
@@ -616,7 +618,7 @@ mod tests {
                     None,
                     PhysicalType::FLOAT,
                     None,
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -628,7 +630,7 @@ mod tests {
                     None,
                     PhysicalType::BOOLEAN,
                     None,
-                    ConvertedType::NONE,
+                    None,
                     Repetition::OPTIONAL,
                 )
                 .unwrap(),
@@ -640,7 +642,7 @@ mod tests {
                     Some(42),
                     PhysicalType::BOOLEAN,
                     None,
-                    ConvertedType::NONE,
+                    None,
                     Repetition::OPTIONAL,
                 )
                 .unwrap(),
@@ -655,7 +657,7 @@ mod tests {
                         is_adjusted_to_u_t_c: true,
                         unit: TimeUnit::MILLIS,
                     }),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -667,7 +669,7 @@ mod tests {
                     None,
                     PhysicalType::INT32,
                     Some(LogicalType::Date),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::OPTIONAL,
                 )
                 .unwrap(),
@@ -682,7 +684,7 @@ mod tests {
                         unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: false,
                     }),
-                    ConvertedType::TIME_MILLIS,
+                    Some(ConvertedType::TIME_MILLIS),
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -697,7 +699,7 @@ mod tests {
                         unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: false,
                     }),
-                    ConvertedType::TIME_MILLIS,
+                    Some(ConvertedType::TIME_MILLIS),
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -709,7 +711,7 @@ mod tests {
                     None,
                     PhysicalType::BYTE_ARRAY,
                     None,
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -721,7 +723,7 @@ mod tests {
                     Some(42),
                     PhysicalType::BYTE_ARRAY,
                     None,
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -733,7 +735,7 @@ mod tests {
                     None,
                     PhysicalType::BYTE_ARRAY,
                     None,
-                    ConvertedType::UTF8,
+                    Some(ConvertedType::UTF8),
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -745,7 +747,7 @@ mod tests {
                     None,
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::Json),
-                    ConvertedType::JSON,
+                    Some(ConvertedType::JSON),
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -757,7 +759,7 @@ mod tests {
                     None,
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::Bson),
-                    ConvertedType::BSON,
+                    Some(ConvertedType::BSON),
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -769,7 +771,7 @@ mod tests {
                     None,
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::String),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -781,7 +783,7 @@ mod tests {
                     Some(42),
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::String),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -793,7 +795,7 @@ mod tests {
                     None,
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::Geometry { crs: None }),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -807,7 +809,7 @@ mod tests {
                     Some(LogicalType::Geometry {
                         crs: Some("non-missing CRS".to_string()),
                     }),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -822,7 +824,7 @@ mod tests {
                         crs: None,
                         algorithm: Some(EdgeInterpolationAlgorithm::default()),
                     }),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -837,7 +839,7 @@ mod tests {
                         crs: Some("non-missing CRS".to_string()),
                         algorithm: Some(EdgeInterpolationAlgorithm::default()),
                     }),
-                    ConvertedType::NONE,
+                    None,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
@@ -869,7 +871,7 @@ mod tests {
             (
                 Type::primitive_type_builder("field", PhysicalType::FIXED_LEN_BYTE_ARRAY)
                     .with_logical_type(None)
-                    .with_converted_type(ConvertedType::INTERVAL)
+                    .with_converted_type(Some(ConvertedType::INTERVAL))
                     .with_length(12)
                     .with_repetition(Repetition::REQUIRED)
                     .build()
@@ -901,7 +903,7 @@ mod tests {
             ),
             (
                 Type::primitive_type_builder("decimal", PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                    .with_converted_type(ConvertedType::DECIMAL)
+                    .with_converted_type(Some(ConvertedType::DECIMAL))
                     .with_precision(19)
                     .with_scale(4)
                     .with_length(decimal_length_from_precision(19))
@@ -938,7 +940,7 @@ mod tests {
             let mut p = Printer::new(&mut s);
             let field_a = Type::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
                 .with_id(Some(42))
-                .with_converted_type(ConvertedType::UTF8)
+                .with_converted_type(Some(ConvertedType::UTF8))
                 .build()
                 .unwrap();
 
@@ -985,17 +987,17 @@ mod tests {
             let mut p = Printer::new(&mut s);
             let f1 = Type::primitive_type_builder("f1", PhysicalType::INT32)
                 .with_repetition(Repetition::REQUIRED)
-                .with_converted_type(ConvertedType::INT_32)
+                .with_converted_type(Some(ConvertedType::INT_32))
                 .build();
             let f2 = Type::primitive_type_builder("f2", PhysicalType::BYTE_ARRAY)
-                .with_converted_type(ConvertedType::UTF8)
+                .with_converted_type(Some(ConvertedType::UTF8))
                 .build();
             let f3 = Type::primitive_type_builder("f3", PhysicalType::BYTE_ARRAY)
                 .with_logical_type(Some(LogicalType::String))
                 .build();
             let f4 = Type::primitive_type_builder("f4", PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_repetition(Repetition::REPEATED)
-                .with_converted_type(ConvertedType::INTERVAL)
+                .with_converted_type(Some(ConvertedType::INTERVAL))
                 .with_length(12)
                 .build();
 
@@ -1035,11 +1037,11 @@ mod tests {
             let mut p = Printer::new(&mut s);
             let f1 = Type::primitive_type_builder("f1", PhysicalType::INT32)
                 .with_repetition(Repetition::REQUIRED)
-                .with_converted_type(ConvertedType::INT_32)
+                .with_converted_type(Some(ConvertedType::INT_32))
                 .with_id(Some(0))
                 .build();
             let f2 = Type::primitive_type_builder("f2", PhysicalType::BYTE_ARRAY)
-                .with_converted_type(ConvertedType::UTF8)
+                .with_converted_type(Some(ConvertedType::UTF8))
                 .with_id(Some(1))
                 .build();
             let f3 = Type::primitive_type_builder("f3", PhysicalType::BYTE_ARRAY)
@@ -1048,7 +1050,7 @@ mod tests {
                 .build();
             let f4 = Type::primitive_type_builder("f4", PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_repetition(Repetition::REPEATED)
-                .with_converted_type(ConvertedType::INTERVAL)
+                .with_converted_type(Some(ConvertedType::INTERVAL))
                 .with_length(12)
                 .with_id(Some(2))
                 .build();
@@ -1088,14 +1090,14 @@ mod tests {
     fn test_print_and_parse_primitive() {
         let a2 = Type::primitive_type_builder("a2", PhysicalType::BYTE_ARRAY)
             .with_repetition(Repetition::REPEATED)
-            .with_converted_type(ConvertedType::UTF8)
+            .with_converted_type(Some(ConvertedType::UTF8))
             .build()
             .unwrap();
 
         let a1 = Type::group_type_builder("a1")
             .with_repetition(Repetition::OPTIONAL)
             .with_logical_type(Some(LogicalType::List))
-            .with_converted_type(ConvertedType::LIST)
+            .with_converted_type(Some(ConvertedType::LIST))
             .with_fields(vec![Arc::new(a2)])
             .build()
             .unwrap();
@@ -1120,7 +1122,7 @@ mod tests {
         let b1 = Type::group_type_builder("b1")
             .with_repetition(Repetition::OPTIONAL)
             .with_logical_type(Some(LogicalType::List))
-            .with_converted_type(ConvertedType::LIST)
+            .with_converted_type(Some(ConvertedType::LIST))
             .with_fields(vec![Arc::new(b2)])
             .build()
             .unwrap();
@@ -1143,13 +1145,13 @@ mod tests {
     fn test_print_and_parse_nested() {
         let f1 = Type::primitive_type_builder("f1", PhysicalType::INT32)
             .with_repetition(Repetition::REQUIRED)
-            .with_converted_type(ConvertedType::INT_32)
+            .with_converted_type(Some(ConvertedType::INT_32))
             .build()
             .unwrap();
 
         let f2 = Type::primitive_type_builder("f2", PhysicalType::BYTE_ARRAY)
             .with_repetition(Repetition::OPTIONAL)
-            .with_converted_type(ConvertedType::UTF8)
+            .with_converted_type(Some(ConvertedType::UTF8))
             .build()
             .unwrap();
 
@@ -1161,7 +1163,7 @@ mod tests {
 
         let f3 = Type::primitive_type_builder("f3", PhysicalType::FIXED_LEN_BYTE_ARRAY)
             .with_repetition(Repetition::REPEATED)
-            .with_converted_type(ConvertedType::INTERVAL)
+            .with_converted_type(Some(ConvertedType::INTERVAL))
             .with_length(12)
             .build()
             .unwrap();
@@ -1182,7 +1184,7 @@ mod tests {
                 precision: 9,
                 scale: 2,
             }))
-            .with_converted_type(ConvertedType::DECIMAL)
+            .with_converted_type(Some(ConvertedType::DECIMAL))
             .with_precision(9)
             .with_scale(2)
             .build()
@@ -1194,7 +1196,7 @@ mod tests {
                 precision: 9,
                 scale: 0,
             }))
-            .with_converted_type(ConvertedType::DECIMAL)
+            .with_converted_type(Some(ConvertedType::DECIMAL))
             .with_precision(9)
             .with_scale(0)
             .build()

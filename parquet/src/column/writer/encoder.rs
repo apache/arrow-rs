@@ -154,7 +154,7 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
     fn write_slice(&mut self, slice: &[T::T]) -> Result<()> {
         if self.statistics_enabled != EnabledStatistics::None
             // INTERVAL, Geometry, and Geography have undefined sort order, so don't write min/max stats for them
-            && self.descr.converted_type() != ConvertedType::INTERVAL
+            && self.descr.converted_type() != Some(ConvertedType::INTERVAL)
         {
             if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
                 update_geo_stats_accumulator(accumulator, slice.iter());

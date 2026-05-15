@@ -1181,7 +1181,7 @@ mod tests {
                     ),
                     Arc::new(
                         types::Type::primitive_type_builder("col2", Type::FIXED_LEN_BYTE_ARRAY)
-                            .with_converted_type(ConvertedType::INTERVAL)
+                            .with_converted_type(Some(ConvertedType::INTERVAL))
                             .with_length(12)
                             .build()
                             .unwrap(),
