@@ -101,7 +101,7 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
 ///
 /// let field_a = Type::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
 ///     .with_id(Some(42))
-///     .with_converted_type(ConvertedType::UTF8)
+///     .with_converted_type(Some(ConvertedType::UTF8))
 ///     .build()
 ///     .unwrap();
 ///

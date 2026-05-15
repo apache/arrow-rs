@@ -48,7 +48,7 @@
 //! // }
 //!
 //! let field_a = Type::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
-//!     .with_converted_type(ConvertedType::UTF8)
+//!     .with_converted_type(Some(ConvertedType::UTF8))
 //!     .with_repetition(Repetition::OPTIONAL)
 //!     .build()
 //!     .unwrap();
