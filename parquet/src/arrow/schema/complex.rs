@@ -670,16 +670,12 @@ impl Visitor {
         if cur_type.is_primitive() {
             self.visit_primitive(cur_type, context)
         } else {
-            if let Some(converted_type) = cur_type.get_basic_info().converted_type() {
-                match converted_type {
-                    ConvertedType::LIST => self.visit_list(cur_type, context),
-                    ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
-                        self.visit_map(cur_type, context)
-                    }
-                    _ => self.visit_struct(cur_type, context),
+            match cur_type.get_basic_info().converted_type() {
+                Some(ConvertedType::LIST) => self.visit_list(cur_type, context),
+                Some(ConvertedType::MAP) | Some(ConvertedType::MAP_KEY_VALUE) => {
+                    self.visit_map(cur_type, context)
                 }
-            } else {
-                self.visit_struct(cur_type, context)
+                _ => self.visit_struct(cur_type, context),
             }
         }
     }

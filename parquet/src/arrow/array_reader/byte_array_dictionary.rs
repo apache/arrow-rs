@@ -237,7 +237,10 @@ where
     fn new(col: &ColumnDescPtr) -> Self {
         let validate_utf8 = col.converted_type() == Some(ConvertedType::UTF8);
 
-        let value_type = match (V::IS_LARGE, col.converted_type() == Some(ConvertedType::UTF8)) {
+        let value_type = match (
+            V::IS_LARGE,
+            col.converted_type() == Some(ConvertedType::UTF8),
+        ) {
             (true, true) => ArrowType::LargeUtf8,
             (true, false) => ArrowType::LargeBinary,
             (false, true) => ArrowType::Utf8,

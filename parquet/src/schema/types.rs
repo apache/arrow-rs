@@ -1030,7 +1030,7 @@ impl ColumnDescriptor {
 ///         ),
 ///         Arc::new(
 ///          Type::primitive_type_builder("b", basic::Type::INT32)
-///           .with_converted_type(basic::ConvertedType::DATE)
+///           .with_converted_type(Some(basic::ConvertedType::DATE))
 ///           .with_logical_type(Some(basic::LogicalType::Date))
 ///           .build().unwrap()
 ///         ),
