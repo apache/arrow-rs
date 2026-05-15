@@ -62,8 +62,6 @@ enum Type {
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `ConvertedType`
 
-// TODO(ets): Adding the `NONE` variant to this enum is a bit awkward. We should
-// look into removing it and using `Option<ConvertedType>` instead.
 thrift_enum!(
 /// Common types (converted types) used by frameworks when using Parquet.
 ///
@@ -73,9 +71,6 @@ thrift_enum!(
 /// This struct was renamed from `LogicalType` in version 4.0.0.
 /// If targeting Parquet format 2.4.0 or above, please use [LogicalType] instead.
 enum ConvertedType {
-  /// Not defined in the spec, used internally to indicate no type conversion
-  NONE = -1;
-
   /// A BYTE_ARRAY actually contains UTF8 encoded chars.
   UTF8 = 0;
 
@@ -1207,7 +1202,7 @@ impl ColumnOrder {
     )]
     pub fn get_sort_order(
         logical_type: Option<LogicalType>,
-        converted_type: ConvertedType,
+        converted_type: Option<ConvertedType>,
         physical_type: Type,
     ) -> SortOrder {
         Self::sort_order_for_type(logical_type.as_ref(), converted_type, physical_type)
@@ -1216,7 +1211,7 @@ impl ColumnOrder {
     /// Returns sort order for a physical/logical type.
     pub fn sort_order_for_type(
         logical_type: Option<&LogicalType>,
-        converted_type: ConvertedType,
+        converted_type: Option<ConvertedType>,
         physical_type: Type,
     ) -> SortOrder {
         match logical_type {
@@ -1246,42 +1241,47 @@ impl ColumnOrder {
         }
     }
 
-    fn get_converted_sort_order(converted_type: ConvertedType, physical_type: Type) -> SortOrder {
-        match converted_type {
-            // Unsigned byte-wise comparison.
-            ConvertedType::UTF8
-            | ConvertedType::JSON
-            | ConvertedType::BSON
-            | ConvertedType::ENUM => SortOrder::UNSIGNED,
+    fn get_converted_sort_order(
+        converted_type: Option<ConvertedType>,
+        physical_type: Type,
+    ) -> SortOrder {
+        if let Some(converted_type) = converted_type {
+            match converted_type {
+                // Unsigned byte-wise comparison.
+                ConvertedType::UTF8
+                | ConvertedType::JSON
+                | ConvertedType::BSON
+                | ConvertedType::ENUM => SortOrder::UNSIGNED,
 
-            ConvertedType::INT_8
-            | ConvertedType::INT_16
-            | ConvertedType::INT_32
-            | ConvertedType::INT_64 => SortOrder::SIGNED,
+                ConvertedType::INT_8
+                | ConvertedType::INT_16
+                | ConvertedType::INT_32
+                | ConvertedType::INT_64 => SortOrder::SIGNED,
 
-            ConvertedType::UINT_8
-            | ConvertedType::UINT_16
-            | ConvertedType::UINT_32
-            | ConvertedType::UINT_64 => SortOrder::UNSIGNED,
+                ConvertedType::UINT_8
+                | ConvertedType::UINT_16
+                | ConvertedType::UINT_32
+                | ConvertedType::UINT_64 => SortOrder::UNSIGNED,
 
-            // Signed comparison of the represented value.
-            ConvertedType::DECIMAL => SortOrder::SIGNED,
+                // Signed comparison of the represented value.
+                ConvertedType::DECIMAL => SortOrder::SIGNED,
 
-            ConvertedType::DATE => SortOrder::SIGNED,
+                ConvertedType::DATE => SortOrder::SIGNED,
 
-            ConvertedType::TIME_MILLIS
-            | ConvertedType::TIME_MICROS
-            | ConvertedType::TIMESTAMP_MILLIS
-            | ConvertedType::TIMESTAMP_MICROS => SortOrder::SIGNED,
+                ConvertedType::TIME_MILLIS
+                | ConvertedType::TIME_MICROS
+                | ConvertedType::TIMESTAMP_MILLIS
+                | ConvertedType::TIMESTAMP_MICROS => SortOrder::SIGNED,
 
-            ConvertedType::INTERVAL => SortOrder::UNDEFINED,
+                ConvertedType::INTERVAL => SortOrder::UNDEFINED,
 
-            ConvertedType::LIST | ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
-                SortOrder::UNDEFINED
+                ConvertedType::LIST | ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
+                    SortOrder::UNDEFINED
+                }
             }
-
+        } else {
             // Fall back to physical type.
-            ConvertedType::NONE => Self::get_default_sort_order(physical_type),
+            Self::get_default_sort_order(physical_type)
         }
     }
 
@@ -1381,60 +1381,55 @@ impl fmt::Display for ColumnOrder {
 // ----------------------------------------------------------------------
 // LogicalType <=> ConvertedType conversion
 
-// Note: To prevent type loss when converting from ConvertedType to LogicalType,
-// the conversion from ConvertedType -> LogicalType is not implemented.
-// Such type loss includes:
-// - Not knowing the decimal scale and precision of ConvertedType
-// - Time and timestamp nanosecond precision, that is not supported in ConvertedType.
-
-impl From<Option<LogicalType>> for ConvertedType {
-    fn from(value: Option<LogicalType>) -> Self {
-        match value {
-            Some(value) => match value {
-                LogicalType::String => ConvertedType::UTF8,
-                LogicalType::Map => ConvertedType::MAP,
-                LogicalType::List => ConvertedType::LIST,
-                LogicalType::Enum => ConvertedType::ENUM,
-                LogicalType::Decimal { .. } => ConvertedType::DECIMAL,
-                LogicalType::Date => ConvertedType::DATE,
-                LogicalType::Time { unit, .. } => match unit {
-                    TimeUnit::MILLIS => ConvertedType::TIME_MILLIS,
-                    TimeUnit::MICROS => ConvertedType::TIME_MICROS,
-                    TimeUnit::NANOS => ConvertedType::NONE,
-                },
-                LogicalType::Timestamp { unit, .. } => match unit {
-                    TimeUnit::MILLIS => ConvertedType::TIMESTAMP_MILLIS,
-                    TimeUnit::MICROS => ConvertedType::TIMESTAMP_MICROS,
-                    TimeUnit::NANOS => ConvertedType::NONE,
-                },
-                LogicalType::Integer {
-                    bit_width,
-                    is_signed,
-                } => match (bit_width, is_signed) {
-                    (8, true) => ConvertedType::INT_8,
-                    (16, true) => ConvertedType::INT_16,
-                    (32, true) => ConvertedType::INT_32,
-                    (64, true) => ConvertedType::INT_64,
-                    (8, false) => ConvertedType::UINT_8,
-                    (16, false) => ConvertedType::UINT_16,
-                    (32, false) => ConvertedType::UINT_32,
-                    (64, false) => ConvertedType::UINT_64,
-                    (bit_width, is_signed) => panic!(
-                        "Integer type bit_width={bit_width}, signed={is_signed} is not supported"
-                    ),
-                },
-                LogicalType::Json => ConvertedType::JSON,
-                LogicalType::Bson => ConvertedType::BSON,
-                LogicalType::Uuid
-                | LogicalType::Float16
-                | LogicalType::Variant { .. }
-                | LogicalType::Geometry { .. }
-                | LogicalType::Geography { .. }
-                | LogicalType::_Unknown { .. }
-                | LogicalType::Unknown => ConvertedType::NONE,
+/// Convert a [`LogicalType`] to the appropriate [`ConvertedType`].
+///
+/// Returns `None` if there is no defined conversion.
+///
+/// Note: To prevent type loss when converting from `ConvertedType` to `LogicalType`,
+/// the conversion from `ConvertedType` -> `LogicalType` is not implemented.
+/// Such type loss includes:
+/// - Not knowing the decimal scale and precision of `ConvertedType`
+/// - Time and timestamp nanosecond precision, that is not supported in `ConvertedType`.
+pub fn converted_type_for_logical(value: Option<LogicalType>) -> Option<ConvertedType> {
+    match value {
+        Some(value) => match value {
+            LogicalType::String => Some(ConvertedType::UTF8),
+            LogicalType::Map => Some(ConvertedType::MAP),
+            LogicalType::List => Some(ConvertedType::LIST),
+            LogicalType::Enum => Some(ConvertedType::ENUM),
+            LogicalType::Decimal { .. } => Some(ConvertedType::DECIMAL),
+            LogicalType::Date => Some(ConvertedType::DATE),
+            LogicalType::Time { unit, .. } => match unit {
+                TimeUnit::MILLIS => Some(ConvertedType::TIME_MILLIS),
+                TimeUnit::MICROS => Some(ConvertedType::TIME_MICROS),
+                TimeUnit::NANOS => None,
             },
-            None => ConvertedType::NONE,
-        }
+            LogicalType::Timestamp { unit, .. } => match unit {
+                TimeUnit::MILLIS => Some(ConvertedType::TIMESTAMP_MILLIS),
+                TimeUnit::MICROS => Some(ConvertedType::TIMESTAMP_MICROS),
+                TimeUnit::NANOS => None,
+            },
+            LogicalType::Integer {
+                bit_width,
+                is_signed,
+            } => match (bit_width, is_signed) {
+                (8, true) => Some(ConvertedType::INT_8),
+                (16, true) => Some(ConvertedType::INT_16),
+                (32, true) => Some(ConvertedType::INT_32),
+                (64, true) => Some(ConvertedType::INT_64),
+                (8, false) => Some(ConvertedType::UINT_8),
+                (16, false) => Some(ConvertedType::UINT_16),
+                (32, false) => Some(ConvertedType::UINT_32),
+                (64, false) => Some(ConvertedType::UINT_64),
+                (bit_width, is_signed) => panic!(
+                    "Integer type bit_width={bit_width}, signed={is_signed} is not supported"
+                ),
+            },
+            LogicalType::Json => Some(ConvertedType::JSON),
+            LogicalType::Bson => Some(ConvertedType::BSON),
+            _ => None,
+        },
+        None => None,
     }
 }
 
@@ -1477,7 +1472,6 @@ impl str::FromStr for ConvertedType {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
-            "NONE" => Ok(ConvertedType::NONE),
             "UTF8" => Ok(ConvertedType::UTF8),
             "MAP" => Ok(ConvertedType::MAP),
             "MAP_KEY_VALUE" => Ok(ConvertedType::MAP_KEY_VALUE),
@@ -1858,163 +1852,154 @@ mod tests {
     #[test]
     fn test_logical_to_converted_type() {
         let logical_none: Option<LogicalType> = None;
-        assert_eq!(ConvertedType::from(logical_none), ConvertedType::NONE);
+        assert_eq!(converted_type_for_logical(logical_none), None);
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Decimal {
+            converted_type_for_logical(Some(LogicalType::Decimal {
                 precision: 20,
                 scale: 5
             })),
-            ConvertedType::DECIMAL
+            Some(ConvertedType::DECIMAL)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Bson)),
-            ConvertedType::BSON
+            converted_type_for_logical(Some(LogicalType::Bson)),
+            Some(ConvertedType::BSON)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Json)),
-            ConvertedType::JSON
+            converted_type_for_logical(Some(LogicalType::Json)),
+            Some(ConvertedType::JSON)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::String)),
-            ConvertedType::UTF8
+            converted_type_for_logical(Some(LogicalType::String)),
+            Some(ConvertedType::UTF8)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Date)),
-            ConvertedType::DATE
+            converted_type_for_logical(Some(LogicalType::Date)),
+            Some(ConvertedType::DATE)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Time {
+            converted_type_for_logical(Some(LogicalType::Time {
                 unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
-            ConvertedType::TIME_MILLIS
+            Some(ConvertedType::TIME_MILLIS)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Time {
+            converted_type_for_logical(Some(LogicalType::Time {
                 unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: true,
             })),
-            ConvertedType::TIME_MICROS
+            Some(ConvertedType::TIME_MICROS)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Time {
+            converted_type_for_logical(Some(LogicalType::Time {
                 unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
-            ConvertedType::NONE
+            None
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Timestamp {
+            converted_type_for_logical(Some(LogicalType::Timestamp {
                 unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
-            ConvertedType::TIMESTAMP_MILLIS
+            Some(ConvertedType::TIMESTAMP_MILLIS)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Timestamp {
+            converted_type_for_logical(Some(LogicalType::Timestamp {
                 unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: false,
             })),
-            ConvertedType::TIMESTAMP_MICROS
+            Some(ConvertedType::TIMESTAMP_MICROS)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Timestamp {
+            converted_type_for_logical(Some(LogicalType::Timestamp {
                 unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
-            ConvertedType::NONE
+            None
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: false
             })),
-            ConvertedType::UINT_8
+            Some(ConvertedType::UINT_8)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true
             })),
-            ConvertedType::INT_8
+            Some(ConvertedType::INT_8)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: false
             })),
-            ConvertedType::UINT_16
+            Some(ConvertedType::UINT_16)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: true
             })),
-            ConvertedType::INT_16
+            Some(ConvertedType::INT_16)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(LogicalType::Integer {
                 bit_width: 32,
                 is_signed: false
             })),
-            ConvertedType::UINT_32
+            Some(ConvertedType::UINT_32)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(LogicalType::Integer {
                 bit_width: 32,
                 is_signed: true
             })),
-            ConvertedType::INT_32
+            Some(ConvertedType::INT_32)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(LogicalType::Integer {
                 bit_width: 64,
                 is_signed: false
             })),
-            ConvertedType::UINT_64
+            Some(ConvertedType::UINT_64)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Integer {
+            converted_type_for_logical(Some(LogicalType::Integer {
                 bit_width: 64,
                 is_signed: true
             })),
-            ConvertedType::INT_64
+            Some(ConvertedType::INT_64)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::List)),
-            ConvertedType::LIST
+            converted_type_for_logical(Some(LogicalType::List)),
+            Some(ConvertedType::LIST)
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Map)),
-            ConvertedType::MAP
+            converted_type_for_logical(Some(LogicalType::Map)),
+            Some(ConvertedType::MAP)
+        );
+        assert_eq!(converted_type_for_logical(Some(LogicalType::Uuid)), None);
+        assert_eq!(
+            converted_type_for_logical(Some(LogicalType::Enum)),
+            Some(ConvertedType::ENUM)
+        );
+        assert_eq!(converted_type_for_logical(Some(LogicalType::Float16)), None);
+        assert_eq!(
+            converted_type_for_logical(Some(LogicalType::Geometry { crs: None })),
+            None
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::Uuid)),
-            ConvertedType::NONE
-        );
-        assert_eq!(
-            ConvertedType::from(Some(LogicalType::Enum)),
-            ConvertedType::ENUM
-        );
-        assert_eq!(
-            ConvertedType::from(Some(LogicalType::Float16)),
-            ConvertedType::NONE
-        );
-        assert_eq!(
-            ConvertedType::from(Some(LogicalType::Geometry { crs: None })),
-            ConvertedType::NONE
-        );
-        assert_eq!(
-            ConvertedType::from(Some(LogicalType::Geography {
+            converted_type_for_logical(Some(LogicalType::Geography {
                 crs: None,
                 algorithm: Some(EdgeInterpolationAlgorithm::default()),
             })),
-            ConvertedType::NONE
+            None
         );
-        assert_eq!(
-            ConvertedType::from(Some(LogicalType::Unknown)),
-            ConvertedType::NONE
-        );
+        assert_eq!(converted_type_for_logical(Some(LogicalType::Unknown)), None);
     }
 
     #[test]
@@ -2381,7 +2366,7 @@ mod tests {
         fn check_sort_order(types: Vec<ConvertedType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(None, tpe, Type::BYTE_ARRAY),
+                    ColumnOrder::get_sort_order(None, Some(tpe), Type::BYTE_ARRAY),
                     expected_order
                 );
             }
@@ -2426,7 +2411,10 @@ mod tests {
 
         // Check None logical type
         // This should return a sort order for byte array type.
-        check_sort_order(vec![ConvertedType::NONE], SortOrder::UNSIGNED);
+        assert_eq!(
+            ColumnOrder::get_sort_order(None, None, Type::BYTE_ARRAY),
+            SortOrder::UNSIGNED
+        );
     }
 
     #[test]
