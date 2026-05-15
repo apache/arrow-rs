@@ -881,10 +881,11 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = cast_single_decimal_to_integer_div_opt::<D, T::Native>(
-                            array.value(i),
-                            div,
-                        );
+                        let v = array
+                            .value(i)
+                            .div_checked(div)
+                            .ok()
+                            .and_then(<T::Native as NumCast>::from::<D::Native>);
                         value_builder.append_option(v);
                     }
                 }
@@ -912,19 +913,6 @@ where
         }
     }
     Ok(Arc::new(value_builder.finish()))
-}
-
-/// Casting a given decimal to an integer by dividing with the given divisor.
-/// Returns `None` if checked division fails or the target cast fails.
-#[inline(always)]
-pub fn cast_single_decimal_to_integer_div_opt<D, T>(value: D::Native, div: D::Native) -> Option<T>
-where
-    T: NumCast + ToPrimitive,
-    D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ToPrimitive,
-{
-    let v = value.div_checked(div).ok()?;
-    <T as NumCast>::from::<D::Native>(v)
 }
 
 /// Cast a decimal array to a floating point array.
