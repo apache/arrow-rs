@@ -1530,16 +1530,16 @@ fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) 
                 return compare_greater_unsigned_int(a, b);
             }
 
-            if let Some(converted_type) = descr.converted_type() {
-                match converted_type {
+            if descr.converted_type().is_some_and(|ct| {
+                matches!(
+                    ct,
                     ConvertedType::UINT_8
-                    | ConvertedType::UINT_16
-                    | ConvertedType::UINT_32
-                    | ConvertedType::UINT_64 => {
-                        return compare_greater_unsigned_int(a, b);
-                    }
-                    _ => {}
-                };
+                        | ConvertedType::UINT_16
+                        | ConvertedType::UINT_32
+                        | ConvertedType::UINT_64
+                )
+            }) {
+                return compare_greater_unsigned_int(a, b);
             }
         }
         Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
