@@ -17,7 +17,7 @@
 
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
-use crate::variant_array::{binary_array_value, validate_binary_array};
+use crate::variant_array::{ShreddingState, binary_array_value};
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     Array, ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray,
@@ -66,7 +66,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     // NOTE: None/None at top-level is technically invalid, but the shredding spec requires us to
     // emit `Variant::Null` when a required value is missing.
     let nulls = array.nulls();
-    let mut row_builder = UnshredVariantRowBuilder::try_new_opt(array.inner())?
+    let mut row_builder = UnshredVariantRowBuilder::try_new_opt(array.shredding_state())?
         .unwrap_or_else(UnshredVariantRowBuilder::null);
 
     let metadata = array.metadata_field();
@@ -174,17 +174,15 @@ impl<'a> UnshredVariantRowBuilder<'a> {
         }
     }
 
-    /// Creates a new UnshredVariantRowBuilder from the `(value, typed_value)` pair of a shredded
-    /// variant struct. Returns None for the None/None case - caller decides how to handle based on
-    /// context.
-    fn try_new_opt(inner_struct: &'a StructArray) -> Result<Option<Self>> {
-        let value = if let Some(value_col) = inner_struct.column_by_name("value") {
-            validate_binary_array(value_col.as_ref(), "value")?;
-            Some(value_col)
-        } else {
-            None
-        };
-        let Some(typed_value) = inner_struct.column_by_name("typed_value") else {
+    /// Creates a new UnshredVariantRowBuilder from a shredded `(value, typed_value)` pair.
+    /// Returns None for the None/None case - caller decides how to handle based on context.
+    ///
+    /// The `ShreddingState` is consumed so its `'a` lifetime is preserved through to the borrowed
+    /// fields stored in the returned builder. The state must be `Cow::Borrowed`; the unshred path
+    /// only ever sees borrowed inputs (rooted at the top-level `VariantArray`'s inner struct).
+    fn try_new_opt(shredding_state: ShreddingState<'a>) -> Result<Option<Self>> {
+        let (value, typed_value) = shredding_state.into_borrowed_fields();
+        let Some(typed_value) = typed_value else {
             // Copy the value across directly, if present. Else caller decides what to do.
             return Ok(value.map(|v| Self::ValueOnly(ValueOnlyUnshredVariantBuilder::new(v))));
         };
@@ -584,7 +582,7 @@ impl<'a> StructUnshredVariantBuilder<'a> {
                     field_array.data_type()
                 )));
             };
-            let field_unshredder = UnshredVariantRowBuilder::try_new_opt(field_array)?;
+            let field_unshredder = UnshredVariantRowBuilder::try_new_opt(field_array.try_into()?)?;
             field_unshredders.insert(field.name().as_ref(), field_unshredder);
         }
 
@@ -664,7 +662,7 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
         //
         // NOTE: A None/None array element is technically invalid, but the shredding spec
         // requires us to emit `Variant::Null` when a required value is missing.
-        let element_unshredder = UnshredVariantRowBuilder::try_new_opt(element_values)?
+        let element_unshredder = UnshredVariantRowBuilder::try_new_opt(element_values.try_into()?)?
             .unwrap_or_else(UnshredVariantRowBuilder::null);
 
         Ok(Self {

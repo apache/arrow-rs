@@ -257,8 +257,10 @@ pub struct VariantArray {
     /// The metadata column of this variant (Binary, LargeBinary, or BinaryView)
     metadata: ArrayRef,
 
-    /// how is this variant array shredded?
-    shredding_state: ShreddingState,
+    /// Cached shredding state derived from `inner`. Stored as `'static` (i.e. owned `ArrayRef`
+    /// clones) so per-row accessors don't redo name lookups. Borrowed views are produced on
+    /// demand by `shredding_state()`.
+    shredding_state: ShreddingState<'static>,
 }
 
 impl VariantArray {
@@ -308,11 +310,14 @@ impl VariantArray {
         };
         validate_binary_array(metadata_col.as_ref(), "metadata")?;
 
+        // Cache the (value, typed_value) lookup. try_from validates the value column type.
+        let shredding_state = ShreddingState::try_from(inner)?.into_static();
+
         // Note these clones are cheap, they just bump the ref count
         Ok(Self {
             inner: inner.clone(),
             metadata: metadata_col.clone(),
-            shredding_state: ShreddingState::try_from(inner)?,
+            shredding_state,
         })
     }
 
@@ -323,11 +328,11 @@ impl VariantArray {
         nulls: Option<NullBuffer>,
     ) -> Self {
         let mut builder = StructArrayBuilder::new().with_field("metadata", metadata.clone(), false);
-        if let Some(value) = value.clone() {
-            builder = builder.with_field("value", value, true);
+        if let Some(ref value) = value {
+            builder = builder.with_field("value", value.clone(), true);
         }
-        if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value, true);
+        if let Some(ref typed_value) = typed_value {
+            builder = builder.with_field("typed_value", typed_value.clone(), true);
         }
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
@@ -350,9 +355,13 @@ impl VariantArray {
         self.inner
     }
 
-    /// Return the shredding state of this `VariantArray`
-    pub fn shredding_state(&self) -> &ShreddingState {
-        &self.shredding_state
+    /// Return a borrowed view of this `VariantArray`'s shredding state, backed by the cached
+    /// column lookup so accessors are O(1).
+    pub fn shredding_state(&self) -> ShreddingState<'_> {
+        ShreddingState {
+            value: self.shredding_state.value_field().map(Cow::Borrowed),
+            typed_value: self.shredding_state.typed_value_field().map(Cow::Borrowed),
+        }
     }
 
     /// Return the [`Variant`] instance stored at the given row
@@ -645,7 +654,9 @@ impl<'a> ExactSizeIterator for VariantArrayIter<'a> {}
 pub struct ShreddedVariantFieldArray {
     /// Reference to the underlying StructArray
     inner: StructArray,
-    shredding_state: ShreddingState,
+
+    /// Cached shredding state derived from `inner` (see `VariantArray::shredding_state`).
+    shredding_state: ShreddingState<'static>,
 }
 
 #[allow(unused)]
@@ -676,16 +687,23 @@ impl ShreddedVariantFieldArray {
             ));
         };
 
+        // Cache the (value, typed_value) lookup. try_from validates the value column type.
+        let shredding_state = ShreddingState::try_from(inner_struct)?.into_static();
+
         // Note this clone is cheap, it just bumps the ref count
         Ok(Self {
             inner: inner_struct.clone(),
-            shredding_state: ShreddingState::try_from(inner_struct)?,
+            shredding_state,
         })
     }
 
-    /// Return the shredding state of this `VariantArray`
-    pub fn shredding_state(&self) -> &ShreddingState {
-        &self.shredding_state
+    /// Return a borrowed view of this `ShreddedVariantFieldArray`'s shredding state, backed by
+    /// the cached column lookup.
+    pub fn shredding_state(&self) -> ShreddingState<'_> {
+        ShreddingState {
+            value: self.shredding_state.value_field().map(Cow::Borrowed),
+            typed_value: self.shredding_state.typed_value_field().map(Cow::Borrowed),
+        }
     }
 
     /// Return a reference to the value field of the `StructArray`
@@ -709,11 +727,11 @@ impl ShreddedVariantFieldArray {
         nulls: Option<NullBuffer>,
     ) -> Self {
         let mut builder = StructArrayBuilder::new();
-        if let Some(value) = value.clone() {
-            builder = builder.with_field("value", value, true);
+        if let Some(ref value) = value {
+            builder = builder.with_field("value", value.clone(), true);
         }
-        if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value, true);
+        if let Some(ref typed_value) = typed_value {
+            builder = builder.with_field("typed_value", typed_value.clone(), true);
         }
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
@@ -809,62 +827,97 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 ///
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
 #[derive(Debug, Clone)]
-pub struct ShreddingState {
-    value: Option<ArrayRef>,
-    typed_value: Option<ArrayRef>,
+pub struct ShreddingState<'a> {
+    value: Option<Cow<'a, ArrayRef>>,
+    typed_value: Option<Cow<'a, ArrayRef>>,
 }
 
-impl ShreddingState {
-    /// Create a new `ShreddingState` from the given `value` and `typed_value` fields
+impl ShreddingState<'static> {
+    /// Create a new owned `ShreddingState` from the given `value` and `typed_value` fields
     ///
-    /// Note you can create a `ShreddingState` from a &[`StructArray`] using
-    /// `ShreddingState::try_from(&struct_array)`, for example:
-    ///
-    /// ```no_run
-    /// # use arrow::array::StructArray;
-    /// # use parquet_variant_compute::ShreddingState;
-    /// # fn get_struct_array() -> StructArray {
-    /// #   unimplemented!()
-    /// # }
-    /// let struct_array: StructArray = get_struct_array();
-    /// let shredding_state = ShreddingState::try_from(&struct_array).unwrap();
-    /// ```
+    /// Use this when constructing a `ShreddingState` from freshly produced arrays (e.g., the
+    /// result of a `take` kernel call). For borrowing an existing `StructArray`'s columns, use
+    /// `ShreddingState::try_from(&struct_array)`.
     pub fn new(value: Option<ArrayRef>, typed_value: Option<ArrayRef>) -> Self {
-        Self { value, typed_value }
-    }
-
-    /// Return a reference to the value field, if present
-    pub fn value_field(&self) -> Option<&ArrayRef> {
-        self.value.as_ref()
-    }
-
-    /// Return a reference to the typed_value field, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        self.typed_value.as_ref()
-    }
-
-    /// Slice all the underlying arrays
-    pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
-            value: self.value.as_ref().map(|v| v.slice(offset, length)),
-            typed_value: self.typed_value.as_ref().map(|tv| tv.slice(offset, length)),
+            value: value.map(Cow::Owned),
+            typed_value: typed_value.map(Cow::Owned),
         }
     }
 }
 
-impl TryFrom<&StructArray> for ShreddingState {
+impl<'a> ShreddingState<'a> {
+    /// Return a reference to the value field, if present
+    pub fn value_field(&self) -> Option<&ArrayRef> {
+        self.value.as_deref()
+    }
+
+    /// Return a reference to the typed_value field, if present
+    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
+        self.typed_value.as_deref()
+    }
+
+    /// Consume self and return the `(value, typed_value)` Cows so callers can extract long-lived
+    /// borrows from `Cow::Borrowed` variants.
+    pub(crate) fn into_fields(self) -> (Option<Cow<'a, ArrayRef>>, Option<Cow<'a, ArrayRef>>) {
+        (self.value, self.typed_value)
+    }
+
+    /// Convert into a `'static`-lifetime state by cloning any borrowed Arcs. Cheap (just Arc
+    /// refcount bumps for each `Cow::Borrowed`; no-op for `Cow::Owned`).
+    pub fn into_static(self) -> ShreddingState<'static> {
+        ShreddingState {
+            value: self.value.map(|cow| Cow::Owned(cow.into_owned())),
+            typed_value: self.typed_value.map(|cow| Cow::Owned(cow.into_owned())),
+        }
+    }
+
+    /// Consume self and return the `(value, typed_value)` borrowed references, asserting that
+    /// the state was constructed from borrowed data. Panics on `Cow::Owned`.
+    ///
+    /// Use this in code paths (like unshred) that only ever receive borrowed state and need
+    /// `&'a ArrayRef` references to store in lifetime-parameterized builders.
+    pub(crate) fn into_borrowed_fields(self) -> (Option<&'a ArrayRef>, Option<&'a ArrayRef>) {
+        fn expect_borrowed<'a>(opt: Option<Cow<'a, ArrayRef>>) -> Option<&'a ArrayRef> {
+            opt.map(|cow| match cow {
+                Cow::Borrowed(r) => r,
+                Cow::Owned(_) => unreachable!("expected Cow::Borrowed ShreddingState"),
+            })
+        }
+        (
+            expect_borrowed(self.value),
+            expect_borrowed(self.typed_value),
+        )
+    }
+
+    /// Slice all the underlying arrays. Produces owned data.
+    pub fn slice(&self, offset: usize, length: usize) -> ShreddingState<'static> {
+        ShreddingState {
+            value: self
+                .value_field()
+                .map(|v| Cow::Owned(v.slice(offset, length))),
+            typed_value: self
+                .typed_value_field()
+                .map(|tv| Cow::Owned(tv.slice(offset, length))),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a StructArray> for ShreddingState<'a> {
     type Error = ArrowError;
 
-    fn try_from(inner_struct: &StructArray) -> Result<Self> {
+    fn try_from(inner_struct: &'a StructArray) -> Result<Self> {
         // The `value` column need not exist, but if it does it must be a binary type.
         let value = if let Some(value_col) = inner_struct.column_by_name("value") {
             validate_binary_array(value_col.as_ref(), "value")?;
-            Some(value_col.clone())
+            Some(Cow::Borrowed(value_col))
         } else {
             None
         };
-        let typed_value = inner_struct.column_by_name("typed_value").cloned();
-        Ok(ShreddingState::new(value, typed_value))
+        let typed_value = inner_struct
+            .column_by_name("typed_value")
+            .map(Cow::Borrowed);
+        Ok(ShreddingState { value, typed_value })
     }
 }
 
