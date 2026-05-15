@@ -152,7 +152,7 @@ impl TreeBuilder {
         } else {
             match field.get_basic_info().converted_type() {
                 // List types
-                ConvertedType::LIST => {
+                Some(ConvertedType::LIST) => {
                     assert_eq!(field.get_fields().len(), 1, "Invalid list type {field:?}");
 
                     let repeated_field = field.get_fields()[0].clone();
@@ -204,7 +204,7 @@ impl TreeBuilder {
                     }
                 }
                 // Map types (key-value pairs)
-                ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
+                Some(ConvertedType::MAP) | Some(ConvertedType::MAP_KEY_VALUE) => {
                     assert_eq!(field.get_fields().len(), 1, "Invalid map type: {field:?}");
                     assert!(
                         !field.get_fields()[0].is_primitive(),

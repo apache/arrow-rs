@@ -44,7 +44,10 @@
 
 use std::sync::Arc;
 
-use crate::basic::{ConvertedType, LogicalType, Repetition, TimeUnit, Type as PhysicalType};
+use crate::basic::{
+    ConvertedType, LogicalType, Repetition, TimeUnit, Type as PhysicalType,
+    converted_type_for_logical,
+};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{Type, TypePtr};
 
@@ -255,17 +258,18 @@ impl Parser<'_> {
                     let upper = v.to_uppercase();
                     let logical = upper.parse::<LogicalType>();
                     match logical {
-                        Ok(logical) => {
-                            Ok((Some(logical.clone()), ConvertedType::from(Some(logical))))
-                        }
-                        Err(_) => Ok((None, upper.parse::<ConvertedType>()?)),
+                        Ok(logical) => Ok((
+                            Some(logical.clone()),
+                            converted_type_for_logical(Some(&logical)),
+                        )),
+                        Err(_) => Ok((None, Some(upper.parse::<ConvertedType>()?))),
                     }
                 })?;
             assert_token(self.tokenizer.next(), ")")?;
             tpe
         } else {
             self.tokenizer.backtrack();
-            (None, ConvertedType::NONE)
+            (None, None)
         };
 
         // Parse optional id
@@ -322,10 +326,11 @@ impl Parser<'_> {
                     let upper = v.to_uppercase();
                     let logical = upper.parse::<LogicalType>();
                     match logical {
-                        Ok(logical) => {
-                            Ok((Some(logical.clone()), ConvertedType::from(Some(logical))))
-                        }
-                        Err(_) => Ok((None, upper.parse::<ConvertedType>()?)),
+                        Ok(logical) => Ok((
+                            Some(logical.clone()),
+                            converted_type_for_logical(Some(&logical)),
+                        )),
+                        Err(_) => Ok((None, Some(upper.parse::<ConvertedType>()?))),
                     }
                 })?;
 
@@ -354,7 +359,7 @@ impl Parser<'_> {
                                 scale = 0
                             }
                             logical = Some(LogicalType::Decimal { scale, precision });
-                            converted = ConvertedType::from(logical.clone());
+                            converted = converted_type_for_logical(logical.as_ref());
                         }
                     }
                     LogicalType::Time { .. } => {
@@ -375,7 +380,7 @@ impl Parser<'_> {
                                     is_adjusted_to_u_t_c,
                                     unit,
                                 });
-                                converted = ConvertedType::from(logical.clone());
+                                converted = converted_type_for_logical(logical.as_ref());
                             } else {
                                 // Invalid token for unit
                                 self.tokenizer.backtrack();
@@ -400,7 +405,7 @@ impl Parser<'_> {
                                     is_adjusted_to_u_t_c,
                                     unit,
                                 });
-                                converted = ConvertedType::from(logical.clone());
+                                converted = converted_type_for_logical(logical.as_ref());
                             } else {
                                 // Invalid token for unit
                                 self.tokenizer.backtrack();
@@ -450,7 +455,7 @@ impl Parser<'_> {
                                     bit_width,
                                     is_signed,
                                 });
-                                converted = ConvertedType::from(logical.clone());
+                                converted = converted_type_for_logical(logical.as_ref());
                             } else {
                                 // Invalid token for unit
                                 self.tokenizer.backtrack();
@@ -459,7 +464,7 @@ impl Parser<'_> {
                     }
                     _ => {}
                 }
-            } else if converted == ConvertedType::DECIMAL {
+            } else if converted == Some(ConvertedType::DECIMAL) {
                 if let Some("(") = self.tokenizer.next() {
                     // Parse precision
                     precision = parse_i32(
@@ -491,7 +496,7 @@ impl Parser<'_> {
             (logical, converted, precision, scale)
         } else {
             self.tokenizer.backtrack();
-            (None, ConvertedType::NONE, -1, -1)
+            (None, None, -1, -1)
         };
 
         // Parse optional id
@@ -837,7 +842,7 @@ mod tests {
                             precision: 9,
                             scale: 3,
                         }))
-                        .with_converted_type(ConvertedType::DECIMAL)
+                        .with_converted_type(Some(ConvertedType::DECIMAL))
                         .with_length(5)
                         .with_precision(9)
                         .with_scale(3)
@@ -850,7 +855,7 @@ mod tests {
                             precision: 38,
                             scale: 18,
                         }))
-                        .with_converted_type(ConvertedType::DECIMAL)
+                        .with_converted_type(Some(ConvertedType::DECIMAL))
                         .with_length(16)
                         .with_precision(38)
                         .with_scale(18)
@@ -900,11 +905,11 @@ mod tests {
                             Type::group_type_builder("a1")
                                 .with_repetition(Repetition::OPTIONAL)
                                 .with_logical_type(Some(LogicalType::List))
-                                .with_converted_type(ConvertedType::LIST)
+                                .with_converted_type(Some(ConvertedType::LIST))
                                 .with_fields(vec![Arc::new(
                                     Type::primitive_type_builder("a2", PhysicalType::BYTE_ARRAY)
                                         .with_repetition(Repetition::REPEATED)
-                                        .with_converted_type(ConvertedType::UTF8)
+                                        .with_converted_type(Some(ConvertedType::UTF8))
                                         .build()
                                         .unwrap(),
                                 )])
@@ -915,7 +920,7 @@ mod tests {
                             Type::group_type_builder("b1")
                                 .with_repetition(Repetition::OPTIONAL)
                                 .with_logical_type(Some(LogicalType::List))
-                                .with_converted_type(ConvertedType::LIST)
+                                .with_converted_type(Some(ConvertedType::LIST))
                                 .with_fields(vec![Arc::new(
                                     Type::group_type_builder("b2")
                                         .with_repetition(Repetition::REPEATED)
@@ -971,14 +976,14 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_1", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_converted_type(ConvertedType::INT_8)
+                    .with_converted_type(Some(ConvertedType::INT_8))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_2", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_converted_type(ConvertedType::INT_16)
+                    .with_converted_type(Some(ConvertedType::INT_16))
                     .build()
                     .unwrap(),
             ),
@@ -997,13 +1002,13 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_5", PhysicalType::INT32)
                     .with_logical_type(Some(LogicalType::Date))
-                    .with_converted_type(ConvertedType::DATE)
+                    .with_converted_type(Some(ConvertedType::DATE))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_6", PhysicalType::BYTE_ARRAY)
-                    .with_converted_type(ConvertedType::UTF8)
+                    .with_converted_type(Some(ConvertedType::UTF8))
                     .build()
                     .unwrap(),
             ),

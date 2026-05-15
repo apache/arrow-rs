@@ -703,7 +703,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .build(),
         DataType::Interval(_) => {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                .with_converted_type(ConvertedType::INTERVAL)
+                .with_converted_type(Some(ConvertedType::INTERVAL))
                 .with_repetition(repetition)
                 .with_id(id)
                 .with_length(12)

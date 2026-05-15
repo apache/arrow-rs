@@ -170,7 +170,7 @@ fn decimal_256_type(scale: i32, precision: i32) -> Result<DataType> {
 
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
     match (info.logical_type_ref(), info.converted_type()) {
-        (None, ConvertedType::NONE) => Ok(DataType::Int32),
+        (None, None) => Ok(DataType::Int32),
         (
             Some(
                 ref t @ LogicalType::Integer {
@@ -199,17 +199,17 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
                 unit
             )),
         },
-        (None, ConvertedType::UINT_8) => Ok(DataType::UInt8),
-        (None, ConvertedType::UINT_16) => Ok(DataType::UInt16),
-        (None, ConvertedType::UINT_32) => Ok(DataType::UInt32),
-        (None, ConvertedType::INT_8) => Ok(DataType::Int8),
-        (None, ConvertedType::INT_16) => Ok(DataType::Int16),
-        (None, ConvertedType::INT_32) => Ok(DataType::Int32),
-        (None, ConvertedType::DATE) => Ok(DataType::Date32),
-        (None, ConvertedType::TIME_MILLIS) => Ok(DataType::Time32(TimeUnit::Millisecond)),
-        (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
+        (None, Some(ConvertedType::UINT_8)) => Ok(DataType::UInt8),
+        (None, Some(ConvertedType::UINT_16)) => Ok(DataType::UInt16),
+        (None, Some(ConvertedType::UINT_32)) => Ok(DataType::UInt32),
+        (None, Some(ConvertedType::INT_8)) => Ok(DataType::Int8),
+        (None, Some(ConvertedType::INT_16)) => Ok(DataType::Int16),
+        (None, Some(ConvertedType::INT_32)) => Ok(DataType::Int32),
+        (None, Some(ConvertedType::DATE)) => Ok(DataType::Date32),
+        (None, Some(ConvertedType::TIME_MILLIS)) => Ok(DataType::Time32(TimeUnit::Millisecond)),
+        (None, Some(ConvertedType::DECIMAL)) => decimal_128_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
-            "Unable to convert parquet INT32 logical type {:?} or converted type {}",
+            "Unable to convert parquet INT32 logical type {:?} or converted type {:?}",
             logical,
             converted
         )),
@@ -218,7 +218,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
 
 fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
     match (info.logical_type_ref(), info.converted_type()) {
-        (None, ConvertedType::NONE) => Ok(DataType::Int64),
+        (None, None) => Ok(DataType::Int64),
         (
             Some(LogicalType::Integer {
                 bit_width: 64,
@@ -254,23 +254,23 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
                 None
             },
         )),
-        (None, ConvertedType::INT_64) => Ok(DataType::Int64),
-        (None, ConvertedType::UINT_64) => Ok(DataType::UInt64),
-        (None, ConvertedType::TIME_MICROS) => Ok(DataType::Time64(TimeUnit::Microsecond)),
-        (None, ConvertedType::TIMESTAMP_MILLIS) => Ok(DataType::Timestamp(
+        (None, Some(ConvertedType::INT_64)) => Ok(DataType::Int64),
+        (None, Some(ConvertedType::UINT_64)) => Ok(DataType::UInt64),
+        (None, Some(ConvertedType::TIME_MICROS)) => Ok(DataType::Time64(TimeUnit::Microsecond)),
+        (None, Some(ConvertedType::TIMESTAMP_MILLIS)) => Ok(DataType::Timestamp(
             TimeUnit::Millisecond,
             Some("UTC".into()),
         )),
-        (None, ConvertedType::TIMESTAMP_MICROS) => Ok(DataType::Timestamp(
+        (None, Some(ConvertedType::TIMESTAMP_MICROS)) => Ok(DataType::Timestamp(
             TimeUnit::Microsecond,
             Some("UTC".into()),
         )),
         (Some(LogicalType::Decimal { scale, precision }), _) => {
             decimal_128_type(*scale, *precision)
         }
-        (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
+        (None, Some(ConvertedType::DECIMAL)) => decimal_128_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
-            "Unable to convert parquet INT64 logical type {:?} or converted type {}",
+            "Unable to convert parquet INT64 logical type {:?} or converted type {:?}",
             logical,
             converted
         )),
@@ -286,11 +286,11 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
         (Some(LogicalType::Geometry { .. }), _) => Ok(DataType::Binary),
         (Some(LogicalType::Geography { .. }), _) => Ok(DataType::Binary),
         (Some(LogicalType::_Unknown { .. }), _) => Ok(DataType::Binary),
-        (None, ConvertedType::NONE) => Ok(DataType::Binary),
-        (None, ConvertedType::JSON) => Ok(DataType::Utf8),
-        (None, ConvertedType::BSON) => Ok(DataType::Binary),
-        (None, ConvertedType::ENUM) => Ok(DataType::Binary),
-        (None, ConvertedType::UTF8) => Ok(DataType::Utf8),
+        (None, None) => Ok(DataType::Binary),
+        (None, Some(ConvertedType::JSON)) => Ok(DataType::Utf8),
+        (None, Some(ConvertedType::BSON)) => Ok(DataType::Binary),
+        (None, Some(ConvertedType::ENUM)) => Ok(DataType::Binary),
+        (None, Some(ConvertedType::UTF8)) => Ok(DataType::Utf8),
         (
             Some(LogicalType::Decimal {
                 scale: s,
@@ -298,9 +298,9 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
             }),
             _,
         ) => decimal_type(*s, *p),
-        (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
+        (None, Some(ConvertedType::DECIMAL)) => decimal_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
-            "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
+            "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {:?}",
             logical,
             converted
         )),
@@ -322,14 +322,14 @@ fn from_fixed_len_byte_array(
                 decimal_256_type(*scale, *precision)
             }
         }
-        (None, ConvertedType::DECIMAL) => {
+        (None, Some(ConvertedType::DECIMAL)) => {
             if type_length <= 16 {
                 decimal_128_type(scale, precision)
             } else {
                 decimal_256_type(scale, precision)
             }
         }
-        (None, ConvertedType::INTERVAL) => {
+        (None, Some(ConvertedType::INTERVAL)) => {
             // There is currently no reliable way of determining which IntervalUnit
             // to return. Thus without the original Arrow schema, the results
             // would be incorrect if all 12 bytes of the interval are populated
