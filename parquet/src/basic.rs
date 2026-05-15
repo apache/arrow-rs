@@ -1540,6 +1540,9 @@ impl str::FromStr for LogicalType {
                 "Interval parquet logical type not yet supported"
             )),
             "FLOAT16" => Ok(LogicalType::Float16),
+            "VARIANT" => Ok(LogicalType::Variant {
+                specification_version: None,
+            }),
             "GEOMETRY" => Ok(LogicalType::Geometry { crs: None }),
             "GEOGRAPHY" => Ok(LogicalType::Geography {
                 crs: None,
@@ -2001,6 +2004,12 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
+            ConvertedType::from(Some(LogicalType::Variant {
+                specification_version: None
+            })),
+            ConvertedType::NONE
+        );
+        assert_eq!(
             ConvertedType::from(Some(LogicalType::Geometry { crs: None })),
             ConvertedType::NONE
         );
@@ -2365,6 +2374,9 @@ mod tests {
         let undefined = vec![
             LogicalType::List,
             LogicalType::Map,
+            LogicalType::Variant {
+                specification_version: None,
+            },
             LogicalType::Geometry { crs: None },
             LogicalType::Geography {
                 crs: None,
