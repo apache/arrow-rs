@@ -743,7 +743,9 @@ impl Type {
         let last_part = self.last_part();
 
         match last_part.trim() {
-            "NaiveDateTime" => Some(quote! { ::parquet::basic::ConvertedType::TIMESTAMP_MILLIS }),
+            "NaiveDateTime" => {
+                Some(quote! { Some(::parquet::basic::ConvertedType::TIMESTAMP_MILLIS) })
+            }
             _ => None,
         }
     }
