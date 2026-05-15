@@ -273,12 +273,12 @@ pub(crate) struct RowGroupReaderBuilder {
     buffers: PushBuffers,
 }
 
-/// The builder-configurable parts of a [`RowGroupReaderBuilder`], recovered by
+/// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
 /// [`RowGroupReaderBuilder::into_parts`].
 ///
 /// This is the inverse of [`RowGroupReaderBuilder::new`]: it returns the
-/// fields that originated from a [`ParquetPushDecoderBuilder`], dropping the
-/// runtime decode `state` and the buffered `PushBuffers`.
+/// fields that originated from a [`ParquetPushDecoderBuilder`] plus the
+/// [`PushBuffers`], dropping only the runtime decode `state`.
 ///
 /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
 #[derive(Debug)]
@@ -291,6 +291,9 @@ pub(crate) struct RowGroupReaderBuilderParts {
     pub max_predicate_cache_size: usize,
     pub metrics: ArrowReaderMetrics,
     pub row_selection_policy: RowSelectionPolicy,
+    /// Bytes already pushed into the decoder, carried across a rebuild so they
+    /// are not re-requested.
+    pub buffers: PushBuffers,
 }
 
 impl RowGroupReaderBuilder {
@@ -321,11 +324,11 @@ impl RowGroupReaderBuilder {
         }
     }
 
-    /// Decompose into the builder-configurable [`RowGroupReaderBuilderParts`].
+    /// Decompose into [`RowGroupReaderBuilderParts`].
     ///
-    /// The runtime decode `state` and any buffered bytes are discarded; only
-    /// the configuration that came from the [`ParquetPushDecoderBuilder`] is
-    /// returned.
+    /// The runtime decode `state` is discarded; the configuration that came
+    /// from the [`ParquetPushDecoderBuilder`] and the buffered bytes are
+    /// returned so the builder can be reconstructed.
     ///
     /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
     pub(crate) fn into_parts(self) -> RowGroupReaderBuilderParts {
@@ -339,7 +342,7 @@ impl RowGroupReaderBuilder {
             metrics,
             row_selection_policy,
             state: _,
-            buffers: _,
+            buffers,
         } = self;
         RowGroupReaderBuilderParts {
             batch_size,
@@ -350,6 +353,7 @@ impl RowGroupReaderBuilder {
             max_predicate_cache_size,
             metrics,
             row_selection_policy,
+            buffers,
         }
     }
 

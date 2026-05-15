@@ -122,17 +122,34 @@ use std::sync::Arc;
 /// selectivity observed in the row groups decoded so far.
 pub type ParquetPushDecoderBuilder = ArrowReaderBuilder<NoInput>;
 
-/// Type that represents "No input" for the [`ParquetPushDecoderBuilder`]
+/// The `input` slot of a [`ParquetPushDecoderBuilder`].
 ///
-/// There is no "input" for the push decoder by design (the idea is that
-/// the caller pushes data to the decoder as needed)..
+/// [`ArrowReaderBuilder`] is shared by the sync, async, and push decoders.
+/// The sync and async builders put a real input there — a file or async
+/// reader — to read from. The push decoder has no reader, by design: the
+/// caller pushes bytes in. So its slot instead holds the `PushBuffers` those
+/// pushed bytes accumulate in.
 ///
-/// However, [`ArrowReaderBuilder`] is shared with the sync and async readers,
-/// which DO have an `input`. To support reusing the same builder code for
-/// all three types of decoders, we define this `NoInput` for the push decoder to
-/// denote in the type system there is no type.
-#[derive(Debug, Clone, Copy)]
-pub struct NoInput;
+/// A fresh builder starts with empty buffers.
+/// [`ParquetPushDecoder::into_builder`] threads an existing decoder's buffers
+/// back through so a rebuilt decoder keeps the bytes it already holds.
+///
+/// The name predates the buffer-carrying behaviour; it still reads as "no
+/// *reader* input".
+#[derive(Debug)]
+pub struct NoInput {
+    /// Bytes pushed into the decoder, awaiting decode.
+    buffers: PushBuffers,
+}
+
+impl Default for NoInput {
+    fn default() -> Self {
+        // The file length is unused by the push decoder's buffer tracking.
+        Self {
+            buffers: PushBuffers::new(0),
+        }
+    }
+}
 
 /// Methods for building a ParquetDecoder. See the base [`ArrowReaderBuilder`] for
 /// more options that can be configured.
@@ -167,13 +184,27 @@ impl ParquetPushDecoderBuilder {
     /// See [`ArrowReaderMetadata::try_new`] for how to create the metadata from
     /// the Parquet metadata and reader options.
     pub fn new_with_metadata(arrow_reader_metadata: ArrowReaderMetadata) -> Self {
-        Self::new_builder(NoInput, arrow_reader_metadata)
+        Self::new_builder(NoInput::default(), arrow_reader_metadata)
+    }
+
+    /// Reuse a [`PushBuffers`] when [`build`](Self::build)ing the decoder so
+    /// that bytes already fetched are not requested again.
+    ///
+    /// This is how [`ParquetPushDecoder::into_builder`] carries a decoder's
+    /// buffered bytes across a rebuild. It is `pub(crate)` because
+    /// [`PushBuffers`] is an internal type; callers seed a fresh decoder with
+    /// [`ParquetPushDecoder::push_ranges`] instead.
+    pub(crate) fn with_buffers(self, buffers: PushBuffers) -> Self {
+        Self {
+            input: NoInput { buffers },
+            ..self
+        }
     }
 
     /// Create a [`ParquetPushDecoder`] with the configured options
     pub fn build(self) -> Result<ParquetPushDecoder, ParquetError> {
         let Self {
-            input: NoInput,
+            input: NoInput { buffers },
             metadata: parquet_metadata,
             schema,
             fields,
@@ -196,9 +227,9 @@ impl ParquetPushDecoderBuilder {
             .as_ref()
             .is_some_and(|filter| !filter.predicates.is_empty());
 
-        // Prepare to build RowGroup readers
-        let file_len = 0; // not used in push decoder
-        let buffers = PushBuffers::new(file_len);
+        // Prepare to build RowGroup readers. `buffers` carries any bytes the
+        // caller already pushed (preserved across `into_builder`); a fresh
+        // builder supplies an empty `PushBuffers`.
         let row_group_reader_builder = RowGroupReaderBuilder::new(
             batch_size,
             projection,
@@ -237,8 +268,8 @@ impl ParquetPushDecoderBuilder {
 /// destructures a builder into decoder state, this reconstructs a builder from
 /// the decoder state that remains. The reconstructed builder is configured for
 /// exactly the row groups, row selection, and offset/limit budget that have not
-/// yet been decoded, so re-`build`ing it resumes the scan where the decoder
-/// left off.
+/// yet been decoded, and carries the decoder's buffered bytes, so re-`build`ing
+/// it resumes the scan where the decoder left off.
 fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderBuilder {
     let RemainingRowGroupsParts {
         schema,
@@ -257,10 +288,11 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         max_predicate_cache_size,
         metrics,
         row_selection_policy,
+        buffers,
     } = reader_builder;
 
     ArrowReaderBuilder {
-        input: NoInput,
+        input: NoInput::default(),
         metadata,
         schema,
         fields,
@@ -278,6 +310,9 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         metrics,
         max_predicate_cache_size,
     }
+    // Carry the decoder's already-fetched bytes across the rebuild so the new
+    // decoder does not re-request them.
+    .with_buffers(buffers)
 }
 
 /// A push based Parquet Decoder
@@ -505,11 +540,11 @@ impl ParquetPushDecoder {
     ///
     /// # Buffered bytes
     ///
-    /// Any bytes still buffered inside the decoder are dropped; the rebuilt
-    /// decoder re-requests whatever its configuration needs via
-    /// [`DecodeResult::NeedsData`]. At a row-group boundary reached through
-    /// incremental I/O the decoder has typically already freed the consumed
-    /// bytes, so in practice little or nothing is discarded.
+    /// The decoder's buffered bytes are carried across the rebuild: bytes
+    /// already fetched for row groups the new configuration still reads are
+    /// not re-requested. Bytes the new configuration no longer needs stay
+    /// buffered until [`clear_all_ranges`](Self::clear_all_ranges) is called
+    /// or the rebuilt decoder is dropped.
     pub fn into_builder(self) -> Result<ParquetPushDecoderBuilder, ParquetError> {
         self.state.into_builder()
     }
@@ -1709,14 +1744,11 @@ mod test {
             .with_row_filter(RowFilter::new(vec![Box::new(filter)]))
             .build()
             .unwrap();
-        // The rebuilt decoder starts with an empty buffer (see
-        // `test_into_builder_drops_buffered_bytes`), so re-supply the data.
-        decoder
-            .push_range(test_file_range(), TEST_FILE_DATA.clone())
-            .unwrap();
 
-        // Reader for row group 1 — filter applied. Column "a" in RG1 has
-        // values 200..399; `a > 250` keeps 251..399 = 149 rows.
+        // Reader for row group 1 — filter applied. The rebuilt decoder kept
+        // the buffered bytes (see `test_into_builder_preserves_buffered_bytes`)
+        // so no data needs to be re-supplied. Column "a" in RG1 has values
+        // 200..399; `a > 250` keeps 251..399 = 149 rows.
         let reader1 = expect_data(decoder.try_next_reader());
         let batches1: Vec<_> = reader1.collect::<Result<_, _>>().unwrap();
         let batch1 = concat_batches(&TEST_BATCH.schema(), &batches1).unwrap();
@@ -1825,12 +1857,10 @@ mod test {
         assert_eq!(batch0, TEST_BATCH.slice(0, 200));
 
         // Rebuild without changing anything: the remaining 50-row limit and
-        // the not-yet-decoded RG1 must carry through.
+        // the not-yet-decoded RG1 must carry through (as do the buffers, so
+        // no data needs re-supplying).
         assert!(decoder.is_at_row_group_boundary());
         let mut decoder = decoder.into_builder().unwrap().build().unwrap();
-        decoder
-            .push_range(test_file_range(), TEST_FILE_DATA.clone())
-            .unwrap();
 
         let reader1 = expect_data(decoder.try_next_reader());
         let batches1: Vec<_> = reader1.collect::<Result<_, _>>().unwrap();
@@ -1840,11 +1870,11 @@ mod test {
         expect_finished(decoder.try_next_reader());
     }
 
-    /// `into_builder` drops the decoder's buffered bytes: the rebuilt
-    /// decoder starts with an empty buffer and re-requests whatever its
-    /// configuration needs.
+    /// `into_builder` carries the decoder's buffered bytes across the
+    /// rebuild: the rebuilt decoder keeps them and does not re-request data
+    /// it already holds.
     #[test]
-    fn test_into_builder_drops_buffered_bytes() {
+    fn test_into_builder_preserves_buffered_bytes() {
         let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
             .unwrap()
             .with_batch_size(1024)
@@ -1859,15 +1889,15 @@ mod test {
         let reader0 = expect_data(decoder.try_next_reader());
         let _: Vec<_> = reader0.collect::<Result<_, _>>().unwrap();
         // RG1's bytes are still staged inside the decoder.
-        assert!(decoder.buffered_bytes() > 0);
+        let buffered = decoder.buffered_bytes();
+        assert!(buffered > 0);
 
-        // Rebuilding via into_builder discards them.
+        // Rebuilding via into_builder keeps the staged bytes.
         let mut decoder = decoder.into_builder().unwrap().build().unwrap();
-        assert_eq!(decoder.buffered_bytes(), 0);
+        assert_eq!(decoder.buffered_bytes(), buffered);
 
-        // So RG1 must be fetched again before it can be decoded.
-        let ranges = expect_needs_data(decoder.try_next_reader());
-        push_ranges_to_decoder(&mut decoder, ranges);
+        // RG1's bytes are already buffered, so it decodes without a
+        // `NeedsData` round-trip.
         let reader1 = expect_data(decoder.try_next_reader());
         let batches1: Vec<_> = reader1.collect::<Result<_, _>>().unwrap();
         let batch1 = concat_batches(&TEST_BATCH.schema(), &batches1).unwrap();

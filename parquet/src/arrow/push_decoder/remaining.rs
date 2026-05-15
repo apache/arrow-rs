@@ -248,11 +248,12 @@ impl RemainingRowGroups {
         }
     }
 
-    /// Decompose into the builder-configurable [`RemainingRowGroupsParts`].
+    /// Decompose into [`RemainingRowGroupsParts`].
     ///
     /// Must be called at a row-group boundary (see
-    /// [`Self::is_at_row_group_boundary`]); the inner reader builder's runtime
-    /// decode state and buffered bytes are discarded.
+    /// [`Self::is_at_row_group_boundary`]). The inner reader builder's runtime
+    /// decode state is discarded; its buffered bytes are carried through in
+    /// [`RemainingRowGroupsParts::reader_builder`].
     pub(crate) fn into_parts(self) -> RemainingRowGroupsParts {
         let Self {
             schema,

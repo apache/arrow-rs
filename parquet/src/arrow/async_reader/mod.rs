@@ -600,7 +600,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
         let decoder = ParquetPushDecoderBuilder {
-            input: NoInput,
+            input: NoInput::default(),
             metadata,
             schema,
             fields,
