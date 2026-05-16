@@ -280,7 +280,7 @@ impl RemainingRowGroups {
                     self.frontier
                         .update_budget_after_row_group(remaining_budget);
                     // ready to read the row group
-                    return Ok(DecodeResult::Data(batch_reader));
+                    return Ok(DecodeResult::Data(*batch_reader));
                 }
             }
         }

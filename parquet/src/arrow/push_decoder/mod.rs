@@ -1352,10 +1352,17 @@ mod test {
             },
         );
 
+        let mut row_selection = Vec::with_capacity(101);
+        for _ in 0..50 {
+            row_selection.push(RowSelector::select(1));
+            row_selection.push(RowSelector::skip(1));
+        }
+        row_selection.push(RowSelector::select(100));
+
         let mut decoder = builder
             .with_batch_size(100)
             .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
-            .with_row_selection(RowSelection::from(vec![RowSelector::select(400)]))
+            .with_row_selection(RowSelection::from(row_selection))
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
             .with_row_filter(RowFilter::new(vec![Box::new(row_filter_a)]))
             .with_metrics(metrics.clone())
@@ -1365,13 +1372,13 @@ mod test {
         let batch = next_batch_with_data(&mut decoder, data).unwrap();
         assert_eq!(
             predicate_rows.load(Ordering::Relaxed),
-            100,
+            50,
             "fallback observation must not re-run the predicate for the same row group"
         );
-        assert_eq!(batch, TEST_BATCH.slice(0, 100).project(&[2]).unwrap());
+        assert_eq!(batch, expected_c_every_other(0, 100));
 
         let batch = next_batch_with_data(&mut decoder, data).unwrap();
-        assert_eq!(predicate_rows.load(Ordering::Relaxed), 200);
+        assert_eq!(predicate_rows.load(Ordering::Relaxed), 150);
         assert_eq!(batch, TEST_BATCH.slice(100, 100).project(&[2]).unwrap());
 
         assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
@@ -1997,6 +2004,13 @@ mod test {
     fn expected_c_multiple_of_ten(offset: usize, len: usize) -> RecordBatch {
         let batch = TEST_BATCH.slice(offset, len);
         let filter = multiple_of_ten_filter(&batch);
+        let projected = batch.project(&[2]).unwrap();
+        filter_record_batch(&projected, &filter).unwrap()
+    }
+
+    fn expected_c_every_other(offset: usize, len: usize) -> RecordBatch {
+        let batch = TEST_BATCH.slice(offset, len);
+        let filter = BooleanArray::from((0..len).map(|idx| idx % 2 == 0).collect::<Vec<_>>());
         let projected = batch.project(&[2]).unwrap();
         filter_record_batch(&projected, &filter).unwrap()
     }
