@@ -198,16 +198,21 @@ impl RecordDecoder {
 
         // csv_core::Reader writes end offsets relative to the start of the row
         // Therefore scan through and offset these based on the cumulative row offsets
-        let mut row_offset = 0;
+        let mut row_offset: usize = 0;
         self.offsets[1..self.offsets_len]
             .chunks_exact_mut(self.num_columns)
-            .for_each(|row| {
+            .try_for_each(|row| -> Result<(), ArrowError> {
                 let offset = row_offset;
-                row.iter_mut().for_each(|x| {
-                    *x += offset;
+                row.iter_mut().try_for_each(|x| -> Result<(), ArrowError> {
+                    *x = x.checked_add(offset).ok_or_else(|| {
+                        ArrowError::CsvError(
+                            "CSV record offsets overflowed usize while flushing".to_string(),
+                        )
+                    })?;
                     row_offset = *x;
-                });
-            });
+                    Ok(())
+                })
+            })?;
 
         // Need to truncate data t1o the actual amount of data read
         let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
@@ -398,5 +403,24 @@ mod tests {
         let (read, bytes) = decoder.decode(csv.as_bytes(), 5).unwrap();
         assert_eq!(read, 5);
         assert_eq!(bytes, csv.len());
+    }
+
+    /// Regression test for an overflow path found by the `arrow-csv`
+    /// cargo-fuzz harness being prototyped for #5332. Stages the
+    /// `RecordDecoder` state directly so that rebasing the second row's
+    /// end offset overflows `usize`. With the previous `*x += offset` this
+    /// panicked with `attempt to add with overflow`; the patched code
+    /// surfaces the condition as `ArrowError::CsvError`.
+    #[test]
+    fn test_flush_offset_overflow_returns_csv_error() {
+        let mut decoder = RecordDecoder::new(Reader::new(), 1, false);
+        decoder.offsets = vec![0, usize::MAX, 1];
+        decoder.offsets_len = 3;
+        decoder.num_rows = 2;
+        let err = decoder.flush().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Csv error: CSV record offsets overflowed usize while flushing"
+        );
     }
 }

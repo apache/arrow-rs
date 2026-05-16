@@ -37,7 +37,7 @@
 //! Fallback only applies to `Auto`. Explicit `Mask` and `Selectors` are treated
 //! as user intent and are not overridden here.
 
-use super::RowGroupReaderBuilder;
+use super::{RowBudget, RowGroupReaderBuilder};
 use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::RowFilter;
 use crate::arrow::arrow_reader::RowSelectionPolicy;
@@ -66,7 +66,7 @@ impl Default for RowGroupFallbackState {
 }
 
 impl RowGroupReaderBuilder {
-    pub(super) fn should_use_post_filter_fallback(&self) -> bool {
+    pub(super) fn should_use_post_filter_fallback(&self, budget: RowBudget) -> bool {
         // Keep the runtime switch narrow:
         //
         // * `Auto` means the caller allowed the reader to choose.
@@ -79,13 +79,16 @@ impl RowGroupReaderBuilder {
             RowGroupFallbackState::UsePostFilter { .. }
         ) && self.post_filter_fallback_enabled
             && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
-            && self.limit.is_none()
-            && self.offset.is_none()
+            && budget.is_unbounded()
             && !self.has_virtual_columns()
     }
 
-    pub(super) fn post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {
-        if !self.should_use_post_filter_fallback() {
+    pub(super) fn post_filter_read_projection(
+        &self,
+        filter: &RowFilter,
+        budget: RowBudget,
+    ) -> Option<ProjectionMask> {
+        if !self.should_use_post_filter_fallback(budget) {
             return None;
         }
 
@@ -125,6 +128,7 @@ impl RowGroupReaderBuilder {
         &mut self,
         decision: RowSelectionStrategyDecision,
         row_count: usize,
+        budget: RowBudget,
     ) {
         if !matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. }) {
             return;
@@ -161,21 +165,20 @@ impl RowGroupReaderBuilder {
         let should_fallback = observation.should_fallback();
         self.metrics.record_fallback_trigger(reason);
 
-        if should_fallback && self.post_filter_fallback_supported() {
+        if should_fallback && self.post_filter_fallback_supported(budget) {
             self.fallback_state = RowGroupFallbackState::UsePostFilter { reason };
         } else {
             self.fallback_state = RowGroupFallbackState::UsePushdown;
         }
     }
 
-    pub(super) fn post_filter_fallback_supported(&self) -> bool {
+    pub(super) fn post_filter_fallback_supported(&self, budget: RowBudget) -> bool {
         let Some(filter) = self.filter.as_ref() else {
             return false;
         };
         self.post_filter_fallback_enabled
             && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
-            && self.limit.is_none()
-            && self.offset.is_none()
+            && budget.is_unbounded()
             && !self.has_virtual_columns()
             && self.build_post_filter_read_projection(filter).is_some()
     }

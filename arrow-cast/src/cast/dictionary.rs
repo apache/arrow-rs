@@ -361,22 +361,18 @@ where
     D: DecimalType + ArrowPrimitiveType,
 {
     let dict = pack_numeric_to_dictionary::<K, D>(array, dict_value_type, cast_options)?;
-    let dict = dict
-        .as_dictionary::<K>()
-        .downcast_dict::<PrimitiveArray<D>>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError(format!(
-                "Internal Error: Cannot cast dict to {}Array",
-                D::PREFIX
-            ))
-        })?;
-    let value = dict.values().clone();
-    // Set correct precision/scale
-    let value = value.with_precision_and_scale(precision, scale)?;
-    Ok(Arc::new(DictionaryArray::<K>::try_new(
-        dict.keys().clone(),
-        Arc::new(value),
-    )?))
+    let dict = dict.as_dictionary::<K>();
+    let typed = dict.downcast_dict::<PrimitiveArray<D>>().ok_or_else(|| {
+        ArrowError::ComputeError(format!(
+            "Internal Error: Cannot cast dict to {}Array",
+            D::PREFIX
+        ))
+    })?;
+    let value = typed
+        .values()
+        .clone()
+        .with_precision_and_scale(precision, scale)?;
+    Ok(Arc::new(dict.with_values(Arc::new(value))))
 }
 
 pub(crate) fn string_view_to_dictionary<K, O: OffsetSizeTrait>(
