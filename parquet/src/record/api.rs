@@ -141,7 +141,7 @@ impl<'a> Iterator for RowColumnIter<'a> {
 /// Trait for type-safe convenient access to fields within a Row.
 pub trait RowAccessor {
     /// Check if the field at the index is null.
-    fn is_null(&self, i: usize) -> Result<bool>;
+    fn is_null(&self, i: usize) -> bool;
     /// Try to get a boolean value at the given index.
     fn get_bool(&self, i: usize) -> Result<bool>;
     /// Try to get a byte value at the given index.
@@ -249,10 +249,10 @@ impl RowFormatter for Row {
 }
 
 impl RowAccessor for Row {
-    fn is_null(&self, i: usize) -> Result<bool> {
+    fn is_null(&self, i: usize) -> bool {
         match self.fields[i].1 {
-            Field::Null => Ok(true),
-            _ => Err(general_err!("Cannot access field {i}")),
+            Field::Null => true,
+            _ => false,
         }
     }
 
@@ -1660,8 +1660,8 @@ mod tests {
             ("p".to_string(), Field::Float16(f16::from_f32(9.1))),
         ]);
 
-        assert!(row.is_null(0).unwrap());
-        assert!(!row.is_null(1).unwrap());
+        assert!(row.is_null(0));
+        assert!(!row.is_null(1));
         assert!(!row.get_bool(1).unwrap());
         assert_eq!(3, row.get_byte(2).unwrap());
         assert_eq!(4, row.get_short(3).unwrap());
