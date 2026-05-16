@@ -992,7 +992,6 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
-    use arrow_data::{ArrayData, ArrayDataBuilder};
     use rand::distr::uniform::{UniformSampler, UniformUsize};
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
@@ -1468,49 +1467,22 @@ mod tests {
 
     #[test]
     fn test_filter_list_array() {
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8, 8]);
-
-        let list_data_type =
-            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(4)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .null_bit_buffer(Some(Buffer::from([0b00000111])))
-            .build()
-            .unwrap();
-
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let offsets = OffsetBuffer::new(vec![0i64, 3, 6, 8, 8].into());
+        let value_array = Arc::new(Int32Array::from_iter_values(0..8));
+        let nulls = Some(NullBuffer::from(vec![true, true, true, false]));
         //  a = [[0, 1, 2], [3, 4, 5], [6, 7], null]
-        let a = LargeListArray::from(list_data);
+        let a = LargeListArray::new(field.clone(), offsets, value_array, nulls);
         let b = BooleanArray::from(vec![false, true, false, true]);
         let result = filter(&a, &b).unwrap();
 
         // expected: [[3, 4, 5], null]
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(3)
-            .add_buffer(Buffer::from_slice_ref([3, 4, 5]))
-            .build()
-            .unwrap();
+        let offsets = OffsetBuffer::new(vec![0i64, 3, 3].into());
+        let value_array = Arc::new(Int32Array::from_iter_values([3, 4, 5]));
+        let nulls = Some(NullBuffer::from(vec![true, false]));
+        let expected: ArrayRef = Arc::new(LargeListArray::new(field, offsets, value_array, nulls));
 
-        let value_offsets = Buffer::from_slice_ref([0i64, 3, 3]);
-
-        let list_data_type =
-            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
-        let expected = ArrayData::builder(list_data_type)
-            .len(2)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .null_bit_buffer(Some(Buffer::from([0b00000001])))
-            .build()
-            .unwrap();
-
-        assert_eq!(&make_array(expected), &result);
+        assert_eq!(&expected, &result);
     }
 
     fn test_case_filter_list_view<T: OffsetSizeTrait>() {
@@ -1693,14 +1665,7 @@ mod tests {
 
         let truncated_length = mask_len - offset - truncate;
 
-        let data = ArrayDataBuilder::new(DataType::Boolean)
-            .len(truncated_length)
-            .offset(offset)
-            .add_buffer(buffer)
-            .build()
-            .unwrap();
-
-        let filter = BooleanArray::from(data);
+        let filter = BooleanArray::new(BooleanBuffer::new(buffer, offset, truncated_length), None);
 
         let slice_bits: Vec<_> = SlicesIterator::new(&filter)
             .flat_map(|(start, end)| start..end)
@@ -1923,18 +1888,9 @@ mod tests {
 
     #[test]
     fn test_filter_fixed_size_list_arrays() {
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(9)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
-            .build()
-            .unwrap();
-        let list_data_type = DataType::new_fixed_size_list(DataType::Int32, 3, false);
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        let array = FixedSizeListArray::from(list_data);
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let value_array = Arc::new(Int32Array::from_iter_values(0..9));
+        let array = FixedSizeListArray::new(field, 3, value_array, None);
 
         let filter_array = BooleanArray::from(vec![true, false, false]);
 
@@ -1970,28 +1926,10 @@ mod tests {
 
     #[test]
     fn test_filter_fixed_size_list_arrays_with_null() {
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(10)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
-            .build()
-            .unwrap();
-
-        // Set null buts for the nested array:
-        //  [[0, 1], null, null, [6, 7], [8, 9]]
-        // 01011001 00000001
-        let mut null_bits: [u8; 1] = [0; 1];
-        bit_util::set_bit(&mut null_bits, 0);
-        bit_util::set_bit(&mut null_bits, 3);
-        bit_util::set_bit(&mut null_bits, 4);
-
-        let list_data_type = DataType::new_fixed_size_list(DataType::Int32, 2, false);
-        let list_data = ArrayData::builder(list_data_type)
-            .len(5)
-            .add_child_data(value_data)
-            .null_bit_buffer(Some(Buffer::from(null_bits)))
-            .build()
-            .unwrap();
-        let array = FixedSizeListArray::from(list_data);
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let value_array = Arc::new(Int32Array::from_iter_values(0..10));
+        let nulls = Some(NullBuffer::from(vec![true, false, false, true, true]));
+        let array = FixedSizeListArray::new(field, 2, value_array, nulls);
 
         let filter_array = BooleanArray::from(vec![true, true, false, true, false]);
 
