@@ -170,6 +170,16 @@ fn decimal_256_type(scale: i32, precision: i32) -> Result<DataType> {
     Ok(DataType::Decimal256(precision, scale))
 }
 
+fn check_decimal_length(type_length: i32) -> Result<()> {
+    // Arrow's widest decimal is Decimal256, which needs at most 32 bytes.
+    if !(1..=32).contains(&type_length) {
+        return Err(ParquetError::General(format!(
+            "DECIMAL must be a Fixed Length Byte Array with length 1 to 32, got {type_length}"
+        )));
+    }
+    Ok(())
+}
+
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
     match (info.logical_type_ref(), info.converted_type()) {
         (None, ConvertedType::NONE) => Ok(DataType::Int32),
@@ -293,9 +303,9 @@ fn from_fixed_len_byte_array(
     precision: i32,
     type_length: i32,
 ) -> Result<DataType> {
-    // TODO: This should check the type length for the decimal and interval types
     match (info.logical_type_ref(), info.converted_type()) {
         (Some(LogicalType::Decimal(decimal)), _) => {
+            check_decimal_length(type_length)?;
             if type_length <= 16 {
                 decimal_128_type(decimal.scale, decimal.precision)
             } else {
@@ -303,6 +313,7 @@ fn from_fixed_len_byte_array(
             }
         }
         (None, ConvertedType::DECIMAL) => {
+            check_decimal_length(type_length)?;
             if type_length <= 16 {
                 decimal_128_type(scale, precision)
             } else {
@@ -310,6 +321,11 @@ fn from_fixed_len_byte_array(
             }
         }
         (None, ConvertedType::INTERVAL) => {
+            if type_length != 12 {
+                return Err(ParquetError::General(format!(
+                    "INTERVAL must be a Fixed Length Byte Array with length 12, got {type_length}"
+                )));
+            }
             // There is currently no reliable way of determining which IntervalUnit
             // to return. Thus without the original Arrow schema, the results
             // would be incorrect if all 12 bytes of the interval are populated
@@ -326,5 +342,118 @@ fn from_fixed_len_byte_array(
             }
         }
         _ => Ok(DataType::FixedSizeBinary(type_length)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::basic::{DecimalType, Repetition};
+    use crate::schema::types::Type;
+
+    // The PrimitiveTypeBuilder rejects bad lengths at construction. To exercise
+    // the reader-side checks, build a valid type then overwrite its type_length,
+    // simulating a schema decoded from a file that wasn't produced via the builder.
+    fn with_type_length(ty: Type, type_length: i32) -> Type {
+        match ty {
+            Type::PrimitiveType {
+                basic_info,
+                physical_type,
+                precision,
+                scale,
+                ..
+            } => Type::PrimitiveType {
+                basic_info,
+                physical_type,
+                type_length,
+                precision,
+                scale,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    fn flba_decimal_logical(type_length: i32) -> Type {
+        let valid = Type::primitive_type_builder("c", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Decimal(DecimalType {
+                precision: 5,
+                scale: 2,
+            })))
+            .with_length(16)
+            .with_precision(5)
+            .with_scale(2)
+            .build()
+            .unwrap();
+        with_type_length(valid, type_length)
+    }
+
+    fn flba_decimal_converted(type_length: i32) -> Type {
+        let valid = Type::primitive_type_builder("c", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_converted_type(ConvertedType::DECIMAL)
+            .with_length(16)
+            .with_precision(5)
+            .with_scale(2)
+            .build()
+            .unwrap();
+        with_type_length(valid, type_length)
+    }
+
+    fn flba_interval(type_length: i32) -> Type {
+        let valid = Type::primitive_type_builder("c", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_converted_type(ConvertedType::INTERVAL)
+            .with_length(12)
+            .build()
+            .unwrap();
+        with_type_length(valid, type_length)
+    }
+
+    fn assert_err_contains(ty: &Type, needle: &str) {
+        let err = convert_primitive(ty, None).expect_err("expected an error");
+        let msg = err.to_string();
+        assert!(msg.contains(needle), "expected {needle:?} in error: {msg}");
+    }
+
+    #[test]
+    fn decimal_logical_rejects_invalid_length() {
+        for bad in [-1, 0, 33] {
+            assert_err_contains(&flba_decimal_logical(bad), "DECIMAL");
+        }
+    }
+
+    #[test]
+    fn decimal_converted_rejects_invalid_length() {
+        for bad in [-1, 0, 33] {
+            assert_err_contains(&flba_decimal_converted(bad), "DECIMAL");
+        }
+    }
+
+    #[test]
+    fn decimal_accepts_valid_lengths() {
+        assert!(matches!(
+            convert_primitive(&flba_decimal_logical(16), None).unwrap(),
+            DataType::Decimal128(_, _)
+        ));
+        assert!(matches!(
+            convert_primitive(&flba_decimal_logical(32), None).unwrap(),
+            DataType::Decimal256(_, _)
+        ));
+    }
+
+    #[test]
+    fn interval_rejects_wrong_length() {
+        for bad in [0, 11, 13] {
+            assert_err_contains(&flba_interval(bad), "INTERVAL");
+        }
+    }
+
+    #[test]
+    fn interval_accepts_length_12() {
+        assert_eq!(
+            convert_primitive(&flba_interval(12), None).unwrap(),
+            DataType::Interval(IntervalUnit::DayTime)
+        );
     }
 }
