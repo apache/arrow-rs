@@ -61,6 +61,12 @@ struct RowGroupInfo {
     budget: RowBudget,
 }
 
+enum FallbackTransition {
+    ContinuePushdown,
+    StartPostSelection { selection: RowSelection },
+    EnablePostFilter,
+}
+
 /// This is the inner state machine for reading a single row group.
 #[derive(Debug)]
 enum RowGroupDecoderState {
@@ -272,7 +278,7 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Optional filter
     filter: Option<RowFilter>,
 
-    /// Shared filter state used once Auto fallback switches to post-filter.
+    /// Predicate state reused by later row groups once Auto fallback switches to post-filter.
     post_filter: Option<Arc<Mutex<RowFilter>>>,
 
     /// The size in bytes of the predicate cache to use
@@ -287,7 +293,6 @@ pub(crate) struct RowGroupReaderBuilder {
     row_selection_policy: RowSelectionPolicy,
 
     /// Row-group-local fallback state used by Auto policy.
-    #[allow(dead_code)]
     fallback_state: RowGroupFallbackState,
 
     /// Whether this builder may switch Auto policy to post-filter fallback.
@@ -353,6 +358,59 @@ impl RowGroupReaderBuilder {
     /// callers before they are consumed.
     pub(crate) fn disable_post_filter_fallback(&mut self) {
         self.post_filter_fallback_enabled = false;
+    }
+
+    fn ensure_post_filter_state(&mut self) -> Result<(), ParquetError> {
+        if self.post_filter.is_some() {
+            return Ok(());
+        }
+
+        let filter = self.filter.take().ok_or_else(|| {
+            ParquetError::General("post-filter fallback selected without a row filter".to_string())
+        })?;
+        self.post_filter = Some(Arc::new(Mutex::new(filter)));
+        Ok(())
+    }
+
+    fn resolve_fallback_transition(
+        &mut self,
+        row_group_info: &RowGroupInfo,
+        cache_info: Option<&CacheInfo>,
+    ) -> Result<FallbackTransition, ParquetError> {
+        if cache_info.is_none()
+            || !matches!(self.fallback_state, RowGroupFallbackState::Observing { .. })
+            || !self.post_filter_fallback_supported(row_group_info.budget)
+        {
+            return Ok(FallbackTransition::ContinuePushdown);
+        }
+
+        let decision = row_group_info
+            .plan_builder
+            .resolve_selection_strategy_decision();
+        let observed_selection = row_group_info.plan_builder.selection().cloned();
+
+        self.observe_fallback_candidate(decision, row_group_info.row_count, row_group_info.budget);
+
+        if matches!(
+            self.fallback_state,
+            RowGroupFallbackState::UsePostFilter { .. }
+        ) {
+            if row_group_info.base_selection.is_none() {
+                let selection = observed_selection.unwrap_or_else(|| {
+                    RowSelection::from(vec![RowSelector::select(row_group_info.row_count)])
+                });
+                return Ok(FallbackTransition::StartPostSelection { selection });
+            }
+
+            self.ensure_post_filter_state()?;
+            self.metrics
+                .record_fallback_row_group(RowGroupExecutionMode::Pushdown(decision.strategy));
+            return Ok(FallbackTransition::EnablePostFilter);
+        }
+
+        self.metrics
+            .record_fallback_row_group(RowGroupExecutionMode::Pushdown(decision.strategy));
+        Ok(FallbackTransition::ContinuePushdown)
     }
 
     /// take the current state, leaving None in its place.
@@ -889,57 +947,23 @@ impl RowGroupReaderBuilder {
                 data_request,
                 cache_info,
             } => {
-                if cache_info.is_some()
-                    && matches!(self.fallback_state, RowGroupFallbackState::Observing { .. })
-                    && self.post_filter_fallback_supported(row_group_info.budget)
-                {
-                    let decision = row_group_info
-                        .plan_builder
-                        .resolve_selection_strategy_decision();
-                    let fallback_selection = row_group_info.plan_builder.selection().cloned();
-                    self.observe_fallback_candidate(
-                        decision,
-                        row_group_info.row_count,
-                        row_group_info.budget,
-                    );
-
-                    if matches!(
-                        self.fallback_state,
-                        RowGroupFallbackState::UsePostFilter { .. }
-                    ) {
-                        if row_group_info.base_selection.is_none() {
-                            let selection = fallback_selection.unwrap_or_else(|| {
-                                RowSelection::from(vec![RowSelector::select(
-                                    row_group_info.row_count,
-                                )])
-                            });
-                            let column_chunks = data_request.into_dense_column_chunks();
-                            // Sparse predicate chunks may not cover the base
-                            // selection. Dense chunks are safe to reuse and
-                            // preserve predicate-cache IO behavior.
-                            return self.start_post_selection_filter(
-                                row_group_info,
-                                selection,
-                                cache_info,
-                                column_chunks,
-                            );
-                        }
-
-                        if self.post_filter.is_none() {
-                            let filter = self.filter.take().ok_or_else(|| {
-                                ParquetError::General(
-                                    "post-filter fallback selected without a row filter"
-                                        .to_string(),
-                                )
-                            })?;
-                            self.post_filter = Some(Arc::new(Mutex::new(filter)));
-                        }
+                match self.resolve_fallback_transition(&row_group_info, cache_info.as_ref())? {
+                    FallbackTransition::ContinuePushdown | FallbackTransition::EnablePostFilter => {
                     }
-
-                    self.metrics
-                        .record_fallback_row_group(RowGroupExecutionMode::Pushdown(
-                            decision.strategy,
-                        ));
+                    FallbackTransition::StartPostSelection { selection } => {
+                        let column_chunks = data_request.into_dense_column_chunks();
+                        // The current row group already computed a pushdown selection. Apply that
+                        // selection after decode instead of evaluating the predicates again.
+                        //
+                        // Sparse predicate chunks may not cover the base selection. Dense chunks
+                        // are safe to reuse and preserve predicate-cache IO behavior.
+                        return self.start_post_selection_filter(
+                            row_group_info,
+                            selection,
+                            cache_info,
+                            column_chunks,
+                        );
+                    }
                 }
 
                 let needed_ranges = data_request.needed_ranges(&self.buffers);
