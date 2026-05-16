@@ -26,9 +26,10 @@ use arrow_array::types::{
     ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
 };
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, NullBuffer, RunEndBuffer, bit_util};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, NullBuffer, OffsetBuffer, RunEndBuffer, ScalarBuffer, bit_util,
+};
 use arrow_buffer::{Buffer, MutableBuffer};
-use arrow_data::ArrayDataBuilder;
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
@@ -579,6 +580,14 @@ fn filter_null_mask(
     Some((null_count, nulls))
 }
 
+/// Filters `nulls` and reuses the computed `null_count` to avoid scanning the bitmap.
+fn filter_nulls(nulls: Option<&NullBuffer>, predicate: &FilterPredicate) -> Option<NullBuffer> {
+    let (null_count, nulls) = filter_null_mask(nulls, predicate)?;
+    let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
+
+    Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
+}
+
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
@@ -624,18 +633,11 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
 
 /// `filter` implementation for boolean buffers
 fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanArray {
-    let values = filter_bits(array.values(), predicate);
+    let buffer = filter_bits(array.values(), predicate);
+    let values = BooleanBuffer::new(buffer, 0, predicate.count);
+    let nulls = filter_nulls(array.nulls(), predicate);
 
-    let mut builder = ArrayDataBuilder::new(DataType::Boolean)
-        .len(predicate.count)
-        .add_buffer(values);
-
-    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
-    }
-
-    let data = unsafe { builder.build_unchecked() };
-    BooleanArray::from(data)
+    BooleanArray::new(values, nulls)
 }
 
 #[inline(never)]
@@ -681,18 +683,17 @@ fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -
 where
     T: ArrowPrimitiveType,
 {
-    let values = array.values();
-    let buffer = filter_native(values, predicate);
-    let mut builder = ArrayDataBuilder::new(array.data_type().clone())
-        .len(predicate.count)
-        .add_buffer(buffer);
+    let buffer = filter_native(array.values(), predicate);
+    let values = ScalarBuffer::new(buffer, 0, predicate.count);
+    let nulls = filter_nulls(array.nulls(), predicate);
+    let filtered = PrimitiveArray::new(values, nulls);
 
-    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
+    // Avoid the compatibility check when the physical type already matches.
+    if array.data_type() == &T::DATA_TYPE {
+        filtered
+    } else {
+        filtered.with_data_type(array.data_type().clone())
     }
-
-    let data = unsafe { builder.build_unchecked() };
-    PrimitiveArray::from(data)
 }
 
 /// [`FilterBytes`] is created from a source [`GenericByteArray`] and can be
@@ -824,17 +825,10 @@ where
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
 
-    let mut builder = ArrayDataBuilder::new(T::DATA_TYPE)
-        .len(predicate.count)
-        .add_buffer(filter.dst_offsets.into())
-        .add_buffer(filter.dst_values.into());
+    let offsets = unsafe { OffsetBuffer::new_unchecked(filter.dst_offsets.into()) };
+    let nulls = filter_nulls(array.nulls(), predicate);
 
-    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
-    }
-
-    let data = unsafe { builder.build_unchecked() };
-    GenericByteArray::from(data)
+    unsafe { GenericByteArray::new_unchecked(offsets, filter.dst_values.into(), nulls) }
 }
 
 /// `filter` implementation for byte view arrays.
@@ -843,17 +837,11 @@ fn filter_byte_view<T: ByteViewType>(
     predicate: &FilterPredicate,
 ) -> GenericByteViewArray<T> {
     let new_view_buffer = filter_native(array.views(), predicate);
+    let views = ScalarBuffer::new(new_view_buffer, 0, predicate.count);
+    let buffers = array.data_buffers().to_vec();
+    let nulls = filter_nulls(array.nulls(), predicate);
 
-    let mut builder = ArrayDataBuilder::new(T::DATA_TYPE)
-        .len(predicate.count)
-        .add_buffer(new_view_buffer)
-        .add_buffers(array.data_buffers().to_vec());
-
-    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
-    }
-
-    GenericByteViewArray::from(unsafe { builder.build_unchecked() })
+    unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) }
 }
 
 fn filter_fixed_size_binary(
@@ -902,16 +890,10 @@ fn filter_fixed_size_binary(
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
-    let mut builder = ArrayDataBuilder::new(array.data_type().clone())
-        .len(predicate.count)
-        .add_buffer(buffer.into());
 
-    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
-    }
+    let nulls = filter_nulls(array.nulls(), predicate);
 
-    let data = unsafe { builder.build_unchecked() };
-    FixedSizeBinaryArray::from(data)
+    FixedSizeBinaryArray::new(array.value_length(), buffer.into(), nulls)
 }
 
 /// `filter` implementation for dictionaries
@@ -992,24 +974,16 @@ fn filter_list_view<OffsetType: OffsetSizeTrait>(
     let filtered_offsets = filter_native::<OffsetType>(array.offsets(), predicate);
     let filtered_sizes = filter_native::<OffsetType>(array.sizes(), predicate);
 
-    // Filter the nulls
-    let nulls = if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
-
-        Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
-    } else {
-        None
+    let field = match array.data_type() {
+        DataType::ListView(field) | DataType::LargeListView(field) => field.clone(),
+        _ => unreachable!(),
     };
+    let offsets = ScalarBuffer::new(filtered_offsets, 0, predicate.count);
+    let sizes = ScalarBuffer::new(filtered_sizes, 0, predicate.count);
+    let values = array.values().clone();
+    let nulls = filter_nulls(array.nulls(), predicate);
 
-    let list_data = ArrayDataBuilder::new(array.data_type().clone())
-        .nulls(nulls)
-        .buffers(vec![filtered_offsets, filtered_sizes])
-        .child_data(vec![array.values().to_data()])
-        .len(predicate.count);
-
-    let list_data = unsafe { list_data.build_unchecked() };
-
-    GenericListViewArray::from(list_data)
+    unsafe { GenericListViewArray::new_unchecked(field, offsets, sizes, values, nulls) }
 }
 
 #[cfg(test)]
@@ -1018,7 +992,7 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
-    use arrow_data::ArrayData;
+    use arrow_data::{ArrayData, ArrayDataBuilder};
     use rand::distr::uniform::{UniformSampler, UniformUsize};
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
