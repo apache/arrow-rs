@@ -25,52 +25,22 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
 use crate::VariantArray;
-use crate::variant_array::{ShreddingState, validate_binary_array};
+use crate::variant_array::ShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 
 use arrow::array::AsArray;
-use std::borrow::Cow;
 use std::sync::Arc;
 
-pub(crate) enum ShreddedPathStep<'a> {
-    /// Path step succeeded.
-    Success {
-        /// The shredding state for the next step.
-        next_state: ShreddingState<'a>,
-        /// The `typed_value` column the step descended through. Returned so the caller can union
-        /// its nulls into the accumulated null buffer without needing to re-borrow from the
-        /// (now-consumed) input state.
-        consumed_typed_value: Cow<'a, ArrayRef>,
-    },
+pub(crate) enum ShreddedPathStep {
+    /// Path step succeeded, return the new shredding state
+    Success(ShreddingState),
     /// The path element is not present in the `typed_value` column and there is no `value` column,
     /// so we know it does not exist. It, and all paths under it, are all-NULL.
     Missing,
-    /// The path element is not present in the `typed_value` column and must be retrieved from the
-    /// `value` column instead. The caller should be prepared to handle any value, including the
-    /// requested type, an arbitrary "wrong" type, or `Variant::Null`. The consumed `value` column
-    /// is returned so the caller can use it without re-borrowing from the (now-consumed) input.
-    NotShredded {
-        consumed_value: Option<Cow<'a, ArrayRef>>,
-    },
-}
-
-/// Walk into `typed_value`'s nested `StructArray` and look up `name`. Returns
-/// `Ok(Some(nested_struct))` on success, `Ok(None)` for a missing path (non-struct or missing
-/// field), and `Err` on an invalid nested struct.
-fn walk_field_step<'b>(typed_value: &'b ArrayRef, name: &str) -> Result<Option<&'b StructArray>> {
-    let Some(struct_array) = typed_value.as_struct_opt() else {
-        return Ok(None);
-    };
-    let Some(field) = struct_array.column_by_name(name) else {
-        return Ok(None);
-    };
-    let nested_struct = field.as_struct_opt().ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!(
-            "Expected Struct array while following path, got {}",
-            field.data_type(),
-        ))
-    })?;
-    Ok(Some(nested_struct))
+    /// The path element is not present in the `typed_value` column and must be retrieved from the `value`
+    /// column instead. The caller should be prepared to handle any value, including the requested
+    /// type, an arbitrary "wrong" type, or `Variant::Null`.
+    NotShredded,
 }
 
 /// Given a shredded variant field -- a `(value?, typed_value?)` pair -- try to take one path step
@@ -78,62 +48,51 @@ fn walk_field_step<'b>(typed_value: &'b ArrayRef, name: &str) -> Result<Option<&
 /// `typed_value` is not a struct, or if the requested field name does not exist, traversal returns
 /// a missing-path step (`Missing` or `NotShredded` depending on whether `value` exists).
 ///
-/// The state is consumed by value so its lifetime `'a` (rooted at the original input) is preserved
-/// onto the returned step. For `Cow::Borrowed` inputs this lets the chain walk all the way down
-/// without per-step Arc bumps; for `Cow::Owned` inputs (e.g., `take`-kernel results) the function
-/// clones the new state's columns since the owned typed_value goes out of scope on return.
-///
 /// TODO: Support `VariantPathElement::Index`? It wouldn't be easy, and maybe not even possible.
-pub(crate) fn follow_shredded_path_element<'a>(
-    shredding_state: ShreddingState<'a>,
+pub(crate) fn follow_shredded_path_element(
+    shredding_state: &ShreddingState,
     path_element: &VariantPathElement<'_>,
     _cast_options: &CastOptions,
-) -> Result<ShreddedPathStep<'a>> {
-    let (value, typed_value) = shredding_state.into_fields();
-    let missing_path_step = |value: Option<Cow<'a, ArrayRef>>| match value {
-        Some(_) => ShreddedPathStep::NotShredded {
-            consumed_value: value,
-        },
+) -> Result<ShreddedPathStep> {
+    // If the requested path element is not present in `typed_value`, and `value` is missing, then
+    // we know it does not exist; it, and all paths under it, are all-NULL.
+    let missing_path_step = || match shredding_state.value_field() {
+        Some(_) => ShreddedPathStep::NotShredded,
         None => ShreddedPathStep::Missing,
     };
 
-    let Some(typed_value) = typed_value else {
-        return Ok(missing_path_step(value));
+    let Some(typed_value) = shredding_state.typed_value_field() else {
+        return Ok(missing_path_step());
     };
 
     match path_element {
-        VariantPathElement::Field { name } => match typed_value {
-            Cow::Borrowed(typed_value_ref) => {
-                let Some(nested) = walk_field_step(typed_value_ref, name)? else {
-                    return Ok(missing_path_step(value));
-                };
-                // nested: &'a StructArray, so try_from produces ShreddingState<'a> with
-                // Cow::Borrowed views into `nested`. No Arc bumps on this path.
-                let next_state = ShreddingState::try_from(nested)?;
-                Ok(ShreddedPathStep::Success {
-                    next_state,
-                    consumed_typed_value: Cow::Borrowed(typed_value_ref),
-                })
-            }
-            Cow::Owned(typed_value_arc) => {
-                let Some(nested) = walk_field_step(&typed_value_arc, name)? else {
-                    return Ok(missing_path_step(value));
-                };
-                // `typed_value_arc` is the owned input and is about to move into the returned
-                // `consumed_typed_value`. We cannot also borrow into it (self-referential), so we
-                // clone `nested`'s columns to produce a `ShreddingState<'static>` (coerces to 'a).
-                let value_col = nested.column_by_name("value");
-                if let Some(v) = value_col {
-                    validate_binary_array(v.as_ref(), "value")?;
-                }
-                let typed_value_col = nested.column_by_name("typed_value");
-                let next_state = ShreddingState::new(value_col.cloned(), typed_value_col.cloned());
-                Ok(ShreddedPathStep::Success {
-                    next_state,
-                    consumed_typed_value: Cow::Owned(typed_value_arc),
-                })
-            }
-        },
+        VariantPathElement::Field { name } => {
+            // Try to step into the requested field name of a struct.
+            // First, try to downcast to StructArray
+            let Some(struct_array) = typed_value.as_any().downcast_ref::<StructArray>() else {
+                // Object field path step follows JSONPath semantics and returns missing path step (NotShredded/Missing) on non-struct path
+                return Ok(missing_path_step());
+            };
+
+            // Now try to find the column - missing column in a present struct is just missing data
+            let Some(field) = struct_array.column_by_name(name) else {
+                // Missing column in a present struct is just missing, not wrong - return Ok
+                return Ok(missing_path_step());
+            };
+
+            let struct_array = field.as_struct_opt().ok_or_else(|| {
+                // TODO: Should we blow up? Or just end the traversal and let the normal
+                // variant pathing code sort out the mess that it must anyway be
+                // prepared to handle?
+                ArrowError::InvalidArgumentError(format!(
+                    "Expected Struct array while following path, got {}",
+                    field.data_type(),
+                ))
+            })?;
+
+            let state = ShreddingState::try_from(struct_array)?;
+            Ok(ShreddedPathStep::Success(state))
+        }
         VariantPathElement::Index { .. } => {
             // TODO: Support array indexing. Among other things, it will require slicing not
             // only the array we have here, but also the corresponding metadata and null masks.
@@ -195,19 +154,18 @@ fn shredded_get_path(
 
     // Peel away the prefix of path elements that traverses the shredded parts of this variant
     // column. Shredding will traverse the rest of the path on a per-row basis.
-    let mut shredding_state = input.shredding_state();
+    let mut shredding_state = input.shredding_state().clone();
     let mut accumulated_nulls = input.inner().nulls().cloned();
     let mut path_index = 0;
     for path_element in path {
-        match follow_shredded_path_element(shredding_state, path_element, cast_options)? {
-            ShreddedPathStep::Success {
-                next_state,
-                consumed_typed_value,
-            } => {
-                // Union nulls from the typed_value we just descended through.
-                accumulated_nulls =
-                    NullBuffer::union(accumulated_nulls.as_ref(), consumed_typed_value.nulls());
-                shredding_state = next_state;
+        match follow_shredded_path_element(&shredding_state, path_element, cast_options)? {
+            ShreddedPathStep::Success(state) => {
+                // Union nulls from the typed_value we just accessed
+                if let Some(typed_value) = shredding_state.typed_value_field() {
+                    accumulated_nulls =
+                        NullBuffer::union(accumulated_nulls.as_ref(), typed_value.nulls());
+                }
+                shredding_state = state;
                 path_index += 1;
                 continue;
             }
@@ -219,9 +177,9 @@ fn shredded_get_path(
                 };
                 return Ok(arr);
             }
-            ShreddedPathStep::NotShredded { consumed_value } => {
+            ShreddedPathStep::NotShredded => {
                 let target = make_target_variant(
-                    consumed_value.map(Cow::into_owned),
+                    shredding_state.value_field().cloned(),
                     None,
                     accumulated_nulls,
                 );
@@ -231,10 +189,9 @@ fn shredded_get_path(
     }
 
     // Path exhausted! Create a new `VariantArray` for the location we landed on.
-    let (final_value, final_typed_value) = shredding_state.into_fields();
     let target = make_target_variant(
-        final_value.map(Cow::into_owned),
-        final_typed_value.map(Cow::into_owned),
+        shredding_state.value_field().cloned(),
+        shredding_state.typed_value_field().cloned(),
         accumulated_nulls,
     );
 
