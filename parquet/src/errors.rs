@@ -108,12 +108,6 @@ impl From<snap::Error> for ParquetError {
     }
 }
 
-impl From<thrift::Error> for ParquetError {
-    fn from(e: thrift::Error) -> ParquetError {
-        ParquetError::External(Box::new(e))
-    }
-}
-
 impl From<cell::BorrowMutError> for ParquetError {
     fn from(e: cell::BorrowMutError) -> ParquetError {
         ParquetError::External(Box::new(e))

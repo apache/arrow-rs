@@ -21,6 +21,7 @@ use arrow::util::test_util::parquet_test_data;
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 use parquet::errors::ParquetError;
+use parquet::file::metadata::ParquetMetaDataReader;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -173,6 +174,16 @@ fn non_standard_delta_blocks() {
                 .contains("cannot skip miniblock of size 128")
         );
     }
+}
+
+#[test]
+fn skip_unknown_types() {
+    // test file contains a FileMetaData with unknown fields with
+    // types not currently used by Parquet (uuid, set, map). The
+    // parser should be able to skip these unknown fields without
+    // erroring.
+    let file = Bytes::from_static(include_bytes!("new_types.bin"));
+    ParquetMetaDataReader::decode_metadata(&file).unwrap();
 }
 
 #[cfg(feature = "async")]
