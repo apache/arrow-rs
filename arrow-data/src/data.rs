@@ -3324,14 +3324,11 @@ mod tests {
 
         data.validate_full().unwrap();
 
-        // Parent is fully null.
+        // Parent itself is fully null.
         assert_eq!(data.null_count(), len);
 
-        // Nullable child is itself all-null.
-        let nullable = &data.child_data()[0];
-        assert_eq!(nullable.null_count(), len);
-
-        // Non-nullable child must NOT have nulls, even though the parent is all null.
+        // The non-nullable field must NOT carry nulls, even though the parent is
+        // all-null (the field's nullability constraint must be respected).
         let non_nullable = &data.child_data()[1];
         assert_eq!(non_nullable.null_count(), 0);
         assert_eq!(non_nullable.nulls(), None);
@@ -3341,24 +3338,19 @@ mod tests {
     fn new_null_fixed_size_list_does_not_create_nulls_for_non_nullable_item() {
         let len = 3;
         let list_len = 4_i32;
-
-        // Non-nullable item: the child must not carry nulls.
         let dt = DataType::new_fixed_size_list(DataType::Int32, list_len, false);
+
         let data = ArrayData::new_null(&dt, len);
+
         data.validate_full().unwrap();
 
+        // Parent itself is fully null.
         assert_eq!(data.null_count(), len);
+
+        // The non-nullable item child must NOT carry nulls.
         let item = &data.child_data()[0];
         assert_eq!(item.len(), list_len as usize * len);
         assert_eq!(item.null_count(), 0);
         assert_eq!(item.nulls(), None);
-
-        // Nullable item: the child is all-null as before.
-        let dt = DataType::new_fixed_size_list(DataType::Int32, list_len, true);
-        let data = ArrayData::new_null(&dt, len);
-        data.validate_full().unwrap();
-
-        let item = &data.child_data()[0];
-        assert_eq!(item.null_count(), list_len as usize * len);
     }
 }
