@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Post-decode filtering support for parquet row-filter fallback.
+//! Post-decode filtering support for parquet row filters.
 //!
 //! Normal predicate pushdown decodes predicate columns first, builds a
 //! `RowSelection`, and then decodes output columns for selected rows. The
-//! fallback path in this module instead decodes the union of predicate and
+//! The post-filter path in this module instead decodes the union of predicate and
 //! output columns once and applies predicates after decode.
 //!
 //! ```text
@@ -39,6 +39,7 @@
 //! and little pruning, especially fragmented high-selectivity selections.
 
 use crate::arrow::ProjectionMask;
+use crate::arrow::arrow_reader::metrics::{ArrowReaderMetrics, ArrowReaderPhase};
 use crate::arrow::arrow_reader::{RowFilter, RowSelection};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::SchemaDescriptor;
@@ -51,6 +52,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug)]
 pub(super) struct PostFilterState {
     filter: Arc<Mutex<RowFilter>>,
+    metrics: ArrowReaderMetrics,
     predicate_projection_indices: Vec<Vec<usize>>,
     predicate_projection_schemas: Vec<SchemaRef>,
     output_projection_indices: Vec<usize>,
@@ -60,6 +62,7 @@ pub(super) struct PostFilterState {
 impl PostFilterState {
     pub(super) fn try_new(
         filter: Arc<Mutex<RowFilter>>,
+        metrics: ArrowReaderMetrics,
         parquet_schema: &SchemaDescriptor,
         read_schema: &Schema,
         read_projection: &ProjectionMask,
@@ -92,6 +95,7 @@ impl PostFilterState {
 
         Ok(Self {
             filter,
+            metrics,
             predicate_projection_indices,
             predicate_projection_schemas,
             output_projection_indices,
@@ -114,12 +118,20 @@ impl PostFilterState {
             .enumerate()
         {
             let input_rows = batch.num_rows();
-            let predicate_batch = project_record_batch(
-                &batch,
-                projection_indices,
-                Arc::clone(&self.predicate_projection_schemas[predicate_idx]),
-            )?;
-            let predicate_filter = predicate.evaluate(predicate_batch)?;
+            let predicate_batch =
+                self.metrics
+                    .time_phase(ArrowReaderPhase::PostFilterPredicateProject, || {
+                        project_record_batch(
+                            &batch,
+                            projection_indices,
+                            Arc::clone(&self.predicate_projection_schemas[predicate_idx]),
+                        )
+                    })?;
+            let predicate_filter = self
+                .metrics
+                .time_phase(ArrowReaderPhase::PostFilterPredicateEvaluate, || {
+                    predicate.evaluate(predicate_batch)
+                })?;
 
             if predicate_filter.len() != input_rows {
                 return Err(general_err!(
@@ -128,17 +140,25 @@ impl PostFilterState {
                 ));
             }
 
-            batch = filter_record_batch(&batch, &predicate_filter)?;
+            batch = self
+                .metrics
+                .time_phase(ArrowReaderPhase::PostFilterApplyFilter, || {
+                    filter_record_batch(&batch, &predicate_filter)
+                })?;
             if batch.num_rows() == 0 {
                 break;
             }
         }
 
-        Ok(project_record_batch(
-            &batch,
-            &self.output_projection_indices,
-            Arc::clone(&self.output_schema),
-        )?)
+        Ok(self
+            .metrics
+            .time_phase(ArrowReaderPhase::PostFilterOutputProject, || {
+                project_record_batch(
+                    &batch,
+                    &self.output_projection_indices,
+                    Arc::clone(&self.output_schema),
+                )
+            })?)
     }
 }
 
@@ -146,20 +166,22 @@ impl PostFilterState {
 pub(super) struct PostSelectionFilterState {
     mask: BooleanBuffer,
     position: usize,
+    metrics: ArrowReaderMetrics,
 }
 
 impl PostSelectionFilterState {
-    pub(super) fn new(selection: RowSelection) -> Self {
+    pub(super) fn new(selection: RowSelection, metrics: ArrowReaderMetrics) -> Self {
         Self {
             mask: selection.boolean_mask(),
             position: 0,
+            metrics,
         }
     }
 
     pub(super) fn apply(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
         // This path is not predicate post-filtering. It is used after pushdown
         // has already computed a final RowSelection for the current row group,
-        // but fallback chooses to decode the base selection and apply that
+        // but the post-filter path decodes the base selection and applies that
         // already-computed selection after decode.
         let input_rows = batch.num_rows();
         let end = self.position.saturating_add(input_rows);
@@ -172,7 +194,11 @@ impl PostSelectionFilterState {
 
         let filter = BooleanArray::from(self.mask.slice(self.position, input_rows));
         self.position = end;
-        Ok(filter_record_batch(&batch, &filter)?)
+        Ok(self
+            .metrics
+            .time_phase(ArrowReaderPhase::PostSelectionApplyFilter, || {
+                filter_record_batch(&batch, &filter)
+            })?)
     }
 }
 
@@ -232,7 +258,7 @@ fn projection_indices(
             let root = parquet_schema.get_column_root(leaf_idx);
             if !root.is_primitive() {
                 return Err(general_err!(
-                    "post-filter fallback does not support nested read column {}",
+                    "post-filter cost model does not support nested read column {}",
                     root.name()
                 ));
             }

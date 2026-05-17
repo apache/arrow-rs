@@ -50,7 +50,7 @@ use crate::file::metadata::{
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
-use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::metrics::{ArrowReaderMetrics, ArrowReaderPhase};
 // Exposed so integration tests and benchmarks can temporarily override the threshold.
 pub use read_plan::{PredicateOptions, ReadPlan, ReadPlanBuilder};
 
@@ -1228,7 +1228,10 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     .with_parquet_metadata(&reader.metadata)
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
 
-                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                plan_builder = plan_builder.with_predicate_options(
+                    PredicateOptions::new(array_reader, predicate.as_mut())
+                        .with_metrics(metrics.clone()),
+                )?;
             }
         }
 
@@ -1244,7 +1247,11 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .build_limited()
             .build_with_metrics(&metrics);
 
-        Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
+        Ok(ParquetRecordBatchReader::new_with_metrics(
+            array_reader,
+            read_plan,
+            metrics,
+        ))
     }
 }
 
@@ -1347,6 +1354,7 @@ pub struct ParquetRecordBatchReader {
     array_reader_position: usize,
     schema: SchemaRef,
     read_plan: ReadPlan,
+    metrics: ArrowReaderMetrics,
     post_filter: Option<PostFilterState>,
     post_selection_filter: Option<PostSelectionFilterState>,
     buffered_batches: Option<VecDeque<RecordBatch>>,
@@ -1484,8 +1492,11 @@ impl ParquetRecordBatchReader {
                                 )
                             })?;
 
-                            let filtered_batch =
-                                filter_record_batch(&RecordBatch::from(struct_array), &mask)?;
+                            let filtered_batch = self
+                                .metrics
+                                .time_phase(ArrowReaderPhase::OutputMaskFilter, || {
+                                    filter_record_batch(&RecordBatch::from(struct_array), &mask)
+                                })?;
 
                             if filtered_batch.num_rows() != selected_rows {
                                 return Err(general_err!(
@@ -1568,8 +1579,11 @@ impl ParquetRecordBatchReader {
                         )
                     })?;
 
-                    let filtered_batch =
-                        filter_record_batch(&RecordBatch::from(struct_array), &mask)?;
+                    let filtered_batch = self
+                        .metrics
+                        .time_phase(ArrowReaderPhase::OutputMaskFilter, || {
+                            filter_record_batch(&RecordBatch::from(struct_array), &mask)
+                        })?;
 
                     if filtered_batch.num_rows() != mask_chunk.selected_rows {
                         return Err(general_err!(
@@ -1709,6 +1723,7 @@ impl ParquetRecordBatchReader {
             array_reader_position: 0,
             schema: Arc::new(Schema::new(levels.fields.clone())),
             read_plan,
+            metrics,
             post_filter: None,
             post_selection_filter: None,
             buffered_batches: None,
@@ -1719,26 +1734,13 @@ impl ParquetRecordBatchReader {
     /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
     /// all rows will be returned
     pub(crate) fn new(array_reader: Box<dyn ArrayReader>, read_plan: ReadPlan) -> Self {
-        let schema = match array_reader.get_data_type() {
-            ArrowType::Struct(fields) => Schema::new(fields.clone()),
-            _ => unreachable!("Struct array reader's data type is not struct!"),
-        };
-
-        Self {
-            array_reader,
-            array_reader_position: 0,
-            schema: Arc::new(schema),
-            read_plan,
-            post_filter: None,
-            post_selection_filter: None,
-            buffered_batches: None,
-        }
+        Self::new_with_metrics(array_reader, read_plan, ArrowReaderMetrics::disabled())
     }
 
-    pub(crate) fn new_post_selection_filter(
+    pub(crate) fn new_with_metrics(
         array_reader: Box<dyn ArrayReader>,
         read_plan: ReadPlan,
-        selection: RowSelection,
+        metrics: ArrowReaderMetrics,
     ) -> Self {
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(fields) => Schema::new(fields.clone()),
@@ -1750,8 +1752,32 @@ impl ParquetRecordBatchReader {
             array_reader_position: 0,
             schema: Arc::new(schema),
             read_plan,
+            metrics,
             post_filter: None,
-            post_selection_filter: Some(PostSelectionFilterState::new(selection)),
+            post_selection_filter: None,
+            buffered_batches: None,
+        }
+    }
+
+    pub(crate) fn new_post_selection_filter(
+        array_reader: Box<dyn ArrayReader>,
+        read_plan: ReadPlan,
+        selection: RowSelection,
+        metrics: ArrowReaderMetrics,
+    ) -> Self {
+        let schema = match array_reader.get_data_type() {
+            ArrowType::Struct(fields) => Schema::new(fields.clone()),
+            _ => unreachable!("Struct array reader's data type is not struct!"),
+        };
+
+        Self {
+            array_reader,
+            array_reader_position: 0,
+            schema: Arc::new(schema),
+            read_plan,
+            metrics: metrics.clone(),
+            post_filter: None,
+            post_selection_filter: Some(PostSelectionFilterState::new(selection, metrics)),
             buffered_batches: None,
         }
     }
@@ -1763,6 +1789,7 @@ impl ParquetRecordBatchReader {
         parquet_schema: &SchemaDescriptor,
         read_projection: &ProjectionMask,
         output_projection: &ProjectionMask,
+        metrics: ArrowReaderMetrics,
     ) -> Result<Self> {
         let read_schema = match array_reader.get_data_type() {
             ArrowType::Struct(fields) => Schema::new(fields.clone()),
@@ -1770,6 +1797,7 @@ impl ParquetRecordBatchReader {
         };
         let post_filter = PostFilterState::try_new(
             filter,
+            metrics.clone(),
             parquet_schema,
             &read_schema,
             read_projection,
@@ -1782,6 +1810,7 @@ impl ParquetRecordBatchReader {
             array_reader_position: 0,
             schema,
             read_plan,
+            metrics,
             post_filter: Some(post_filter),
             post_selection_filter: None,
             buffered_batches: None,

@@ -228,10 +228,11 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.clear_all_ranges();
     }
 
-    /// Prevent Auto selection from switching to post-filter fallback for reader
+    /// Prevent Auto selection from switching to post-filter by cost for reader
     /// handoff APIs.
-    pub(crate) fn disable_post_filter_fallback(&mut self) {
-        self.row_group_reader_builder.disable_post_filter_fallback();
+    pub(crate) fn disable_post_filter_cost_model(&mut self) {
+        self.row_group_reader_builder
+            .disable_post_filter_cost_model();
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next

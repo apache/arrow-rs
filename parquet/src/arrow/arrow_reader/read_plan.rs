@@ -19,7 +19,7 @@
 //! from a Parquet file
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::metrics::{ArrowReaderMetrics, ArrowReaderPhase};
 use crate::arrow::arrow_reader::selection::{
     LoadedRowRanges, RowSelectionPolicy, RowSelectionShape, RowSelectionStrategy,
     RowSelectionStrategyDecision, RowSelectionStrategyReason,
@@ -45,6 +45,7 @@ pub struct PredicateOptions<'a> {
     predicate: &'a mut dyn ArrowPredicate,
     limit: Option<usize>,
     total_rows: usize,
+    metrics: ArrowReaderMetrics,
 }
 
 impl<'a> PredicateOptions<'a> {
@@ -60,6 +61,7 @@ impl<'a> PredicateOptions<'a> {
             predicate,
             limit: None,
             total_rows: 0,
+            metrics: ArrowReaderMetrics::disabled(),
         }
     }
 
@@ -81,6 +83,11 @@ impl<'a> PredicateOptions<'a> {
     pub fn with_limit(mut self, limit: usize, total_rows: usize) -> Self {
         self.limit = Some(limit);
         self.total_rows = total_rows;
+        self
+    }
+
+    pub(crate) fn with_metrics(mut self, metrics: ArrowReaderMetrics) -> Self {
+        self.metrics = metrics;
         self
     }
 }
@@ -226,6 +233,7 @@ impl ReadPlanBuilder {
             predicate,
             limit,
             total_rows,
+            metrics,
         } = options;
 
         // Target length for the concatenated filter output:
@@ -239,14 +247,21 @@ impl ReadPlanBuilder {
             None => limit.map(|_| total_rows),
         };
 
-        let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
+        let mut reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
         let mut filters = vec![];
         let mut processed_rows: usize = 0;
         let mut matched_rows: usize = 0;
-        for maybe_batch in reader {
+        loop {
+            let maybe_batch =
+                metrics.time_phase(ArrowReaderPhase::PredicateDecode, || reader.next());
+            let Some(maybe_batch) = maybe_batch else {
+                break;
+            };
             let maybe_batch = maybe_batch?;
             let input_rows = maybe_batch.num_rows();
-            let filter = predicate.evaluate(maybe_batch)?;
+            let filter = metrics.time_phase(ArrowReaderPhase::PredicateEvaluate, || {
+                predicate.evaluate(maybe_batch)
+            })?;
             // Since user supplied predicate, check error here to catch bugs quickly
             if filter.len() != input_rows {
                 return Err(arrow_err!(
@@ -294,9 +309,15 @@ impl ReadPlanBuilder {
         if all_selected && self.selection.is_none() {
             return Ok(self);
         }
-        let raw = RowSelection::from_filters(&filters);
+        let raw = metrics.time_phase(ArrowReaderPhase::PredicateSelectionBuild, || {
+            RowSelection::from_filters(&filters)
+        });
         self.selection = match self.selection.take() {
-            Some(selection) => Some(selection.and_then(&raw)),
+            Some(selection) => Some(
+                metrics.time_phase(ArrowReaderPhase::PredicateSelectionMerge, || {
+                    selection.and_then(&raw)
+                }),
+            ),
             None => Some(raw),
         };
         Ok(self)
@@ -663,12 +684,12 @@ mod tests {
     }
 
     #[test]
-    fn fallback_classifier_triggers_for_fragmented_high_selectivity() {
+    fn cost_model_classifier_triggers_for_fragmented_high_selectivity() {
         use crate::arrow::arrow_reader::selection::{
-            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+            CostModelDecisionReason, CostModelObservation, RowSelectionShape,
         };
 
-        let observation = FallbackObservation {
+        let observation = CostModelObservation {
             observed_row_groups: 2,
             shape: RowSelectionShape {
                 selected_rows: 128,
@@ -681,17 +702,17 @@ mod tests {
 
         assert_eq!(
             observation.trigger_reason(),
-            FallbackTriggerReason::FragmentedHighSelectivity
+            CostModelDecisionReason::FragmentedHighSelectivity
         );
     }
 
     #[test]
-    fn fallback_classifier_waits_for_observation_window() {
+    fn cost_model_classifier_waits_for_observation_window() {
         use crate::arrow::arrow_reader::selection::{
-            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+            CostModelDecisionReason, CostModelObservation, RowSelectionShape,
         };
 
-        let observation = FallbackObservation {
+        let observation = CostModelObservation {
             observed_row_groups: 0,
             shape: RowSelectionShape {
                 selected_rows: 64,
@@ -704,17 +725,17 @@ mod tests {
 
         assert_eq!(
             observation.trigger_reason(),
-            FallbackTriggerReason::ObservationIncomplete
+            CostModelDecisionReason::ObservationIncomplete
         );
     }
 
     #[test]
-    fn fallback_classifier_triggers_for_high_selectivity_without_pruning() {
+    fn cost_model_classifier_triggers_for_high_selectivity_without_pruning() {
         use crate::arrow::arrow_reader::selection::{
-            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+            CostModelDecisionReason, CostModelObservation, RowSelectionShape,
         };
 
-        let observation = FallbackObservation {
+        let observation = CostModelObservation {
             observed_row_groups: 2,
             shape: RowSelectionShape {
                 selected_rows: 200,
@@ -727,17 +748,17 @@ mod tests {
 
         assert_eq!(
             observation.trigger_reason(),
-            FallbackTriggerReason::HighSelectivityNoPruning
+            CostModelDecisionReason::HighSelectivityNoPruning
         );
     }
 
     #[test]
-    fn fallback_classifier_triggers_for_fragmented_moderate_selectivity() {
+    fn cost_model_classifier_triggers_for_fragmented_moderate_selectivity() {
         use crate::arrow::arrow_reader::selection::{
-            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+            CostModelDecisionReason, CostModelObservation, RowSelectionShape,
         };
 
-        let observation = FallbackObservation {
+        let observation = CostModelObservation {
             observed_row_groups: 2,
             shape: RowSelectionShape {
                 selected_rows: 30,
@@ -750,17 +771,17 @@ mod tests {
 
         assert_eq!(
             observation.trigger_reason(),
-            FallbackTriggerReason::FragmentedModerateSelectivity
+            CostModelDecisionReason::FragmentedModerateSelectivity
         );
     }
 
     #[test]
-    fn fallback_classifier_triggers_for_fragmented_near_ten_percent_selectivity() {
+    fn cost_model_classifier_triggers_for_fragmented_near_ten_percent_selectivity() {
         use crate::arrow::arrow_reader::selection::{
-            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+            CostModelDecisionReason, CostModelObservation, RowSelectionShape,
         };
 
-        let observation = FallbackObservation {
+        let observation = CostModelObservation {
             observed_row_groups: 1,
             shape: RowSelectionShape {
                 selected_rows: 9,
@@ -773,17 +794,17 @@ mod tests {
 
         assert_eq!(
             observation.trigger_reason(),
-            FallbackTriggerReason::FragmentedModerateSelectivity
+            CostModelDecisionReason::FragmentedModerateSelectivity
         );
     }
 
     #[test]
-    fn fallback_classifier_keeps_q38_like_low_selectivity_fragmented_pushdown() {
+    fn cost_model_classifier_keeps_q38_like_low_selectivity_fragmented_pushdown() {
         use crate::arrow::arrow_reader::selection::{
-            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+            CostModelDecisionReason, CostModelObservation, RowSelectionShape,
         };
 
-        let observation = FallbackObservation {
+        let observation = CostModelObservation {
             observed_row_groups: 1,
             shape: RowSelectionShape {
                 selected_rows: 4_870,
@@ -796,17 +817,17 @@ mod tests {
 
         assert_eq!(
             observation.trigger_reason(),
-            FallbackTriggerReason::PushdownStillPreferred
+            CostModelDecisionReason::PushdownStillPreferred
         );
     }
 
     #[test]
-    fn fallback_classifier_keeps_low_selectivity_fragmented_pushdown() {
+    fn cost_model_classifier_keeps_low_selectivity_fragmented_pushdown() {
         use crate::arrow::arrow_reader::selection::{
-            FallbackObservation, FallbackTriggerReason, RowSelectionShape,
+            CostModelDecisionReason, CostModelObservation, RowSelectionShape,
         };
 
-        let observation = FallbackObservation {
+        let observation = CostModelObservation {
             observed_row_groups: 1,
             shape: RowSelectionShape {
                 selected_rows: 4,
@@ -819,7 +840,7 @@ mod tests {
 
         assert_eq!(
             observation.trigger_reason(),
-            FallbackTriggerReason::PushdownStillPreferred
+            CostModelDecisionReason::PushdownStillPreferred
         );
     }
 

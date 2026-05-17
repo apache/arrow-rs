@@ -404,7 +404,7 @@ impl ParquetDecoderState {
     ) -> Result<(Self, DecodeResult<ParquetRecordBatchReader>), ParquetError> {
         let mut current_state = self;
         loop {
-            current_state.disable_post_filter_fallback();
+            current_state.disable_post_filter_cost_model();
             let (next_state, decode_result) = current_state.transition()?;
             // if more data is needed to transition, can't proceed further without it
             match decode_result {
@@ -424,7 +424,7 @@ impl ParquetDecoderState {
                 } => {
                     // The reader API can advance to future row groups before
                     // the returned reader is consumed. Disable post-filter
-                    // fallback before building row groups for this API; this
+                    // cost modeling before building row groups for this API; this
                     // materialization remains only as a guard for mixed API use
                     // where a post-filter reader was already active.
                     record_batch_reader.materialize_post_filter()?;
@@ -441,12 +441,12 @@ impl ParquetDecoderState {
         }
     }
 
-    fn disable_post_filter_fallback(&mut self) {
+    fn disable_post_filter_cost_model(&mut self) {
         if let Self::ReadingRowGroup {
             remaining_row_groups,
         } = self
         {
-            remaining_row_groups.disable_post_filter_fallback();
+            remaining_row_groups.disable_post_filter_cost_model();
         }
     }
 
@@ -623,21 +623,29 @@ mod test {
     use crate::DecodeResult;
     use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ParquetRecordBatchReader, RowFilter, RowSelection, RowSelectionPolicy,
-        RowSelector,
+        ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader, RowFilter, RowSelection,
+        RowSelectionPolicy, RowSelector,
     };
+    use crate::arrow::async_reader::AsyncFileReader;
     use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
-    use crate::arrow::{ArrowWriter, ProjectionMask};
+    use crate::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
     use crate::errors::ParquetError;
-    use crate::file::metadata::ParquetMetaDataPushDecoder;
+    use crate::file::metadata::{
+        PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
+    };
     use crate::file::properties::WriterProperties;
-    use arrow::compute::kernels::cmp::{gt, lt};
+    use arrow::compute::kernels::cmp::{gt, lt, neq};
+    use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int64Type;
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringViewArray};
+    use arrow_schema::{DataType, Field, Schema};
     use arrow_select::concat::concat_batches;
     use arrow_select::filter::filter_record_batch;
     use bytes::Bytes;
+    use futures::future::BoxFuture;
+    use futures::{FutureExt, StreamExt};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use std::fmt::Debug;
     use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1080,8 +1088,8 @@ mod test {
     }
 
     #[test]
-    fn test_decoder_auto_fallback_uses_post_filter_after_observation() {
-        let data = &FALLBACK_TEST_FILE_DATA;
+    fn test_decoder_auto_cost_model_uses_post_filter_after_observation() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
         let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
@@ -1120,7 +1128,7 @@ mod test {
         assert_eq!(
             predicate_rows.load(Ordering::Relaxed),
             300,
-            "fallback should evaluate predicates while producing the current row group"
+            "cost model should evaluate predicates while producing the current row group"
         );
         assert_eq!(batch, TEST_BATCH.slice(200, 100).project(&[2]).unwrap());
         assert_eq!(predicate_rows.load(Ordering::Relaxed), 300);
@@ -1130,19 +1138,19 @@ mod test {
         assert_eq!(batch, TEST_BATCH.slice(300, 100).project(&[2]).unwrap());
         assert_eq!(predicate_rows.load(Ordering::Relaxed), 400);
 
-        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
-        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
-        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(4));
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(4));
         assert_eq!(
-            metrics.fallback_high_selectivity_no_pruning_count(),
+            metrics.cost_model_high_selectivity_no_pruning_count(),
             Some(1)
         );
         assert!(next_batch_with_data(&mut decoder, data).is_none());
     }
 
     #[test]
-    fn test_decoder_try_next_reader_skips_post_filter_fallback() {
-        let data = &FALLBACK_TEST_FILE_DATA;
+    fn test_decoder_try_next_reader_skips_post_filter_cost_model() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
         let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
@@ -1178,13 +1186,13 @@ mod test {
             assert!(reader.next().is_none());
         }
 
-        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(0));
         assert!(next_reader_with_data(&mut decoder, data).is_none());
     }
 
     #[test]
-    fn test_decoder_auto_fallback_post_filter_applies_fragmented_filter() {
-        let data = &FALLBACK_TEST_FILE_DATA;
+    fn test_decoder_auto_cost_model_post_filter_applies_fragmented_filter() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
         let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
@@ -1226,7 +1234,7 @@ mod test {
             assert_eq!(
                 predicate_rows.load(Ordering::Relaxed),
                 (row_group_idx + 1) * 100,
-                "fallback should evaluate predicates while producing the current row group"
+                "cost model should evaluate predicates while producing the current row group"
             );
             assert_eq!(
                 batch,
@@ -1238,19 +1246,19 @@ mod test {
             );
         }
 
-        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
-        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
-        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(4));
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(4));
         assert_eq!(
-            metrics.fallback_fragmented_high_selectivity_count(),
+            metrics.cost_model_fragmented_high_selectivity_count(),
             Some(1)
         );
         assert!(next_batch_with_data(&mut decoder, data).is_none());
     }
 
     #[test]
-    fn test_decoder_auto_fallback_records_fragmented_moderate_selectivity() {
-        let data = &FALLBACK_TEST_FILE_DATA;
+    fn test_decoder_auto_cost_model_records_fragmented_moderate_selectivity() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
         let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
@@ -1288,19 +1296,19 @@ mod test {
             );
         }
 
-        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
-        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
-        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(4));
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(4));
         assert_eq!(
-            metrics.fallback_fragmented_moderate_selectivity_count(),
+            metrics.cost_model_fragmented_moderate_selectivity_count(),
             Some(1)
         );
         assert!(next_batch_with_data(&mut decoder, data).is_none());
     }
 
     #[test]
-    fn test_decoder_auto_fallback_current_row_uses_predicate_cache() {
-        let data = &FALLBACK_TEST_FILE_DATA;
+    fn test_decoder_auto_cost_model_current_row_uses_predicate_cache() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
         let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
@@ -1327,14 +1335,14 @@ mod test {
         let batch = next_batch_with_data(&mut decoder, data).unwrap();
         assert_eq!(batch, TEST_BATCH.slice(0, 100).project(&[0, 2]).unwrap());
 
-        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
-        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(1));
         assert_eq!(metrics.records_read_from_cache(), Some(100));
     }
 
     #[test]
-    fn test_decoder_auto_fallback_with_row_selection_does_not_evaluate_current_row_group_twice() {
-        let data = &FALLBACK_TEST_FILE_DATA;
+    fn test_decoder_auto_cost_model_with_row_selection_does_not_evaluate_current_row_group_twice() {
+        let data = &COST_MODEL_TEST_FILE_DATA;
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(parquet_metadata_for_data(data)).unwrap();
         let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
@@ -1373,7 +1381,7 @@ mod test {
         assert_eq!(
             predicate_rows.load(Ordering::Relaxed),
             50,
-            "fallback observation must not re-run the predicate for the same row group"
+            "cost-model observation must not re-run the predicate for the same row group"
         );
         assert_eq!(batch, expected_c_every_other(0, 100));
 
@@ -1381,9 +1389,9 @@ mod test {
         assert_eq!(predicate_rows.load(Ordering::Relaxed), 150);
         assert_eq!(batch, TEST_BATCH.slice(100, 100).project(&[2]).unwrap());
 
-        assert_eq!(metrics.fallback_observed_row_group_count(), Some(1));
-        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(1));
-        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(1));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(1));
     }
 
     #[test]
@@ -1491,11 +1499,11 @@ mod test {
         );
     }
 
-    /// Auto post-filter fallback is disabled for `LIMIT` because the limit is
+    /// Auto post-filter cost modeling is disabled for `LIMIT` because the limit is
     /// applied during row-group planning. Limit scans should therefore avoid
-    /// fallback observation bookkeeping entirely.
+    /// cost-model observation bookkeeping entirely.
     #[test]
-    fn test_decoder_filter_with_limit_skips_auto_fallback_observation() {
+    fn test_decoder_filter_with_limit_skips_auto_cost_model_observation() {
         let builder =
             ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
         let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
@@ -1530,9 +1538,9 @@ mod test {
         assert_eq!(batch, expected);
         expect_finished(decoder.try_decode());
 
-        assert_eq!(metrics.fallback_observed_row_group_count(), Some(0));
-        assert_eq!(metrics.fallback_pushdown_row_group_count(), Some(0));
-        assert_eq!(metrics.fallback_post_filter_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_observed_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_pushdown_row_group_count(), Some(0));
+        assert_eq!(metrics.cost_model_post_filter_row_group_count(), Some(0));
     }
 
     /// Once the limit has been satisfied by a prior row group, subsequent
@@ -1849,6 +1857,60 @@ mod test {
         expect_finished(decoder.try_decode());
     }
 
+    #[test]
+    #[ignore = "local profiling aid for row-filter phase breakdowns"]
+    fn profile_utf8_view_row_filter_phases() {
+        const TOTAL_ROWS: usize = 500_000;
+        const ROW_GROUP_SIZE: usize = 100_000;
+
+        let parquet_file = Bytes::from(write_utf8_profile_parquet_file(TOTAL_ROWS, ROW_GROUP_SIZE));
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        for (name, policy) in [
+            ("auto", RowSelectionPolicy::default()),
+            ("mask", RowSelectionPolicy::Mask),
+            ("selectors", RowSelectionPolicy::Selectors),
+        ] {
+            let reader = ProfileInMemoryReader::try_new(&parquet_file).unwrap();
+            let schema_descr = reader.metadata().file_metadata().schema_descr();
+            let projection = ProjectionMask::roots(schema_descr, [0, 1, 2, 3]);
+            let predicate_projection = ProjectionMask::roots(schema_descr, [2]);
+            let row_filter = RowFilter::new(vec![Box::new(ArrowPredicateFn::new(
+                predicate_projection,
+                |batch| {
+                    let array = batch.column(batch.schema().index_of("utf8View")?);
+                    neq(array, &StringViewArray::new_scalar(""))
+                },
+            ))]);
+            let metrics = ArrowReaderMetrics::enabled_with_phase_profile();
+
+            runtime.block_on(async {
+                let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
+                    .await
+                    .unwrap()
+                    .with_batch_size(8192)
+                    .with_projection(projection)
+                    .with_row_filter(row_filter)
+                    .with_row_selection_policy(policy)
+                    .with_metrics(metrics.clone())
+                    .build()
+                    .unwrap();
+
+                let mut rows = 0;
+                while let Some(batch) = stream.next().await {
+                    rows += batch.unwrap().num_rows();
+                }
+                assert!(rows > 0 && rows < TOTAL_ROWS);
+            });
+
+            println!("phase profile: {name}");
+            println!("{}", metrics.phase_profile_report().unwrap());
+        }
+    }
+
     /// Returns a batch with 400 rows, with 3 columns: "a", "b", "c"
     ///
     /// Note c is a different types (so the data page sizes will be different)
@@ -1893,7 +1955,7 @@ mod test {
     /// c      | "string_300".."string_399"     | 2         | 1
     static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| write_test_file(200, 100));
 
-    static FALLBACK_TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| write_test_file(100, 50));
+    static COST_MODEL_TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| write_test_file(100, 50));
 
     fn write_test_file(max_row_group_row_count: usize, data_page_row_count_limit: usize) -> Bytes {
         let input_batch = &TEST_BATCH;
@@ -1917,6 +1979,115 @@ mod test {
         }
         writer.close().unwrap();
         Bytes::from(output)
+    }
+
+    fn write_utf8_profile_parquet_file(total_rows: usize, row_group_size: usize) -> Vec<u8> {
+        let batch = create_utf8_profile_batch(total_rows);
+        let props = WriterProperties::builder()
+            .set_compression(crate::basic::Compression::SNAPPY)
+            .set_max_row_group_row_count(Some(row_group_size))
+            .build();
+        let mut buffer = vec![];
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        buffer
+    }
+
+    fn create_utf8_profile_batch(size: usize) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("int64", DataType::Int64, false),
+            Field::new("float64", DataType::Float64, false),
+            Field::new("utf8View", DataType::Utf8View, true),
+            Field::new("ts", DataType::Int64, false),
+        ]));
+
+        let int64 = Arc::new(Int64Array::from_iter_values(0..size as i64)) as ArrayRef;
+        let float64 = Arc::new(arrow_array::Float64Array::from_iter_values(
+            (0..size).map(|i| (i % 100) as f64),
+        )) as ArrayRef;
+        let utf8 = create_profile_utf8_view_array(size);
+        let ts = Arc::new(Int64Array::from_iter_values(
+            (0..size).map(|i| (i % 10_000) as i64),
+        )) as ArrayRef;
+
+        RecordBatch::try_new(schema, vec![int64, float64, utf8, ts]).unwrap()
+    }
+
+    fn create_profile_utf8_view_array(size: usize) -> ArrayRef {
+        const AVG_RUN_LENGTH: usize = 4;
+        const EMPTY_DENSITY: u32 = 85;
+
+        let mut builder = StringViewBuilder::with_capacity(size);
+        let mut rng = StdRng::seed_from_u64(44);
+        while builder.len() < size {
+            let mut run_length = rng.random_range(1..AVG_RUN_LENGTH);
+            if builder.len() + run_length > size {
+                run_length = size - builder.len();
+            }
+
+            if rng.random_range(0..100) < EMPTY_DENSITY {
+                for _ in 0..run_length {
+                    builder.append_value("");
+                }
+            } else {
+                for _ in 0..run_length {
+                    builder.append_value(random_profile_string(&mut rng));
+                }
+            }
+        }
+        Arc::new(builder.finish()) as ArrayRef
+    }
+
+    fn random_profile_string(rng: &mut StdRng) -> String {
+        let charset = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let len = if rng.random_bool(0.5) {
+            rng.random_range(13..21)
+        } else {
+            rng.random_range(3..12)
+        };
+        (0..len)
+            .map(|_| charset[rng.random_range(0..charset.len())] as char)
+            .collect()
+    }
+
+    #[derive(Debug, Clone)]
+    struct ProfileInMemoryReader {
+        inner: Bytes,
+        metadata: Arc<ParquetMetaData>,
+    }
+
+    impl ProfileInMemoryReader {
+        fn try_new(inner: &Bytes) -> crate::errors::Result<Self> {
+            let mut metadata_reader =
+                ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
+            metadata_reader.try_parse(inner)?;
+            let metadata = metadata_reader.finish().map(Arc::new)?;
+
+            Ok(Self {
+                inner: inner.clone(),
+                metadata,
+            })
+        }
+
+        fn metadata(&self) -> &Arc<ParquetMetaData> {
+            &self.metadata
+        }
+    }
+
+    impl AsyncFileReader for ProfileInMemoryReader {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, crate::errors::Result<Bytes>> {
+            let data = self.inner.slice(range.start as usize..range.end as usize);
+            async move { Ok(data) }.boxed()
+        }
+
+        fn get_metadata<'a>(
+            &'a mut self,
+            _options: Option<&'a ArrowReaderOptions>,
+        ) -> BoxFuture<'a, crate::errors::Result<Arc<ParquetMetaData>>> {
+            let metadata = Arc::clone(&self.metadata);
+            async move { Ok(metadata) }.boxed()
+        }
     }
 
     /// Return the length of [`TEST_FILE_DATA`], in bytes

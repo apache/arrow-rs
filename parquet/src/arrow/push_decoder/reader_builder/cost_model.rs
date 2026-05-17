@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Runtime post-filter fallback decisions for push decoder row groups.
+//! Runtime post-filter cost decisions for push decoder row groups.
 //!
-//! The fallback is intentionally adaptive rather than purely static. The first
+//! The cost model is intentionally adaptive rather than purely static. The first
 //! eligible row group is evaluated with predicate pushdown so the reader can
 //! observe the actual `RowSelection` shape produced by the predicate chain.
 //! Later row groups may then switch to post-filter execution if the observed
@@ -31,10 +31,10 @@
 //!   |
 //!   +-- pushdown still preferred ------> UsePushdown
 //!   |
-//!   +-- fallback trigger + supported --> UsePostFilter
+//!   +-- post-filter preferred + supported --> UsePostFilter
 //! ```
 //!
-//! Fallback only applies to `Auto`. Explicit `Mask` and `Selectors` are treated
+//! The cost model only applies to `Auto`. Explicit `Mask` and `Selectors` are treated
 //! as user intent and are not overridden here.
 
 use super::{RowBudget, RowGroupReaderBuilder};
@@ -42,31 +42,32 @@ use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::RowFilter;
 use crate::arrow::arrow_reader::RowSelectionPolicy;
 use crate::arrow::arrow_reader::selection::{
-    FallbackObservation, FallbackTriggerReason, RowSelectionShape, RowSelectionStrategyDecision,
+    CostModelDecisionReason, CostModelObservation, RowSelectionShape, RowSelectionStrategyDecision,
 };
 use crate::arrow::schema::{ParquetField, ParquetFieldType};
+use crate::basic::Type as PhysicalType;
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub(super) enum RowGroupFallbackState {
+pub(super) enum RowGroupCostModelState {
     /// Collect row-selection shape from early row groups before choosing a mode.
-    Observing { observation: FallbackObservation },
+    Observing { observation: CostModelObservation },
     /// Predicate pushdown remains the execution mode for this reader.
     UsePushdown,
     /// Later row groups should decode once and evaluate predicates after decode.
-    UsePostFilter { reason: FallbackTriggerReason },
+    UsePostFilter { reason: CostModelDecisionReason },
 }
 
-impl Default for RowGroupFallbackState {
+impl Default for RowGroupCostModelState {
     fn default() -> Self {
         Self::Observing {
-            observation: FallbackObservation::default(),
+            observation: CostModelObservation::default(),
         }
     }
 }
 
 impl RowGroupReaderBuilder {
-    pub(super) fn should_use_post_filter_fallback(&self, budget: RowBudget) -> bool {
+    pub(super) fn should_use_post_filter_by_cost(&self, budget: RowBudget) -> bool {
         // Keep the runtime switch narrow:
         //
         // * `Auto` means the caller allowed the reader to choose.
@@ -75,9 +76,9 @@ impl RowGroupReaderBuilder {
         // * virtual columns are not read from Parquet pages and need their
         //   existing projection path.
         matches!(
-            self.fallback_state,
-            RowGroupFallbackState::UsePostFilter { .. }
-        ) && self.post_filter_fallback_enabled
+            self.cost_model_state,
+            RowGroupCostModelState::UsePostFilter { .. }
+        ) && self.post_filter_cost_model_enabled
             && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
             && budget.is_unbounded()
             && !self.has_virtual_columns()
@@ -88,11 +89,40 @@ impl RowGroupReaderBuilder {
         filter: &RowFilter,
         budget: RowBudget,
     ) -> Option<ProjectionMask> {
-        if !self.should_use_post_filter_fallback(budget) {
+        if !self.should_use_post_filter_by_cost(budget) {
             return None;
         }
 
         self.build_post_filter_read_projection(filter)
+    }
+
+    pub(super) fn post_filter_read_projection_for_filter(
+        &self,
+        filter: &RowFilter,
+        budget: RowBudget,
+    ) -> Option<ProjectionMask> {
+        if !self.post_filter_supports_filter(filter, budget) {
+            return None;
+        }
+
+        self.build_post_filter_read_projection(filter)
+    }
+
+    pub(super) fn should_start_with_post_filter_for_predicate_cost(
+        &self,
+        filter: &RowFilter,
+        row_group_idx: usize,
+        budget: RowBudget,
+    ) -> bool {
+        if !self.post_filter_supports_filter(filter, budget) {
+            return false;
+        }
+
+        let Some(predicate_projection) = filter.union_projection() else {
+            return false;
+        };
+
+        self.projection_has_variable_width_leaf(row_group_idx, &predicate_projection)
     }
 
     fn build_post_filter_read_projection(&self, filter: &RowFilter) -> Option<ProjectionMask> {
@@ -116,15 +146,27 @@ impl RowGroupReaderBuilder {
     fn post_filter_supports_projection(&self, projection: &ProjectionMask) -> bool {
         // The post-filter reader currently projects record batches by parquet
         // leaf column position. Nested roots can span multiple leaves and need
-        // the existing array-reader projection machinery, so keep fallback to
-        // primitive roots only.
+        // the existing array-reader projection machinery, so allow the
+        // post-filter cost path for primitive roots only.
         let schema = self.metadata.file_metadata().schema_descr();
         (0..schema.num_columns()).all(|leaf_idx| {
             !projection.leaf_included(leaf_idx) || schema.get_column_root(leaf_idx).is_primitive()
         })
     }
 
-    pub(super) fn observe_fallback_candidate(
+    fn projection_has_variable_width_leaf(
+        &self,
+        row_group_idx: usize,
+        projection: &ProjectionMask,
+    ) -> bool {
+        let row_group = self.metadata.row_group(row_group_idx);
+        (0..row_group.num_columns()).any(|leaf_idx| {
+            projection.leaf_included(leaf_idx)
+                && row_group.column(leaf_idx).column_type() == PhysicalType::BYTE_ARRAY
+        })
+    }
+
+    pub(super) fn observe_cost_model_candidate(
         &mut self,
         decision: RowSelectionStrategyDecision,
         row_count: usize,
@@ -134,14 +176,14 @@ impl RowGroupReaderBuilder {
             return;
         }
 
-        let RowGroupFallbackState::Observing { observation } = &mut self.fallback_state else {
+        let RowGroupCostModelState::Observing { observation } = &mut self.cost_model_state else {
             return;
         };
 
         let mut shape = decision.shape;
         if shape.total_rows() == 0 {
             // `None` selection means the predicate kept the whole row group.
-            // Represent it as one selected run so the fallback classifier can
+            // Represent it as one selected run so the cost model can
             // treat "no pruning" as an observed high-selectivity case.
             shape = RowSelectionShape {
                 selected_rows: row_count,
@@ -154,29 +196,33 @@ impl RowGroupReaderBuilder {
 
         observation.observed_row_groups += 1;
         observation.shape.add_assign(shape);
-        self.metrics.record_fallback_observed_row_group();
+        self.metrics.record_cost_model_observed_row_group();
 
         let reason = observation.trigger_reason();
-        if matches!(reason, FallbackTriggerReason::ObservationIncomplete) {
-            self.metrics.record_fallback_trigger(reason);
+        if matches!(reason, CostModelDecisionReason::ObservationIncomplete) {
+            self.metrics.record_cost_model_trigger(reason);
             return;
         }
 
-        let should_fallback = observation.should_fallback();
-        self.metrics.record_fallback_trigger(reason);
+        let prefers_post_filter = observation.prefers_post_filter();
+        self.metrics.record_cost_model_trigger(reason);
 
-        if should_fallback && self.post_filter_fallback_supported(budget) {
-            self.fallback_state = RowGroupFallbackState::UsePostFilter { reason };
+        if prefers_post_filter && self.post_filter_cost_model_supported(budget) {
+            self.cost_model_state = RowGroupCostModelState::UsePostFilter { reason };
         } else {
-            self.fallback_state = RowGroupFallbackState::UsePushdown;
+            self.cost_model_state = RowGroupCostModelState::UsePushdown;
         }
     }
 
-    pub(super) fn post_filter_fallback_supported(&self, budget: RowBudget) -> bool {
+    pub(super) fn post_filter_cost_model_supported(&self, budget: RowBudget) -> bool {
         let Some(filter) = self.filter.as_ref() else {
             return false;
         };
-        self.post_filter_fallback_enabled
+        self.post_filter_supports_filter(filter, budget)
+    }
+
+    fn post_filter_supports_filter(&self, filter: &RowFilter, budget: RowBudget) -> bool {
+        self.post_filter_cost_model_enabled
             && matches!(self.row_selection_policy, RowSelectionPolicy::Auto { .. })
             && budget.is_unbounded()
             && !self.has_virtual_columns()

@@ -244,7 +244,7 @@ impl std::fmt::Display for SyncStrategy {
 #[derive(Clone, Copy)]
 enum AsyncStrategy {
     FullPostFilter,
-    PushdownAutoFallback,
+    PushdownAutoCostModel,
     PushdownSelectors,
     PushdownMask,
 }
@@ -253,7 +253,7 @@ impl std::fmt::Display for AsyncStrategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AsyncStrategy::FullPostFilter => write!(f, "full_post_filter"),
-            AsyncStrategy::PushdownAutoFallback => write!(f, "pushdown_auto_fallback"),
+            AsyncStrategy::PushdownAutoCostModel => write!(f, "pushdown_auto_cost_model"),
             AsyncStrategy::PushdownSelectors => write!(f, "pushdown_selectors"),
             AsyncStrategy::PushdownMask => write!(f, "pushdown_mask"),
         }
@@ -644,7 +644,7 @@ fn benchmark_sync_strategy_matrix(c: &mut Criterion) {
 }
 
 /// Compare async full scan plus post-filtering against async row-level pushdown
-/// strategies. This is the matrix that exercises reader `Auto` fallback because
+/// strategies. This is the matrix that exercises reader `Auto` cost modeling because
 /// the async stream is backed by the push decoder row-group pipeline.
 fn benchmark_async_strategy_matrix(c: &mut Criterion) {
     let parquet_file = Bytes::from(write_parquet_file());
@@ -656,7 +656,7 @@ fn benchmark_async_strategy_matrix(c: &mut Criterion) {
     ];
     let strategies = [
         AsyncStrategy::FullPostFilter,
-        AsyncStrategy::PushdownAutoFallback,
+        AsyncStrategy::PushdownAutoCostModel,
         AsyncStrategy::PushdownSelectors,
         AsyncStrategy::PushdownMask,
     ];
@@ -712,7 +712,7 @@ fn benchmark_async_strategy_matrix(c: &mut Criterion) {
                                     )
                                     .await
                                 }
-                                AsyncStrategy::PushdownAutoFallback => {
+                                AsyncStrategy::PushdownAutoCostModel => {
                                     let row_filter = row_filter_for(filter_type, pred_mask);
                                     benchmark_async_reader_with_policy(
                                         reader,

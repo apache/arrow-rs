@@ -174,7 +174,7 @@ impl RowSelectionShape {
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FallbackTriggerReason {
+pub(crate) enum CostModelDecisionReason {
     /// Predicate pushdown kept almost everything and did not produce useful pruning.
     HighSelectivityNoPruning,
     /// Fragmented runs with moderate selectivity often pay many small skip/read costs.
@@ -190,7 +190,7 @@ pub(crate) enum FallbackTriggerReason {
 }
 
 /// Aggregate row-selection shape observed while deciding whether Auto should
-/// continue predicate pushdown or fall back to post-filter execution.
+/// continue predicate pushdown or switch to post-filter execution.
 ///
 /// The classifier looks for shapes where row-level pushdown is unlikely to
 /// recover its own overhead:
@@ -201,49 +201,49 @@ pub(crate) enum FallbackTriggerReason {
 /// high selected ratio           -> most output rows are decoded anyway
 /// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct FallbackObservation {
+pub(crate) struct CostModelObservation {
     pub(crate) observed_row_groups: usize,
     pub(crate) shape: RowSelectionShape,
 }
 
-impl FallbackObservation {
+impl CostModelObservation {
     pub(crate) const OBSERVATION_ROW_GROUPS: usize = 1;
     const FRAGMENTED_MODERATE_SELECTIVITY_MIN_RATIO: f64 = 0.08;
 
-    pub(crate) fn trigger_reason(self) -> FallbackTriggerReason {
+    pub(crate) fn trigger_reason(self) -> CostModelDecisionReason {
         if self.observed_row_groups < Self::OBSERVATION_ROW_GROUPS {
-            return FallbackTriggerReason::ObservationIncomplete;
+            return CostModelDecisionReason::ObservationIncomplete;
         }
 
         let shape = self.shape;
         if shape.total_rows() > 0 && shape.skipped_rows == 0 && shape.selected_ratio() >= 0.95 {
-            return FallbackTriggerReason::HighSelectivityNoPruning;
+            return CostModelDecisionReason::HighSelectivityNoPruning;
         }
 
         let fragmented = shape.average_selected_run_length() <= 4.0 && shape.run_density() >= 0.01;
 
         if !fragmented {
-            return FallbackTriggerReason::PushdownStillPreferred;
+            return CostModelDecisionReason::PushdownStillPreferred;
         }
 
         let selected_ratio = shape.selected_ratio();
         if (Self::FRAGMENTED_MODERATE_SELECTIVITY_MIN_RATIO..0.50).contains(&selected_ratio) {
-            return FallbackTriggerReason::FragmentedModerateSelectivity;
+            return CostModelDecisionReason::FragmentedModerateSelectivity;
         }
         if selected_ratio < 0.50 {
-            return FallbackTriggerReason::PushdownStillPreferred;
+            return CostModelDecisionReason::PushdownStillPreferred;
         }
 
-        FallbackTriggerReason::FragmentedHighSelectivity
+        CostModelDecisionReason::FragmentedHighSelectivity
     }
 
     #[allow(dead_code)]
-    pub(crate) fn should_fallback(self) -> bool {
+    pub(crate) fn prefers_post_filter(self) -> bool {
         matches!(
             self.trigger_reason(),
-            FallbackTriggerReason::HighSelectivityNoPruning
-                | FallbackTriggerReason::FragmentedModerateSelectivity
-                | FallbackTriggerReason::FragmentedHighSelectivity
+            CostModelDecisionReason::HighSelectivityNoPruning
+                | CostModelDecisionReason::FragmentedModerateSelectivity
+                | CostModelDecisionReason::FragmentedHighSelectivity
         )
     }
 }

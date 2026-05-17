@@ -18,11 +18,86 @@
 //! [ArrowReaderMetrics] for collecting metrics about the Arrow reader
 
 use crate::arrow::arrow_reader::selection::{
-    FallbackTriggerReason, RowGroupExecutionMode, RowSelectionStrategyDecision,
+    CostModelDecisionReason, RowGroupExecutionMode, RowSelectionStrategyDecision,
     RowSelectionStrategyReason,
 };
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ArrowReaderPhase {
+    PredicateRangePlanning,
+    PredicateDecode,
+    PredicateEvaluate,
+    PredicateSelectionBuild,
+    PredicateSelectionMerge,
+    OutputRangePlanning,
+    OutputSelectionResolve,
+    OutputMaskFilter,
+    PostFilterPredicateProject,
+    PostFilterPredicateEvaluate,
+    PostFilterApplyFilter,
+    PostFilterOutputProject,
+    PostSelectionApplyFilter,
+}
+
+impl ArrowReaderPhase {
+    const COUNT: usize = 13;
+    #[cfg(test)]
+    const ALL: [Self; Self::COUNT] = [
+        Self::PredicateRangePlanning,
+        Self::PredicateDecode,
+        Self::PredicateEvaluate,
+        Self::PredicateSelectionBuild,
+        Self::PredicateSelectionMerge,
+        Self::OutputRangePlanning,
+        Self::OutputSelectionResolve,
+        Self::OutputMaskFilter,
+        Self::PostFilterPredicateProject,
+        Self::PostFilterPredicateEvaluate,
+        Self::PostFilterApplyFilter,
+        Self::PostFilterOutputProject,
+        Self::PostSelectionApplyFilter,
+    ];
+
+    fn index(self) -> usize {
+        match self {
+            Self::PredicateRangePlanning => 0,
+            Self::PredicateDecode => 1,
+            Self::PredicateEvaluate => 2,
+            Self::PredicateSelectionBuild => 3,
+            Self::PredicateSelectionMerge => 4,
+            Self::OutputRangePlanning => 5,
+            Self::OutputSelectionResolve => 6,
+            Self::OutputMaskFilter => 7,
+            Self::PostFilterPredicateProject => 8,
+            Self::PostFilterPredicateEvaluate => 9,
+            Self::PostFilterApplyFilter => 10,
+            Self::PostFilterOutputProject => 11,
+            Self::PostSelectionApplyFilter => 12,
+        }
+    }
+
+    #[cfg(test)]
+    fn name(self) -> &'static str {
+        match self {
+            Self::PredicateRangePlanning => "predicate_range_planning",
+            Self::PredicateDecode => "predicate_decode",
+            Self::PredicateEvaluate => "predicate_evaluate",
+            Self::PredicateSelectionBuild => "predicate_selection_build",
+            Self::PredicateSelectionMerge => "predicate_selection_merge",
+            Self::OutputRangePlanning => "output_range_planning",
+            Self::OutputSelectionResolve => "output_selection_resolve",
+            Self::OutputMaskFilter => "output_mask_filter",
+            Self::PostFilterPredicateProject => "post_filter_predicate_project",
+            Self::PostFilterPredicateEvaluate => "post_filter_predicate_evaluate",
+            Self::PostFilterApplyFilter => "post_filter_apply_filter",
+            Self::PostFilterOutputProject => "post_filter_output_project",
+            Self::PostSelectionApplyFilter => "post_selection_apply_filter",
+        }
+    }
+}
 
 /// This enum represents the state of Arrow reader metrics collection.
 ///
@@ -49,7 +124,12 @@ impl ArrowReaderMetrics {
 
     /// Creates a new instance of [`ArrowReaderMetrics::Enabled`]
     pub fn enabled() -> Self {
-        Self::Enabled(Arc::new(ArrowReaderMetricsInner::new()))
+        Self::Enabled(Arc::new(ArrowReaderMetricsInner::new(false)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn enabled_with_phase_profile() -> Self {
+        Self::Enabled(Arc::new(ArrowReaderMetricsInner::new(true)))
     }
 
     /// Predicate Cache: number of records read directly from the inner reader
@@ -165,49 +245,49 @@ impl ArrowReaderMetrics {
         self.load(|inner| &inner.row_selection_auto_selector_long_run_plan_count)
     }
 
-    /// Fallback: number of row groups included in the observation window
-    pub fn fallback_observed_row_group_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_observed_row_group_count)
+    /// Cost model: number of row groups included in the observation window
+    pub fn cost_model_observed_row_group_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.cost_model_observed_row_group_count)
     }
 
-    /// Fallback: number of row groups executed with pushdown
-    pub fn fallback_pushdown_row_group_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_pushdown_row_group_count)
+    /// Cost model: number of row groups executed with pushdown
+    pub fn cost_model_pushdown_row_group_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.cost_model_pushdown_row_group_count)
     }
 
-    /// Fallback: number of row groups executed with post-filter
-    pub fn fallback_post_filter_row_group_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_post_filter_row_group_count)
+    /// Cost model: number of row groups executed with post-filter
+    pub fn cost_model_post_filter_row_group_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.cost_model_post_filter_row_group_count)
     }
 
-    /// Fallback: number of times fallback was disabled by a forced policy
-    pub fn fallback_forced_policy_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_forced_policy_count)
+    /// Cost model: number of times cost modeling was disabled by a forced policy
+    pub fn cost_model_forced_policy_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.cost_model_forced_policy_count)
     }
 
-    /// Fallback: number of incomplete observation-window decisions
-    pub fn fallback_observation_incomplete_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_observation_incomplete_count)
+    /// Cost model: number of incomplete observation-window decisions
+    pub fn cost_model_observation_incomplete_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.cost_model_observation_incomplete_count)
     }
 
-    /// Fallback: number of times pushdown remained preferred
-    pub fn fallback_pushdown_still_preferred_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_pushdown_still_preferred_count)
+    /// Cost model: number of times pushdown remained preferred
+    pub fn cost_model_pushdown_still_preferred_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.cost_model_pushdown_still_preferred_count)
     }
 
-    /// Fallback: number of high-selectivity no-pruning triggers
-    pub fn fallback_high_selectivity_no_pruning_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_high_selectivity_no_pruning_count)
+    /// Cost model: number of high-selectivity no-pruning triggers
+    pub fn cost_model_high_selectivity_no_pruning_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.cost_model_high_selectivity_no_pruning_count)
     }
 
-    /// Fallback: number of fragmented moderate-selectivity triggers
-    pub fn fallback_fragmented_moderate_selectivity_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_fragmented_moderate_selectivity_count)
+    /// Cost model: number of fragmented moderate-selectivity triggers
+    pub fn cost_model_fragmented_moderate_selectivity_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.cost_model_fragmented_moderate_selectivity_count)
     }
 
-    /// Fallback: number of fragmented high-selectivity triggers
-    pub fn fallback_fragmented_high_selectivity_count(&self) -> Option<usize> {
-        self.load(|inner| &inner.fallback_fragmented_high_selectivity_count)
+    /// Cost model: number of fragmented high-selectivity triggers
+    pub fn cost_model_fragmented_high_selectivity_count(&self) -> Option<usize> {
+        self.load(|inner| &inner.cost_model_fragmented_high_selectivity_count)
     }
 
     /// Increments the count of records read from the inner reader
@@ -287,51 +367,93 @@ impl ArrowReaderMetrics {
         decision_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_fallback_observed_row_group(&self) {
+    pub(crate) fn record_cost_model_observed_row_group(&self) {
         let Self::Enabled(inner) = self else {
             return;
         };
         inner
-            .fallback_observed_row_group_count
+            .cost_model_observed_row_group_count
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_fallback_row_group(&self, mode: RowGroupExecutionMode) {
+    pub(crate) fn record_cost_model_row_group(&self, mode: RowGroupExecutionMode) {
         let Self::Enabled(inner) = self else {
             return;
         };
 
         let counter = match mode {
-            RowGroupExecutionMode::Pushdown(_) => &inner.fallback_pushdown_row_group_count,
-            RowGroupExecutionMode::PostFilter => &inner.fallback_post_filter_row_group_count,
+            RowGroupExecutionMode::Pushdown(_) => &inner.cost_model_pushdown_row_group_count,
+            RowGroupExecutionMode::PostFilter => &inner.cost_model_post_filter_row_group_count,
         };
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_fallback_trigger(&self, reason: FallbackTriggerReason) {
+    pub(crate) fn record_cost_model_trigger(&self, reason: CostModelDecisionReason) {
         let Self::Enabled(inner) = self else {
             return;
         };
 
         let counter = match reason {
-            FallbackTriggerReason::HighSelectivityNoPruning => {
-                &inner.fallback_high_selectivity_no_pruning_count
+            CostModelDecisionReason::HighSelectivityNoPruning => {
+                &inner.cost_model_high_selectivity_no_pruning_count
             }
-            FallbackTriggerReason::FragmentedModerateSelectivity => {
-                &inner.fallback_fragmented_moderate_selectivity_count
+            CostModelDecisionReason::FragmentedModerateSelectivity => {
+                &inner.cost_model_fragmented_moderate_selectivity_count
             }
-            FallbackTriggerReason::FragmentedHighSelectivity => {
-                &inner.fallback_fragmented_high_selectivity_count
+            CostModelDecisionReason::FragmentedHighSelectivity => {
+                &inner.cost_model_fragmented_high_selectivity_count
             }
-            FallbackTriggerReason::ObservationIncomplete => {
-                &inner.fallback_observation_incomplete_count
+            CostModelDecisionReason::ObservationIncomplete => {
+                &inner.cost_model_observation_incomplete_count
             }
-            FallbackTriggerReason::PushdownStillPreferred => {
-                &inner.fallback_pushdown_still_preferred_count
+            CostModelDecisionReason::PushdownStillPreferred => {
+                &inner.cost_model_pushdown_still_preferred_count
             }
-            FallbackTriggerReason::ForcedPolicy => &inner.fallback_forced_policy_count,
+            CostModelDecisionReason::ForcedPolicy => &inner.cost_model_forced_policy_count,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn time_phase<T>(&self, phase: ArrowReaderPhase, f: impl FnOnce() -> T) -> T {
+        let Self::Enabled(inner) = self else {
+            return f();
+        };
+        if !inner.phase_profile_enabled {
+            return f();
+        }
+
+        let start = Instant::now();
+        let result = f();
+        inner.record_phase(phase, start.elapsed());
+        result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn phase_profile_report(&self) -> Option<String> {
+        let Self::Enabled(inner) = self else {
+            return None;
+        };
+        if !inner.phase_profile_enabled {
+            return None;
+        }
+
+        let mut lines = vec!["phase,total_ms,count,avg_us".to_string()];
+        for phase in ArrowReaderPhase::ALL {
+            let idx = phase.index();
+            let total_ns = inner.phase_ns[idx].load(Ordering::Relaxed);
+            let count = inner.phase_counts[idx].load(Ordering::Relaxed);
+            if count == 0 {
+                continue;
+            }
+
+            let total_ms = total_ns as f64 / 1_000_000.0;
+            let avg_us = total_ns as f64 / count as f64 / 1_000.0;
+            lines.push(format!(
+                "{},{total_ms:.3},{count},{avg_us:.3}",
+                phase.name()
+            ));
+        }
+        Some(lines.join("\n"))
     }
 
     fn load(&self, metric: fn(&ArrowReaderMetricsInner) -> &AtomicUsize) -> Option<usize> {
@@ -382,29 +504,32 @@ pub struct ArrowReaderMetricsInner {
     row_selection_auto_selector_clustered_plan_count: AtomicUsize,
     /// Number of Auto plans choosing selectors for long runs
     row_selection_auto_selector_long_run_plan_count: AtomicUsize,
-    /// Number of row groups included in fallback observation
-    fallback_observed_row_group_count: AtomicUsize,
-    /// Number of fallback-capable row groups executed with pushdown
-    fallback_pushdown_row_group_count: AtomicUsize,
+    /// Number of row groups included in cost-model observation
+    cost_model_observed_row_group_count: AtomicUsize,
+    /// Number of cost-model eligible row groups executed with pushdown
+    cost_model_pushdown_row_group_count: AtomicUsize,
     /// Number of row groups executed with post-filter
-    fallback_post_filter_row_group_count: AtomicUsize,
-    /// Number of fallback decisions disabled by forced policy
-    fallback_forced_policy_count: AtomicUsize,
-    /// Number of incomplete fallback observations
-    fallback_observation_incomplete_count: AtomicUsize,
-    /// Number of fallback decisions that kept pushdown
-    fallback_pushdown_still_preferred_count: AtomicUsize,
-    /// Number of high-selectivity no-pruning fallback triggers
-    fallback_high_selectivity_no_pruning_count: AtomicUsize,
-    /// Number of fragmented moderate-selectivity fallback triggers
-    fallback_fragmented_moderate_selectivity_count: AtomicUsize,
-    /// Number of fragmented high-selectivity fallback triggers
-    fallback_fragmented_high_selectivity_count: AtomicUsize,
+    cost_model_post_filter_row_group_count: AtomicUsize,
+    /// Number of cost-model decisions disabled by forced policy
+    cost_model_forced_policy_count: AtomicUsize,
+    /// Number of incomplete cost-model observations
+    cost_model_observation_incomplete_count: AtomicUsize,
+    /// Number of cost-model decisions that kept pushdown
+    cost_model_pushdown_still_preferred_count: AtomicUsize,
+    /// Number of high-selectivity no-pruning cost-model triggers
+    cost_model_high_selectivity_no_pruning_count: AtomicUsize,
+    /// Number of fragmented moderate-selectivity cost-model triggers
+    cost_model_fragmented_moderate_selectivity_count: AtomicUsize,
+    /// Number of fragmented high-selectivity cost-model triggers
+    cost_model_fragmented_high_selectivity_count: AtomicUsize,
+    phase_profile_enabled: bool,
+    phase_ns: [AtomicU64; ArrowReaderPhase::COUNT],
+    phase_counts: [AtomicUsize; ArrowReaderPhase::COUNT],
 }
 
 impl ArrowReaderMetricsInner {
     /// Creates a new instance of `ArrowReaderMetricsInner`
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(phase_profile_enabled: bool) -> Self {
         Self {
             records_read_from_inner: AtomicUsize::new(0),
             records_read_from_cache: AtomicUsize::new(0),
@@ -423,15 +548,24 @@ impl ArrowReaderMetricsInner {
             row_selection_auto_mask_high_ratio_plan_count: AtomicUsize::new(0),
             row_selection_auto_selector_clustered_plan_count: AtomicUsize::new(0),
             row_selection_auto_selector_long_run_plan_count: AtomicUsize::new(0),
-            fallback_observed_row_group_count: AtomicUsize::new(0),
-            fallback_pushdown_row_group_count: AtomicUsize::new(0),
-            fallback_post_filter_row_group_count: AtomicUsize::new(0),
-            fallback_forced_policy_count: AtomicUsize::new(0),
-            fallback_observation_incomplete_count: AtomicUsize::new(0),
-            fallback_pushdown_still_preferred_count: AtomicUsize::new(0),
-            fallback_high_selectivity_no_pruning_count: AtomicUsize::new(0),
-            fallback_fragmented_moderate_selectivity_count: AtomicUsize::new(0),
-            fallback_fragmented_high_selectivity_count: AtomicUsize::new(0),
+            cost_model_observed_row_group_count: AtomicUsize::new(0),
+            cost_model_pushdown_row_group_count: AtomicUsize::new(0),
+            cost_model_post_filter_row_group_count: AtomicUsize::new(0),
+            cost_model_forced_policy_count: AtomicUsize::new(0),
+            cost_model_observation_incomplete_count: AtomicUsize::new(0),
+            cost_model_pushdown_still_preferred_count: AtomicUsize::new(0),
+            cost_model_high_selectivity_no_pruning_count: AtomicUsize::new(0),
+            cost_model_fragmented_moderate_selectivity_count: AtomicUsize::new(0),
+            cost_model_fragmented_high_selectivity_count: AtomicUsize::new(0),
+            phase_profile_enabled,
+            phase_ns: std::array::from_fn(|_| AtomicU64::new(0)),
+            phase_counts: std::array::from_fn(|_| AtomicUsize::new(0)),
         }
+    }
+
+    fn record_phase(&self, phase: ArrowReaderPhase, duration: Duration) {
+        let idx = phase.index();
+        self.phase_ns[idx].fetch_add(duration.as_nanos() as u64, Ordering::Relaxed);
+        self.phase_counts[idx].fetch_add(1, Ordering::Relaxed);
     }
 }
