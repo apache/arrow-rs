@@ -673,7 +673,10 @@ impl ArrayData {
                 ),
                 DataType::FixedSizeList(f, list_len) => (
                     vec![],
-                    vec![ArrayData::new_default(f.data_type(), *list_len as usize * len)],
+                    vec![ArrayData::new_default(
+                        f.data_type(),
+                        *list_len as usize * len,
+                    )],
                     true,
                 ),
                 DataType::Struct(fields) => (
@@ -925,10 +928,7 @@ impl ArrayData {
                         // SAFETY:
                         // Valid by construction
                         let runs = unsafe { builder.build_unchecked() };
-                        (
-                            vec![],
-                            vec![runs, ArrayData::new_default(v.data_type(), 1)],
-                        )
+                        (vec![], vec![runs, ArrayData::new_default(v.data_type(), 1)])
                     }
                 }
                 // Handled by Some(width) branch above
