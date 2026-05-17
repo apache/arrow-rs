@@ -19,7 +19,6 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
@@ -192,9 +191,7 @@ impl BooleanArray {
                 let value_chunks = self.values().bit_chunks().iter_padded();
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & v) != 0)
             }
-            None => {
-              self.values().has_true()
-            }
+            None => self.values().has_true(),
         }
     }
 
@@ -211,9 +208,7 @@ impl BooleanArray {
                 let value_chunks = self.values().bit_chunks().iter_padded();
                 null_chunks.zip(value_chunks).any(|(n, v)| (n & !v) != 0)
             }
-            None => {
-              self.values().has_false()
-            }
+            None => self.values().has_false(),
         }
     }
 

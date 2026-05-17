@@ -610,7 +610,7 @@ impl BooleanBuffer {
     pub fn iter(&self) -> BitIterator<'_> {
         self.into_iter()
     }
-    
+
     /// Returns an [`UnalignedBitChunk`] over this buffer's values.
     fn unaligned_bit_chunks(&self) -> UnalignedBitChunk<'_> {
         UnalignedBitChunk::new(self.values(), self.offset(), self.len())
@@ -630,7 +630,7 @@ impl BooleanBuffer {
     pub fn set_slices(&self) -> BitSliceIterator<'_> {
         BitSliceIterator::new(self.values(), self.bit_offset, self.bit_len)
     }
-    
+
     /// Block size for chunked fold operations in [`Self::has_true`] and [`Self::has_false`].
     /// Using `chunks_exact` with this size lets the compiler fully unroll the inner
     /// fold (no inner branch/loop), enabling short-circuit exits every N chunks.
@@ -648,9 +648,7 @@ impl BooleanBuffer {
         let mut exact = chunks.chunks_exact(Self::CHUNK_FOLD_BLOCK_SIZE);
         let found = bit_chunks.prefix().unwrap_or(0) != 0
             || exact.any(|block| block.iter().fold(0u64, |acc, &c| acc | c) != 0);
-        found
-            || exact.remainder().iter().any(|&c| c != 0)
-            || bit_chunks.suffix().unwrap_or(0) != 0
+        found || exact.remainder().iter().any(|&c| c != 0) || bit_chunks.suffix().unwrap_or(0) != 0
     }
 
     /// Returns whether there is at least one `false` value in this buffer.
@@ -680,8 +678,7 @@ impl BooleanBuffer {
         let found = bit_chunks
             .prefix()
             .is_some_and(|v| (v | prefix_fill) != u64::MAX)
-            || exact
-                .any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX);
+            || exact.any(|block| block.iter().fold(u64::MAX, |acc, &c| acc & c) != u64::MAX);
         found
             || exact.remainder().iter().any(|&c| c != u64::MAX)
             || bit_chunks
@@ -1308,7 +1305,7 @@ mod tests {
         let buffer = BooleanBuffer::new_unset(100);
         assert_eq!(buffer.clone().find_nth_set_bit_position(0, 1), 100);
     }
-    
+
     #[test]
     fn test_has_true_has_false_all_true() {
         let arr = BooleanBuffer::from(vec![true, true, true]);
