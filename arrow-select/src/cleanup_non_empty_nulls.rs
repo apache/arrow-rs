@@ -520,6 +520,36 @@ mod tests {
         assert_eq!(cleaned.value(3), b"baz");
     }
 
+    #[test]
+    fn map_cleanup_when_null_pointing_to_non_empty_and_have_empty() {
+        let keys = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        let values = Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 0, 2]);
+        let input_nulls = NullBuffer::from(vec![true, false, true, true]);
+        let map = build_map_array(offsets, keys, values, Some(input_nulls.clone()));
+        let array: ArrayRef = Arc::new(map);
+
+        assert!(has_non_empty_nulls(array.as_ref()).unwrap());
+
+        let cleaned = cleanup_non_empty_nulls(array).unwrap();
+        assert!(!has_non_empty_nulls(cleaned.as_ref()).unwrap());
+        let cleaned = cleaned.as_map();
+
+        assert_eq!(
+            cleaned.offsets().lengths().collect::<Vec<_>>(),
+            vec![3, 0, 0, 2]
+        );
+        assert_eq!(cleaned.nulls(), Some(&input_nulls));
+        assert_eq!(
+            cleaned.keys().as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![1, 2, 3, 8, 9]),
+        );
+        assert_eq!(
+            cleaned.values().as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![10, 20, 30, 80, 90]),
+        );
+    }
+
     // ===== All nulls point to non-empty values =====
 
     #[test]
@@ -597,95 +627,8 @@ mod tests {
             vec![3, 0, 2]
         );
         assert_eq!(cleaned.nulls(), Some(&input_nulls));
-    }
-
-    // ===== Underlying child array is sliced =====
-    // Cleanup must drop the child values that were only reachable through nulls.
-
-    #[test]
-    fn list_cleanup_slices_underlying_values_with_empty_entry() {
-        let list_values = UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 0, 2]);
-        let input_nulls = NullBuffer::from(vec![true, false, true, true]);
-        let list_field = Arc::new(Field::new("item", list_values.data_type().clone(), false));
-        let list: ArrayRef = Arc::new(GenericListArray::<i32>::new(
-            list_field,
-            offsets,
-            Arc::new(list_values),
-            Some(input_nulls),
-        ));
-
-        let cleaned = cleanup_non_empty_nulls(list).unwrap();
-        let cleaned = cleaned.as_list::<i32>();
-
-        // The null at index 1 originally referenced [4, 5, 6, 7]; those values
-        // should no longer appear in the underlying child array.
-        assert_eq!(
-            cleaned
-                .values()
-                .as_primitive::<arrow_array::types::UInt32Type>(),
-            &UInt32Array::from(vec![1, 2, 3, 8, 9]),
-        );
-    }
-
-    #[test]
-    fn list_cleanup_slices_underlying_values_without_empty_entry() {
-        let list_values = UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 2]);
-        let input_nulls = NullBuffer::from(vec![true, false, true]);
-        let list_field = Arc::new(Field::new("item", list_values.data_type().clone(), false));
-        let list: ArrayRef = Arc::new(GenericListArray::<i32>::new(
-            list_field,
-            offsets,
-            Arc::new(list_values),
-            Some(input_nulls),
-        ));
-
-        let cleaned = cleanup_non_empty_nulls(list).unwrap();
-        let cleaned = cleaned.as_list::<i32>();
-
-        assert_eq!(
-            cleaned
-                .values()
-                .as_primitive::<arrow_array::types::UInt32Type>(),
-            &UInt32Array::from(vec![1, 2, 3, 8, 9]),
-        );
-    }
-
-    #[test]
-    fn map_cleanup_slices_underlying_entries_with_empty_entry() {
-        let keys = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let values = Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80, 90]);
-        let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 0, 2]);
-        let input_nulls = NullBuffer::from(vec![true, false, true, true]);
-        let map = build_map_array(offsets, keys, values, Some(input_nulls));
-        let array: ArrayRef = Arc::new(map);
-
-        let cleaned = cleanup_non_empty_nulls(array).unwrap();
-        let cleaned = cleaned.as_map();
-
-        assert_eq!(
-            cleaned.keys().as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![1, 2, 3, 8, 9]),
-        );
-        assert_eq!(
-            cleaned.values().as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![10, 20, 30, 80, 90]),
-        );
-    }
-
-    #[test]
-    fn map_cleanup_slices_underlying_entries_without_empty_entry() {
-        let keys = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let values = Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80, 90]);
-        let offsets = OffsetBuffer::<i32>::from_lengths(vec![3, 4, 2]);
-        let input_nulls = NullBuffer::from(vec![true, false, true]);
-        let map = build_map_array(offsets, keys, values, Some(input_nulls));
-        let array: ArrayRef = Arc::new(map);
-
-        let cleaned = cleanup_non_empty_nulls(array).unwrap();
-        let cleaned = cleaned.as_map();
-
+        // The null at index 1 originally referenced keys/values 4..8;
+        // those entries should be dropped from the underlying child arrays.
         assert_eq!(
             cleaned.keys().as_primitive::<Int32Type>(),
             &Int32Array::from(vec![1, 2, 3, 8, 9]),
