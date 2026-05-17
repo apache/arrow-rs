@@ -60,7 +60,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::StringViewArray;
 use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
 use bytes::Bytes;
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{
+    BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime,
+};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use parquet::arrow::arrow_reader::{
@@ -190,11 +192,17 @@ const ROW_GROUP_SIZE: usize = 100_000;
 
 /// Writes the RecordBatch to an in memory buffer, returning the buffer
 fn write_parquet_file() -> Vec<u8> {
-    let batch = create_record_batch(TOTAL_ROWS);
+    write_parquet_file_with_rows(TOTAL_ROWS, ROW_GROUP_SIZE)
+}
+
+/// Writes a RecordBatch with a configurable shape to an in memory buffer,
+/// returning the buffer.
+fn write_parquet_file_with_rows(total_rows: usize, row_group_size: usize) -> Vec<u8> {
+    let batch = create_record_batch(total_rows);
     let schema = batch.schema();
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
-        .set_max_row_group_row_count(Some(ROW_GROUP_SIZE))
+        .set_max_row_group_row_count(Some(row_group_size))
         .build();
     let mut buffer = vec![];
     {
@@ -211,6 +219,8 @@ fn write_parquet_file() -> Vec<u8> {
 enum ProjectionCase {
     AllColumns,
     ExcludeFilterColumn,
+    FilterColumnsOnly,
+    Utf8Only,
 }
 
 impl std::fmt::Display for ProjectionCase {
@@ -218,6 +228,8 @@ impl std::fmt::Display for ProjectionCase {
         match self {
             ProjectionCase::AllColumns => write!(f, "all_columns"),
             ProjectionCase::ExcludeFilterColumn => write!(f, "exclude_filter_column"),
+            ProjectionCase::FilterColumnsOnly => write!(f, "filter_columns_only"),
+            ProjectionCase::Utf8Only => write!(f, "utf8_only"),
         }
     }
 }
@@ -369,6 +381,21 @@ enum FilterType {
     /// [ClickBench]: https://github.com/ClickHouse/ClickBench
     /// [Q21-Q27]: https://github.com/apache/datafusion/blob/b7177234e65cbbb2dcc04c252f6acd80bb026362/benchmarks/queries/clickbench/queries.sql#L22-L28
     Utf8ViewNonEmpty,
+    /// Scalar-only part of ClickBench Q37:
+    ///
+    /// ```sql
+    /// WHERE CounterID = 62
+    ///   AND EventDate BETWEEN ...
+    ///   AND DontCountHits = 0
+    ///   AND IsRefresh = 0
+    ///   AND Title <> ''
+    /// ```
+    ///
+    /// DataFusion `Auto` does not push down the `Title <> ''` string predicate,
+    /// but it can push down the scalar prefix to defer decoding `Title`.
+    /// This synthetic predicate keeps that reader-level shape: cheap scalar
+    /// filter columns protect an expensive `Utf8View` output column.
+    ClickBenchQ37ScalarPrefix,
 }
 
 impl std::fmt::Display for FilterType {
@@ -382,6 +409,7 @@ impl std::fmt::Display for FilterType {
             FilterType::UnselectiveClustered => "ts < 9000",
             FilterType::Composite => "float64 > 99.0 AND ts >= 9000",
             FilterType::Utf8ViewNonEmpty => "utf8View <> ''",
+            FilterType::ClickBenchQ37ScalarPrefix => "int64 == 62 AND ts < 9000",
         };
         write!(f, "{s}")
     }
@@ -436,6 +464,15 @@ impl FilterType {
                 let scalar = StringViewArray::new_scalar("");
                 neq(array, &scalar)
             }
+            // ClickBenchQ37ScalarPrefix: a cheap fragmented scalar predicate
+            // evaluated before decoding a variable-width output column.
+            FilterType::ClickBenchQ37ScalarPrefix => {
+                let int64 = batch.column(batch.schema().index_of("int64")?);
+                let ts = batch.column(batch.schema().index_of("ts")?);
+                let counter_match = eq(int64, &Int64Array::new_scalar(62))?;
+                let date_like_range = lt(ts, &TimestampMillisecondArray::new_scalar(9000))?;
+                and(&counter_match, &date_like_range)
+            }
         }
     }
 
@@ -450,6 +487,7 @@ impl FilterType {
             FilterType::UnselectiveClustered => &[3],
             FilterType::Composite => &[1, 3], // Use float64 column and ts column as representative for composite
             FilterType::Utf8ViewNonEmpty => &[2],
+            FilterType::ClickBenchQ37ScalarPrefix => &[0, 3],
         }
     }
 }
@@ -484,17 +522,8 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
 
     for filter_type in filter_types {
         for proj_case in &projection_cases {
-            // All indices corresponding to the 10 columns.
-            let all_indices = vec![0, 1, 2, 3];
             let filter_col = filter_type.filter_projection().to_vec();
-            // For the projection, either select all columns or exclude the filter column(s).
-            let output_projection: Vec<usize> = match proj_case {
-                ProjectionCase::AllColumns => all_indices.clone(),
-                ProjectionCase::ExcludeFilterColumn => all_indices
-                    .into_iter()
-                    .filter(|i| !filter_col.contains(i))
-                    .collect(),
-            };
+            let output_projection = output_projection_for(filter_type, proj_case);
 
             let reader = InMemoryReader::try_new(&parquet_file).unwrap();
             let metadata = Arc::clone(reader.metadata());
@@ -756,38 +785,79 @@ fn benchmark_async_strategy_matrix(c: &mut Criterion) {
 /// [`benchmark_async_strategy_matrix`]: it keeps the benchmark output focused
 /// on cases where `Auto` should either switch to post-filter execution or
 /// explicitly keep predicate pushdown.
+///
+/// The `profile_*` cases are derived from DataFusion ClickBench and TPC-DS
+/// comparisons. They keep the reader-level shapes worth tracking while
+/// excluding query regressions that did not construct a Parquet `RowFilter`.
 fn benchmark_async_cost_model_focus(c: &mut Criterion) {
+    const SMALL_TOTAL_ROWS: usize = 20_000;
+    const SMALL_ROW_GROUP_SIZE: usize = 5_000;
+
     let parquet_file = Bytes::from(write_parquet_file());
+    let small_parquet_file = Bytes::from(write_parquet_file_with_rows(
+        SMALL_TOTAL_ROWS,
+        SMALL_ROW_GROUP_SIZE,
+    ));
     let cases = [
-        (
+        AsyncFocusCase::new(
             "utf8_non_empty",
+            parquet_file.clone(),
             FilterType::Utf8ViewNonEmpty,
             ProjectionCase::ExcludeFilterColumn,
         ),
-        (
+        AsyncFocusCase::new(
             "utf8_non_empty",
+            parquet_file.clone(),
             FilterType::Utf8ViewNonEmpty,
             ProjectionCase::AllColumns,
         ),
-        (
+        AsyncFocusCase::new(
             "high_selectivity_float64",
+            parquet_file.clone(),
             FilterType::UnselectiveUnclustered,
             ProjectionCase::ExcludeFilterColumn,
         ),
-        (
+        AsyncFocusCase::new(
             "high_selectivity_ts_clustered",
+            parquet_file.clone(),
             FilterType::UnselectiveClustered,
             ProjectionCase::ExcludeFilterColumn,
         ),
-        (
+        AsyncFocusCase::new(
             "fragmented_int64_10pct",
+            parquet_file.clone(),
             FilterType::ModeratelySelectiveUnclustered,
             ProjectionCase::ExcludeFilterColumn,
         ),
-        (
+        AsyncFocusCase::new(
             "selective_float64_1pct",
+            parquet_file.clone(),
             FilterType::SelectiveUnclustered,
             ProjectionCase::ExcludeFilterColumn,
+        ),
+        AsyncFocusCase::new(
+            "profile_q37_scalar_utf8",
+            parquet_file.clone(),
+            FilterType::ClickBenchQ37ScalarPrefix,
+            ProjectionCase::Utf8Only,
+        ),
+        AsyncFocusCase::new(
+            "profile_q19_no_defer",
+            parquet_file,
+            FilterType::PointLookup,
+            ProjectionCase::FilterColumnsOnly,
+        ),
+        AsyncFocusCase::new(
+            "profile_small_scalar_no_defer",
+            small_parquet_file.clone(),
+            FilterType::ModeratelySelectiveUnclustered,
+            ProjectionCase::FilterColumnsOnly,
+        ),
+        AsyncFocusCase::new(
+            "profile_small_q37_scalar_utf8",
+            small_parquet_file,
+            FilterType::ClickBenchQ37ScalarPrefix,
+            ProjectionCase::Utf8Only,
         ),
     ];
     let strategies = [
@@ -804,94 +874,138 @@ fn benchmark_async_cost_model_focus(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("arrow_reader_row_filter_async_cost_model_focus");
 
-    for (case_name, filter_type, projection_case) in cases {
-        let reader = InMemoryReader::try_new(&parquet_file).unwrap();
-        let metadata = Arc::clone(reader.metadata());
-        let schema_descr = metadata.file_metadata().schema_descr();
-        let output_projection = output_projection_for(filter_type, &projection_case);
-        let read_projection = full_post_filter_read_projection(filter_type, &output_projection);
-        let output_column_names = projection_names(&output_projection);
-        let projection_mask = ProjectionMask::roots(schema_descr, output_projection);
-        let read_projection_mask = ProjectionMask::roots(schema_descr, read_projection);
-        let pred_mask = ProjectionMask::roots(
-            schema_descr,
-            filter_type.filter_projection().iter().copied(),
-        );
+    for case in cases {
+        benchmark_async_focus_case(&mut group, &rt, case, &strategies);
+    }
+}
 
-        for strategy in strategies {
-            let bench_id = BenchmarkId::new(
-                format!("{case_name}/{projection_case}"),
-                strategy.to_string(),
-            );
-            let rt_captured = rt.handle().clone();
+struct AsyncFocusCase {
+    case_name: &'static str,
+    parquet_file: Bytes,
+    filter_type: FilterType,
+    projection_case: ProjectionCase,
+}
 
-            group.bench_function(bench_id, |b| {
-                b.iter(|| {
-                    let reader = reader.clone();
-                    let pred_mask = pred_mask.clone();
-                    let projection_mask = projection_mask.clone();
-                    let read_projection_mask = read_projection_mask.clone();
-                    let output_column_names = output_column_names.clone();
-
-                    rt_captured.block_on(async {
-                        match strategy {
-                            AsyncStrategy::FullPostFilter => {
-                                benchmark_async_reader_post_filter(
-                                    reader,
-                                    read_projection_mask,
-                                    output_column_names,
-                                    filter_type,
-                                )
-                                .await
-                            }
-                            AsyncStrategy::PushdownAutoCostModel => {
-                                let row_filter = row_filter_for(filter_type, pred_mask);
-                                benchmark_async_reader_with_policy(
-                                    reader,
-                                    projection_mask,
-                                    row_filter,
-                                    RowSelectionPolicy::default(),
-                                )
-                                .await
-                            }
-                            AsyncStrategy::PushdownSelectors => {
-                                let row_filter = row_filter_for(filter_type, pred_mask);
-                                benchmark_async_reader_with_policy(
-                                    reader,
-                                    projection_mask,
-                                    row_filter,
-                                    RowSelectionPolicy::Selectors,
-                                )
-                                .await
-                            }
-                            AsyncStrategy::PushdownMask => {
-                                let row_filter = row_filter_for(filter_type, pred_mask);
-                                benchmark_async_reader_with_policy(
-                                    reader,
-                                    projection_mask,
-                                    row_filter,
-                                    RowSelectionPolicy::Mask,
-                                )
-                                .await
-                            }
-                        }
-                    })
-                });
-            });
+impl AsyncFocusCase {
+    fn new(
+        case_name: &'static str,
+        parquet_file: Bytes,
+        filter_type: FilterType,
+        projection_case: ProjectionCase,
+    ) -> Self {
+        Self {
+            case_name,
+            parquet_file,
+            filter_type,
+            projection_case,
         }
+    }
+}
+
+fn benchmark_async_focus_case(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    rt: &tokio::runtime::Runtime,
+    case: AsyncFocusCase,
+    strategies: &[AsyncStrategy],
+) {
+    let AsyncFocusCase {
+        case_name,
+        parquet_file,
+        filter_type,
+        projection_case,
+    } = case;
+
+    let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+    let metadata = Arc::clone(reader.metadata());
+    let schema_descr = metadata.file_metadata().schema_descr();
+    let output_projection = output_projection_for(filter_type, &projection_case);
+    let read_projection = full_post_filter_read_projection(filter_type, &output_projection);
+    let output_column_names = projection_names(&output_projection);
+    let projection_mask = ProjectionMask::roots(schema_descr, output_projection);
+    let read_projection_mask = ProjectionMask::roots(schema_descr, read_projection);
+    let pred_mask = ProjectionMask::roots(
+        schema_descr,
+        filter_type.filter_projection().iter().copied(),
+    );
+
+    for strategy in strategies.iter().copied() {
+        let bench_id = BenchmarkId::new(
+            format!("{case_name}/{projection_case}"),
+            strategy.to_string(),
+        );
+        let rt_captured = rt.handle().clone();
+
+        group.bench_function(bench_id, |b| {
+            b.iter(|| {
+                let reader = reader.clone();
+                let pred_mask = pred_mask.clone();
+                let projection_mask = projection_mask.clone();
+                let read_projection_mask = read_projection_mask.clone();
+                let output_column_names = output_column_names.clone();
+
+                rt_captured.block_on(async {
+                    match strategy {
+                        AsyncStrategy::FullPostFilter => {
+                            benchmark_async_reader_post_filter(
+                                reader,
+                                read_projection_mask,
+                                output_column_names,
+                                filter_type,
+                            )
+                            .await
+                        }
+                        AsyncStrategy::PushdownAutoCostModel => {
+                            let row_filter = row_filter_for(filter_type, pred_mask);
+                            benchmark_async_reader_with_policy(
+                                reader,
+                                projection_mask,
+                                row_filter,
+                                RowSelectionPolicy::default(),
+                            )
+                            .await
+                        }
+                        AsyncStrategy::PushdownSelectors => {
+                            let row_filter = row_filter_for(filter_type, pred_mask);
+                            benchmark_async_reader_with_policy(
+                                reader,
+                                projection_mask,
+                                row_filter,
+                                RowSelectionPolicy::Selectors,
+                            )
+                            .await
+                        }
+                        AsyncStrategy::PushdownMask => {
+                            let row_filter = row_filter_for(filter_type, pred_mask);
+                            benchmark_async_reader_with_policy(
+                                reader,
+                                projection_mask,
+                                row_filter,
+                                RowSelectionPolicy::Mask,
+                            )
+                            .await
+                        }
+                    }
+                })
+            });
+        });
     }
 }
 
 fn output_projection_for(filter_type: FilterType, projection_case: &ProjectionCase) -> Vec<usize> {
     let filter_columns = filter_type.filter_projection();
-    COLUMN_NAMES
-        .iter()
-        .enumerate()
-        .map(|(idx, _)| idx)
-        .filter(move |idx| {
-            matches!(projection_case, ProjectionCase::AllColumns) || !filter_columns.contains(idx)
-        })
-        .collect()
+    match projection_case {
+        ProjectionCase::AllColumns | ProjectionCase::ExcludeFilterColumn => COLUMN_NAMES
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| idx)
+            .filter(move |idx| {
+                matches!(projection_case, ProjectionCase::AllColumns)
+                    || !filter_columns.contains(idx)
+            })
+            .collect(),
+        ProjectionCase::FilterColumnsOnly => filter_columns.to_vec(),
+        ProjectionCase::Utf8Only => vec![2],
+    }
 }
 
 fn full_post_filter_read_projection(
@@ -1135,7 +1249,6 @@ fn benchmark_filters_with_limit(c: &mut Criterion) {
         ProjectionCase::AllColumns,
         ProjectionCase::ExcludeFilterColumn,
     ];
-    let all_indices = vec![0, 1, 2, 3];
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1147,14 +1260,7 @@ fn benchmark_filters_with_limit(c: &mut Criterion) {
     for filter_type in filter_types {
         for proj_case in &projection_cases {
             let filter_col = filter_type.filter_projection().to_vec();
-            let output_projection: Vec<usize> = match proj_case {
-                ProjectionCase::AllColumns => all_indices.clone(),
-                ProjectionCase::ExcludeFilterColumn => all_indices
-                    .iter()
-                    .copied()
-                    .filter(|i| !filter_col.contains(i))
-                    .collect(),
-            };
+            let output_projection = output_projection_for(filter_type, proj_case);
 
             let reader = InMemoryReader::try_new(&parquet_file).unwrap();
             let metadata = Arc::clone(reader.metadata());
