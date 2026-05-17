@@ -88,11 +88,23 @@ use std::sync::Arc;
 ///
 #[derive(Clone)]
 pub struct FixedSizeBinaryArray {
-    data_type: DataType, // Must be DataType::FixedSizeBinary(value_length)
+    /// Must be DataType::FixedSizeBinary(value_size)
+    data_type: DataType,
+    /// `len` values, each `value_size` bytes
     value_data: Buffer,
+    /// Optional Null Buffer
     nulls: Option<NullBuffer>,
+    /// Number of elements in the array
     len: usize,
-    value_length: i32,
+    /// size of each element, validated to fit in a positive i32
+    ///
+    /// Corresponds to the [`byteWidth` field] in the Arrow Spec
+    ///
+    /// note: Arrow stores `value_len` using i32. This implementation stores it
+    /// as a usize to ensure correct offset calculations.
+    ///
+    /// [`byteWidth` field]: https://github.com/apache/arrow/blob/2a89d03bbefd620b42126b8e00f8ae57e99cd638/format/Schema.fbs#L211
+    value_size: usize,
 }
 
 impl FixedSizeBinaryArray {
@@ -124,7 +136,6 @@ impl FixedSizeBinaryArray {
     /// * `value_length < 0`
     /// * `values.len() / value_length != nulls.len()`
     /// * `value_length == 0 && values.len() != 0`
-    /// * `len * value_length > i32::MAX`
     pub fn try_new(
         value_length: i32,
         values: Buffer,
@@ -163,42 +174,13 @@ impl FixedSizeBinaryArray {
             }
         };
 
-        Self::validate_lengths(value_size, len)?;
-
         Ok(Self {
             data_type,
             value_data: values,
-            value_length,
+            value_size,
             nulls,
             len,
         })
-    }
-
-    /// Some calculations below use i32 arithmetic which can overflow when
-    /// valid offsets are past i32::MAX. Until that is solved for real do not
-    /// permit constructing any FixedSizeBinaryArray that has a valid offset
-    /// past i32::MAX
-    fn validate_lengths(value_size: usize, len: usize) -> Result<(), ArrowError> {
-        // the offset is also calculated for the next element (i + 1) so
-        // check `len` (not last element index) to ensure that all offsets are valid
-        let max_offset = value_size.checked_mul(len).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "FixedSizeBinaryArray error: value size {value_size} * len {len} exceeds maximum valid offset"
-            ))
-        })?;
-
-        let max_valid_offset: usize = i32::MAX.try_into().map_err(|_| {
-            ArrowError::InvalidArgumentError(format!(
-                "FixedSizeBinaryArray error: maximum valid offset exceeds i32::MAX, got {max_offset}"
-            ))
-        })?;
-
-        if max_offset > max_valid_offset {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "FixedSizeBinaryArray error: value size {value_size} * length {len} exceeds maximum valid offset of {max_valid_offset}"
-            )));
-        };
-        Ok(())
     }
 
     /// Create a new [`FixedSizeBinaryArray`] of length `len` where all values are null
@@ -209,26 +191,25 @@ impl FixedSizeBinaryArray {
     ///
     /// * `value_length < 0`
     /// * `value_length * len` would overflow `usize`
-    /// * `value_length * len > i32::MAX`
     /// * `value_length * len * 8` would overflow `usize`
     pub fn new_null(value_length: i32, len: usize) -> Self {
         const BITS_IN_A_BYTE: usize = 8;
         let value_size = value_length.to_usize().unwrap();
-        Self::validate_lengths(value_size, len).unwrap();
         let capacity_in_bytes = value_size.checked_mul(len).unwrap();
         let capacity_in_bits = capacity_in_bytes.checked_mul(BITS_IN_A_BYTE).unwrap();
         Self {
             data_type: DataType::FixedSizeBinary(value_length),
             value_data: MutableBuffer::new_null(capacity_in_bits).into(),
             nulls: Some(NullBuffer::new_null(len)),
-            value_length,
+            value_size,
             len,
         }
     }
 
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (i32, Buffer, Option<NullBuffer>) {
-        (self.value_length, self.value_data, self.nulls)
+        let value_length = self.value_length();
+        (value_length, self.value_data, self.nulls)
     }
 
     /// Returns the element at index `i` as a byte slice.
@@ -239,19 +220,14 @@ impl FixedSizeBinaryArray {
     /// # Panics
     /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &[u8] {
+        let len = self.len();
         assert!(
-            i < self.len(),
-            "Trying to access an element at index {} from a FixedSizeBinaryArray of length {}",
-            i,
-            self.len()
+            i < len,
+            "Trying to access an element at index {i} from a FixedSizeBinaryArray of length {len}",
         );
-        let offset = i + self.offset();
+        let position = i * self.value_size;
         unsafe {
-            let pos = self.value_offset_at(offset);
-            std::slice::from_raw_parts(
-                self.value_data.as_ptr().offset(pos as isize),
-                (self.value_offset_at(offset + 1) - pos) as usize,
-            )
+            std::slice::from_raw_parts(self.value_data.as_ptr().add(position), self.value_size)
         }
     }
 
@@ -265,30 +241,46 @@ impl FixedSizeBinaryArray {
     /// Caller is responsible for ensuring that the index is within the bounds
     /// of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
-        let offset = i + self.offset();
-        let pos = self.value_offset_at(offset);
+        let position = i * self.value_size;
         unsafe {
-            std::slice::from_raw_parts(
-                self.value_data.as_ptr().offset(pos as isize),
-                (self.value_offset_at(offset + 1) - pos) as usize,
-            )
+            std::slice::from_raw_parts(self.value_data.as_ptr().add(position), self.value_size)
         }
     }
 
     /// Returns the offset for the element at index `i`.
     ///
     /// Note this doesn't do any bound checking, for performance reason.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the computed byte offset exceeds `i32::MAX`.
+    #[deprecated(since = "59.0.0", note = "Use i * value_size() instead")]
     #[inline]
     pub fn value_offset(&self, i: usize) -> i32 {
-        self.value_offset_at(self.offset() + i)
+        self.value_length() * i as i32
     }
 
     /// Returns the length for an element.
     ///
     /// All elements have the same length as the array is a fixed size.
+    ///
+    /// Returns an `i32` to be compatible with the Arrow spec.
+    ///
+    /// Use [`Self::value_size`] to return a `usize`.
     #[inline]
     pub fn value_length(&self) -> i32 {
-        self.value_length
+        // This is safe: constructor validated that value_size was a valid i32
+        self.value_size as i32
+    }
+
+    /// Return the length for an element, as a usize.
+    ///
+    /// All elements have the same length as the array is a fixed size.
+    ///
+    /// Note: This value will always fit, without overflow, into an i32
+    #[inline]
+    pub fn value_size(&self) -> usize {
+        self.value_size
     }
 
     /// Returns the values of this array.
@@ -311,14 +303,16 @@ impl FixedSizeBinaryArray {
             offset.saturating_add(len) <= self.len,
             "the length + offset of the sliced FixedSizeBinaryArray cannot exceed the existing length"
         );
-
-        let size = self.value_length as usize;
+        let offset_bytes = offset
+            .checked_mul(self.value_size)
+            .expect("offset overflow");
+        let len_bytes = len.checked_mul(self.value_size).expect("offset overflow");
 
         Self {
             data_type: self.data_type.clone(),
             nulls: self.nulls.as_ref().map(|n| n.slice(offset, len)),
-            value_length: self.value_length,
-            value_data: self.value_data.slice_with_length(offset * size, len * size),
+            value_size: self.value_size,
+            value_data: self.value_data.slice_with_length(offset_bytes, len_bytes),
             len,
         }
     }
@@ -420,7 +414,6 @@ impl FixedSizeBinaryArray {
         let nulls = NullBuffer::from_unsliced_buffer(null_buf, len);
 
         let value_size = value_size.unwrap_or(0);
-        Self::validate_lengths(value_size, len)?;
         let value_length = value_size.try_into().map_err(|_| {
             ArrowError::InvalidArgumentError(format!(
                 "FixedSizeBinaryArray value length exceeds i32, got {value_size}"
@@ -430,7 +423,7 @@ impl FixedSizeBinaryArray {
             data_type: DataType::FixedSizeBinary(value_length),
             value_data: buffer.into(),
             nulls,
-            value_length,
+            value_size,
             len,
         })
     }
@@ -514,14 +507,13 @@ impl FixedSizeBinaryArray {
         })?;
 
         let nulls = NullBuffer::from_unsliced_buffer(null_buf, len);
-        Self::validate_lengths(value_size, len)?;
 
         Ok(Self {
             data_type: DataType::FixedSizeBinary(value_length),
             value_data: buffer.into(),
             nulls,
             len,
-            value_length,
+            value_size,
         })
     }
 
@@ -583,7 +575,6 @@ impl FixedSizeBinaryArray {
         }
 
         let value_size = value_size.unwrap_or(0);
-        Self::validate_lengths(value_size, len)?;
         let value_length = value_size.try_into().map_err(|_| {
             ArrowError::InvalidArgumentError(format!(
                 "FixedSizeBinaryArray value length exceeds i32, got {value_size}"
@@ -593,14 +584,9 @@ impl FixedSizeBinaryArray {
             data_type: DataType::FixedSizeBinary(value_length),
             value_data: buffer.into(),
             nulls: None,
-            value_length,
+            value_size,
             len,
         })
-    }
-
-    #[inline]
-    fn value_offset_at(&self, i: usize) -> i32 {
-        self.value_length * i as i32
     }
 
     /// constructs a new iterator
@@ -626,8 +612,6 @@ impl From<ArrayData> for FixedSizeBinaryArray {
         let value_size = value_length
             .to_usize()
             .expect("FixedSizeBinaryArray value length must be non-negative");
-        Self::validate_lengths(value_size, len)
-            .expect("FixedSizeBinaryArray offsets must fit within i32");
         let value_data = buffers[0].slice_with_length(
             offset.checked_mul(value_size).expect("offset overflow"),
             len.checked_mul(value_size).expect("length overflow"),
@@ -638,7 +622,7 @@ impl From<ArrayData> for FixedSizeBinaryArray {
             nulls,
             len,
             value_data,
-            value_length,
+            value_size,
         }
     }
 }
@@ -849,7 +833,6 @@ mod tests {
             fixed_size_binary_array.value(2)
         );
         assert_eq!(5, fixed_size_binary_array.value_length());
-        assert_eq!(10, fixed_size_binary_array.value_offset(2));
         for i in 0..3 {
             assert!(fixed_size_binary_array.is_valid(i));
             assert!(!fixed_size_binary_array.is_null(i));
@@ -872,9 +855,7 @@ mod tests {
             fixed_size_binary_array.value(1)
         );
         assert_eq!(2, fixed_size_binary_array.len());
-        assert_eq!(0, fixed_size_binary_array.value_offset(0));
         assert_eq!(5, fixed_size_binary_array.value_length());
-        assert_eq!(5, fixed_size_binary_array.value_offset(1));
     }
 
     #[test]
@@ -1120,26 +1101,6 @@ mod tests {
         let array = FixedSizeBinaryArray::from(values);
 
         array.value(4);
-    }
-
-    #[test]
-    fn test_validate_lengths_allows_empty_array() {
-        FixedSizeBinaryArray::validate_lengths(1024, 0).unwrap();
-    }
-
-    #[test]
-    fn test_validate_lengths_allows_i32_max_offset() {
-        FixedSizeBinaryArray::validate_lengths(1, i32::MAX as usize).unwrap();
-        FixedSizeBinaryArray::validate_lengths(262_176, 8191).unwrap();
-    }
-
-    #[test]
-    fn test_validate_lengths_rejects_offset_past_i32_max() {
-        let err = FixedSizeBinaryArray::validate_lengths(262_177, 8192).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Invalid argument error: FixedSizeBinaryArray error: value size 262177 * length 8192 exceeds maximum valid offset of 2147483647",
-        );
     }
 
     #[test]

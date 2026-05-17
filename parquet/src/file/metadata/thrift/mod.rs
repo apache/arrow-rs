@@ -1135,13 +1135,7 @@ impl DataPageHeaderV2 {
                     repetition_levels_byte_length = Some(val);
                 }
                 7 => {
-                    if field_ident.bool_val.is_none() {
-                        return Err(general_err!(
-                            "Expected bool field but got thrift type {:?}",
-                            field_ident.field_type
-                        ));
-                    }
-                    is_compressed = field_ident.bool_val;
+                    is_compressed = Some(field_ident.bool_val()?);
                 }
                 _ => {
                     prot.skip(field_ident.field_type)?;
@@ -1837,7 +1831,7 @@ pub(crate) mod tests {
     fn assert_malformed_bool_error(err: crate::errors::ParquetError) {
         let msg = err.to_string();
         assert!(
-            msg.contains("Expected bool field"),
+            msg.contains("Unexpected struct field type"),
             "unexpected error message: {msg}"
         );
     }
