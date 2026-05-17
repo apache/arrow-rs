@@ -207,7 +207,7 @@ fn write_parquet_file() -> Vec<u8> {
 
 /// ProjectionCase defines the projection mode for the benchmark:
 /// either projecting all columns or excluding the column that is used for filtering.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum ProjectionCase {
     AllColumns,
     ExcludeFilterColumn,
@@ -751,6 +751,137 @@ fn benchmark_async_strategy_matrix(c: &mut Criterion) {
     }
 }
 
+/// A small async-only matrix that isolates the cases most relevant to the
+/// row-filter cost model. This is intentionally narrower than
+/// [`benchmark_async_strategy_matrix`]: it keeps the benchmark output focused
+/// on cases where `Auto` should either switch to post-filter execution or
+/// explicitly keep predicate pushdown.
+fn benchmark_async_cost_model_focus(c: &mut Criterion) {
+    let parquet_file = Bytes::from(write_parquet_file());
+    let cases = [
+        (
+            "utf8_non_empty",
+            FilterType::Utf8ViewNonEmpty,
+            ProjectionCase::ExcludeFilterColumn,
+        ),
+        (
+            "utf8_non_empty",
+            FilterType::Utf8ViewNonEmpty,
+            ProjectionCase::AllColumns,
+        ),
+        (
+            "high_selectivity_float64",
+            FilterType::UnselectiveUnclustered,
+            ProjectionCase::ExcludeFilterColumn,
+        ),
+        (
+            "high_selectivity_ts_clustered",
+            FilterType::UnselectiveClustered,
+            ProjectionCase::ExcludeFilterColumn,
+        ),
+        (
+            "fragmented_int64_10pct",
+            FilterType::ModeratelySelectiveUnclustered,
+            ProjectionCase::ExcludeFilterColumn,
+        ),
+        (
+            "selective_float64_1pct",
+            FilterType::SelectiveUnclustered,
+            ProjectionCase::ExcludeFilterColumn,
+        ),
+    ];
+    let strategies = [
+        AsyncStrategy::FullPostFilter,
+        AsyncStrategy::PushdownAutoCostModel,
+        AsyncStrategy::PushdownMask,
+        AsyncStrategy::PushdownSelectors,
+    ];
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("arrow_reader_row_filter_async_cost_model_focus");
+
+    for (case_name, filter_type, projection_case) in cases {
+        let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+        let metadata = Arc::clone(reader.metadata());
+        let schema_descr = metadata.file_metadata().schema_descr();
+        let output_projection = output_projection_for(filter_type, &projection_case);
+        let read_projection = full_post_filter_read_projection(filter_type, &output_projection);
+        let output_column_names = projection_names(&output_projection);
+        let projection_mask = ProjectionMask::roots(schema_descr, output_projection);
+        let read_projection_mask = ProjectionMask::roots(schema_descr, read_projection);
+        let pred_mask = ProjectionMask::roots(
+            schema_descr,
+            filter_type.filter_projection().iter().copied(),
+        );
+
+        for strategy in strategies {
+            let bench_id = BenchmarkId::new(
+                format!("{case_name}/{projection_case}"),
+                strategy.to_string(),
+            );
+            let rt_captured = rt.handle().clone();
+
+            group.bench_function(bench_id, |b| {
+                b.iter(|| {
+                    let reader = reader.clone();
+                    let pred_mask = pred_mask.clone();
+                    let projection_mask = projection_mask.clone();
+                    let read_projection_mask = read_projection_mask.clone();
+                    let output_column_names = output_column_names.clone();
+
+                    rt_captured.block_on(async {
+                        match strategy {
+                            AsyncStrategy::FullPostFilter => {
+                                benchmark_async_reader_post_filter(
+                                    reader,
+                                    read_projection_mask,
+                                    output_column_names,
+                                    filter_type,
+                                )
+                                .await
+                            }
+                            AsyncStrategy::PushdownAutoCostModel => {
+                                let row_filter = row_filter_for(filter_type, pred_mask);
+                                benchmark_async_reader_with_policy(
+                                    reader,
+                                    projection_mask,
+                                    row_filter,
+                                    RowSelectionPolicy::default(),
+                                )
+                                .await
+                            }
+                            AsyncStrategy::PushdownSelectors => {
+                                let row_filter = row_filter_for(filter_type, pred_mask);
+                                benchmark_async_reader_with_policy(
+                                    reader,
+                                    projection_mask,
+                                    row_filter,
+                                    RowSelectionPolicy::Selectors,
+                                )
+                                .await
+                            }
+                            AsyncStrategy::PushdownMask => {
+                                let row_filter = row_filter_for(filter_type, pred_mask);
+                                benchmark_async_reader_with_policy(
+                                    reader,
+                                    projection_mask,
+                                    row_filter,
+                                    RowSelectionPolicy::Mask,
+                                )
+                                .await
+                            }
+                        }
+                    })
+                });
+            });
+        }
+    }
+}
+
 fn output_projection_for(filter_type: FilterType, projection_case: &ProjectionCase) -> Vec<usize> {
     let filter_columns = filter_type.filter_projection();
     COLUMN_NAMES
@@ -1066,6 +1197,7 @@ criterion_group!(
     benchmark_filters_and_projections,
     benchmark_sync_strategy_matrix,
     benchmark_async_strategy_matrix,
+    benchmark_async_cost_model_focus,
     benchmark_filters_with_limit,
 );
 criterion_main!(benches);
