@@ -44,7 +44,7 @@ pub(crate) enum ArrowReaderPhase {
 
 impl ArrowReaderPhase {
     const COUNT: usize = 13;
-    #[cfg(test)]
+    #[cfg(all(test, feature = "async"))]
     const ALL: [Self; Self::COUNT] = [
         Self::PredicateRangePlanning,
         Self::PredicateDecode,
@@ -79,7 +79,7 @@ impl ArrowReaderPhase {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "async"))]
     fn name(self) -> &'static str {
         match self {
             Self::PredicateRangePlanning => "predicate_range_planning",
@@ -127,7 +127,7 @@ impl ArrowReaderMetrics {
         Self::Enabled(Arc::new(ArrowReaderMetricsInner::new(false)))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "async"))]
     pub(crate) fn enabled_with_phase_profile() -> Self {
         Self::Enabled(Arc::new(ArrowReaderMetricsInner::new(true)))
     }
@@ -428,7 +428,7 @@ impl ArrowReaderMetrics {
         result
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "async"))]
     pub(crate) fn phase_profile_report(&self) -> Option<String> {
         let Self::Enabled(inner) = self else {
             return None;

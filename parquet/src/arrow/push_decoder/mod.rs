@@ -621,30 +621,42 @@ impl ParquetDecoderState {
 mod test {
     use super::*;
     use crate::DecodeResult;
+    #[cfg(feature = "async")]
+    use crate::arrow::ParquetRecordBatchStreamBuilder;
+    #[cfg(feature = "async")]
+    use crate::arrow::arrow_reader::ArrowReaderOptions;
     use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader, RowFilter, RowSelection,
-        RowSelectionPolicy, RowSelector,
+        ArrowPredicateFn, ParquetRecordBatchReader, RowFilter, RowSelection, RowSelectionPolicy,
+        RowSelector,
     };
+    #[cfg(feature = "async")]
     use crate::arrow::async_reader::AsyncFileReader;
     use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
-    use crate::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
+    use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::errors::ParquetError;
-    use crate::file::metadata::{
-        PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
-    };
+    use crate::file::metadata::ParquetMetaDataPushDecoder;
+    #[cfg(feature = "async")]
+    use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::WriterProperties;
-    use arrow::compute::kernels::cmp::{gt, lt, neq};
+    #[cfg(feature = "async")]
+    use arrow::compute::kernels::cmp::neq;
+    use arrow::compute::kernels::cmp::{gt, lt};
+    #[cfg(feature = "async")]
     use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int64Type;
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringViewArray};
+    #[cfg(feature = "async")]
     use arrow_schema::{DataType, Field, Schema};
     use arrow_select::concat::concat_batches;
     use arrow_select::filter::filter_record_batch;
     use bytes::Bytes;
+    #[cfg(feature = "async")]
     use futures::future::BoxFuture;
+    #[cfg(feature = "async")]
     use futures::{FutureExt, StreamExt};
+    #[cfg(feature = "async")]
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use std::fmt::Debug;
     use std::ops::Range;
@@ -1857,6 +1869,7 @@ mod test {
         expect_finished(decoder.try_decode());
     }
 
+    #[cfg(feature = "async")]
     #[test]
     #[ignore = "local profiling aid for row-filter phase breakdowns"]
     fn profile_utf8_view_row_filter_phases() {
@@ -1981,6 +1994,7 @@ mod test {
         Bytes::from(output)
     }
 
+    #[cfg(feature = "async")]
     fn write_utf8_profile_parquet_file(total_rows: usize, row_group_size: usize) -> Vec<u8> {
         let batch = create_utf8_profile_batch(total_rows);
         let props = WriterProperties::builder()
@@ -1994,6 +2008,7 @@ mod test {
         buffer
     }
 
+    #[cfg(feature = "async")]
     fn create_utf8_profile_batch(size: usize) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![
             Field::new("int64", DataType::Int64, false),
@@ -2014,6 +2029,7 @@ mod test {
         RecordBatch::try_new(schema, vec![int64, float64, utf8, ts]).unwrap()
     }
 
+    #[cfg(feature = "async")]
     fn create_profile_utf8_view_array(size: usize) -> ArrayRef {
         const AVG_RUN_LENGTH: usize = 4;
         const EMPTY_DENSITY: u32 = 85;
@@ -2039,6 +2055,7 @@ mod test {
         Arc::new(builder.finish()) as ArrayRef
     }
 
+    #[cfg(feature = "async")]
     fn random_profile_string(rng: &mut StdRng) -> String {
         let charset = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         let len = if rng.random_bool(0.5) {
@@ -2052,11 +2069,13 @@ mod test {
     }
 
     #[derive(Debug, Clone)]
+    #[cfg(feature = "async")]
     struct ProfileInMemoryReader {
         inner: Bytes,
         metadata: Arc<ParquetMetaData>,
     }
 
+    #[cfg(feature = "async")]
     impl ProfileInMemoryReader {
         fn try_new(inner: &Bytes) -> crate::errors::Result<Self> {
             let mut metadata_reader =
@@ -2075,6 +2094,7 @@ mod test {
         }
     }
 
+    #[cfg(feature = "async")]
     impl AsyncFileReader for ProfileInMemoryReader {
         fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, crate::errors::Result<Bytes>> {
             let data = self.inner.slice(range.start as usize..range.end as usize);
